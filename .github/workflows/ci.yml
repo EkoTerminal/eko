@@ -1,0 +1,27 @@
+name: Public source checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check public identifiers and complete history
+        env:
+          EKO_PUBLIC_GUARD_KEY: ${{ secrets.PUBLIC_GUARD_KEY }}
+        run: python3 scripts/public-guard.py --mode history
+      - name: Exercise negative privacy checks
+        run: python3 scripts/test-public-guard.py
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
