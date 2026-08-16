@@ -1,0 +1,93 @@
+import { useGuardCoin } from './useGuardCoin';
+import { CompactVerdictChip, GuardCompact } from '../../components/GuardCompact';
+import { AnalysisPolicyNotice } from '../../components/PolicyLinks';
+import { SCANNING, NOT_CHECKED, NOT_FULLY_CHECKED, PENDING_ORDER } from '../../copy/availability';
+import { memo, useEffect, useRef, type ReactNode } from 'react';
+import type { CoinCard, CoinSignal, RadarRow, Flow } from '@eko/shared';
+import { HeatTag, Info, UnavailableValue, UntrustedText, VerdictChip } from '../../components/ui';
+import { MiniBars, Spark } from '../../components/ui/charts';
+import { heatOf, marking, markClass, type HeatRow } from '../../lib/heat';
+import { fetchParsed } from '../../lib/api';
+import { CoinCardSchema } from '@eko/shared';
+import { useState } from 'react';
+import { useMedia } from '../../lib/useMedia';
+import { expandTo } from '../../lib/expand';
+import { Link } from '../../lib/Link';
+import { Decode, Roll } from './radarMotion';
+import { age, exitText, pct, PLAYBOOK_NAMES, price, usd } from './radarModel';
+import { formatAge } from '../../lib/format';
+
+export const ROLES = ['momentum', 'liquidity', 'holders', 'narrative', 'risk'] as const;
+export function SignalBars({ signal }: { signal: CoinSignal }) {
+  return <span className="rt-sig"><b className="num">{signal.composite}</b><span className="rt-read" aria-hidden="true">{ROLES.map((role) => <i key={role} style={{ height: `${Math.max(14, signal.readings[role])}%` }} />)}</span></span>;
+}
+export function FlowBar({ flow, unavailable = false, legend = false, compact = false }: { flow: Flow; unavailable?: boolean; legend?: boolean; compact?: boolean }) {
+  if (unavailable || flow.meta?.unavailable) return <span className="muted availability">{NOT_CHECKED}</span>;
+  const parts = flow.declaredAgentPct !== undefined && flow.likelyAgentPct !== undefined
+    ? [{ name: 'Declared agents', className: 'agent', value: flow.declaredAgentPct }, { name: 'Likely agents', className: 'likely', value: flow.likelyAgentPct }]
+    : [{ name: 'Agents', className: 'agent', value: flow.agentPct }];
+  parts.push({ name: 'Crews', className: 'crew', value: flow.crewPct }, { name: 'Humans', className: 'human', value: flow.humanPct });
+  return <div className="radar-flow"><div className="flowbar" role="img" aria-label={parts.map((p) => `${p.name} ${Math.round(p.value)}%`).join(', ')}>{parts.map((p) => <i key={p.name} className={p.className} style={{ width: `${p.value}%` }} />)}{flow.washEstPct > 0 && <i className="wash" style={{ width: `${flow.washEstPct}%` }} />}</div>
+    {flow.beta && !compact && <span className="flow-beta"><span className="tag">Beta</span> {flow.confidence === undefined ? 'Confidence unavailable' : `${Math.round(flow.confidence * 100)}% confidence`}</span>}
+    {legend && <div className="legend">{parts.map((p) => <span key={p.name}><i className={p.className} />{p.name}<b className="num">{Math.round(p.value)}%</b></span>)}{flow.washEstPct > 0 && <span><i className="wash" />Wash estimate {Math.round(flow.washEstPct)}%</span>}</div>}
+  </div>;
+}
+export function HeatLegend() {
+  return <div className="heat-legend" aria-label="How rows are marked">{['Hot', 'Normal', 'Fading', 'Danger'].map((word, i) => <span key={word}><i className={`sw ${['hot', 'normal', 'fading', 'avoid'][i]}`} />{word}</span>)}<Info label="How rows are marked">A blue-white shimmer grows from warming (3%+ in an hour, agents 25%+, signal 60+) to Hot (signal 70+, rising, agents 30%+) to surging (10%+, agents 40%+). A dark ember marks falling activity (down 8%+, signal under 65), Danger, and red flags (honeypot, 75%+ exit cost, or a Danger match at 97%+ confidence). Danger always wins. Without signal, only price and flow predicates apply. The marks describe activity; they are not a reason to buy.</Info></div>;
+}
+export const RadarRowView = memo(function RadarRowView({ c, selected, select, trade, pulse, confidence }: { c: RadarRow; selected: boolean; select: (c: RadarRow, el: HTMLElement) => void; trade: (c: RadarRow, el: HTMLElement) => void; pulse: number; confidence?: number }) {
+  const el = useRef<HTMLTableRowElement>(null);
+  useEffect(() => { const row = el.current; if (!pulse || !row) return; row.classList.remove('pulse'); void row.offsetWidth; row.classList.add('pulse'); }, [pulse]);
+  return <tr ref={el} data-address={c.address} className={`h-${heatOf(c)} ${markClass(marking(c))}${selected ? ' sel' : ''}`} onClick={(e) => select(c, e.currentTarget.querySelector<HTMLButtonElement>('[data-pick]')!)}>
+    <td className="c-coin"><button data-pick className="rt-pick" aria-pressed={selected} aria-controls={selected ? 'radar-inspector' : undefined} onClick={(e) => { e.stopPropagation(); select(c, e.currentTarget); }}><span className="rt-top"><span className="rt-sym" title={`$${c.symbol.text}`}><Decode text={`$${c.symbol.text}`}><span>$<UntrustedText value={c.symbol} /></span></Decode></span><HeatTag heat={heatOf(c)} /></span><span className="rt-name"><UntrustedText value={c.name} /> · {age(c.ageSec)}</span></button></td>
+    <td className="c-guard"><CompactVerdictChip level={c.verdict} guard={c.guardV2} failed={c.guardRefreshFailed} pending={c.verdictPending} evaluatedPlaybooks={c.evaluatedPlaybooks} missing={c.missingChecks} /></td>
+    <td className="c-watch">{c.topPlaybook ? <><span className="rt-play">{PLAYBOOK_NAMES[c.topPlaybook]}</span>{confidence !== undefined && <span className="rt-conf">{Math.round(confidence * 100)}% confidence</span>}</> : <span className="faint">{c.verdictPending ? SCANNING : c.verdict === 'pending' ? NOT_FULLY_CHECKED : 'Nothing matched'}</span>}</td>
+    <td className="c-sig r">{c.unavailable?.includes('signal') ? <UnavailableValue /> : c.signal && <SignalBars signal={c.signal} />}</td>
+    <td className="c-beta r">{c.beta && <span className="rt-sig"><span className="tag">Beta</span>{c.beta.apeScore !== undefined && <b className="num">{c.beta.apeScore}</b>}{c.beta.setupGrade && <span>{c.beta.setupGrade}</span>}</span>}</td>
+    <td className={`c-1h r num${c.change1hPct > 0 && c.verdict !== 'danger' ? ' up' : ''}`}>{c.unavailable?.includes('change') ? <UnavailableValue /> : <Roll value={pct(c.change1hPct)} />}</td>
+    <td className="c-spark">{c.unavailable?.includes('spark') ? <UnavailableValue /> : c.spark8h && <div className="rt-spark"><Spark series={c.spark8h} height={28} /></div>}</td>
+    <td className="c-flow">{c.unavailable?.includes('flow') ? <UnavailableValue /> : <div className="rt-flow"><FlowBar flow={c.flow} /><span className="num">{Math.round(c.flow.agentPct)}%</span></div>}</td>
+    <td className="c-liq r num">{c.unavailable?.includes('liquidity') ? <UnavailableValue /> : usd(c.liquidityUsd)}</td><td className={`c-exit r num${!c.unavailable?.includes('exitCost') && c.exitCost1kPct > 15 ? ' bad' : ''}`}>{c.unavailable?.includes('exitCost') ? <UnavailableValue /> : exitText(c.exitCost1kPct)}</td>
+    <td className="c-act r"><button className={`btn btn-sm${c.verdict === 'danger' ? '' : ' btn-primary'}`} disabled={c.verdictPending || c.verdict === 'danger'} aria-label={c.verdict === 'danger' ? 'Refused by the guard' : `Trade $${c.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(c, e.currentTarget); }}>{c.verdict === 'danger' ? 'Refused' : 'Trade'}</button></td>
+  </tr>;
+});
+export function HotStrip({ coins, selected, select }: { coins: RadarRow[]; selected: string | null; select: (c: RadarRow, el: HTMLElement) => void }) {
+  if (!coins.length) return null;
+  return <section className="hot-strip" aria-labelledby="hot-h"><div className="sec-head" style={{ marginTop: 26 }}><h2 id="hot-h">Hot right now</h2><span className="sub">Unusual activity and agent buying in the last hour. Not a recommendation.</span></div><div className="hot-grid">{coins.map((c) => <button key={c.address} className={`htile ${markClass(marking(c))}${selected === c.address ? ' sel' : ''}`} aria-pressed={selected === c.address} onClick={(e) => select(c, e.currentTarget)}><span className="htile-top"><span className="htile-sym" title={`$${c.symbol.text}`}><Decode text={`$${c.symbol.text}`}><span>$<UntrustedText value={c.symbol} /></span></Decode></span><span className="htile-tags"><HeatTag heat={heatOf(c)} /><CompactVerdictChip linked={false} level={c.verdict} guard={c.guardV2} failed={c.guardRefreshFailed} pending={c.verdictPending} evaluatedPlaybooks={c.evaluatedPlaybooks} missing={c.missingChecks} /></span></span>{c.spark8h && <span className="htile-spark"><Spark series={c.spark8h} height={46} /></span>}<span className="htile-facts">{c.signal && <span><span className="htile-signal-label">Signal <span className="signal-beta">Beta</span></span><b className="num score">{c.signal.composite}</b></span>}<span>Agents<b className="num">{c.unavailable?.includes('flow') ? <UnavailableValue /> : `${Math.round(c.flow.agentPct)}%`}</b></span><span>1h<b className="num up">{c.unavailable?.includes('change') ? <UnavailableValue /> : <Roll value={pct(c.change1hPct)} />}</b></span></span></button>)}</div></section>;
+}
+// TODO(spec): M3 TradePanel. This slot deliberately never quotes, signs, or submits.
+export function DisabledTradePanel({ row, priceFormat = price }: { row: Pick<RadarRow, 'priceUsd'> & Partial<Pick<RadarRow,'verdict'|'verdictPending'|'priceUnavailable'>>; priceFormat?: (value: number) => string }) {
+  return <div className="tpanel">{row.verdict === 'pending' && !row.verdictPending && <p className="muted">{PENDING_ORDER}</p>}<fieldset disabled><div className="tp-side"><div className="seg"><button aria-pressed="true">Buy</button><button>Sell</button></div><span className="muted">Mode <b>Balanced</b></span></div><div className="tp-amounts">{[25, 50, 100, 250].map((v) => <button className="btn btn-sm" key={v}>${v}</button>)}<input className="input num" placeholder="Custom" aria-label="Custom trade amount" /></div><dl className="tp-quote"><dt>You receive</dt><dd>—</dd><dt>Price</dt><dd>{row.priceUnavailable ? NOT_CHECKED : priceFormat(row.priceUsd)}</dd><dt>Route</dt><dd>—</dd><dt>Terminal fee</dt><dd>—</dd></dl><div className="tp-guard"><div className="tp-guard-head">Guard checks <span className="tag">Pending M3</span></div><ul className="tp-checks">{['Sell simulation', 'Scam playbooks', 'Exit cost at $100', 'Taxes', 'Per-trade cap', 'Data freshness'].map((label) => <li key={label}><span className="tp-ic">○</span><span><b>{label}</b><span>Waiting for the guarded panel</span></span></li>)}</ul></div><button className="btn btn-primary tp-submit">Trading opens with the guarded panel</button></fieldset><AnalysisPolicyNotice /></div>;
+}
+function Section({ title, figure, children }: { title: string; figure?: ReactNode; children: ReactNode }) { return <section className="insp-sec"><h3>{title}{figure}</h3>{children}</section>; }
+export function InspectorGuard({ card, href, mark = '' }: { card: CoinCard; href: string; mark?: string }) {
+  const top = card.playbooks.find(p => p.level === 'danger') ?? card.playbooks.find(p => p.level === 'monitor');
+  return <div className={`insp-box insp-guard${card.verdict.level === 'danger' ? ' danger' : ''} ${mark}`}><div className="insp-guard-top"><b>{card.verdict.level === 'pending' ? NOT_FULLY_CHECKED : top ? `Watch for: ${PLAYBOOK_NAMES[top.id]}` : 'No scam playbooks matched'}</b><Link to={href} className="insp-link">Evidence</Link></div><p>{card.verdict.reasons.join(' ')}{top?.history && ` Deployer: ${top.history.deployerRuns} prior flagged runs.`}</p><AnalysisPolicyNotice /></div>;
+}
+export function CoinInspector({ row, close, onCard, formatRowAge = age }: { row: HeatRow; close: () => void; onCard: (card: CoinCard) => void; formatRowAge?: typeof formatAge }) {
+  const guard = useGuardCoin(row.address);
+  const wide = useMedia('(min-width:1480px)'), panel = useRef<HTMLElement>(null);
+  const [card, setCard] = useState<CoinCard | null>(null), [error, setError] = useState(false), [retry, setRetry] = useState(0);
+  useEffect(() => { const ac = new AbortController(); setCard(null); setError(false); void fetchParsed(`/coins/${row.address}`, CoinCardSchema, { signal: ac.signal }).then((data) => { if (!ac.signal.aborted) { setCard(data); onCard(data); } }).catch((e) => { if (e.name !== 'AbortError') setError(true); }); return () => ac.abort(); }, [row.address, retry]);
+  useEffect(() => { if (!wide) panel.current?.focus(); }, [wide]);
+  const signal = card?.signal, flow = card?.flow;
+  const redFlag = card?.tradeability.honeypot || card?.playbooks.some((m) => m.level === 'danger' && m.confidence >= .97);
+  const mk = marking({ ...row, verdict: card?.verdict.level ?? row.verdict }, { redFlag });
+  const fullTo = `/coin/${row.address}`;
+  return <><button className="insp-scrim" tabIndex={-1} aria-label="Close details" onClick={close} /><aside ref={panel} className="insp radar-insp" id="radar-inspector" tabIndex={-1} role={wide ? undefined : 'dialog'} aria-modal={wide ? undefined : true} aria-label={`$${row.symbol.text} details`} onKeyDown={(e) => {
+    if (!wide && e.key === 'Tab') { const nodes = panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled)'); if (!nodes?.length) return; const first = nodes[0], last = nodes[nodes.length - 1]; if (e.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) { e.preventDefault(); last.focus(); } else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); } }
+  }}><div className="insp-bar"><span>Coin</span><a className="iconbtn" href={fullTo} aria-label="Open the full page" title="Open the full page" onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); void expandTo(fullTo, panel.current!); }}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3L7 9" /></svg></a><button className="iconbtn" onClick={close} aria-label="Close details">×</button></div>
+    <div className="insp-id"><h2><Decode text={`$${row.symbol.text}`}><span>$<UntrustedText value={card?.identity.symbol ?? row.symbol} /></span></Decode></h2><span className="tags"><HeatTag heat={heatOf({ ...row, verdict: card?.verdict.level ?? row.verdict })} /><VerdictChip guard={guard.assessment ?? row.guardV2 ?? undefined} level={card?.verdict.level ?? row.verdict} verdictPending={row.verdictPending && !card} evaluatedPlaybooks={card?.verdict.evaluatedPlaybooks ?? row.evaluatedPlaybooks} meta={card?.meta} missing={row.missingChecks} /></span></div><p className="insp-sub"><span><UntrustedText value={card?.identity.name ?? row.name} /> · {row.launchpad === 'pons' ? 'Pons' : 'Other'} · {formatRowAge(row.ageSec)} old</span><span className="addr" title={row.address}>{row.address.slice(0, 6)}…{row.address.slice(-4)} <button className="iconbtn" aria-label="Copy address" onClick={() => void navigator.clipboard?.writeText(row.address)}>⧉</button></span></p>
+    {/* TODO(spec): CoinCard lacks price/chart fields. Use the selected RadarRow for price/chart and optional market cap. */}
+    <div className="insp-price"><b className="num">{row.priceUnavailable ? NOT_CHECKED : price(row.priceUsd)}</b><span className={`num${row.change1hPct > 0 ? ' up' : ''}`}>{row.unavailable?.includes('change') ? NOT_CHECKED : pct(row.change1hPct)} 1h</span>{row.change24hPct !== undefined && <span className={`num${row.change24hPct > 0 ? ' up' : ''}`}>{row.unavailable?.includes('change') ? NOT_CHECKED : pct(row.change24hPct)} 24h</span>}</div>
+    {row.spark8h && <div className="insp-chart"><Spark series={row.spark8h} height={120} label="Price over the last 8 hours" /><MiniBars series={row.spark8h.slice(1).map((v, i) => Math.abs(v - row.spark8h![i]) + 1.5)} height={26} label="Price movement over the same 8 hours" /><div className="insp-axis"><span>8h ago</span><span>4h</span><span>Now</span></div></div>}
+    {guard.assessment && <GuardCompact verdict={{version:2,assessment:guard.assessment}} />}
+    {error ? <div role="status">Could not load coin details. <button className="btn" onClick={() => setRetry((n) => n + 1)}>Retry</button></div> : !card ? <div className="skel" aria-label="Loading coin details" style={{ height: 100 }} /> : <>
+      <InspectorGuard card={card} href={fullTo} mark={mk?.kind === 'ember' ? markClass(mk) : ''} />
+      <Section title="Can you get out?"><dl className="insp-kv">{[['Exit cost at $100', card.meta?.tradeability?.unavailable ? NOT_CHECKED : exitText(card.tradeability.exitCostPct.usd100)], ['Exit cost at $1K', card.meta?.tradeability?.unavailable ? NOT_CHECKED : exitText(card.tradeability.exitCostPct.usd1k)], ['Liquidity', row.unavailable?.includes('liquidity') ? NOT_CHECKED : usd(row.liquidityUsd)], ...(row.marketCapUsd === undefined ? [] : [['Market cap', usd(row.marketCapUsd)]])].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className={label.startsWith('Exit') && card.tradeability.exitCostPct.usd1k > 15 ? 'num bad' : 'num'}>{value}</dd></div>)}</dl></Section>
+      {signal && <Section title="Signal · five readings" figure={<b className="num">{signal.composite} <span className="tag">Beta</span></b>}><div className="insp-roles">{ROLES.map((role) => <div key={role}><span>{role[0].toUpperCase() + role.slice(1)}</span><i><i style={{ width: `${signal.readings[role]}%` }} /></i><b className="num">{signal.readings[role]}</b></div>)}</div></Section>}
+      {row.unavailable?.includes('flow') ? <Section title="Who’s buying">{NOT_CHECKED}</Section> : flow && <Section title="Who’s buying" figure={<b className="num">{Math.round(flow.agentPct)}% agents</b>}><FlowBar flow={flow} legend /></Section>}
+    </>}
+    <Section title="Trade"><div className="insp-box"><DisabledTradePanel row={row} /></div></Section>
+  </aside></>;
+}
