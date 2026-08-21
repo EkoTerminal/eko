@@ -1,0 +1,15 @@
+{
+  "name": "@eko/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "forge build",
+    "test": "node scripts/test.mjs",
+    "test:fork": "forge test --match-path 'test/fork/*'",
+    "coverage": "forge coverage --report summary",
+    "abi:export": "node scripts/export-abi.mjs"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "5.6.1"
+  }
+}
