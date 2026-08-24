@@ -1,0 +1,43 @@
+{
+  "route": {
+    "receiver": "unconfigured",
+    "group_by": [
+      "alertname",
+      "severity"
+    ],
+    "group_wait": "0s",
+    "group_interval": "1m",
+    "repeat_interval": "1h",
+    "routes": [
+      {
+        "matchers": [
+          "severity=\"1\""
+        ],
+        "receiver": "ops-and-oncall"
+      },
+      {
+        "matchers": [
+          "severity=\"2\""
+        ],
+        "receiver": "ops-and-oncall"
+      },
+      {
+        "matchers": [
+          "severity=\"3\""
+        ],
+        "receiver": "ops"
+      }
+    ]
+  },
+  "receivers": [
+    {
+      "name": "unconfigured"
+    },
+    {
+      "name": "ops"
+    },
+    {
+      "name": "ops-and-oncall"
+    }
+  ]
+}
