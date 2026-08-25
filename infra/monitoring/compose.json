@@ -1,0 +1,44 @@
+{
+  "services": {
+    "prometheus": {
+      "image": "prom/prometheus:v3.2.1",
+      "command": [
+        "--config.file=/etc/prometheus/prometheus.json"
+      ],
+      "volumes": [
+        "./prometheus.json:/etc/prometheus/prometheus.json:ro",
+        "./launch-alerts.json:/etc/prometheus/launch-alerts.json:ro"
+      ],
+      "restart": "unless-stopped"
+    },
+    "alertmanager": {
+      "image": "prom/alertmanager:v0.28.1",
+      "command": [
+        "--config.file=/etc/alertmanager/alertmanager.json"
+      ],
+      "volumes": [
+        "./alertmanager.json:/etc/alertmanager/alertmanager.json:ro"
+      ],
+      "restart": "unless-stopped"
+    },
+    "grafana": {
+      "image": "grafana/grafana:11.6.0",
+      "volumes": [
+        "./grafana-datasources.json:/etc/grafana/provisioning/datasources/eko.yaml:ro",
+        "./grafana-dashboards.json:/etc/grafana/provisioning/dashboards/eko.yaml:ro",
+        "./grafana-dashboard.json:/var/lib/grafana/dashboards/eko.json:ro"
+      ],
+      "restart": "unless-stopped"
+    },
+    "uptime-kuma": {
+      "image": "louislam/uptime-kuma:1.23.16",
+      "volumes": [
+        "kuma-data:/app/data"
+      ],
+      "restart": "unless-stopped"
+    }
+  },
+  "volumes": {
+    "kuma-data": {}
+  }
+}
