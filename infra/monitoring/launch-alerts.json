@@ -1,0 +1,227 @@
+{
+  "groups": [
+    {
+      "name": "eko-launch",
+      "rules": [
+        {
+          "alert": "LaunchMetricsUnavailable",
+          "expr": "absent(up{job=\"eko-api\"}) or up{job=\"eko-api\"} == 0",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Launch metrics source unavailable",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "LaunchCheckUnavailable",
+          "expr": "(eko_check_available{check!~\"backup|preflight|quote\"} == 0) and on(check,instance,job) (eko_check_active == 1)",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Required launch check unhealthy or unavailable",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "GuardMiss",
+          "expr": "eko_launch_value{metric=\"post_fill_sell_failure\"} > 0",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Post-fill sell check failed; pause trading and open an incident",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "PublishedWalletOutflow",
+          "expr": "eko_launch_value{metric=\"published_wallet_unexpected_outflow\"} > 0",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Published wallet anomaly requires incident review",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "BurnUnexpectedOutflow",
+          "expr": "eko_launch_value{metric=\"burn_unexpected_outflow\"} > 0 and on(instance,job) (eko_check_active{check=\"daily_burn\"} == 1)",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Published wallet anomaly requires incident review",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "BurnWrongToken",
+          "expr": "eko_launch_value{metric=\"burn_wrong_token\"} > 0 and on(instance,job) (eko_check_active{check=\"daily_burn\"} == 1)",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Published wallet anomaly requires incident review",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "SimulationFailures",
+          "expr": "eko_launch_value{metric=\"simulation_failure\"} > 0.05",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Simulation failures exceed 5 percent for five minutes",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          },
+          "for": "5m"
+        },
+        {
+          "alert": "RpcLag",
+          "expr": "eko_launch_value{metric=\"head_lag_ms\"} > 5000",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "RPC head lag exceeds five seconds",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "CompleteVerdictLatency",
+          "expr": "eko_launch_value{metric=\"pair_to_complete_verdict_ms\"} > 5000",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Pair to complete verdict p95 exceeds five seconds",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "StaleCommitter",
+          "expr": "time() - eko_launch_value{metric=\"receipt_commit_timestamp_s\"} >= 600",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Committer missed two five-minute windows",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "DailyBurnLate",
+          "expr": "eko_check_healthy{check=\"daily_burn\"} == 0 and on(check,instance,job) eko_check_active{check=\"daily_burn\"} == 1",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Daily burn unavailable or more than sixty minutes late",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "PreflightLatency",
+          "expr": "eko_launch_value{metric=\"preflight_ms\"} > 150",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "Preflight p95 exceeds 150 milliseconds",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "AiBudget",
+          "expr": "eko_launch_value{metric=\"ai_budget_ratio\"} >= 0.8",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "AI spend reached eighty percent of budget",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "XBudget50",
+          "expr": "eko_launch_value{metric=\"x_budget_ratio\"} >= 0.5 and eko_launch_value{metric=\"x_budget_ratio\"} < 0.8",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "X spend reached fifty percent of cap",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "XBudget80",
+          "expr": "eko_launch_value{metric=\"x_budget_ratio\"} >= 0.8",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "X spend reached eighty percent of cap",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "BackupFailed",
+          "expr": "eko_launch_value{metric=\"backup_success\"} == 0",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "Backup failed",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "BackupUnavailable",
+          "expr": "eko_measurement_available{metric=\"backup_success\"} == 0",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "Backup result missing or stale",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
+          "alert": "LaunchLatencyMeasurementUnavailable",
+          "expr": "eko_check_available{check=~\"preflight|quote\"} == 0",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "Launch latency measurement unavailable"
+          }
+        },
+        {
+          "alert": "AiBudgetUnavailable",
+          "expr": "eko_measurement_available{metric=\"ai_budget_ratio\"} == 0",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "Configured AI budget measurement unavailable"
+          }
+        },
+        {
+          "alert": "XBudgetUnavailable",
+          "expr": "eko_measurement_available{metric=\"x_budget_ratio\"} == 0 and on(instance,job) eko_check_active{check=\"x\"} == 1",
+          "labels": {
+            "severity": "3"
+          },
+          "annotations": {
+            "summary": "Active X budget measurement unavailable"
+          }
+        }
+      ]
+    }
+  ]
+}

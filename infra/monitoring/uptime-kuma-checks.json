@@ -1,0 +1,136 @@
+{
+  "prepared": true,
+  "format": "repo check definitions; configure in Kuma after replacing fixture origins",
+  "checks": [
+    {
+      "name": "web",
+      "type": "http",
+      "url": "https://app.eko.example/",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "api",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/api",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "indexer",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/indexer",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "engines",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/engines",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "mcp",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/mcp",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "oauth",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/oauth",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "guard",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/guard",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "scan",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/scan",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "telegram",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/telegram",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "x",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/x",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": false
+    },
+    {
+      "name": "farcaster",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/farcaster",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": false
+    },
+    {
+      "name": "receipts",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/receipts",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
+      "name": "daily_burn",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/daily_burn",
+      "interval": 30,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": false
+    }
+  ]
+}
