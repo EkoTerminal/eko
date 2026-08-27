@@ -1,0 +1,250 @@
+{
+  "formatVersion": 1,
+  "purpose": "staging-only",
+  "candidateRevision": "96c0205f469664b980763e70c72ba098f08ccb38",
+  "rollbackTargetSeconds": 600,
+  "commonEnvironment": {
+    "NODE_ENV": "production",
+    "HOST": "0.0.0.0",
+    "PORT": "8710",
+    "LIVE_TRADING_ENABLED": "false",
+    "TRADING_ALLOWLIST_ONLY": "true",
+    "TRADE_MAX_USD": "25",
+    "TRADE_CAPS_FROM": "",
+    "FEE_BPS_DEFAULT": "0",
+    "FEE_ACTIVE_FROM": "",
+    "TIERS_ACTIVE_FROM": "",
+    "FLAGS": "",
+    "LEGACY_API": "false",
+    "LEGACY_SIGNALS": "false",
+    "ENABLE_DEV_ROUTES": "false",
+    "MARKET_DATA_SOURCE": "onchain",
+    "SWARM_ENABLED": "false",
+    "MCP_OAUTH_ENABLED": "false",
+    "AI_DAILY_BUDGET_USD": "0",
+    "RPC_PAID_DAILY_BUDGET": "0",
+    "RPC_SESSION_BUDGET": "0",
+    "RPC_PAID_MAX_RPM": "60",
+    "RPC_PUBLIC_MAX_RPM": "120",
+    "RPC_WEIGHTS": "{}"
+  },
+  "opsDefaults": {
+    "trading_live": false,
+    "swarm_ranking": false
+  },
+  "services": {
+    "api": {
+      "config": "infra/railway/api.json",
+      "available": true,
+      "requiresPackets": [],
+      "environment": {
+        "APP_ROLE": "api",
+        "RUN_WORKER": "false",
+        "SERVE_WEB": "true",
+        "PUBLIC_ORIGIN": "https://app.staging.example.invalid",
+        "SESSION_COOKIE_DOMAIN": "staging.example.invalid",
+        "WEB_DIST_DIR": "/app/web",
+        "MIGRATIONS_DIR": "/app/drizzle",
+        "TRADE_CAPS_FILE": "/app/dist/trading-caps.yaml"
+      },
+      "secretNames": [
+        "DATABASE_URL",
+        "SESSION_SECRET",
+        "DEMO_SECRET",
+        "HARNESS_KEY_PEPPER"
+      ],
+      "public": true,
+      "limits": {
+        "cpu": 1,
+        "memoryMb": 1024
+      },
+      "readiness": "GET /v1/health + GET /v1/config + SPA + WS"
+    },
+    "indexer": {
+      "config": "infra/railway/indexer.json",
+      "available": true,
+      "requiresPackets": [],
+      "environment": {
+        "APP_ROLE": "indexer",
+        "RUN_WORKER": "false",
+        "SERVE_WEB": "false",
+        "INDEX_START_BLOCK": "0",
+        "INDEX_BACKFILL_WORKERS": "1",
+        "INDEX_LOG_RANGE": "2000",
+        "INDEX_REORG_DEPTH": "256"
+      },
+      "secretNames": [
+        "DATABASE_URL",
+        "RPC_HTTP_URL",
+        "RPC_WS_URL"
+      ],
+      "public": false,
+      "limits": {
+        "cpu": 1,
+        "memoryMb": 2048
+      },
+      "readiness": "indexer_started + head_tick + persisted cursor/lag"
+    },
+    "engines": {
+      "config": "infra/railway/engines.json",
+      "available": true,
+      "requiresPackets": [],
+      "environment": {
+        "APP_ROLE": "engines",
+        "RUN_WORKER": "false",
+        "SERVE_WEB": "false",
+        "ENGINE_MODE": "live",
+        "ENGINE_CONCURRENCY": "1",
+        "ANVIL_FORK_URL": "http://sim.private.invalid:8545"
+      },
+      "secretNames": [
+        "DATABASE_URL",
+        "RPC_HTTP_URL"
+      ],
+      "public": false,
+      "limits": {
+        "cpu": 1,
+        "memoryMb": 2048
+      },
+      "readiness": "engines_started + durable engine progress/outbox"
+    },
+    "worker": {
+      "config": "infra/railway/worker.json",
+      "available": true,
+      "requiresPackets": [],
+      "environment": {
+        "APP_ROLE": "worker",
+        "RUN_WORKER": "true",
+        "SERVE_WEB": "false",
+        "PUBLIC_ORIGIN": "https://app.staging.example.invalid",
+        "SESSION_COOKIE_DOMAIN": "staging.example.invalid",
+        "MIGRATIONS_DIR": "/app/drizzle",
+        "TRADE_CAPS_FILE": "/app/dist/trading-caps.yaml"
+      },
+      "secretNames": [
+        "DATABASE_URL",
+        "SESSION_SECRET",
+        "DEMO_SECRET",
+        "HARNESS_KEY_PEPPER"
+      ],
+      "public": false,
+      "limits": {
+        "cpu": 1,
+        "memoryMb": 2048
+      },
+      "readiness": "EKO worker ready + exclusive role lease"
+    },
+    "mcp": {
+      "config": "infra/railway/mcp.json",
+      "available": true,
+      "requiresPackets": [
+        "094",
+        "095"
+      ],
+      "environment": {
+        "APP_ROLE": "mcp",
+        "RUN_WORKER": "false",
+        "SERVE_WEB": "false",
+        "MCP_PUBLIC_URL": "https://mcp.staging.example.invalid/mcp",
+        "PUBLIC_ORIGIN": "https://app.staging.example.invalid"
+      },
+      "secretNames": [
+        "DATABASE_URL",
+        "HARNESS_KEY_PEPPER"
+      ],
+      "public": false,
+      "limits": {
+        "cpu": 1,
+        "memoryMb": 2048
+      },
+      "readiness": "GET /health + authenticated /mcp initialize; real tool handlers require 094/095"
+    },
+    "receipts": {
+      "config": "infra/railway/receipts.json",
+      "available": true,
+      "requiresPackets": [],
+      "environment": {
+        "APP_ROLE": "receipts",
+        "RUN_WORKER": "false",
+        "SERVE_WEB": "false"
+      },
+      "secretNames": [
+        "DATABASE_URL",
+        "RECEIPTS_COMMITTER_KEY"
+      ],
+      "public": false,
+      "limits": {
+        "cpu": 1,
+        "memoryMb": 2048
+      },
+      "readiness": "unavailable; require committed registry event + proof"
+    },
+    "bots": {
+      "config": "infra/railway/bots.json",
+      "available": false,
+      "requiresPackets": [
+        "116"
+      ],
+      "environment": {
+        "APP_ROLE": "bots",
+        "RUN_WORKER": "false",
+        "SERVE_WEB": "false"
+      },
+      "secretNames": [
+        "DATABASE_URL",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET"
+      ],
+      "public": false,
+      "limits": {
+        "cpu": 1,
+        "memoryMb": 2048
+      },
+      "readiness": "unavailable; require approved Telegram fixture check"
+    },
+    "og": {
+      "config": "infra/railway/og.json",
+      "available": false,
+      "requiresPackets": [
+        "111"
+      ],
+      "environment": {
+        "APP_ROLE": "og",
+        "RUN_WORKER": "false",
+        "SERVE_WEB": "false"
+      },
+      "secretNames": [
+        "DATABASE_URL"
+      ],
+      "public": false,
+      "limits": {
+        "cpu": 1,
+        "memoryMb": 2048
+      },
+      "readiness": "unavailable; require deterministic image check"
+    }
+  },
+  "postgres": {
+    "major": 16,
+    "private": true,
+    "replicas": 1,
+    "volumeMount": "/var/lib/postgresql/data",
+    "limits": {
+      "cpu": 2,
+      "memoryMb": 4096,
+      "volumeGb": 20
+    },
+    "readiness": "pg_isready; SELECT 1; three migration ledgers; encrypted backup/restore external packet 084"
+  },
+  "sim": {
+    "railway": false,
+    "private": true,
+    "chainId": 4663,
+    "limits": {
+      "cpu": 2,
+      "memoryMb": 4096
+    },
+    "upstream": "metered archive gateway only; no direct paid fork URL",
+    "readiness": "chain id + pinned fork block/hash + ArbSys mock + supported buy/sell fork suite"
+  }
+}
