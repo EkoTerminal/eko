@@ -19,7 +19,7 @@ import { IconRadar, IconPairs, IconSearch, IconAgent, IconMenu } from '../icons'
 import { NAV_GROUPS, NAV_ICONS, breadcrumbTrail } from './navigation';
 
 // A real link, not a router Link: "/" is the landing, served by the host (and by vite.config.ts in dev), not the SPA.
-export function BrandLink() { return <a href="/" className="apphdr-brand" aria-label={`${APP_NAME}: back to the site`}><LogoMark /><span className="eko-wordmark">{APP_NAME}</span></a>; }
+export function BrandLink() { return <a href="/" className="apphdr-brand" aria-label={`${APP_NAME}: back to the site`}><LogoMark />{APP_NAME}</a>; }
 export function ScanBox({ focus = false, onDone }: { focus?: boolean; onDone?: () => void }) {
   const [query, setQuery] = useState(''); const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
