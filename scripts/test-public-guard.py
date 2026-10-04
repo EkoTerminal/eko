@@ -35,10 +35,13 @@ class PublicGuardTests(unittest.TestCase):
         guard.scan(b'sample-user contributors@example.invalid API_KEY=replace-me', self.fingerprints)
 
     def test_private_paths_blocked(self):
-        for path in (b'.env', b'apps/server/.env.local', b'docs/tasks/report.md', b'node_modules/module/index.js'):
+        for path in (b'.env', b'apps/server/.env.local', b'docs/screenshots/capture.png', b'.claude/launch.json',
+                     b'node_modules/module/index.js'):
             with self.assertRaises(ValueError):
                 guard.check_path(path, self.fingerprints)
-        guard.check_path(b'.env.example', self.fingerprints)
+        for path in (b'.env.example', b'docs/tasks/report.md', b'docs/eko/FACTS.md',
+                     b'harness-packs/generated/claude_code/.claude/skills/eko/SKILL.md'):
+            guard.check_path(path, self.fingerprints)
 
     def test_empty_or_malformed_configuration_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:

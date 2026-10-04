@@ -62,9 +62,12 @@ def scan(data, fingerprints):
 def check_path(path, fingerprints):
     scan(path, fingerprints)
     decoded = path.decode('utf8', errors='strict')
-    if any(part in decoded.split('/') for part in ('.git', 'node_modules', '.data', '.claude')):
+    # Root .claude/ is local editor tooling; generated harness packs ship a .claude/ tree for users.
+    if any(part in decoded.split('/') for part in ('.git', 'node_modules', '.data')) or decoded.startswith('.claude/'):
         raise ValueError('Private/generated path is forbidden')
-    if decoded.startswith(('docs/tasks/', 'docs/eko/', 'docs/screenshots/')):
+    # The spec (docs/eko) and task reports (docs/tasks) are public since the October 3 sync;
+    # internal captures stay out because images cannot be reviewed for identifiers as text.
+    if decoded.startswith('docs/screenshots/'):
         raise ValueError('Internal artifact is forbidden')
     if any(part.startswith('.env') and part != '.env.example' for part in decoded.split('/')):
         raise ValueError('Environment-secret file is forbidden')
