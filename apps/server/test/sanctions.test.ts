@@ -21,8 +21,11 @@ describe('SDN parser (synthetic fixtures only)', () => {
       text.replaceAll('Digital Currency Address', 'Unknown identifier')]) expect(() => parseSdn(bad)).toThrow();
   });
   it('requires an explicit Treasury HTTPS source and makes no download for invalid URLs', async () => {
-    for (const url of ['http://ofac.treasury.gov/sdn.xml', 'https://untrusted.example/sdn.xml', 'https://sample-user:placeholder@ofac.treasury.gov/sdn.xml'])
+    for (const url of ['http://ofac.treasury.gov/sdn.xml', 'https://untrusted.example/sdn.xml', 'https://sample-user:placeholder@ofac.treasury.gov/sdn.xml',
+      'https://wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com/Published/sdn.xml', 'https://evil.ofac.treas.gov/sdn.xml'])
       expect(() => loadConfig({ OFAC_SDN_URL: url, PGLITE_DIR: ':memory:' })).toThrow();
+    for (const url of ['https://www.treasury.gov/ofac/downloads/sdn.xml', 'https://sanctionslistservice.ofac.treas.gov/api/publicationpreview/exports/sdn.xml'])
+      expect(loadConfig({ OFAC_SDN_URL: url, PGLITE_DIR: ':memory:' }).OFAC_SDN_URL).toBe(url);
     await expect(downloadSdn('http://example.test')).rejects.toThrow();
   });
 });

@@ -8,6 +8,7 @@ import { AddressSchema } from '@eko/shared';
 import { parseFlagOverride } from './flags/service.js';
 import { parsePointsRates } from './points/config.js';
 import { TrustProxyHopsSchema } from './proxy-trust.js';
+import { isTreasurySource } from './sanctions/source.js';
 
 // TODO(spec): BACKEND §15.3 leaves WS budgets unspecified; tune these bounded defaults with load evidence.
 export const WS_DEFAULT_LIMITS = {
@@ -92,11 +93,8 @@ const EnvSchema = z.object({
   RUN_WORKER: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   WEB_DIST_DIR: z.string().default('../web/dist'),
   // TODO(spec): §2.4 leaves the OFAC URL/format unverified; configure a verified Treasury SDN XML source before trading.
-  OFAC_SDN_URL: optionalValue(z.url().refine(value => {
-    const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password && !url.hash &&
-      (url.hostname === 'treasury.gov' || url.hostname.endsWith('.treasury.gov'));
-  }, 'OFAC source must be a public Treasury HTTPS URL')),
+  OFAC_SDN_URL: optionalValue(z.url().refine(value => isTreasurySource(new URL(value)),
+    'OFAC source must be a public Treasury HTTPS URL')),
   LOG_LEVEL: z.string().default('info'),
   SENTRY_DSN: z.string().optional(),
 

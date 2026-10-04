@@ -10,12 +10,39 @@ function stream(chunks: Uint8Array[], headers: Record<string, string> = {}) {
   return { fetch, read, cancel };
 }
 describe('bounded sanctions downloader', () => {
-  it('decodes chunked UTF-8 and sends no credentials or redirects', async () => {
+  it('decodes chunked UTF-8, sends no credentials and never lets fetch follow redirects itself', async () => {
     const bytes = new TextEncoder().encode('<fixture>€</fixture>');
     const f = stream([bytes.slice(0, 10), bytes.slice(10)]);
     expect(await downloadSdn(source)).toBe('<fixture>€</fixture>');
-    expect(f.fetch).toHaveBeenCalledWith(new URL(source), { redirect: 'error', signal: expect.any(AbortSignal), headers: { accept: 'application/xml, text/xml' } });
+    expect(f.fetch).toHaveBeenCalledWith(new URL(source), { redirect: 'manual', signal: expect.any(AbortSignal), headers: { accept: 'application/xml, text/xml' } });
     expect(f.cancel).toHaveBeenCalledOnce();
+  });
+  it('follows Treasury redirects to the signed published-file link and nowhere else', async () => {
+    const sls = 'https://sanctionslistservice.ofac.treas.gov/api/publicationpreview/exports/sdn.xml';
+    const signed = 'https://wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com/Published/day/SDN.XML?X-Amz-Signature=fixture';
+    const redirect = (location?: string) => ({ status: 302, headers: new Headers(location ? { location } : {}), body: null });
+    const read = vi.fn(async () => ({ done: true }));
+    const ok = { status: 200, headers: new Headers(), body: { getReader: () => ({ read, cancel: vi.fn(async () => {}) }) } };
+    const fetch = vi.fn().mockResolvedValueOnce(redirect(sls)).mockResolvedValueOnce(redirect(signed)).mockResolvedValueOnce(ok);
+    vi.stubGlobal('fetch', fetch);
+    expect(await downloadSdn('https://www.treasury.gov/ofac/downloads/sdn.xml')).toBe('');
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual(['https://www.treasury.gov/ofac/downloads/sdn.xml', sls, signed]);
+    expect(fetch.mock.calls.every(([, init]) => init.redirect === 'manual')).toBe(true);
+
+    for (const location of ['https://untrusted.example/sdn.xml', 'http://wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com/SDN.XML',
+      'https://other-bucket.s3.us-gov-west-1.amazonaws.com/SDN.XML', 'https://sample-user:placeholder@ofac.treasury.gov/sdn.xml']) {
+      fetch.mockReset().mockResolvedValueOnce(redirect(location));
+      await expect(downloadSdn(source)).rejects.toThrow('Invalid source');
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+    fetch.mockReset().mockResolvedValueOnce(redirect());
+    await expect(downloadSdn(source)).rejects.toThrow('Source unavailable');
+    fetch.mockReset().mockResolvedValue(redirect(source));
+    await expect(downloadSdn(source)).rejects.toThrow('Source unavailable');
+    expect(fetch).toHaveBeenCalledTimes(4);
+    fetch.mockReset();
+    await expect(downloadSdn(signed)).rejects.toThrow('Invalid source');
+    expect(fetch).not.toHaveBeenCalled();
   });
   it('rejects oversized declared bodies before reading', async () => {
     const f = stream([], { 'content-length': String(32 * 1024 * 1024 + 1) });

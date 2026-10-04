@@ -3,6 +3,7 @@ import type { ChainDb } from '@eko/db';
 import type { ApiError, ErrorCode } from '@eko/shared';
 import { ERROR_STATUS } from '../http/v1/helpers.js';
 import { normalizeWallet, parseSdn } from './parser.js';
+import { isTreasuryRedirect, isTreasurySource } from './source.js';
 
 export class ScreeningError extends Error {
   readonly statusCode: number;
@@ -61,19 +62,30 @@ export class SanctionsService {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_BYTES = 32 * 1024 * 1024;
+const MAX_REDIRECTS = 3;
 /** Bounded public-list HTTP read. Never sends account data, cookies or authentication.
  * @remarks
- * Fetch only credential-free Treasury HTTPS XML without redirects, with a 30-second timeout and 32
- * MB streaming cap. Host source selection only; invalid source, HTTP/body/size/UTF-8/transport
- * failures reject and no user data is sent.
+ * Fetch only credential-free Treasury HTTPS XML, with a 30-second overall timeout and 32 MB
+ * streaming cap. Treasury's list service answers with redirects (treasury.gov to the Sanctions
+ * List Service to a signed link in its published-file bucket), so up to three redirects are
+ * followed by hand and every hop must stay on those hosts. Host source selection only; invalid
+ * source or hop, HTTP/body/size/UTF-8/transport failures reject and no user data is sent.
  * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
  * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
  */
 export async function downloadSdn(url: string): Promise<string> {
-  const target = new URL(url);
-  if (target.protocol !== 'https:' || target.username || target.password || target.hash ||
-    !(target.hostname === 'treasury.gov' || target.hostname.endsWith('.treasury.gov'))) throw new Error('Invalid source');
-  const response = await fetch(target, { redirect: 'error', signal: AbortSignal.timeout(30_000), headers: { accept: 'application/xml, text/xml' } });
+  let target = new URL(url);
+  if (!isTreasurySource(target)) throw new Error('Invalid source');
+  const signal = AbortSignal.timeout(30_000);
+  let response = await fetch(target, { redirect: 'manual', signal, headers: { accept: 'application/xml, text/xml' } });
+  for (let hops = 0; response.status >= 300 && response.status < 400; hops++) {
+    const location = response.headers.get('location');
+    await response.body?.cancel().catch(() => {});
+    if (hops >= MAX_REDIRECTS || !location) throw new Error('Source unavailable');
+    target = new URL(location, target);
+    if (!isTreasuryRedirect(target)) throw new Error('Invalid source');
+    response = await fetch(target, { redirect: 'manual', signal, headers: { accept: 'application/xml, text/xml' } });
+  }
   if (response.status !== 200 || !response.body || Number(response.headers.get('content-length') ?? 0) > MAX_BYTES) throw new Error('Source unavailable');
   const chunks: Uint8Array[] = [];
   let bytes = 0;
