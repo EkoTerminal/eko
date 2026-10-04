@@ -19,6 +19,25 @@ coin activity (launches, swaps, transfers, liquidity and Pons events) and persis
 work even when `chain_blocks` is empty. Production uses `DATABASE_URL` and Postgres LISTEN, with polling as fallback.
 Optional `RPC_HTTP_URL` enables block-stamped archive Pons reads and missing block timestamps; its chain ID must be 4663. Without RPC or cached
 reads, taxes and anti-snipe remain unknown. Exemption holdings/history can still be evaluated from indexed rows.
+Live catch-up: a lagging live poll used to replay every historical checkpoint for every coin in block order. Each
+uncached checkpoint reloads the coin's history, rebuilds holders from transfers (later transfers exist, so the
+balance fast path is unusable), scans the hourly market twice and makes the Pons archive reads, so lag made every
+evaluation slower and new launches waited behind hours of backlog showing "Scanning…". Now:
+
+- `ENGINE_LIVE_BACKLOG_SEC` (default 900, 60–604800): checkpoints further than this behind the indexed head are
+  coalesced; the coin is evaluated at its recent checkpoints, or once at head if all were stale. 604800 keeps full
+  catch-up. `ENGINE_MODE=replay` over the skipped range fills the history later (existing runs are skipped).
+- Coins with no card yet (first scans) run before refreshes of scanned coins, newest launch first; each coin's own
+  checkpoints stay in block order. Replay order is unchanged.
+- `ENGINE_LIVE_SLICE_MS` (default 60000): after this long, a poll yields once first scans are done if a token was
+  indexed beyond its head, so that launch is scanned next. Only coins whose checkpoints all ran advance their progress.
+- The hourly market-rank read is shared by every evaluation at the same block within a poll.
+- `live_planned` logs the task count, first scans and coalesced checkpoints when it coalesces or has more than ten
+  first scans queued.
+
+`pnpm --filter @eko/engines exec node --import tsx test/live-catchup-benchmark.ts` compares one lagging live poll
+with and without coalescing on a timestamped PGlite fixture (`BENCH_SWAPS`, `BENCH_HOURS` resize it).
+
 `ENGINE_CONCURRENCY` defaults to 4 (1–32); `ENGINE_POLL_MS` defaults to 2000. SIGINT/SIGTERM finish the current
 coin evaluation, drain in-flight reads and close the database. Replay prints `replay_complete` or `replay_interrupted`
 with evaluations/s, elapsed time, RPC call counts by method, and wall-time shares for source loading, writes and

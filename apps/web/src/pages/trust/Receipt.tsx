@@ -55,7 +55,7 @@ export default function Receipt({ params }: { params: Record<string, string> }) 
     const checked = await verifyReceipt(receipt, PUBLISHED_RECEIPTS_REGISTRY, keylessReceiptReader);
     if (run === generation.current) { setResult(checked); setChecking(false); }
   };
-  return <div className="page trust-page"><div className="page-head"><div><h1>Verify a receipt</h1><p>JCS hashing, Merkle proof and keyless on-chain checks run in your browser.</p></div><Link to="/scoreboard">Scoreboard</Link></div>
+  return <div className="shell-page trust-page"><div className="page-head"><div><h1>Verify a receipt</h1><p>JCS hashing, Merkle proof and keyless on-chain checks run in your browser.</p></div><Link to="/scoreboard">Scoreboard</Link></div>
     {error ? <p role="alert">{error}</p> : receipt ? <ReceiptContents receipt={receipt} result={result} checking={checking} onVerify={() => void verify()} registryAvailable={!!PUBLISHED_RECEIPTS_REGISTRY} /> : <p role="status">Loading receipt…</p>}
     <button className="btn" onClick={() => setReload(n => n + 1)}>Refresh receipt</button>
   </div>;

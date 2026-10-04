@@ -16,6 +16,7 @@ interface Subscription {
   grace?: ReturnType<typeof setTimeout>; buffer: Map<string, WsEvent>; syncing: boolean; needsSnapshot: boolean; generation: number;
 }
 const USER = new Set(['alerts', 'agents', 'approvals', 'orders']);
+export const FRAME_FALLBACK_MS = 250;
 const foreground = (ch: string) => ['feed', 'pairs', 'radar', 'coin', 'flow'].includes(ch.split(':')[0]);
 const limit = (ch: string) => ch === 'feed' ? 500 : ch === 'pairs' ? 300 : ch.startsWith('flow:') ? 5000 : 500;
 const eventKey = (event: WsEvent) => {
@@ -30,6 +31,7 @@ export class Realtime {
   private stateListeners = new Set<(state: WsState) => void>();
   private controlListeners = new Set<(message: Exclude<WsServer, WsEvent>) => void>();
   private frame: number | null = null;
+  private frameFallback?: ReturnType<typeof setTimeout>;
   private hiddenTimer?: ReturnType<typeof setTimeout>;
   private suspended = false;
   private signedIn = false;
@@ -38,7 +40,9 @@ export class Realtime {
   state: WsState = 'closed';
   constructor(private transport: ChannelTransport,
     private schedule = (cb: FrameRequestCallback) => requestAnimationFrame(cb),
-    private cancel = (id: number) => cancelAnimationFrame(id)) {
+    private cancel = (id: number) => cancelAnimationFrame(id),
+    /** Browsers pause animation frames for pages they are not painting; deltas must still drain. */
+    private frameFallbackMs = FRAME_FALLBACK_MS) {
     this.dispose.push(transport.on((m) => this.receive(m)), transport.onState((state) => {
       this.state = state;
       if (state === 'open') {
@@ -153,18 +157,25 @@ export class Realtime {
   }
   private flushSoon() {
     if (this.frame !== null) return;
-    this.frame = this.schedule(() => {
-      this.frame = null;
-      for (const sub of this.channels.values()) {
-        if (sub.syncing) continue;
-        const events = [...sub.buffer.values()].sort((a, b) => a.seq - b.seq); sub.buffer.clear();
-        if (events.length) sub.listeners.forEach((l) => { l.batch?.(events); if (l.event) for (const event of events) l.event(event); });
-      }
-    });
+    // One write per painted frame. A page that is not painting (background tab, hidden pane, occluded window)
+    // never runs the frame, so a timer drains the same batch; otherwise the store froze until a reload.
+    this.frame = this.schedule(() => this.flush());
+    this.frameFallback = setTimeout(() => this.flush(), this.frameFallbackMs);
+  }
+  private flush() {
+    if (this.frame !== null) this.cancel(this.frame);
+    if (this.frameFallback) clearTimeout(this.frameFallback);
+    this.frame = null; this.frameFallback = undefined;
+    for (const sub of this.channels.values()) {
+      if (sub.syncing) continue;
+      const events = [...sub.buffer.values()].sort((a, b) => a.seq - b.seq); sub.buffer.clear();
+      if (events.length) sub.listeners.forEach((l) => { l.batch?.(events); if (l.event) for (const event of events) l.event(event); });
+    }
   }
   close() {
     this.transport.close(); this.dispose.forEach((fn) => fn());
     if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    if (this.frameFallback) clearTimeout(this.frameFallback);
     if (this.frame !== null) this.cancel(this.frame);
     for (const sub of this.channels.values()) { if (sub.grace) clearTimeout(sub.grace); sub.generation++; }
     this.channels.clear();

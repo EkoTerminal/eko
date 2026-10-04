@@ -5,7 +5,8 @@ import { createPairRows } from '../../mocks/demo/pairs';
 import { createFeedRows } from '../../mocks/demo/feed';
 import { PairView } from './Pairs';
 import { LabelGlyph } from './Feed';
-import { antiSnipeLeft, antiSnipeTax, applyPairEvents, feedDescription, feedRing, flushFeed, pairColumns, pairTradeDisabled, receiveFeed } from './pairsFeedModel';
+import { antiSnipeLeft, antiSnipeTax, applyPairEvents, feedDescription, feedRing, flushFeed, launchedAt, pairColumns, pairTradeDisabled, receivedAt, receiveFeed } from './pairsFeedModel';
+import { scanDelayed } from './radarModel';
 import { terminalRange } from './terminalWindow';
 
 describe('pairs columns and guard', () => {
@@ -23,6 +24,42 @@ describe('pairs columns and guard', () => {
     expect(removed).toEqual(next);
     const many = Array.from({ length: 130 }, (_, i) => ({ ...row, address: `0x${i.toString(16).padStart(40, '0')}` as const, ageSec: i }));
     expect(pairColumns(many).new).toHaveLength(100);
+  });
+  it('orders New by launch time across rows received at different times, so later launches reach the top', () => {
+    // Reproduces the stuck New column: rows keep the ageSec they carried on arrival, so comparing raw ageSec
+    // kept quiet early rows (small frozen ages) above every launch that arrived later with a larger first age.
+    const pair = (symbol: string, n: number, ageSec: number) => ({ ...row, column: 'new' as const, address: `0x${n.toString(16).padStart(40, '0')}` as const, symbol: { ...row.symbol, text: symbol }, ageSec });
+    const t0 = 1_000_000, received = new Map<string, number>();
+    const snapshot = [pair('COSM', 1, 5), pair('SI', 2, 8)];
+    for (const r of snapshot) received.set(r.address, t0);
+    const event = (data: ReturnType<typeof pair>, at: number, seq: number): WsEvent<'pairs'> => { received.set(data.address, at); return { t: 'ev', ch: 'pairs', kind: 'pair_upsert', seq, ts: at, data }; };
+    let rows = applyPairEvents(snapshot, [event(pair('WICK', 3, 20), t0 + 30_000, 1)], received);
+    rows = applyPairEvents(rows, [event(pair('NRV', 4, 13), t0 + 60_000, 2)], received);
+    rows = applyPairEvents(rows, [event(pair('RDTRIP', 5, 14), t0 + 75_000, 3)], received);
+    const top = (rs: typeof rows, at?: Map<string, number>) => pairColumns(rs, at).new.slice(0, 3).map((r) => r.symbol.text);
+    expect(top(rows)).toEqual(['COSM', 'SI', 'NRV']); // the old comparison: stuck on early rows
+    expect(top(rows, received)).toEqual(['RDTRIP', 'NRV', 'WICK']);
+    // A later update of an old row re-measures its age; it does not jump ahead of newer launches.
+    rows = applyPairEvents(rows, [event(pair('COSM', 1, 95), t0 + 90_000, 4)], received);
+    expect(top(rows, received)).toEqual(['RDTRIP', 'NRV', 'WICK']);
+    expect(launchedAt(rows.find((r) => r.symbol.text === 'COSM')!, received)).toBe(t0 - 5_000);
+    // The 100-row window keeps the newest launches, not the smallest stale ages.
+    const many = Array.from({ length: 120 }, (_, i) => pair(`OLD${i}`, 100 + i, 1));
+    many.forEach((r) => received.set(r.address, t0 - 600_000));
+    const windowed = pairColumns(applyPairEvents([...many, ...rows], [], received), received).new;
+    expect(windowed).toHaveLength(100); expect(windowed.slice(0, 3).map((r) => r.symbol.text)).toEqual(['RDTRIP', 'NRV', 'WICK']);
+  });
+  it('maps envelope server time onto the client clock and never into the future', () => {
+    expect(receivedAt(10_000, 20_000, 500)).toBe(9_500);
+    expect(receivedAt(30_000, 20_000, 0)).toBe(20_000);
+  });
+  it('labels a first scan that has waited past the Fast Scan window as delayed, not scanning', () => {
+    const pending = { ...row, verdictPending: true, ageSec: 10 };
+    const html = (now: number) => renderToStaticMarkup(<ul><PairView row={pending} now={now} at={1000} stale={false} select={() => {}} trade={() => {}} /></ul>);
+    expect(html(1000)).toContain('Scanning…'); expect(html(1000)).not.toContain('Scan delayed');
+    expect(html(51_000)).toContain('Scan delayed'); expect(html(51_000)).not.toContain('Scanning…');
+    expect(html(51_000)).toMatch(/<button[^>]*disabled=""[^>]*title="Waiting for the guard&#x27;s first scan\."/);
+    expect(scanDelayed({ verdictPending: false }, 3600)).toBe(false);
   });
   it('Scanning never enables Trade even with a clear placeholder; Danger and stale rows also remain disabled', () => {
     for (const verdict of ['clear', 'monitor', 'danger'] as const) {

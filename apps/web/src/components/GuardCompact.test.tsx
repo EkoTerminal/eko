@@ -5,7 +5,8 @@ import { renderToStaticMarkup as render } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { GuardAssessmentV2Schema, BUYER_RISK, DYOR, NON_AFFILIATION, GUARD_CHECK_LABELS, type GuardAssessmentV2 } from '@eko/shared';
 import { assessment } from '../../../../packages/shared/test/fixtures/contracts/guard-v2';
-import { GuardCompact, CompactVerdictChip } from './GuardCompact';
+import { GuardCompact, CompactVerdictChip, GuardLegend } from './GuardCompact';
+import { GUARD2_UNAVAILABLE_TITLE, LEGACY_TITLE } from '../copy/availability';
 import { RadarRowView, HotStrip } from '../pages/terminal/RadarParts';
 import { PairView } from '../pages/terminal/Pairs';
 import { FeedRow, FeedDescription } from '../pages/terminal/Feed';
@@ -65,5 +66,15 @@ describe('037 compact rendering (synthetic fixtures)', () => {
     const item = FeedItemSchema.parse({id:'sample-feed',kind:'verdict',coin:guard.coin,symbol:row.symbol,block:123,ts:1000000,guardReasonCode:'EXIT_COST',guardFactorId:'execution_cost'});
     expect(render(<FeedDescription item={item}/>)).toContain('Venue round-trip cost');
     expect(render(<FeedDescription item={{...item,guardReason:guard.reasons[0]}}/>)).toContain('buy-then-sell');
+  });
+  it('explains the legacy and Guard 2 labels once, keeping both disclosures on the row', () => {
+    const legend = render(<GuardLegend rows={[{ guardV2: null }, { guardV2: null }]} />);
+    expect(legend.match(/Guard 2 assessment unavailable:/g)).toHaveLength(1);expect(legend).toContain('Legacy assessment · rules 1.0.x:');
+    expect(render(<GuardLegend rows={[{}]} />)).toBe('');
+    const active = GuardAssessmentV2Schema.parse({...guard,mode:'active',level:'high',observedLevel:'high',score:60,baseScore:60,familyPoints:{E:60,O:0,Ff:0,C:0,I:0},factors:[]}) as GuardAssessmentV2;
+    expect(render(<GuardLegend rows={[{ guardV2: active }]} />)).toBe('');
+    const chip = render(<CompactVerdictChip level="monitor" guard={null} />);
+    expect(chip).toContain('Legacy assessment · rules 1.0.x');expect(chip).toContain('Guard 2 assessment unavailable');
+    expect(chip).toContain(`title="${LEGACY_TITLE}"`);expect(chip).toContain(`title="${GUARD2_UNAVAILABLE_TITLE}"`);
   });
 });

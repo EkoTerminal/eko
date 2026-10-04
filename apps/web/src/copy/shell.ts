@@ -19,5 +19,7 @@ export const SHELL_COPY = {
   wallet: 'Connect wallet', risk: 'Risk mode', open: 'Open the full page', close: 'Close inspector',
   select: 'Inspector preview', inspector: 'Inspector', planDormant: 'Tiers and trials are planned. Free during launch week.',
   configError: 'Configuration unavailable. Optional routes are hidden.', retry: 'Retry',
+  connectGate: 'Give your trading agent EKO’s checks before each order, through Claude Code or another MCP client. You supervise it in Mission Control.',
+  missionEyebrow: 'Mission Control', missionGate: 'Mission Control is where you connect a trading agent to EKO and review the checks it runs before each order.',
 };
 export const RISK_OPTIONS = [{ value: 'safe', label: 'Safe' }, { value: 'balanced', label: 'Balanced' }, { value: 'degen', label: 'Degen' }] as const;

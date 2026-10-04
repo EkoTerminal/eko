@@ -1,5 +1,10 @@
 import { PlaybookIdSchema, type CoinCardMeta, type PlaybookId } from '@eko/shared';
 export const SCANNING = 'Scanning…';
+/** Fast Scan normally lands within seconds; past this age a pending row is waiting, not scanning.
+ * TODO(spec): FRONTEND §3.4 defines only "Scanning…"; the 60 s threshold and "Scan delayed" copy need sign-off. */
+export const SCAN_DELAYED_AFTER_SEC = 60;
+export const SCAN_DELAYED = 'Scan delayed';
+export const SCAN_DELAYED_DETAIL = "No verdict yet. This launch is waiting in the scan queue; Trade stays off until the guard's first scan finishes.";
 export const NOT_FULLY_CHECKED = 'Not fully checked';
 export const NOT_CHECKED = 'not checked yet';
 export const PENDING_ORDER = 'Not fully checked. Some required checks have not run; review the missing checks before placing an order.';
@@ -15,6 +20,10 @@ export function missingChecks(evaluated?:PlaybookId[],meta?:CoinCardMeta,missing
 }
 
 export const CHECK_LEGEND='— not checked yet: exit costs and buyer mix arrive with the trade simulation and wallet labels';
+// Plain-language keys for the Guard disclosures; the disclosure labels themselves stay on every row.
+export const LEGACY_TITLE='Graded by EKO’s first rule set (rules 1.0.x), shown for reference.';
+export const GUARD2_UNAVAILABLE_TITLE='The current buyer-risk check (Guard 2) has no result for this coin yet. Buys stay unavailable until it does.';
+export const GUARD_LEGEND='Legacy assessment · rules 1.0.x: the grade from EKO’s first rule set, shown for reference. Guard 2 assessment unavailable: the current buyer-risk check has no result for this coin yet, and buys stay unavailable until it does.';
 
 export const NOT_CHECKED_LABEL='Not checked yet';
 export const NOT_TRACKED_LABEL='Not tracked yet';

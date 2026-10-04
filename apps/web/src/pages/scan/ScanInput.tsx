@@ -17,5 +17,5 @@ export function ScanInput({ examples = [] }: { examples?: string[] }) {
       enterKeyHint="go" autoComplete="off" spellCheck={false} maxLength={42} aria-invalid={!!error} aria-describedby={error ? 'scan-input-error' : undefined} disabled={busy} />
       <button className="btn btn-primary" disabled={busy || !query.trim()}>{busy ? C.pending : C.submit}</button></div>
     {error && <p id="scan-input-error" role="alert">{error}</p>}
-  </form><div className="scan-examples">{examples.length ? examples.slice(0, 3).map(address => <button className="btn btn-sm" key={address} disabled={busy} title={address} onClick={() => { setQuery(address); void submit(address); }}>{address.slice(0, 6)}…{address.slice(-4)}</button>) : <span className="muted">{C.examplesUnavailable}</span>}</div></div>;
+  </form><div className="scan-examples">{examples.length ? examples.slice(0, 3).map(address => <button className="btn btn-sm" key={address} disabled={busy} title={address} onClick={() => { setQuery(address); void submit(address); }}>{address.slice(0, 6)}…{address.slice(-4)}</button>) : <span className="muted">{C.scope}</span>}</div></div>;
 }

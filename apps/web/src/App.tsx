@@ -26,6 +26,8 @@ import { SkipLink } from './components/SkipLink';
 import { useShareMeta } from './lib/share';
 
 const pages = new Map([...ROUTES, ...INTERNAL_ROUTES].map((route) => [route, lazy(route.load)]));
+/** Wallet-gated Mission Control pages still say what they are before asking for a wallet. */
+function GatedHead({ title, intro }: { title: string; intro: string }) { return <div className="shell-page gated-head"><div className="page-head"><span className="eyebrow">{C.missionEyebrow}</span><h1>{title}</h1><p>{intro}</p></div></div>; }
 export function NotFound() { return <div className="shell-page"><div className="page-head"><h1>{C.notFound}</h1></div><Link to="/radar" className="btn">{C.back}</Link></div>; }
 async function loadConfig(signal?: AbortSignal) {
   try { const config = await fetchParsed('/config', PublicConfigSchema, { signal }); useShell.setState({ config, configError: null }); }
@@ -91,7 +93,8 @@ export function App({ walletEnabled = false }: { walletEnabled?: boolean }) {
   // The title follows the resolved route, which can change after /config loads its flags; focus moves only on navigation.
   const pageTitle = resolved?.route.title ?? C.notFound;
   useShareMeta(path, pageTitle);
-  const page = Page && resolved ? <>{!(resolved.route.workspace === 'mission' && resolved.route.auth === 'siwe' && !signedIn && !MOCKS && (path.startsWith('/mission/agents/') || path === '/mission/connect' || path === '/mission/approvals' || path.startsWith('/approve/'))) && <Page params={resolved.params} />}{resolved.route.auth === 'siwe' && path !== '/bags' && path !== '/watch' && !signedIn && !(MOCKS && resolved.route.workspace === 'mission') ? <div className="connect-card"><p>{C.connect}</p><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-wallet'))}>{C.wallet}</button></div> : null}
+  const gatedMission = !!resolved && resolved.route.workspace === 'mission' && resolved.route.auth === 'siwe' && !signedIn && !MOCKS && (path.startsWith('/mission/agents/') || path === '/mission/connect' || path === '/mission/approvals' || path.startsWith('/approve/'));
+  const page = Page && resolved ? <>{gatedMission ? <GatedHead title={pageTitle} intro={path === '/mission/connect' ? C.connectGate : C.missionGate} /> : <Page params={resolved.params} />}{resolved.route.auth === 'siwe' && path !== '/bags' && path !== '/watch' && !signedIn && !(MOCKS && resolved.route.workspace === 'mission') ? <div className="connect-card"><p>{C.connect}</p><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-wallet'))}>{C.wallet}</button></div> : null}
     {['/scan/', '/bags/r/', '/receipt/'].some(prefix => path.startsWith(prefix)) && <div className="shell-note"><p>{DYOR}</p><p>{NON_AFFILIATION}</p></div>}
   </> : <NotFound />;
   return <RealtimeContext.Provider value={sharedRealtime}><WatchRuntime owner={MOCKS ? 'demo-account' : signedIn ? account!.walletAddress : null} /><AlertsDrawer /><div className="eko-shell" data-style="desk" data-density={density}><SkipLink /><Header /><div className="shell-frame"><Sidebar /><MobileBar /><main className="shell-main" id="main" tabIndex={-1}>

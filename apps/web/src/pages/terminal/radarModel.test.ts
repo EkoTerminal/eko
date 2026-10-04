@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRadarRows } from '../../mocks/demo/radar';
-import { applyRadarEvents, filterRows, SORTS, sortRows } from './radarModel';
+import { applyRadarEvents, currentAgeSec, filterRows, scanDelayed, SORTS, sortRows } from './radarModel';
 import type { ChannelEvent } from '../../lib/realtime';
 const event = (kind: string, data: unknown) => ({t:'ev',ch:'radar',seq:1,ts:1,kind,data}) as ChannelEvent<'radar'>;
 describe('Radar server order and user sorting', () => {
@@ -14,6 +14,14 @@ describe('Radar server order and user sorting', () => {
     expect(SORTS).not.toContain('Signal');
     expect(sortRows(rows,'Agent flow')[0].flow.agentPct).toBe(Math.max(...rows.map(c=>c.flow.agentPct)));
     expect(rows).toEqual(original);
+  });
+  it('sorts Newest by launch time when rows arrived at different times', () => {
+    const [a, b] = createRadarRows().slice(0, 2), received = new Map<string, number>();
+    const early = { ...a, ageSec: 5 }, late = { ...b, ageSec: 40 };
+    received.set(early.address, 0); received.set(late.address, 120_000); // late launched 85 s after early
+    expect(sortRows([early, late], 'Newest').map((c) => c.address)).toEqual([early.address, late.address]);
+    expect(sortRows([early, late], 'Newest', received).map((c) => c.address)).toEqual([late.address, early.address]);
+    expect(currentAgeSec(early, received, 60_000)).toBe(65); expect(scanDelayed({ ...early, verdictPending: true }, 65)).toBe(true);
   });
   it('preserves ranking and Hottest ordering with missing or changed Signal', () => {
     const rows = createRadarRows().slice(0,2); rows[0].signal = undefined; expect(sortRows(rows,'Rank')).toEqual(rows);

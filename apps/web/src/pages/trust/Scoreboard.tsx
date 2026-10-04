@@ -77,7 +77,7 @@ export default function Scoreboard() {
   const misses = useScoreboard('honeypots_missed', revision), selected = useScoreboard(kind, revision);
   const data = kind === 'honeypots_missed' ? misses.data : selected.data;
   const availabilityKey = kind === 'calls' ? 'grades' : kind === 'honeypots_refused' ? 'refused' : kind === 'honeypots_missed' ? 'missed' : kind;
-  return <div className="page trust-page"><div className="page-head"><div><h1>Scoreboard</h1><p>The public record. Misses come first; measurements keep their original receipts and corrections.</p></div><button className="btn" onClick={() => setRevision(n => n + 1)}>Refresh record</button></div>
+  return <div className="shell-page trust-page"><div className="page-head"><div><h1>Scoreboard</h1><p>The public record. Misses come first; measurements keep their original receipts and corrections.</p></div><button className="btn" onClick={() => setRevision(n => n + 1)}>Refresh record</button></div>
     <ScoreboardHeadlines data={misses.data} />
     <section className="panel"><div className="panel-head"><h2>Misses first</h2></div><div className="panel-body">
       {misses.error ? <p role="alert">Misses are unavailable. Refresh to retry.</p> : !misses.data ? <p role="status">Loading misses…</p> : <>{!misses.data.rows.length && <p>{misses.data.availability.missed.status === 'observed' ? 'No misses in this record.' : availabilityMessage(misses.data.availability.missed)}</p>}<RecordRows rows={misses.data.rows} />

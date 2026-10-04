@@ -59,7 +59,9 @@ export async function historyAt(db: ChainDb, deployer: Address, coin: Address, b
     WHERE deployer=$1 AND coin<>$2 AND valid_from_block<=$3 AND rules_version=$4 ORDER BY coin,valid_from_block DESC`, [binary(deployer), binary(coin), block, RULES_VERSION])).rows;
   return { launches: stats.map(r => r.data) };
 }
-async function readSources(db: ChainDb, coin: Address, block: number, client?: PonsProfileClient, clock?:ClockCache,cache?:ReplayCache,retrospective=false): Promise<LoadedSources | null> {
+/** Reads shared by every coin evaluated in one live poll (most of them at the same head block). */
+export interface SourceMemo { ranks: Map<string, Promise<Map<Address, number>>> }
+async function readSources(db: ChainDb, coin: Address, block: number, client?: PonsProfileClient, clock?:ClockCache,cache?:ReplayCache,retrospective=false,memo?:SourceMemo): Promise<LoadedSources | null> {
   const token = cache ? cache.tokens.get(coin) : (await db.sql.query<TokenRow>('SELECT * FROM tokens WHERE address=$1 AND first_block<=$2', [binary(coin), block])).rows[0];
   if(token && Number(token.first_block)>block)return unavailable(db,coin,block,'launch_after_checkpoint');
   if (!token?.deployer || token.name == null || token.symbol == null) return unavailable(db,coin,block,'missing_launch_identity');
@@ -222,7 +224,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     GROUP BY s.coin,t.name,t.symbol,b.ts ORDER BY volume DESC,s.coin LIMIT 50`, [s.createdAtBlock, createdAtSec - 3600])).rows.map((r,i) => ({ coin: rowHex(r.coin), name: toUntrusted(r.name,120).text, symbol: toUntrusted(r.symbol,32).text,
       rank: i+1, createdAtSec: seconds(r.created), trendStartedAtSec: seconds(r.started), evidence: [{ kind:'stat', ref:`${rowHex(r.coin)}:trending:${s.createdAtBlock}`, block:s.createdAtBlock, label:'Hourly USD volume rank', value:i+1 }] }));
   s.trending=cache ? await cache.trending(s.createdAtBlock,trending) : await trending();
-  const ranked=cache ? await cache.ranked(block,asOfSec) : await liveRanks(db,block,asOfSec);
+  const ranked=cache ? await cache.ranked(block,asOfSec) : memo ? await sharedRanks(db,memo,block,asOfSec) : await liveRanks(db,block,asOfSec);
   const rank=ranked.get(coin);if(rank!=null)s.trendingRank=rank;
   const lifetime=trade.attribution,hour=attributionGap(trade.recent,'trailing_1h');
   const liquidityMissing=events.filter(e=>e.actor==null || e.senders_pending).length;
@@ -248,7 +250,15 @@ async function unavailable(db:ChainDb,coin:Address,block:number,reason:string):P
     ON CONFLICT(coin) DO UPDATE SET attempts=engine_card_failures.attempts+1,last_block=excluded.last_block,reason=excluded.reason`,[binary(coin),block,reason]);
   return null;
 }
-export async function loadSources(db:ChainDb,coin:Address,block:number,client?:PonsProfileClient,clock?:ClockCache,cache?:ReplayCache,retrospective=false) {
-  try {return await readSources(db,coin,block,client,clock,cache,retrospective);}
+/** One hourly priced-swap read per (block, time) per poll, instead of one per evaluated coin. */
+function sharedRanks(db:ChainDb,memo:SourceMemo,block:number,sec:number) {
+  const key=`${block}:${sec}`;let found=memo.ranks.get(key);
+  if(!found){found=liveRanks(db,block,sec);memo.ranks.set(key,found);found.catch(()=>memo.ranks.delete(key));
+    // Tasks run in block order, so only the most recent few (block, time) pairs are reused.
+    if(memo.ranks.size>8)memo.ranks.delete(memo.ranks.keys().next().value!);}
+  return found;
+}
+export async function loadSources(db:ChainDb,coin:Address,block:number,client?:PonsProfileClient,clock?:ClockCache,cache?:ReplayCache,retrospective=false,memo?:SourceMemo) {
+  try {return await readSources(db,coin,block,client,clock,cache,retrospective,memo);}
   catch(error){await unavailable(db,coin,block,'source_load_failed');throw error;}
 }

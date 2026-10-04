@@ -687,14 +687,14 @@ export function Footer() {
       </div>
       <div className="eko-footer-bottom">
         <span>© 2026 EKO</span>
-        <p>DYOR · Not financial advice.</p>
+        <p>DYOR · Not financial advice · AI-generated analysis</p>
         <a href="#top" aria-label="Back to top">
           ↑
         </a>
       </div>
       <p className="eko-nonaffiliation">
-        Not affiliated with, endorsed by, or officially connected with Robinhood
-        Markets, Inc.
+        Built on Robinhood Chain · Not affiliated with, endorsed by, or
+        officially connected with Robinhood Markets, Inc.
       </p>
     </footer>
   );

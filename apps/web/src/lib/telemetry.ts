@@ -9,16 +9,29 @@ const samples: TelemetrySample[] = [];
 const events: TelemetryEvent[] = [];
 let error: Telemetry['error'];
 let timer: ReturnType<typeof setTimeout> | null = null;
+let due = Infinity;
 let sending = false;
+let lastSent = -Infinity;
 const local = new Map<string, number[]>();
 const MAX_QUEUE = 200;
-function schedule() {
-  if (timer === null) timer = setTimeout(() => void flushTelemetry(), 5000);
+/** Collect for this long before sending. The WebSocket RTT sample arrives every 10 s, so a shorter window
+ * turned nearly every sample (and every page view) into its own POST. */
+export const TELEMETRY_FLUSH_MS = 30_000;
+/** No two sends closer than this, whatever fills the queue. Only page hide bypasses it. */
+export const TELEMETRY_MIN_GAP_MS = 10_000;
+const BATCH = 40;
+function schedule(delay = TELEMETRY_FLUSH_MS) {
+  const at = Date.now() + Math.max(0, delay);
+  if (timer !== null && due <= at) return;
+  if (timer !== null) clearTimeout(timer);
+  due = at; timer = setTimeout(() => void flushTelemetry(), Math.max(0, delay));
 }
+/** A full batch goes out as soon as the spacing allows, never back to back. */
+const nextAllowed = () => lastSent + TELEMETRY_MIN_GAP_MS - Date.now();
 function enqueue<T>(queue: T[], item: T) {
   queue.push(item);
   if (queue.length > MAX_QUEUE) queue.shift();
-  if (queue.length >= 40) void flushTelemetry();
+  if (samples.length + events.length >= BATCH && !sending) { if (nextAllowed() <= 0) void flushTelemetry(); else schedule(nextAllowed()); }
   else schedule();
 }
 
@@ -63,16 +76,18 @@ export function trackEvent(input: EventInput) {
   if (parsed.success) enqueue(events, parsed.data);
 }
 
-export async function flushTelemetry() {
-  if (timer !== null) { clearTimeout(timer); timer = null; }
+/** `final` is the page being hidden or unloaded: send now, and let the request outlive the page. */
+export async function flushTelemetry(final = false) {
+  if (timer !== null) { clearTimeout(timer); timer = null; due = Infinity; }
   if (sending || (!samples.length && !events.length && !error)) return;
   const body: Telemetry = { samples: samples.splice(0, 50), events: events.splice(0, 50), ...(error ? { error } : {}) };
   error = undefined;
-  sending = true;
-  try { await api('/telemetry', { body }); } catch { /* best effort, no recursive error report */ }
+  sending = true; lastSent = Date.now();
+  try { await api('/telemetry', { body, ...(final ? { keepalive: true } : {}) }); } catch { /* best effort, no recursive error report */ }
   finally {
     sending = false;
-    if (samples.length || events.length || error) schedule();
+    if (samples.length + events.length >= BATCH) schedule(nextAllowed());
+    else if (samples.length || events.length || error) schedule();
   }
 }
 
@@ -81,8 +96,10 @@ export function reportClientError(err: unknown) {
   error = { kind: telemetryErrorKind(err), demo: MOCKS };
   schedule();
 }
+// Mobile browsers may never fire pagehide; a hidden page sends what it has queued once.
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void flushTelemetry(true); });
 export function installErrorReporting() {
   window.addEventListener('error', (e) => reportClientError(e.error));
   window.addEventListener('unhandledrejection', (e) => reportClientError(e.reason));
-  window.addEventListener('pagehide', () => void flushTelemetry());
+  window.addEventListener('pagehide', () => void flushTelemetry(true));
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { ScanResultSchema } from '@eko/shared';
 import { BUILT_ON, DYOR, NON_AFFILIATION } from '../../copy';
 import { APP_NAME, SHELL_COPY as C, RISK_OPTIONS } from '../../copy/shell';
+import { CHAIN_NAME, CHAIN_TITLE } from '../../copy/chain';
 import { fetchParsed, MOCKS } from '../../lib/api';
 import { Link } from '../../lib/Link';
 import { navigate, usePath } from '../../lib/router';
@@ -77,7 +78,7 @@ export function Header() {
   const path = usePath(), config = useShell((s) => s.config), state = useShell((s) => s.wsState), block = useShell((s) => s.headBlock), delay = useShell((s) => s.delayedSec), now = useNow();
   const trail = breadcrumbTrail(path, config?.flags);
   const status = state === 'open' ? delay ? `Delayed ~${delay} s` : C.live : state === 'closed' ? C.offline : state === 'connecting' ? C.connecting : C.reconnecting;
-  return <header className="apphdr" onClick={onHeaderBackgroundClick}><BrandLink /><nav className="apphdr-crumb" aria-label="Breadcrumb">{trail.map((label, i) => <span key={`${i}-${label}`} aria-current={i === trail.length - 1 ? 'page' : undefined}>{label}</span>)}</nav><span className="apphdr-live" data-testid="stream-status"><span className="apphdr-status"><i className={`live-dot ${state}`} />{status}</span><span className="apphdr-sep" />{C.block} <span className="num apphdr-block">{block?.toLocaleString() ?? '—'}</span><span className="apphdr-sep" /><span className="num" aria-hidden="true">{new Date(now).toISOString().slice(11, 19)} UTC</span></span></header>;
+  return <header className="apphdr" onClick={onHeaderBackgroundClick}><BrandLink /><nav className="apphdr-crumb" aria-label="Breadcrumb">{trail.map((label, i) => <span key={`${i}-${label}`} aria-current={i === trail.length - 1 ? 'page' : undefined}>{label}</span>)}</nav><span className="apphdr-live" data-testid="stream-status"><span className="apphdr-chain" title={CHAIN_TITLE}>{CHAIN_NAME}</span><span className="apphdr-sep" /><span className="apphdr-status"><i className={`live-dot ${state}`} />{status}</span><span className="apphdr-sep" />{C.block} <span className="num apphdr-block">{block?.toLocaleString() ?? '—'}</span><span className="apphdr-sep" /><span className="num" aria-hidden="true">{new Date(now).toISOString().slice(11, 19)} UTC</span></span></header>;
 }
 export function MobileBar() { return <header className="mbar" onClick={onHeaderBackgroundClick}><BrandLink /><div className="mbar-r"><PlanChip compact /><WalletButton /></div></header>; }
 function Sheet({ title, children, close }: { title: string; children: ReactNode; close: () => void }) {

@@ -39,29 +39,55 @@ describe('client telemetry privacy and v1 transport (offline fixtures)', () => {
     const t = await import('./telemetry'), stringify = vi.fn(() => privateText);
     t.reportClientError({ toString: stringify, wallet: privateText });
     t.trackEvent({ name: 'page_view', props: { wallet: privateText } } as never);
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(t.TELEMETRY_FLUSH_MS);
     expect(stringify).not.toHaveBeenCalled(); expect(send).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String((send.mock.calls[0] as unknown as [string, RequestInit])[1].body));
     expect(body.events).toEqual([]); expect(body.error.kind).toBe('client_error');
     expect(JSON.stringify(body)).not.toContain(privateText);
   });
   it('keeps timers and batches bounded while a send is pending and contains transport failures', async () => {
-    const t = await import('./telemetry');
+    // Cadence changed with the telemetry-flood fix: full batches drain one per TELEMETRY_MIN_GAP_MS, not every 5 s.
+    const t = await import('./telemetry'), gap = t.TELEMETRY_MIN_GAP_MS;
     let release!: () => void;
     send.mockImplementationOnce(async () => { await new Promise<void>(r => { release = r; }); return new Response('{"ok":true}'); });
     for (let i = 0; i < 300; i++) t.track('ws.rtt_ms', i);
     expect(send).toHaveBeenCalledTimes(1);
     release(); await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(send).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(gap - 1); expect(send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1); expect(send).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3 * gap); expect(send).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(10 * gap); expect(send).toHaveBeenCalledTimes(5);
     for (const call of send.mock.calls) {
       const body = JSON.parse(String((call as unknown as [string, RequestInit])[1].body));
       expect(body.samples.length).toBeLessThanOrEqual(50); expect(TelemetrySchema.safeParse(body).success).toBe(true);
     }
+    expect(send.mock.calls.reduce((n, call) => n + JSON.parse(String((call as unknown as [string, RequestInit])[1].body)).samples.length, 0)).toBe(240);
     expect(t.localStats('ws.rtt_ms')!.count).toBe(200);
     send.mockRejectedValueOnce(new Error('fixture transport unavailable'));
     t.track('ws.rtt_ms', 1); await t.flushTelemetry();
-    await vi.advanceTimersByTimeAsync(10_000); expect(send).toHaveBeenCalledTimes(6);
+    await vi.advanceTimersByTimeAsync(t.TELEMETRY_FLUSH_MS); expect(send).toHaveBeenCalledTimes(6);
+  });
+  it('batches a browsing session instead of sending one request per ping or page view', async () => {
+    // Before: a 5 s window against a 10 s WebSocket ping sent ~one POST per RTT sample and per navigation.
+    const t = await import('./telemetry');
+    for (let second = 0; second < 120; second++) {
+      if (second % 10 === 0) t.track('ws.rtt_ms', 40 + second % 7);
+      if (second % 15 === 3) t.trackEvent({ name: 'page_view' });
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(send.mock.calls.length).toBeLessThanOrEqual(4);
+    const sent = send.mock.calls.map((call) => JSON.parse(String((call as unknown as [string, RequestInit])[1].body)) as { samples: unknown[]; events: unknown[] });
+    expect(sent.reduce((n, b) => n + b.samples.length, 0)).toBe(12); expect(sent.reduce((n, b) => n + b.events.length, 0)).toBe(8);
+  });
+  it('spaces sends under any burst and sends what is queued, with keepalive, when the page is hidden', async () => {
+    const t = await import('./telemetry'), times: number[] = [];
+    send.mockImplementation(async () => { times.push(Date.now()); return new Response('{"ok":true}'); });
+    for (let burst = 0; burst < 5; burst++) { for (let i = 0; i < 120; i++) t.trackEvent({ name: 'page_view' }); await vi.advanceTimersByTimeAsync(2000); }
+    await vi.advanceTimersByTimeAsync(60_000);
+    for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeGreaterThanOrEqual(t.TELEMETRY_MIN_GAP_MS);
+    send.mockClear(); t.track('ws.rtt_ms', 12);
+    await t.flushTelemetry(true); expect(send).toHaveBeenCalledOnce();
+    expect((send.mock.calls[0] as unknown as [string, RequestInit])[1].keepalive).toBe(true);
   });
   it('uses v1-only telemetry and empty metrics fixtures in mock mode without fetch', async () => {
     vi.stubEnv('VITE_MOCKS', '1');

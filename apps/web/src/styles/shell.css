@@ -67,6 +67,10 @@ html,body,#root{height:auto;min-height:100%;overflow:visible}body{overflow:auto;
    and the group is right-aligned, so without these the whole group shifts (FRONTEND §3.3, no layout shift). */
 .apphdr-status{display:inline-flex;align-items:center;justify-content:flex-end;gap:8px;min-width:calc(14ch + 15px)}
 .apphdr-block{display:inline-block;min-width:10ch}
+/* The chain name leads the status group so every terminal page says where it reads; narrow headers keep the
+   sidebar's "Built on Robinhood Chain" instead. */
+.apphdr-chain{color:var(--ink)}
+@media(max-width:1119px){.apphdr-chain,.apphdr-chain+.apphdr-sep{display:none}}
 
 .policy-links{display:flex;flex-wrap:wrap;gap:6px 16px;margin:12px 0}
 .policy-links a{text-decoration:underline;text-underline-offset:3px}

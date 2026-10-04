@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { FeedItem, Untrusted } from '@eko/shared';
 import { createFeedRows } from '../../mocks/demo/feed';
-import { FeedDescription, FeedRow } from './Feed';
+import { FeedDescription, FeedRow, feedTime } from './Feed';
 import { feedDescription } from './pairsFeedModel';
 import { PLAYBOOK_DESCRIPTIONS } from '../../copy/playbooks';
 
@@ -65,5 +65,11 @@ describe('CA-32 feed descriptions', () => {
     expect(rows.some((r) => r.cloneOf && r.clones7d === 6)).toBe(true);
     expect(rows.some((r) => r.firstVerdictMs !== undefined)).toBe(true);
     expect(rows.some((r) => r.swarm)).toBe(true);
+  });
+  it('shows a short address for coins without an indexed symbol, and UTC times', () => {
+    const html = renderToStaticMarkup(<FeedRow item={item({ symbol: untrusted(''), ts: Date.UTC(2026, 9, 4, 13, 22, 5) })} />);
+    expect(html).toContain('0x1111…1111');expect(html).not.toMatch(/fr-sym[^>]*>\$</);
+    expect(html).toContain('>13:22:05</time>');
+    expect(feedTime(Date.UTC(2026, 9, 4, 0, 0, 9))).toBe('00:00:09');
   });
 });

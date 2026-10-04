@@ -175,7 +175,7 @@ function ScheduleDemoButton({
 }) {
   const [hovering, setHovering] = useState(false)
   return (
-    <motion.a href="/radar" aria-label="Explore EKO"
+    <motion.a href="/radar" aria-label="Open the EKO terminal"
       className="absolute flex h-[30px] items-center justify-center gap-[7px] bg-white px-[9px]"
       style={{ left: x, top: y, width }}
       {...popIn(true, delay)}
@@ -183,7 +183,7 @@ function ScheduleDemoButton({
       onMouseLeave={() => setHovering(false)}
     >
       <DrumText
-        text="Explore EKO"
+        text="Open terminal"
         hovering={hovering}
         className="whitespace-nowrap text-[14px] font-medium text-black"
         style={{ fontFamily: 'var(--font-display)', letterSpacing: '-0.14px' }}
@@ -352,7 +352,7 @@ function MobileHero() {
           <AnimatedLines
             as="p"
             lines={[
-              'Look beyond the price. Follow wallet activity, market context and the reasons behind each signal.',
+              'A trench terminal for Robinhood Chain. Every new Pons launch and Uniswap pool, scanned for scam playbooks.',
             ]}
             isInView={true}
             className="mt-[14px] text-[14px] font-medium text-white/80"
@@ -587,9 +587,9 @@ export default function Hero() {
         <AnimatedLines
           as="p"
           lines={[
-            'Look beyond the price. Follow wallet activity,',
-            'market context and the reasons',
-            'behind each signal.',
+            'A trench terminal for Robinhood Chain.',
+            'Every new Pons launch and Uniswap pool,',
+            'scanned for scam playbooks.',
           ]}
           isInView={true}
           lineClassName="whitespace-nowrap"

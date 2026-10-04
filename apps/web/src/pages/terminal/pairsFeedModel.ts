@@ -2,24 +2,26 @@ import { formatGuardReason, GUARD_REASON_LABELS, GuardReasonV2Schema, GuardReaso
 import { z } from 'zod';
 import { FeedItemSchema, PairRowSchema, type FeedItem, type PairRow, type Untrusted } from '@eko/shared';
 import type { ChannelEvent } from '../../lib/realtime';
-import { PLAYBOOK_NAMES } from './radarModel';
+import { launchedAt, PLAYBOOK_NAMES, receivedAt, type ReceivedAt } from './radarModel';
 import { PLAYBOOK_DESCRIPTIONS } from '../../copy/playbooks';
 import { WALLET_LABEL_WORD } from '../../components/ui';
 
 export const COLUMNS = ['new', 'near_grad', 'migrated'] as const;
 export const PairResponseSchema = z.object({ rows: z.array(PairRowSchema), cursor: z.string().nullable(), delayedSec: z.number(), unavailable:z.array(z.string()).optional() });
 export const FeedResponseSchema = z.object({ rows: z.array(FeedItemSchema), cursor: z.string().nullable(), delayedSec: z.number(), unavailable:z.array(z.string()).optional() });
-export function pairColumns(rows: readonly PairRow[]) {
+export { launchedAt, receivedAt, type ReceivedAt };
+export function pairColumns(rows: readonly PairRow[], received?: ReceivedAt) {
   // TODO(spec): PairRow has no migration timestamp. Keep the server's migrated order; WS migrations prepend the row.
-  return Object.fromEntries(COLUMNS.map((column) => [column, rows.filter((r) => r.column === column).sort((a, b) => column === 'migrated' ? 0 : column === 'near_grad' ? (b.curvePct ?? 0) - (a.curvePct ?? 0) : a.ageSec - b.ageSec).slice(0, 100)])) as Record<PairRow['column'], PairRow[]>;
+  const newest = (a: PairRow, b: PairRow) => launchedAt(b, received) - launchedAt(a, received) || (a.address < b.address ? -1 : a.address > b.address ? 1 : 0);
+  return Object.fromEntries(COLUMNS.map((column) => [column, rows.filter((r) => r.column === column).sort((a, b) => column === 'migrated' ? 0 : column === 'near_grad' ? (b.curvePct ?? 0) - (a.curvePct ?? 0) : newest(a, b)).slice(0, 100)])) as Record<PairRow['column'], PairRow[]>;
 }
-export function applyPairEvents(rows: readonly PairRow[], events: readonly ChannelEvent<'pairs'>[]) {
+export function applyPairEvents(rows: readonly PairRow[], events: readonly ChannelEvent<'pairs'>[], received?: ReceivedAt) {
   let next = [...rows];
   for (const event of events) {
     if (event.kind === 'pair_remove') next = next.filter((r) => r.address !== event.data.address || r.column !== event.data.column);
     else { const previous = next.find(r => r.address === event.data.address); next = next.filter((r) => r.address !== event.data.address); next.unshift({ ...event.data, ...(event.data.guardV2 === undefined && previous?.guardV2 !== undefined ? {guardV2:previous.guardV2,guardRefreshFailed:previous.guardRefreshFailed} : {}) }); }
   }
-  const columns = pairColumns(next);
+  const columns = pairColumns(next, received);
   return COLUMNS.flatMap((column) => columns[column]);
 }
 export function antiSnipeLeft(endsInSec: number, receivedAt: number, now: number) {

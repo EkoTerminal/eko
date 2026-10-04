@@ -20,7 +20,7 @@ import { ConnectionStatus } from './components/Pwa';
 
 window.addEventListener('error', e => { void import('./lib/telemetry').then(m => m.reportClientError(e.error)); });
 window.addEventListener('unhandledrejection', e => { void import('./lib/telemetry').then(m => m.reportClientError(e.reason)); });
-window.addEventListener('pagehide', () => { void import('./lib/telemetry').then(m => m.flushTelemetry()); });
+window.addEventListener('pagehide', () => { void import('./lib/telemetry').then(m => m.flushTelemetry(true)); });
 initializePwa();
 const TerminalApp = lazy(() => import('./TerminalApp'));
 const UI = import.meta.env.DEV ? lazy(() => import('./pages/UI')) : null;

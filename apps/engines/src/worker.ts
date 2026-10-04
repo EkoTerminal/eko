@@ -9,7 +9,7 @@ import { shouldRecomputeSignal } from '@eko/signal';
 import type { PonsProfileClient } from '@eko/chain';
 import type { Address, CoinCard, Verdict } from '@eko/shared';
 import { assembleCard, cardHash, digest, evaluatedPlaybooks } from './card.js';
-import { loadSources, historyAt, seconds, type LoadedSources } from './sources.js';
+import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } from './sources.js';
 import { refreshClock, resolveClock, coinActivity, checkpoints, type BlockReader, type ClockCache, type Checkpoint } from './activity.js';
 import { materializeHistory, updateOutcomes } from './outcomes.js';
 import { performance } from 'node:perf_hooks';
@@ -25,9 +25,20 @@ export interface WorkerOptions {
   referenceSimulation?: (coin:Address,block:number)=>Promise<void>;
   onScanComplete?: (ms:number)=>void; onScanQueueDelay?: (ms:number)=>void;
   onQueueCompletion?: (ms: number) => void; onHeartbeat?: () => void;
-  concurrency?: number; pollMs?: number; client?: PonsProfileClient; bus?: EngineBus; readBlock?: BlockReader; now?: () => number; replayCache?:boolean;marketWindow?:boolean; onPlanned?:(plan:{tasks:number;coins:number;from:number;to:number})=>void; onProgress?: (completed:number,block:number) => void }
+  concurrency?: number; pollMs?: number; client?: PonsProfileClient; bus?: EngineBus; readBlock?: BlockReader; now?: () => number; replayCache?:boolean;marketWindow?:boolean; onPlanned?:(plan:{tasks:number;coins:number;from:number;to:number})=>void; onProgress?: (completed:number,block:number) => void;
+  /**
+   * Live only. Checkpoints older than this many seconds behind the indexed head are not replayed one by one:
+   * the coin is evaluated once at its newest checkpoint (or at head). Unset keeps full catch-up, as replay does.
+   * Skipped history can be filled later with ENGINE_MODE=replay, which skips runs that already exist.
+   */
+  liveBacklogSec?: number;
+  /** Live only. After this long, a poll yields to a newer launch so its first scan is not queued behind backlog. */
+  liveSliceMs?: number;
+  onLivePlanned?: (plan:LivePlan) => void }
+export interface LivePlan { tasks:number; coins:number; firstScans:number; coalescedCheckpoints:number; to:number }
 interface Schedule { coin: Uint8Array; first_block: string; last_block: string | null; last_sec: string | null; price: number | null; last_trade: Date | null }
-/** Blocks commit in order. Source reads are bounded; rule/history writes remain serial to preserve prior-launch ordering. */
+/** Blocks commit in order (in live polls, first scans of new launches commit ahead of older backlog). Source reads are
+ * bounded; rule/history writes remain serial to preserve prior-launch ordering. */
 export class EngineWorker {
   private stopped=false;
   private clock:ClockCache=new Map();
@@ -112,6 +123,7 @@ export class EngineWorker {
     await writeRegistryLabels(this.db);this.registryLabelRevision=revision;
   }
   private startup=true;
+  private yielded=false;
   /**
    * Expire traces, refresh registry/clock state, reconcile cursor and process bounded scan/activity
    * work before advancing the engine cursor. Engines role only; missing head returns zero, orphaned
@@ -141,7 +153,8 @@ export class EngineWorker {
     for(const row of unrecorded)await this.recordScan(row.data);
     const scans=await this.processScanJobs(to);
     const count=scans+await this.evaluateActivity(0,to,true,this.startup);
-    this.startup=false;
+    // A startup poll that yielded to a new launch has not refreshed every coin yet; the next poll continues it.
+    this.startup=this.yielded;
     await this.db.sql.query("INSERT INTO engine_cursors VALUES('engines',$1,$2) ON CONFLICT(stream) DO UPDATE SET block=excluded.block,hash=excluded.hash",[to,(await resolveClock(this.db,to,undefined,this.clock))?.hash ?? null]);
     return count;
   }
@@ -196,6 +209,8 @@ export class EngineWorker {
     const tasks:Checkpoint[]=[];
     const revised=new Set<Address>();
     const pending:typeof coins=[];
+    const backlog=live ? this.options.liveBacklogSec : undefined,head=clock.at(-1);
+    let coalesced=0;
     for (const coin of coins) {
       const activityInRange=coin.firstBlock>=from || coin.events.some(event=>event.block>=from && event.block<=to);
       if (!activityInRange && !live) continue;
@@ -206,14 +221,30 @@ export class EngineWorker {
       if(live && !startup && state?.revision===revision && Number(state.through_block)>=to)continue;
       if(live && state?.revision!==revision)revised.add(coin.coin);
       const planFrom=live && state ? Math.max(from,Number(state.through_block)+1) : from;
-      const plan=checkpoints(coin,clock,planFrom,to,index);
+      let plan=checkpoints(coin,clock,planFrom,to,index);
       if(live && (startup || state?.revision!==revision) && clock.length && now-clock.at(-1)!.sec<7*86400) {
         const head=clock.at(-1)!;
         if(!plan.some(point=>point.block===head.number))plan.push({coin:coin.coin,block:head.number,sec:head.sec});
       }
+      if(backlog!==undefined && head) {
+        // A lagging live engine replayed every historical checkpoint in block order. Each one reloads the coin's
+        // whole history and rebuilds holders, so lag fed itself. TODO(spec): §6.5 triggers assume no lag; skip, then replay.
+        const recent=plan.filter(point=>head.sec-point.sec<=backlog);
+        if(recent.length<plan.length) {coalesced+=plan.length-recent.length;plan=recent.length ? recent : [{coin:coin.coin,block:head.number,sec:head.sec}];}
+      }
       tasks.push(...plan);pending.push({...coin,revision});
     }
-    tasks.sort((a,b)=>a.block-b.block || a.coin.localeCompare(b.coin));
+    // Live: a coin with no card yet shows "Scanning…"; its first scan goes before any refresh of scanned coins,
+    // newest launch first. Each coin's own checkpoints stay in block order. Replay keeps strict block order.
+    const scanned=live ? new Set((await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest')).rows.map(row=>hex(row.coin))) : undefined;
+    const launched=new Map(coins.map(coin=>[coin.coin,coin.firstBlock]));
+    const first=(coin:Address)=>!!scanned && !scanned.has(coin);
+    tasks.sort((a,b)=>Number(first(b.coin))-Number(first(a.coin)) || (first(a.coin) ? launched.get(b.coin)!-launched.get(a.coin)! || a.coin.localeCompare(b.coin) || a.block-b.block : a.block-b.block || a.coin.localeCompare(b.coin)));
+    const firstScans=tasks.findIndex(task=>!first(task.coin)),priority=firstScans<0 ? tasks.length : firstScans;
+    if(live)this.options.onLivePlanned?.({tasks:tasks.length,coins:new Set(tasks.map(t=>t.coin)).size,firstScans:new Set(tasks.slice(0,priority).map(t=>t.coin)).size,coalescedCheckpoints:coalesced,to});
+    const remaining=new Map<Address,number>();for(const task of tasks)remaining.set(task.coin,(remaining.get(task.coin) ?? 0)+1);
+    const memo:SourceMemo|undefined=live ? {ranks:new Map()} : undefined;
+    const sliceStart=performance.now();let yielded=false;this.yielded=false;
     if(!live) {
       this.options.onPlanned?.({tasks:tasks.length,coins:new Set(tasks.map(t=>t.coin)).size,from,to});
       if(this.options.replayCache!==false){const start=performance.now();this.cache=new ReplayCache(this.db,to,this.clock,this.options.marketWindow);await this.cache.initialize();this.metrics.sourceMs+=performance.now()-start;}
@@ -225,8 +256,11 @@ export class EngineWorker {
     const width=this.options.concurrency ?? 4;
     let completed=0;
     let outcomesBlock=-1;
-    for(let offset=0;offset<tasks.length && !this.stopped;offset+=width) {
-      const batch=tasks.slice(offset,offset+width);
+    for(let offset=0;offset<tasks.length && !this.stopped;) {
+      if(live && offset>=priority && this.options.liveSliceMs!==undefined && performance.now()-sliceStart>=this.options.liveSliceMs
+        && (await this.db.sql.query('SELECT 1 FROM tokens WHERE first_block>$1 LIMIT 1',[to])).rows.length) {yielded=true;break;}
+      // First scans never share a batch with backlog, so a yield happens right after them.
+      const batch=tasks.slice(offset,Math.min(offset+width,offset<priority ? priority : tasks.length));offset+=batch.length;
       const sourceStart=performance.now();
       // Prepare the shared market lane in task order before asynchronous coin loads.
       if(this.cache)for(const point of batch)await this.cache.ranked(point.block,point.sec);
@@ -235,18 +269,21 @@ export class EngineWorker {
         if(existing && !(live && revised.has(point.coin) && point.block===to))return null;
         await resolveClock(this.db,point.block,this.readBlock,this.clock);
         if(live){await recordScanStart(this.db,point.coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.options.referenceSimulation?.(point.coin,point.block);}
-        const sources=await loadSources(this.db,point.coin,point.block,this.client,this.clock,this.cache,!live);
+        const sources=await loadSources(this.db,point.coin,point.block,this.client,this.clock,this.cache,!live,memo);
         if(!sources)this.cardFailures++;
         return sources;
       }));
       this.metrics.sourceMs+=performance.now()-sourceStart;
       for(let i=0;i<batch.length;i++) {
         if(i>0 && this.stopped)break;
+        remaining.set(batch[i].coin,remaining.get(batch[i].coin)!-1);
         const sources=loaded[i];if(!sources){this.cache?.writes.delete(batch[i].coin);expire(batch[i].sec);continue;}
         const writeStart=performance.now();const card=await this.db.tx(async tx=>{
           await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
           if(!this.cache && !(live && revised.has(sources.coin) && sources.asOfBlock===to) && (await tx.sql.query('SELECT 1 FROM engine_runs WHERE coin=$1 AND block=$2 AND rules_version=$3',[binary(sources.coin),sources.asOfBlock,RULES_VERSION])).rows.length)return;
-          if(outcomesBlock!==sources.asOfBlock) {
+          // Outcomes are keyed by horizon time, so a later block covers every earlier one. Replay runs in block
+          // order (unchanged); live first scans run ahead of older backlog, which must not re-run this per write.
+          if(sources.asOfBlock>outcomesBlock) {
             await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,this.cache);
             outcomesBlock=sources.asOfBlock;
           }
@@ -266,11 +303,13 @@ export class EngineWorker {
     }
     // Outcome horizons still mature after a coin stops receiving card evaluations.
     const end=clock.at(-1);
-    if(!this.stopped && end && outcomesBlock!==end.number){const start=performance.now();await this.db.tx(async tx=>{
+    if(!this.stopped && end && outcomesBlock<end.number){const start=performance.now();await this.db.tx(async tx=>{
       await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
       await updateOutcomes(tx,end.number,end.sec,this.clock,this.cache);
     });this.metrics.writeMs+=performance.now()-start;}
-    if(!this.stopped && live)for(const coin of pending)await this.db.sql.query('INSERT INTO engine_activity_state VALUES($1,$2,$3) ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision,through_block=excluded.through_block',[binary(coin.coin),coin.revision,to]);
+    // A yielded poll records only coins whose checkpoints all ran; the rest are planned again next poll.
+    this.yielded=yielded;
+    if(!this.stopped && live)for(const coin of pending)if(!yielded || !remaining.get(coin.coin))await this.db.sql.query('INSERT INTO engine_activity_state VALUES($1,$2,$3) ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision,through_block=excluded.through_block',[binary(coin.coin),coin.revision,to]);
     return completed;
   }
   /**

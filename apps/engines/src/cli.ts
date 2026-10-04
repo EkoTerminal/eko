@@ -8,6 +8,10 @@ const config=z.object({
   DATABASE_URL:z.string().optional(),PGLITE_DIR:z.string().default('.data/indexer'),RPC_HTTP_URL:z.url().optional(),
   FROM:z.coerce.number().int().nonnegative().safe().optional(),TO:z.coerce.number().int().nonnegative().safe().optional(),
   ENGINE_CONCURRENCY:z.coerce.number().int().min(1).max(32).default(4),ENGINE_POLL_MS:z.coerce.number().int().min(100).max(60000).default(2000),
+  // Live catch-up: checkpoints further behind head than this are coalesced into one current evaluation per coin.
+  // 604800 (seven days) keeps full catch-up; ENGINE_MODE=replay fills skipped history.
+  ENGINE_LIVE_BACKLOG_SEC:z.coerce.number().int().min(60).max(604800).default(900),
+  ENGINE_LIVE_SLICE_MS:z.coerce.number().int().min(1000).max(3600000).default(60000),
 });
 async function main() {
   const parsed=config.safeParse(process.env);
@@ -36,7 +40,7 @@ async function main() {
     const telemetry=launchEmitter(db.sql,()=>console.log(JSON.stringify({event:'launch_metrics_unavailable'})));
     let heartbeatAt=0;
     let progressAt=Date.now();
-    const worker=new EngineWorker(db,{ client,readBlock,onScanComplete:ms=>telemetry.emit('pair_to_complete_verdict_ms',ms),onQueueCompletion:ms=>telemetry.emit('queue_completion_ms',ms),onHeartbeat:()=>{if(Date.now()-heartbeatAt>=30000){telemetry.emit('role_engines',1);heartbeatAt=Date.now();}},onPlanned:plan=>console.log(JSON.stringify({event:'replay_planned',...plan})),onProgress:(evaluations,block)=>{if(evaluations%100===0 || Date.now()-progressAt>=30000){console.log(JSON.stringify({event:'engine_progress',evaluations,block,...worker.telemetry()}));progressAt=Date.now();}},concurrency:env.ENGINE_CONCURRENCY,pollMs:env.ENGINE_POLL_MS,bus:env.DATABASE_URL ? new PostgresBus(env.DATABASE_URL) : db.bus });
+    const worker=new EngineWorker(db,{ client,readBlock,onScanComplete:ms=>telemetry.emit('pair_to_complete_verdict_ms',ms),onQueueCompletion:ms=>telemetry.emit('queue_completion_ms',ms),onHeartbeat:()=>{if(Date.now()-heartbeatAt>=30000){telemetry.emit('role_engines',1);heartbeatAt=Date.now();}},onPlanned:plan=>console.log(JSON.stringify({event:'replay_planned',...plan})),onProgress:(evaluations,block)=>{if(evaluations%100===0 || Date.now()-progressAt>=30000){console.log(JSON.stringify({event:'engine_progress',evaluations,block,...worker.telemetry()}));progressAt=Date.now();}},concurrency:env.ENGINE_CONCURRENCY,pollMs:env.ENGINE_POLL_MS,liveBacklogSec:env.ENGINE_LIVE_BACKLOG_SEC,liveSliceMs:env.ENGINE_LIVE_SLICE_MS,onLivePlanned:plan=>{if(plan.coalescedCheckpoints || plan.firstScans>10)console.log(JSON.stringify({event:'live_planned',...plan}));},bus:env.DATABASE_URL ? new PostgresBus(env.DATABASE_URL) : db.bus });
     let interrupted=false;
     const stop=()=>{interrupted=true;worker.stop();};stopWorker=stop;process.on('SIGINT',stop);process.on('SIGTERM',stop);
     try {

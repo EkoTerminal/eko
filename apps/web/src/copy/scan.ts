@@ -5,7 +5,7 @@ export const SCAN_COPY = {
   pending: 'Scanning… usually under 5 s', waiting: 'This scan is taking longer. Check again to reload the persisted result.',
   error: 'Could not load the scan. Nothing was sent to chain.', submitError: 'Could not start the scan. Nothing was sent to chain.',
   notFound: 'No coin found for this scan.', ambiguous: 'Choose the coin you meant', retry: 'Retry',
-  unavailable: 'Unavailable', ageUnavailable: 'Age unavailable', examplesUnavailable: 'Example scans are not configured yet.',
+  unavailable: 'Unavailable', ageUnavailable: 'Age unavailable', scope: 'Robinhood Chain tokens: Pons launches and Uniswap pools.',
   refused: 'honeypots refused', missed: 'honeypots missed', since: 'Observed since', countersUnavailable: 'Observation counters are unavailable.',
   radar: 'Radar preview', radarEmpty: 'No indexed coins to preview yet.', radarError: 'Radar preview unavailable.',
   radarDelay: 'Data delay', openRadar: 'Open Radar', exit: 'Exit cost at $1K', flow: 'Buyer flow',

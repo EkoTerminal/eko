@@ -3,15 +3,20 @@ import { VerdictChip } from './ui';
 import { AnalysisPolicyNotice } from './PolicyLinks';
 import { Link } from '../lib/Link';
 import { GUARD_REFRESH_FAILED, GUARD_UNAVAILABLE, GUARD_COPY } from '../copy/guard';
+import { GUARD2_UNAVAILABLE_TITLE, GUARD_LEGEND, LEGACY_TITLE } from '../copy/availability';
 
 /** Lists can show a shadow alongside the original grade without replacing it. */
-export function CompactVerdictChip({ level, guard, pending = false, failed = false, linked = true, ...context }: { level: Verdict['level'] | 'info'; guard?: GuardAssessmentV2 | null; pending?: boolean; failed?: boolean; linked?: boolean; evaluatedPlaybooks?: import('@eko/shared').PlaybookId[]; missing?: string[] }) {
+export function CompactVerdictChip({ level, guard, pending = false, failed = false, linked = true, ...context }: { level: Verdict['level'] | 'info'; guard?: GuardAssessmentV2 | null; pending?: boolean; failed?: boolean; linked?: boolean; evaluatedPlaybooks?: import('@eko/shared').PlaybookId[]; missing?: string[]; scanDelayed?: boolean }) {
   const snapshot = guard ? compactGuardVerdict({version:2,assessment:guard}) : null;
   const detailText = guard && `Block ${guard.cursor.blockNumber} · $100 / $1,000 · EOA / smart account`;
   const details = snapshot && (linked ? <Link to={snapshot.evidencePath!} title={snapshot.snapshot}>{detailText} · {GUARD_COPY.allReasons}</Link> : <span title={snapshot.snapshot}>{detailText}</span>);
   if (guard?.mode === 'active') return <><VerdictChip level={level} guard={guard} />{details}{failed && <span>{GUARD_REFRESH_FAILED}</span>}</>;
-  return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}{guard !== undefined && <span className="tag">Legacy assessment · rules 1.0.x</span>}<VerdictChip level={level} verdictPending={pending} {...context} />
-    {guard ? <VerdictChip level={level} guard={guard} /> : guard === null ? <span className="tag">{GUARD_UNAVAILABLE}</span> : null}{details}</>;
+  return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}{guard !== undefined && <span className="tag" title={LEGACY_TITLE}>Legacy assessment · rules 1.0.x</span>}<VerdictChip level={level} verdictPending={pending} {...context} />
+    {guard ? <VerdictChip level={level} guard={guard} /> : guard === null ? <span className="tag" title={GUARD2_UNAVAILABLE_TITLE}>{GUARD_UNAVAILABLE}</span> : null}{details}</>;
+}
+/** Lists that show the legacy grade beside a missing or shadow Guard 2 result explain both labels once, above the rows. */
+export function GuardLegend({ rows }: { rows: { guardV2?: GuardAssessmentV2 | null }[] }) {
+  return rows.some((row) => row.guardV2 !== undefined && row.guardV2?.mode !== 'active') ? <p className="availability-legend guard-legend">{GUARD_LEGEND}</p> : null;
 }
 /** Three summary lines; full findings stay accessible on the detail surface. */
 export function GuardCompact({ verdict }: { verdict: GuardConsumerRequest }) {

@@ -10,6 +10,7 @@ import { Link } from '../../lib/Link';
 import { FlowBar } from '../terminal/FlowBar';
 import { exitText, age } from '../terminal/radarModel';
 import { ScanCountersSchema, type ScanCounters } from './scanModel';
+import { launchpadLabel } from '../../copy/chain';
 import './scan.css';
 import '../terminal/radar.css';
 
@@ -22,7 +23,7 @@ export function ProofCounters({ counters }: { counters: ScanCounters }) {
 export function RadarPreview({ rows, delayedSec }: { rows: RadarRow[]; delayedSec: number }) {
   return <div className="scan-radar-grid">{rows.slice(0, 6).map(row => <article className="panel scan-preview" key={row.address}>
     <Link to={`/coin/${row.address}`}><b>$<UntrustedText value={row.symbol} /></b><p><UntrustedText value={row.name} /></p></Link>
-    <p className="muted">{C.radarDelay}: {delayedSec} s · {age(row.ageSec)} · {row.launchpad}</p>
+    <p className="muted">{C.radarDelay}: {delayedSec} s · {age(row.ageSec)} · {launchpadLabel(row.launchpad, row.stage === 'graduated')}</p>
     <CompactVerdictChip level={row.verdict} guard={row.guardV2} failed={row.guardRefreshFailed} pending={row.verdictPending} evaluatedPlaybooks={row.evaluatedPlaybooks} missing={row.missingChecks} />
     <p>{C.exit}: {row.unavailable?.includes('exitCost') ? C.notChecked : exitText(row.exitCost1kPct)}</p>
     <FlowBar flow={row.flow} unavailable={row.unavailable?.includes('flow')} legend />

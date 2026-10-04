@@ -5,7 +5,7 @@ import { setApiUnavailable } from './connection';
 export const API_BASE = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || '/v1').replace(/\/$/, '');
 export const MOCKS = import.meta.env.VITE_MOCKS === '1';
 export type FetchTransport = (url: string, init: RequestInit) => Promise<Response>;
-export interface ApiOptions { method?: string; body?: unknown; signal?: AbortSignal }
+export interface ApiOptions { method?: string; body?: unknown; signal?: AbortSignal; keepalive?: boolean }
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly body: Record<string, unknown> = {}) {
@@ -31,19 +31,21 @@ export function createApi(base = API_BASE, transport: FetchTransport = (url, ini
         method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
         headers: opts.body !== undefined ? { 'content-type': 'application/json' } : undefined,
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-        credentials: 'include', cache: 'no-store', signal: opts.signal,
+        credentials: 'include', cache: 'no-store', signal: opts.signal, ...(opts.keepalive ? { keepalive: true } : {}),
       });
     } catch (err) {
       if ((err as Error).name === 'AbortError') throw err;
       setApiUnavailable(true);
       throw new ApiError(0, legacy ? 'network' : 'internal_error', 'Cannot reach the EKO server. Check your connection.');
     }
-    setApiUnavailable(res.status >= 500);
     let body: unknown;
     try { const text = await res.text(); body = text ? JSON.parse(text) : {}; }
-    catch { throw new ApiError(res.status, res.ok ? 'internal_error' : statusCode(res.status), 'Invalid server response.'); }
-    if (!res.ok) {
-      const parsed = ApiErrorSchema.safeParse(body);
+    catch { setApiUnavailable(res.status >= 500); throw new ApiError(res.status, res.ok ? 'internal_error' : statusCode(res.status), 'Invalid server response.'); }
+    const parsed = res.ok ? null : ApiErrorSchema.safeParse(body);
+    // A 5xx that names a product state (trading_paused, sim_unavailable, stale_data…) came from a reachable
+    // server, so it must not raise the global "Cannot reach EKO" banner; bare or internal 5xx still do.
+    setApiUnavailable(res.status >= 500 && !(parsed?.success && parsed.data.error !== 'internal_error'));
+    if (!res.ok && parsed) {
       const raw = body && typeof body === 'object' ? body as Record<string, unknown> : {};
       // Legacy codes are required by the retained trade flow; new responses use ErrorCode.
       const code = parsed.success ? parsed.data.error : legacy && typeof raw.error === 'string' ? raw.error : statusCode(res.status);

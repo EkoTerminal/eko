@@ -248,6 +248,8 @@
 .radar .rt th .signal-beta{text-transform:none;letter-spacing:0;font-family:var(--sans)}
 /* Compact unavailable observations and bounded identity columns. */
 .availability-legend{margin:10px 0 12px;color:var(--muted);font-size:12px;line-height:1.5;white-space:normal}
+.availability-legend+.guard-legend{margin-top:-6px}
+.rt-top .rt-pad{flex:none}
 .rt-wrap{overflow-x:auto;min-width:0}
 .rt{table-layout:fixed}
 .rt .c-coin{width:160px}.rt .c-guard{width:156px}.rt .c-watch{width:160px}.rt .c-sig{width:95px}.rt .c-beta{width:60px}.rt .c-1h{width:66px}.rt .c-spark{width:90px}.rt .c-flow{width:105px}.rt .c-liq{width:85px}.rt .c-exit{width:80px}.rt .c-act{width:80px}

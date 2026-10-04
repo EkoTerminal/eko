@@ -500,3 +500,55 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
  },20000);
 
 });
+
+describe('engines: live catch-up when the worker lags behind head',()=>{
+ // A traded coin whose every swap moves price > 5%, so each swap block is a checkpoint (BACKEND §6.5).
+ async function traded(db:ChainDb,c:Address,launch:number,launchSec:number,swaps:number,step:number){
+  await token(db,c,launch,false);
+  for(let i=0;i<swaps;i++)await swap(db,launch+i,i%2?-1:1,100,10,actor,c,launchSec+i*step,'pons_curve',i%2?1:1.2);
+ }
+ const cardOrder=async(db:ChainDb)=>{const coins:string[]=[];await db.bus.subscribe(m=>{if(m.topic==='card_updated')coins.push(String(m.ids.coin));});return coins;};
+ it('evaluates a lagging coin at its recent checkpoints instead of replaying two hours of history',async()=>{
+  const full=await database(),lagging=await database();
+  for(const db of [full,lagging])await traded(db,coin,1,1,40,180);
+  const planned:import('../src/worker.js').LivePlan[]=[];
+  const replayed=await new EngineWorker(full,{now:()=>epoch+7200}).poll();
+  const caughtUp=await new EngineWorker(lagging,{now:()=>epoch+7200,liveBacklogSec:900,onLivePlanned:p=>planned.push(p)}).poll();
+  expect(replayed).toBeGreaterThanOrEqual(40);
+  // Only checkpoints within 15 minutes of head (swaps 34-39) run; the rest are coalesced, not queued.
+  expect(caughtUp).toBe(6);expect(planned[0]).toMatchObject({tasks:6,coins:1,firstScans:1,to:40});expect(planned[0].coalescedCheckpoints).toBeGreaterThanOrEqual(34);
+  const [a,b]=[await latest(full),await latest(lagging)];
+  expect(b.verdict.asOfBlock).toBe(40);expect(b.verdict.asOfBlock).toBe(a.verdict.asOfBlock);expect(b.verdict.level).toBe(a.verdict.level);
+  // A coin that only has stale checkpoints is still brought current with one evaluation at head.
+  await traded(lagging,address(30),41,7300,1,60);await swap(lagging,42,1,100,10,actor,coin,9000,'pons_curve',2);
+  const quiet=new EngineWorker(lagging,{now:()=>epoch+9000,liveBacklogSec:900,onLivePlanned:p=>planned.push(p)});
+  expect(await quiet.poll()).toBe(2);expect((await latest(lagging)).verdict.asOfBlock).toBe(42);expect((await latest(lagging,address(30))).verdict.asOfBlock).toBe(42);
+ },60000);
+ it('runs first scans before refreshes of scanned coins, newest launch first',async()=>{
+  const db=await database();await traded(db,coin,1,1,10,60);
+  const worker=new EngineWorker(db,{now:()=>epoch+3600});expect(await worker.poll()).toBeGreaterThan(0);
+  for(let i=10;i<20;i++)await swap(db,1+i,i%2?-1:1,100,10,actor,coin,1+i*60,'pons_curve',i%2?1:1.2);
+  const older=address(31),newer=address(32);
+  await traded(db,older,21,1300,2,5);await traded(db,newer,23,1320,2,5);
+  const order=await cardOrder(db);let plan:import('../src/worker.js').LivePlan|undefined;
+  const next=new EngineWorker(db,{now:()=>epoch+3600,liveBacklogSec:604800,onLivePlanned:p=>{plan=p;}});
+  expect(await next.poll()).toBeGreaterThan(2);expect(plan).toMatchObject({firstScans:2,coalescedCheckpoints:0});
+  const firsts=order.filter((c,i)=>order.indexOf(c)===i);
+  expect(firsts.slice(0,2)).toEqual([newer,older]);if(firsts.includes(coin))expect(firsts.indexOf(coin)).toBe(2);
+ },60000);
+ it('yields a long poll to a launch that arrived during it and resumes the unfinished coins next poll',async()=>{
+  const db=await database();await traded(db,coin,1,1,10,60);
+  expect(await new EngineWorker(db,{now:()=>epoch+3600}).poll()).toBeGreaterThan(0);
+  for(let i=10;i<20;i++)await swap(db,1+i,i%2?-1:1,100,10,actor,coin,1+i*60,'pons_curve',i%2?1:1.2);
+  const queued=address(33),arriving=address(34);await traded(db,queued,21,1300,1,5);
+  const through=async(c:Address)=>{const row=(await db.sql.query<{through_block:string}>('SELECT through_block FROM engine_activity_state WHERE coin=$1',[binary(c)])).rows[0];return row ? String(row.through_block) : undefined;};
+  const before=await through(coin);let launched=false;
+  // The first scan of `queued` runs; meanwhile a new launch is indexed beyond this poll's head.
+  const worker=new EngineWorker(db,{now:()=>epoch+3600,liveBacklogSec:604800,liveSliceMs:0,referenceSimulation:async()=>{if(launched)return;launched=true;await block(db,22,1400);await token(db,arriving,22,false);}});
+  expect(await worker.poll()).toBe(1);
+  expect(await through(queued)).toBe('21');expect(await through(coin)).toBe(before);
+  const order=await cardOrder(db);
+  expect(await worker.poll()).toBeGreaterThan(1);
+  expect(order[0]).toBe(arriving);expect(await through(coin)).toBe('22');
+ },60000);
+});

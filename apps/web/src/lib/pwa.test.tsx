@@ -81,4 +81,11 @@ describe('PWA install and connection UI (fixtures)', () => {
     await createApi('/v1', async () => new Response('{}', { status: 503 })).request('/config').catch(() => undefined);
     expect(renderToStaticMarkup(<ConnectionStatus />)).toContain(C.unavailable);
   });
+  it('keeps the connection banner off when a reachable server answers 5xx with a product state', async () => {
+    await expect(createApi('/v1', async () => new Response(JSON.stringify({ error: 'sim_unavailable', message: 'Actual-account trade acquisition is unavailable' }), { status: 503 })).request('/trade/quote', { body: {} }))
+      .rejects.toMatchObject({ status: 503, code: 'sim_unavailable' });
+    expect(renderToStaticMarkup(<ConnectionStatus />)).toBe('');
+    await createApi('/v1', async () => new Response(JSON.stringify({ error: 'internal_error', message: 'Failed' }), { status: 500 })).request('/config').catch(() => undefined);
+    expect(renderToStaticMarkup(<ConnectionStatus />)).toContain(C.unavailable);
+  });
 });

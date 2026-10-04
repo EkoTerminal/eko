@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { WsClient, WsServer, WsEvent, WsEventMap } from '@eko/shared';
-import { Realtime, type ChannelTransport } from './realtime';
+import { FRAME_FALLBACK_MS, Realtime, type ChannelTransport } from './realtime';
 import { ChannelSocket, type WsState } from './ws';
 import { createAddress, createFeedItem, createRadarRow, createTick, createTradeOrder } from '../mocks/fixtures';
 class FakeTransport implements ChannelTransport {
@@ -90,6 +90,22 @@ describe('channel realtime', () => {
     const { rt, transport, paint } = setup(); const batch = vi.fn(); rt.subscribeBatch('radar', batch); rt.connect();
     transport.emit(radar(1)); transport.emit(radar(2, '0x1111111111111111111111111111111111111111')); paint();
     expect(batch).toHaveBeenCalledOnce(); expect(batch.mock.calls[0][0]).toHaveLength(2); rt.close();
+  });
+  it('drains batches on a timer when the page is not painting frames, once per batch', () => {
+    // Background tabs, hidden panes and occluded windows never run animation frames. Before the fallback the
+    // pairs/radar stores froze ("Stale · updated 1m ago") while the socket kept delivering events.
+    vi.useFakeTimers(); const transport = new FakeTransport(), never = vi.fn(() => 1), cancel = vi.fn();
+    const rt = new Realtime(transport, never, cancel), batch = vi.fn(); rt.subscribeBatch('radar', batch); rt.connect();
+    transport.emit(radar(1)); transport.emit(radar(2, '0x1111111111111111111111111111111111111111'));
+    expect(never).toHaveBeenCalledOnce(); vi.advanceTimersByTime(FRAME_FALLBACK_MS - 1); expect(batch).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1); expect(batch).toHaveBeenCalledOnce(); expect(batch.mock.calls[0][0]).toHaveLength(2); expect(cancel).toHaveBeenCalledWith(1);
+    for (let seq = 3; seq < 13; seq++) { transport.emit(radar(seq)); vi.advanceTimersByTime(FRAME_FALLBACK_MS); }
+    expect(batch).toHaveBeenCalledTimes(11); expect(batch.mock.calls.at(-1)![0][0].seq).toBe(12); rt.close();
+  });
+  it('a painted frame wins over the fallback and does not deliver twice', () => {
+    vi.useFakeTimers(); const { rt, transport, paint } = setup(); const batch = vi.fn(); rt.subscribeBatch('radar', batch); rt.connect();
+    transport.emit(radar(1)); paint(); vi.advanceTimersByTime(FRAME_FALLBACK_MS * 4);
+    expect(batch).toHaveBeenCalledOnce(); rt.close();
   });
   it('invalidates a snapshot pending from a previous connection', async () => {
     const { rt, transport, paint } = setup(); const listener = vi.fn(); const finishes: ((seq: number) => void)[] = [];

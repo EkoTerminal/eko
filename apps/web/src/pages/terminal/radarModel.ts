@@ -2,18 +2,33 @@ import { z } from 'zod';
 import { RadarRowSchema, type RadarRow } from '@eko/shared';
 import type { ChannelEvent } from '../../lib/realtime';
 import { heatOf } from '../../lib/heat';
+import { SCAN_DELAYED_AFTER_SEC } from '../../copy/availability';
 export { RadarResponseSchema } from '@eko/shared';
 export const SORTS = ['Rank', 'Hottest', '1h move', 'Agent flow', 'Newest', 'Exit cost'] as const;
 export type Sort = typeof SORTS[number];
 export const ascending = (sort: Sort) => ['Rank', 'Newest', 'Exit cost'].includes(sort);
 // CA-31 signal is descriptive. Hot ranking uses price and flow; Rank keeps the exact server order.
 export const heatScore = (c: RadarRow) => Math.max(0, c.change1hPct) * (c.flow.agentPct + 20);
+/** When each row version arrived, in client milliseconds. `ageSec` is only meaningful relative to it. */
+export type ReceivedAt = ReadonlyMap<string, number>;
+/**
+ * Launch time on the client clock. A row's `ageSec` is its age when the server sent it, so rows received at
+ * different times cannot be compared by `ageSec`: a quiet row keeps the small age it had on arrival and would
+ * outrank every later launch. Without receipt times all rows share one clock and this reduces to `ageSec`.
+ */
+export const launchedAt = (row: { address: string; ageSec: number }, received?: ReceivedAt) => (received?.get(row.address) ?? 0) - row.ageSec * 1000;
+/** Map a WS envelope's server timestamp onto the client clock, never into the future. */
+export const receivedAt = (serverTs: number, clientNow: number, serverOffsetMs: number) => Math.min(clientNow, serverTs - serverOffsetMs);
+/** A row's age now, from the age it carried when it arrived. */
+export const currentAgeSec = (row: { address: string; ageSec: number }, received: ReceivedAt | undefined, now: number) => row.ageSec + Math.max(0, now - (received?.get(row.address) ?? now)) / 1000;
+/** "Scanning…" only while a first scan is plausibly running; after that the row says the scan is delayed. */
+export const scanDelayed = (row: { verdictPending?: boolean }, ageNowSec: number) => !!row.verdictPending && ageNowSec >= SCAN_DELAYED_AFTER_SEC;
 export const sortAvailable = (rows: readonly RadarRow[], sort: Sort) => rows.some(c => sortField(sort) === undefined || !c.unavailable?.includes(sortField(sort)!));
 const sortField = (sort: Sort): NonNullable<RadarRow['unavailable']>[number] | undefined => ({ '1h move':'change', 'Agent flow':'flow', 'Exit cost':'exitCost' } as const)[sort as '1h move'|'Agent flow'|'Exit cost'];
-export function sortRows(rows: readonly RadarRow[], sort: Sort): RadarRow[] {
+export function sortRows(rows: readonly RadarRow[], sort: Sort, received?: ReceivedAt): RadarRow[] {
   const list = [...rows];
   if (sort === 'Rank') return list;
-  const value = (c: RadarRow) => (sortField(sort) && c.unavailable?.includes(sortField(sort)!)) || (sort === 'Hottest' && (c.unavailable?.includes('flow') || c.unavailable?.includes('change'))) ? undefined : sort === 'Hottest' ? heatScore(c) : sort === '1h move' ? c.change1hPct : sort === 'Agent flow' ? c.flow.agentPct : sort === 'Newest' ? c.ageSec : c.exitCost1kPct;
+  const value = (c: RadarRow) => (sortField(sort) && c.unavailable?.includes(sortField(sort)!)) || (sort === 'Hottest' && (c.unavailable?.includes('flow') || c.unavailable?.includes('change'))) ? undefined : sort === 'Hottest' ? heatScore(c) : sort === '1h move' ? c.change1hPct : sort === 'Agent flow' ? c.flow.agentPct : sort === 'Newest' ? -launchedAt(c, received) : c.exitCost1kPct;
   return list.sort((a, b) => { const av = value(a), bv = value(b); return av === undefined ? bv === undefined ? 0 : 1 : bv === undefined ? -1 : ascending(sort) ? av - bv : bv - av; });
 }
 export const filterRows = (rows: readonly RadarRow[], show: string, stage: string) => rows.filter((c) =>
