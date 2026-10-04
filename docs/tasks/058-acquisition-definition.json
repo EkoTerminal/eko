@@ -58,8 +58,8 @@
   ],
   "population": null,
   "budget": {
-    "approvalRef": null,
-    "pricingEvidence": null,
+    "approvalRef": "owner-approval-2026-10-04",
+    "pricingEvidence": "0x9104146ce633504e2b1bf0e08b64a17f86184b09439d6a8ba81bbbf225fe0eac",
     "checkpointUnits": 250000,
     "capNanoUsd": "10000000000",
     "unitNanoUsd": "6000",
