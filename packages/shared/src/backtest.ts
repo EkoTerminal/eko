@@ -234,7 +234,7 @@ export function runBacktest(
     'Past results on this sample do not predict future performance.',
   ];
   if (n < 500) limitations.push(`Small sample (${n} bars) — metrics are highly uncertain.`);
-  if (trades.length < 30) limitations.push(`Only ${trades.length} trades — too few for statistically meaningful win rates.`);
+  if (trades.length < 30) limitations.push(`Only ${trades.length} trades — too few for statistically meaningful results.`);
 
   return {
     strategyId: strategy.id,

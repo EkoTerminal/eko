@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PublicClient } from 'viem';
 import { z } from 'zod';
+import { addressKey } from '../address-limit.js';
 
 export const RPC_BODY_LIMIT = 16 * 1024;
 export const READ_RPC_METHODS = [
@@ -65,7 +66,7 @@ export async function rpcRoutes(app: FastifyInstance, client: PublicClient) {
   });
   app.post('/rpc', {
     bodyLimit: RPC_BODY_LIMIT,
-    config: { rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: req => req.ip } },
+    config: { rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: req => addressKey(req.ip) } },
   }, async (req, reply) => {
     // TODO(spec): CA-25 does not specify batching or notifications. Reject both;
     // a request always admits at most one metered call and receives one response.

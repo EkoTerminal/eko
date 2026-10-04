@@ -30,7 +30,7 @@ import { PointsService } from './points/service.js';
 import { HarnessService } from './harness/service.js';
 import { auditTradeConfig, TradeAccessService } from './exec/trade-access.js';
 import { AuthService } from './http/auth.js';
-import { addressLimit } from './http/address-limit.js';
+import { addressKey, addressLimit } from './http/address-limit.js';
 import { registerRoutes } from './http/routes.js';
 import { FlagService } from './flags/service.js';
 import { ghostReportRoutes } from './http/ghost-reports.js';
@@ -245,7 +245,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     global: true,
     max: 600,
     timeWindow: '1 minute',
-    keyGenerator: (req) => auth.readCookie(req) ?? req.ip,
+    keyGenerator: (req) => auth.readCookie(req) ?? addressKey(req.ip),
     allowList: (req) => req.url.startsWith('/assets/'),
   });
   // Sessions are free to mint, so one address also gets a ceiling across all of its sessions.

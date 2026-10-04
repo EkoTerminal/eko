@@ -35,6 +35,7 @@ import { telemetryIngress } from './v1/telemetry.js';
 import { BACKTEST_METHODOLOGY } from '../quant/service.js';
 import type { Account } from './auth.js';
 import { SESSION_COOKIE } from './auth.js';
+import { sharedAddressLimit } from './address-limit.js';
 
 class HttpError extends Error {
   constructor(
@@ -181,7 +182,8 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
     return { nonce: await ctx.auth.nonce(a.id), domain: new URL(origin).host, uri: origin };
   });
 
-  app.post('/api/auth/verify', tight(20), async (req, reply) => {
+  // Shares the v1 sign-in cap: a failed signature can fall back to an on-chain contract-wallet check.
+  app.post('/api/auth/verify', { ...tight(20), preHandler: sharedAddressLimit(app, 'siwe-verify', 60) }, async (req, reply) => {
     const a = await requireAccount(req);
     const body = parse(z.object({ message: z.string().max(2000), signature: z.string().regex(/^0x[0-9a-fA-F]+$/) }), req.body);
     const clients: Record<number, PublicClient> = {};

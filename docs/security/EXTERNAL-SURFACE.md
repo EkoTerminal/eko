@@ -409,7 +409,7 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `publicGhostReport` | function | [apps/server/src/http/ghost-reports.ts:19](../../apps/server/src/http/ghost-reports.ts#L19) | Yes |
 | `ghostReportRoutes` | function | [apps/server/src/http/ghost-reports.ts:43](../../apps/server/src/http/ghost-reports.ts#L43) | Yes |
 | `launchMonitoringRoutes` | function | [apps/server/src/http/launch-monitoring.ts:19](../../apps/server/src/http/launch-monitoring.ts#L19) | Yes |
-| `registerRoutes` | function | [apps/server/src/http/routes.ts:67](../../apps/server/src/http/routes.ts#L67) | Yes |
+| `registerRoutes` | function | [apps/server/src/http/routes.ts:68](../../apps/server/src/http/routes.ts#L68) | Yes |
 | `ShareService.constructor` | constructor | [apps/server/src/http/share.ts:58](../../apps/server/src/http/share.ts#L58) | Yes |
 | `ShareService.content` | method | [apps/server/src/http/share.ts:66](../../apps/server/src/http/share.ts#L66) | Yes |
 | `ShareService.image` | method | [apps/server/src/http/share.ts:95](../../apps/server/src/http/share.ts#L95) | Yes |
@@ -428,14 +428,14 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `healthRoutes` | function | [apps/server/src/http/v1/health.ts:14](../../apps/server/src/http/v1/health.ts#L14) | Yes |
 | `registerV1` | function | [apps/server/src/http/v1/index.ts:38](../../apps/server/src/http/v1/index.ts#L38) | Yes |
 | `journalRoutes` | function | [apps/server/src/http/v1/journal.ts:20](../../apps/server/src/http/v1/journal.ts#L20) | Yes |
-| `oauthConsentRoutes` | function | [apps/server/src/http/v1/oauth.ts:18](../../apps/server/src/http/v1/oauth.ts#L18) | Yes |
+| `oauthConsentRoutes` | function | [apps/server/src/http/v1/oauth.ts:19](../../apps/server/src/http/v1/oauth.ts#L19) | Yes |
 | `packRoutes` | function | [apps/server/src/http/v1/packs.ts:10](../../apps/server/src/http/v1/packs.ts#L10) | Yes |
 | `readRoutes` | function | [apps/server/src/http/v1/reads.ts:32](../../apps/server/src/http/v1/reads.ts#L32) | Yes |
 | `receiptRoutes` | function | [apps/server/src/http/v1/receipts.ts:14](../../apps/server/src/http/v1/receipts.ts#L14) | Yes |
-| `rpcRoutes` | function | [apps/server/src/http/v1/rpc.ts:58](../../apps/server/src/http/v1/rpc.ts#L58) | Yes |
+| `rpcRoutes` | function | [apps/server/src/http/v1/rpc.ts:59](../../apps/server/src/http/v1/rpc.ts#L59) | Yes |
 | `telegramRoutes` | function | [apps/server/src/http/v1/telegram.ts:13](../../apps/server/src/http/v1/telegram.ts#L13) | Yes |
-| `telemetryIngress` | function | [apps/server/src/http/v1/telemetry.ts:15](../../apps/server/src/http/v1/telemetry.ts#L15) | Yes |
-| `telemetryRoutes` | function | [apps/server/src/http/v1/telemetry.ts:42](../../apps/server/src/http/v1/telemetry.ts#L42) | Yes |
+| `telemetryIngress` | function | [apps/server/src/http/v1/telemetry.ts:16](../../apps/server/src/http/v1/telemetry.ts#L16) | Yes |
+| `telemetryRoutes` | function | [apps/server/src/http/v1/telemetry.ts:43](../../apps/server/src/http/v1/telemetry.ts#L43) | Yes |
 | `tradeAdminRoutes` | function | [apps/server/src/http/v1/trade-admin.ts:19](../../apps/server/src/http/v1/trade-admin.ts#L19) | Yes |
 | `tradeRoutes` | function | [apps/server/src/http/v1/trade.ts:14](../../apps/server/src/http/v1/trade.ts#L14) | Yes |
 | `watchRoutes` | function | [apps/server/src/http/v1/watch.ts:17](../../apps/server/src/http/v1/watch.ts#L17) | Yes |

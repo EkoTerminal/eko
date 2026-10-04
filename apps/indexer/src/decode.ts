@@ -23,6 +23,8 @@ const abs = (n: bigint) => n < 0n ? -n : n;
 const scaled = (n: bigint, decimals: number) => Number(n) / 10 ** decimals;
 
 export class BlockDecoder {
+  /** Store userops, 7702 delegations and wallet-protocol coverage. Off still computes protocol actors for swap attribution. */
+  storeWalletProtocol = true;
   constructor(readonly client: ChainClient, readonly registry: AddressRegistry, readonly metrics = new Metrics(), private logger: Logger = log) {}
   private poolReads = new AsyncCache<string, PoolMetadata | null>(20000);
   private codeReads = new AsyncCache<string, Hex>();
@@ -161,7 +163,8 @@ export class BlockDecoder {
     const state: Prepared = { storedTokens: new Set(), storedPools: new Set(), launches: new Map(), tokens: new Map(), curves: new Map(), pools: new Map(), actors: new Map(), protocolRows: new BlockRows(), rate: null, scope, forceSenders:options.forceSenders??false };
     const logs = receipts.flatMap(r => r.logs).sort((a, b) => Number(BigInt(a.logIndex) - BigInt(b.logIndex)));
     const protocol = await collectWalletProtocol(block,receipts,this.registry,remote,options.walletProtocol);
-    state.protocolRows=protocol.rows; state.actors=protocol.actors;
+    if(this.storeWalletProtocol)state.protocolRows=protocol.rows;
+    state.actors=protocol.actors;
     if (!logs.length) return state;
     const emitters = [...new Set(logs.map(l => lower(l.address)))];
     const placeholders = (values: string[]) => values.map((_, i) => `$${i + 1}`).join(',') || 'NULL';

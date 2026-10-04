@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { metrics } from '../../obs/metrics.js';
 import { observeTelemetry, type LatencyStore } from '../../obs/telemetry.js';
 import { sendError } from './helpers.js';
+import { addressKey } from '../address-limit.js';
 
 /**
  * Register anonymous schema-bounded telemetry POST with finite body size and per-IP rate limit. No
@@ -21,7 +22,7 @@ export function telemetryIngress(app: FastifyInstance, path = '/telemetry') {
   });
   app.post(path, {
     bodyLimit: TELEMETRY_BODY_LIMIT,
-    config: { rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: req => req.ip } },
+    config: { rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: req => addressKey(req.ip) } },
   }, async (req, reply) => {
     const parsed = TelemetrySchema.safeParse(req.body);
     // Zod errors can echo unknown field names; never return private input.

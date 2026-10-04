@@ -121,6 +121,17 @@ describe('scoped wallet protocol evidence',()=>{
     await migrate(db);
     expect((await db.sql.query("SELECT id FROM eko_indexer_migrations WHERE id='0136_wallet_protocol'")).rows).toHaveLength(1);
   });
+  it('can stop storing wallet-protocol evidence while still attributing protocol actors',async()=>{
+    const db=await database(),{f,block,receipts}=inputs();
+    const decoder=new BlockDecoder({} as import('../src/types.js').ChainClient,registry);
+    const options={remote:remote(),walletProtocol:{options:{at,entryPoints:f.profiles}}};
+    const stored=await decoder.prepare(db,block,receipts,options);
+    expect(stored.protocolRows.get('userops')).toHaveLength(2);
+    decoder.storeWalletProtocol=false;
+    const paused=await decoder.prepare(db,block,receipts,options);
+    for(const table of ['userops','delegations_7702','wallet_protocol_coverage'] as const)expect(paused.protocolRows.get(table)).toHaveLength(0);
+    expect([...paused.actors.keys()]).toEqual([...stored.actors.keys()]);
+  });
   it('reuses the existing scoped code admission and propagates meter stops without extra reads',async()=>{
     const {block,receipts}=inputs(),code=vi.fn(async()=>{throw new RpcGuardError('rpc_session_budget_reached');});
     const client={code,tokenMetadata:vi.fn(),v3Pool:vi.fn()} as unknown as import('../src/types.js').ChainClient;

@@ -7,6 +7,7 @@ import { EntitlementsService } from '../../harness/entitlements.js';
 import { HarnessError } from '../../harness/service.js';
 import type { OAuthConsentService } from '../../harness/oauth-consent.js';
 import { InputError, parse, sendError } from './helpers.js';
+import { addressKey } from '../address-limit.js';
 
 export interface OAuthConsentServices { auth: AuthService; consent: OAuthConsentService }
 /**
@@ -31,7 +32,7 @@ export async function oauthConsentRoutes(app: FastifyInstance, cfg: Config, serv
     services.auth.originFor(req, true);
     return services.auth.readCookie(req);
   };
-  const bounded = { config: { rateLimit: { max: 30, timeWindow: '1 minute', keyGenerator: (req: FastifyRequest) => services.auth.readCookie(req) ?? req.ip } } };
+  const bounded = { config: { rateLimit: { max: 30, timeWindow: '1 minute', keyGenerator: (req: FastifyRequest) => services.auth.readCookie(req) ?? addressKey(req.ip) } } };
   app.get('/oauth/requests/:id', bounded, req => services.consent.inspect(token(req), parse(z.object({ id: z.uuid() }), req.params).id));
   app.post('/oauth/consent', bounded, req => services.consent.consent(token(req), parse(OAuthConsentSchema, req.body), new EntitlementsService(cfg).get().limits.agents));
 }

@@ -198,6 +198,9 @@ railway variables --service api --set 'APP_ROLE=api' --set 'RUN_WORKER=false'
    The owner approved paid dRPC for indexer and engines on 2026-10-04, capped at
    600,000 requests per UTC day each with no per-session budget;
    `scripts/check-staging-railway.mjs` rejects a higher cap or a paid budget on any other role.
+   Staging sets `INDEX_WALLET_PROTOCOL=off` (2026-10-04, owner-approved): the indexer still computes protocol
+   actors for swap attribution but stops storing userops, 7702 delegations and per-transaction wallet-protocol
+   coverage, the largest table group. Wallet fingerprints then lack account-abstraction and calldata evidence.
 7. Keep mcp/receipts/bots/og unprovisioned until their packets, compiled entries,
    secrets and role dispatch integration have landed and their own tests pass.
    075 supplies trade lifecycle; 080 receipts; 093 MCP; 116 Telegram. Never add a

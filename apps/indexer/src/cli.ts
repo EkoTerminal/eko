@@ -18,6 +18,8 @@ const config = z.object({
   APP_ROLE: z.literal('indexer').default('indexer'), DATABASE_URL: z.string().optional(), PGLITE_DIR: z.string().default('.data/indexer'),
   RPC_HTTP_URL: z.url(), RPC_PUBLIC_HTTP_URL: z.url().optional(), RPC_WS_URL: z.url().optional(),
   INDEX_AGENT_REGISTRY_PROFILE: z.string().optional(),
+  // Wallet-protocol evidence (userops, 7702 delegations, per-transaction coverage) is the largest table group.
+  INDEX_WALLET_PROTOCOL: z.enum(['on', 'off']).default('on'),
   INDEX_HEAD_MODE: z.enum(['logs', 'blocks']).default('logs'), INDEX_HEAD_TICK_MS: integer(1000), INDEX_HEAD_MAX_RANGE: integer(200), INDEX_CODE_CACHE_SEC: integer(3600), INDEX_TRANSIENT_RETRY_SEC: integer(300),
   INDEX_START_BLOCK: z.preprocess(v => v === '' ? undefined : v, z.coerce.bigint().min(0n).optional()), INDEX_PREFETCH_BLOCKS: integer(32).pipe(z.number().max(128)), INDEX_BACKFILL_WORKERS: integer(4), INDEX_LOG_RANGE: integer(2000).pipe(z.number().max(20000)), INDEX_REORG_DEPTH: integer(256),
 });
@@ -68,6 +70,7 @@ async function main() {
       log('agent_registry_coverage',await agentRegistry.coverage());return;
     }
     const decoder = new BlockDecoder(client, registry, liveMetrics);
+    decoder.storeWalletProtocol = env.INDEX_WALLET_PROTOCOL === 'on';
     const backfill = args[0] === 'backfill';
     let from = 0n, to = 0n, stream: Stream = 'logs:pons_factory';
     if (backfill) {

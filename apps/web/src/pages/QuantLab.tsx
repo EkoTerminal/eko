@@ -626,7 +626,7 @@ function BacktestResults({
           <span className="stat-foot">Peak to trough, marked at each close</span>
         </div>
         <div className="stat">
-          <span className="stat-label">Win rate</span>
+          <span className="stat-label">Winning trades</span>
           <span className="stat-value">{pct1(o.winRate)}</span>
           <span className="stat-foot num">
             {o.wins} of {o.trades} trades
@@ -697,7 +697,7 @@ function BacktestResults({
               <tbody>
                 <MetricRow label="Bars" m={[o, is, oos]} f={(m) => m.bars.toLocaleString()} />
                 <MetricRow label="Trades (sample size)" m={[o, is, oos]} f={(m) => m.trades} sub={(m) => `${m.wins} W · ${m.losses} L`} />
-                <MetricRow label="Win rate" m={[o, is, oos]} f={(m) => pct1(m.winRate)} />
+                <MetricRow label="Winning trades" m={[o, is, oos]} f={(m) => pct1(m.winRate)} />
                 <MetricRow label="Avg win" m={[o, is, oos]} f={(m) => formatPct(m.avgWinPct)} tone={(m) => toneOf(m.avgWinPct)} />
                 <MetricRow label="Avg loss" m={[o, is, oos]} f={(m) => formatPct(m.avgLossPct)} tone={(m) => toneOf(m.avgLossPct)} />
                 <MetricRow label="Expectancy / trade" m={[o, is, oos]} f={(m) => formatPct(m.expectancyPct)} tone={(m) => toneOf(m.expectancyPct)} />

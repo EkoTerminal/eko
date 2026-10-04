@@ -26,6 +26,7 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
   const owned=providedClient?undefined:createMeteredClients(process.env as RpcEnv,{db,transientRetrySec:300});
   const client=providedClient??createClients(process.env as RpcEnv,registry,owned!.meter,{enrich:true});
   const decoder=new BlockDecoder(client,registry),rpc=new Semaphore(16);
+  decoder.storeWalletProtocol=process.env.INDEX_WALLET_PROTOCOL!=='off';
   let enriched=0;
   try {
     const scope=await loadSenderScope(db);
