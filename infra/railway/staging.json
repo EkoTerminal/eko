@@ -126,6 +126,9 @@
       "available": true,
       "requiresPackets": [],
       "environment": {
+        "RETENTION_QUOTE_TRANSFER_DAYS": "2",
+        "RETENTION_IDLE_TOKEN_DAYS": "14",
+        "RETENTION_PENDING_POOL_DAYS": "3",
         "APP_ROLE": "worker",
         "RUN_WORKER": "true",
         "SERVE_WEB": "false",

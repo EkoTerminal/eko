@@ -201,6 +201,8 @@ railway variables --service api --set 'APP_ROLE=api' --set 'RUN_WORKER=false'
    Staging sets `INDEX_WALLET_PROTOCOL=off` (2026-10-04, owner-approved): the indexer still computes protocol
    actors for swap attribution but stops storing userops, 7702 delegations and per-transaction wallet-protocol
    coverage, the largest table group. Wallet fingerprints then lack account-abstraction and calldata evidence.
+   The worker also rolls old transfers into per-holder baselines (`RETENTION_QUOTE_TRANSFER_DAYS=2`,
+   `RETENTION_IDLE_TOKEN_DAYS=14`, `RETENTION_PENDING_POOL_DAYS=3`); see `docs/operations/chain-retention.md`.
 7. Keep mcp/receipts/bots/og unprovisioned until their packets, compiled entries,
    secrets and role dispatch integration have landed and their own tests pass.
    075 supplies trade lifecycle; 080 receipts; 093 MCP; 116 Telegram. Never add a
@@ -282,7 +284,8 @@ Config version 1 hashes canonical sorted JSON of an explicit allowlist in
 defaults: role/mode/port/proxy/WS budgets, launch quota/points rates and dates,
 product env overrides, legacy/dev/web/worker switches, trading/fee/cap settings,
 public burn/registry addresses, market/demo mode, AI budgets/timeouts, effective
-RPC budgets/rates/weights, collector settings and parsed trade-cap file contents.
+RPC budgets/rates/weights, collector settings, chain retention settings and parsed
+trade-cap file contents.
 Optional values become null; an unlimited RPC session budget is `"unlimited"`.
 Flags expand to sorted validated names and addresses normalize to lowercase.
 Secret/key fields, all URLs (including credential/query-bearing URLs), cookies

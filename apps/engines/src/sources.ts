@@ -51,6 +51,8 @@ export async function holdingsAt(db: ChainDb, coin: Address, block: number, cach
   return (await db.sql.query<Holding>(`SELECT holder,sum(amount)::text AS amount,max(block)::text AS block FROM (
     SELECT to_address AS holder,amount,block FROM token_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
     UNION ALL SELECT from_address,-amount,block FROM token_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
+    -- Compacted history (retention) is one net row per holder, exact for views at or after its newest block.
+    UNION ALL SELECT holder,amount,through_block FROM transfer_baselines WHERE token=$1 AND through_block<=$2
     ) m GROUP BY holder HAVING sum(amount)>0 ORDER BY holder`, [binary(coin), block])).rows.map(prepareHolding);
 }
 export async function historyAt(db: ChainDb, deployer: Address, coin: Address, block: number, cache?:ReplayCache): Promise<HistoryView> {

@@ -3,8 +3,10 @@ import { binary, hex, type Hex } from './types.js';
 
 // Recompute from event identities, never apply transfer deltas on replay. WETH's
 // Deposit/Withdrawal are redundant with its Transfer events and are not counted twice.
+// Compacted history (retention.ts) survives as one net baseline per holder, so recomputed balances stay exact.
 const movements = `SELECT token,to_address AS holder,amount,block FROM token_transfers WHERE kind='Transfer'
-  UNION ALL SELECT token,from_address AS holder,-amount,block FROM token_transfers WHERE kind='Transfer'`;
+  UNION ALL SELECT token,from_address AS holder,-amount,block FROM token_transfers WHERE kind='Transfer'
+  UNION ALL SELECT token,holder,amount,through_block AS block FROM transfer_baselines`;
 export async function rebuildBalances(db: ChainDb, touched?: { token: Uint8Array; holder: Uint8Array }[]) {
   await db.sql.query('LOCK TABLE balances IN EXCLUSIVE MODE');
   if (!touched) {

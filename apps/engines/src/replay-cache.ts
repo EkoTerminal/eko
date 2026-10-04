@@ -19,7 +19,9 @@ class Lru<K,V> {
     if(this.values.size>this.limit)this.values.delete(this.values.keys().next().value!);return value;}
 }
 interface Transfer { fromHex?:Address;toHex?:Address;block:string;from_address:Uint8Array;to_address:Uint8Array;amount:string;kind:string }
-interface Rows { progress:ProgressPoint[];nonCurveSwaps:SwapRow[];swaps:SwapRow[];pools:PoolRow[];events:EventRow[];transfers:Transfer[];lastTransfer:number;balances:Holding[];exemptions:Exemption[] }
+interface Rows { progress:ProgressPoint[];nonCurveSwaps:SwapRow[];swaps:SwapRow[];pools:PoolRow[];events:EventRow[];transfers:Transfer[];lastTransfer:number;balances:Holding[];exemptions:Exemption[];baselines:Baseline[] }
+/** Net movement of compacted transfers (retention); replay is exact only at or after its block. */
+interface Baseline { holderHex:Address;amount:string;block:number }
 export interface Exemption {wallet:Uint8Array;block:string;tx_hash:Uint8Array;log_index:number}
 export interface WriteState {
   prior?:{id:string;signature:string;data:Verdict};
@@ -58,7 +60,7 @@ export class ReplayCache {
   async coinRows(coin:Address):Promise<Rows> {
     const found=this.rows.get(coin);if(found)return found;
     const promise=(async()=>{
-      const key=binary(coin),[swaps,pools,events,transfers,last,balances,pons,exemptions]=await Promise.all([
+      const key=binary(coin),[swaps,pools,events,transfers,last,balances,pons,exemptions,baselines]=await Promise.all([
         this.db.sql.query<SwapRow>('SELECT block,ts,tx_hash,log_index,trader,side,amount_coin,amount_quote,price_quote,usd,venue,pool_id,quote_asset FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY block,log_index,tx_hash',[key,this.to]),
         this.db.sql.query<PoolRow>('SELECT * FROM pools WHERE (currency0=$1 OR currency1=$1) AND created_block<=$2 ORDER BY id',[key,this.to]),
         this.db.sql.query<EventRow>('SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block<=$2 ORDER BY e.block,e.log_index,e.tx_hash',[key,this.to]),
@@ -67,18 +69,21 @@ export class ReplayCache {
         this.db.sql.query<Holding>('SELECT holder,amount,last_block AS block FROM balances WHERE token=$1 AND amount>0 ORDER BY holder',[key]),
         this.db.sql.query<PonsEventRow>("SELECT block,kind,data FROM pons_events WHERE token=$1 AND block<=$2 AND kind IN ('launch','trade') ORDER BY block,log_index,tx_hash",[key,this.to]),
         this.db.sql.query<Exemption>('SELECT * FROM pons_exemptions WHERE token=$1 AND block<=$2 ORDER BY wallet',[key,this.to]),
+        this.db.sql.query<{holder:Uint8Array;amount:string;block:string}>('SELECT holder,amount::text,through_block::text AS block FROM transfer_baselines WHERE token=$1 AND through_block<=$2 ORDER BY holder',[key,this.to]),
       ]);
       for(const row of transfers.rows){row.fromHex=rowHex(row.from_address);row.toHex=rowHex(row.to_address);}
       for(const row of pools.rows){rowHex(row.id);rowHex(row.currency0);rowHex(row.currency1);if(row.hooks)rowHex(row.hooks);}
       for(const row of events.rows){if(row.actor!=null)rowHex(row.actor);rowHex(row.pool_id);rowHex(row.tx_hash);}
       for(const row of exemptions.rows){rowHex(row.wallet);rowHex(row.tx_hash);}
       const normalized=swaps.rows.map(prepareSwap);
-      return {progress:curveProgress(pons.rows,Number(this.tokens.get(coin)!.first_block)),swaps:normalized,nonCurveSwaps:normalized.filter(r=>r.venue!=='pons_curve'),pools:pools.rows,events:events.rows,transfers:transfers.rows,lastTransfer:Number(last.rows[0].block ?? -1),balances:balances.rows.map(prepareHolding),exemptions:exemptions.rows};
+      return {progress:curveProgress(pons.rows,Number(this.tokens.get(coin)!.first_block)),swaps:normalized,nonCurveSwaps:normalized.filter(r=>r.venue!=='pons_curve'),pools:pools.rows,events:events.rows,transfers:transfers.rows,lastTransfer:Number(last.rows[0].block ?? -1),balances:balances.rows.map(prepareHolding),exemptions:exemptions.rows,
+        baselines:baselines.rows.map(row=>({holderHex:rowHex(row.holder) as Address,amount:row.amount,block:Number(row.block)}))};
     })();this.rows.set(coin,promise);return promise;
   }
   private holderState(coin:Address,rows:Rows,block:number,lane:string) {
     const key=`${coin}:${lane}`;let state=this.holders.get(key);const token=this.tokens.get(coin)!;
-    if(!state || block<state.block){state={block:-1,cursor:0,aggregate:new HolderAggregate(coin,token.curve ? rowHex(token.curve) : undefined,loadRegistry().addressOf('ours.burnWallet')?.toLowerCase() as Address|undefined)};this.holders.set(key,state);}
+    if(!state || block<state.block){state={block:-1,cursor:0,aggregate:new HolderAggregate(coin,token.curve ? rowHex(token.curve) : undefined,loadRegistry().addressOf('ours.burnWallet')?.toLowerCase() as Address|undefined)};this.holders.set(key,state);
+      for(const b of rows.baselines)state.aggregate.add(b.holderHex,BigInt(b.amount),b.block);}
     if(block>=rows.lastTransfer){
       if(state.cursor!==Infinity){state.aggregate=new HolderAggregate(coin,token.curve ? rowHex(token.curve) : undefined,loadRegistry().addressOf('ours.burnWallet')?.toLowerCase() as Address|undefined);for(const r of rows.balances)state.aggregate.set(r.holderHex!,BigInt(r.amount),Number(r.block));state.cursor=Infinity;}
     }else{

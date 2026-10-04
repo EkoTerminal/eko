@@ -22,6 +22,7 @@ import { LatencyStore } from './obs/telemetry.js';
 import { ChainClients, UniswapV3Adapter } from './exec/chain.js';
 import { PortfolioService } from './exec/portfolio.js';
 import { SanctionsService, SanctionsWorker } from './sanctions/service.js';
+import { RetentionWorker } from './retention-worker.js';
 import { QuoteStore } from './exec/quotes.js';
 import { TradeService, type TradeBackend } from './exec/trades.js';
 import { ExecutionService } from './exec/service.js';
@@ -121,6 +122,9 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   const sanctions = new SanctionsService(dbh.chain);
   const sanctionsWorker = new SanctionsWorker(dbh.chain, cfg.OFAC_SDN_URL, undefined, Date.now,
     failed => logger[failed ? 'warn' : 'info']({ failed }, 'Sanctions dataset refresh'));
+  const retentionWorker = new RetentionWorker(dbh.chain, { quoteDays: cfg.RETENTION_QUOTE_TRANSFER_DAYS,
+    idleTokenDays: cfg.RETENTION_IDLE_TOKEN_DAYS, pendingPoolDays: cfg.RETENTION_PENDING_POOL_DAYS },
+    result => logger['failed' in result ? 'warn' : 'info']({ retention: result }, 'Chain retention pass'));
 
 
   const monitoring = new LaunchMonitor(dbh.chain.sql);
@@ -318,7 +322,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     await market.start();
     if (cfg.RUN_WORKER) {
       exec.start();
-      if (cfg.APP_ROLE === 'worker' || cfg.APP_ROLE === 'dev') sanctionsWorker.start();
+      if (cfg.APP_ROLE === 'worker' || cfg.APP_ROLE === 'dev') { sanctionsWorker.start(); retentionWorker.start(); }
     } else logger.info('RUN_WORKER=false — API-only process (no order reconciler)');
     if (cfg.LEGACY_API && (cfg.RUN_WORKER || cfg.LIVE_TRADING_ENABLED)) void chains.checkHealth().then(pushHealth);
   }
@@ -344,6 +348,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       await reads.store.close();
       exec.stop();
       await sanctionsWorker.stop();
+      await retentionWorker.stop();
       market.stop();
       hub.closeAll();
       await app.close();

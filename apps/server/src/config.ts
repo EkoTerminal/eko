@@ -151,6 +151,11 @@ const EnvSchema = z.object({
   LIVE_TRADING_ENABLED: bool,
   ADMIN_WALLETS: z.string().default(''),
   SECURITY_COLLECTORS: z.string().default('{}').transform(parseSecurityCollectors),
+  /** Chain-table retention on the worker (packages/db/src/retention.ts). Unset keeps full history (BACKEND §3.6). */
+  RETENTION_QUOTE_TRANSFER_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
+  /** Must exceed the engines' seven-day idle window, so live evaluation never reads compacted coins. */
+  RETENTION_IDLE_TOKEN_DAYS: optionalValue(z.coerce.number().int().min(8).max(365)),
+  RETENTION_PENDING_POOL_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
 });
 
 // TODO(spec): BACKEND §2.4/§18 do not define deployment identity. Version 1 attests
@@ -168,6 +173,7 @@ export const identityConfigKeys = {
   AI_TIMEOUT_MS: true, RPC_PAID_MAX_RPM: true, RPC_PUBLIC_MAX_RPM: true,
   RPC_PAID_DAILY_BUDGET: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
   LIVE_TRADING_ENABLED: true, SECURITY_COLLECTORS: true,
+  RETENTION_QUOTE_TRANSFER_DAYS: true, RETENTION_IDLE_TOKEN_DAYS: true, RETENTION_PENDING_POOL_DAYS: true,
 } as const;
 // Identity also covers the headless image roles the dispatcher starts (indexer, engines, ...), not only the server's own roles.
 const IdentityEnvSchema = EnvSchema.pick(identityConfigKeys).extend({
@@ -219,6 +225,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (c.NODE_ENV === 'production' && !c.DATABASE_URL?.trim()) throw new Error('DATABASE_URL is required in production; PGlite is for local development and tests');
   if (c.NODE_ENV === 'production' && c.APP_ROLE === 'api' && c.RUN_WORKER) throw new Error('API replicas require RUN_WORKER=false; use APP_ROLE=worker for the reconciler');
   if (c.APP_ROLE === 'worker' && !c.RUN_WORKER) throw new Error('APP_ROLE=worker requires RUN_WORKER=true');
+  if ((c.RETENTION_QUOTE_TRANSFER_DAYS ?? c.RETENTION_IDLE_TOKEN_DAYS) !== undefined && c.SECURITY_COLLECTORS.wallets)
+    throw new Error('Transfer retention cannot run with the wallet outflow collectors, which read transfer history');
   if (c.APP_ROLE === 'dev' && (!c.RPC_HTTP_URL || !c.RPC_WS_URL)) throw new Error('APP_ROLE=dev requires RPC_HTTP_URL and RPC_WS_URL');
   if (c.NODE_ENV === 'production' && (!c.SESSION_SECRET || c.SESSION_SECRET.length < 32)) {
     throw new Error('SESSION_SECRET (≥32 chars) is required in production');
