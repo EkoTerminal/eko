@@ -38,6 +38,26 @@ describe('canonical §8 copy', () => {
     }
     expect(violations).toEqual([]);
   });
+  it('names the safe risk mode Careful wherever it is shown', async () => {
+    const { riskModeLabel, RISK_OPTIONS } = await import('./shell');
+    const { GUARD_POLICY_OPTIONS } = await import('./guard');
+    expect(riskModeLabel('safe')).toBe('Careful'); expect(riskModeLabel('Safe')).toBe('Careful'); expect(riskModeLabel('degen')).toBe('Degen');
+    for (const option of [...RISK_OPTIONS, ...GUARD_POLICY_OPTIONS]) expect(option.label).not.toMatch(/\bsafe\b/i);
+  });
+  // AGENTS.md hard rule 3, as user-facing claims; the landing mixes copy with graphics code, so the list is exact.
+  const LANDING_FORBIDDEN = [/\baudited\b/i, /trustless/i, /automated burn/i, /ownerless/i, /\bguaranteed\b/i, /rug-?proof/i, /\bwin rate\b/i,
+    /protects your robinhood account/i, /\bSafe\b/, /robinhood (partner|official)/i];
+  it('rejects forbidden claims and the word Safe in the marketing landing', () => {
+    const landing = join(src, '..', '..', 'landing', 'src');
+    const violations: string[] = [];
+    for (const file of files(landing).filter((file) => /\.(tsx?|css)$/.test(file))) {
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        if (line.includes('// copy-allow:')) return;
+        if (LANDING_FORBIDDEN.some((pattern) => pattern.test(line))) violations.push(`${file.slice(landing.length + 1)}:${i + 1}`);
+      });
+    }
+    expect(violations).toEqual([]);
+  });
   it('rejects forbidden claims in canonical copy and marketing', () => {
     const violations: string[] = [];
     for (const file of sourceFiles.filter((file) => file.startsWith(join(src, 'copy') + '/') || file.startsWith(join(src, 'marketing') + '/'))) {

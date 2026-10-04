@@ -67,6 +67,17 @@ only discovers `.yml`/`.yaml` Compose filenames. Its [Docker manifest parser](ht
 also selects YAML filenames. Review monitoring tag/digest pairs manually until
 the file format or updater support changes; this task preserves the JSON format.
 
+## Frontend build isolation
+
+The image builds the terminal (`apps/web`) and landing (`apps/landing`) bundles in
+a separate `frontend` stage that installs only those two workspaces and their own
+workspace dependencies. Their build-time tooling (Vite and `@vitejs/plugin-react`;
+for the landing also `@tailwindcss/vite`, with the `@tailwindcss/oxide` and
+`lightningcss` native binaries) never shares a filesystem with server sources, the
+server bundle or `/out/node_modules`; only the two `dist` folders are copied into the
+runtime image. The server stage installs every workspace except those two. CI builds
+the landing on every push, so a broken landing build fails before deploy.
+
 ## Local verification limits for this change
 
 The lockfile was regenerated offline with

@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../../apps/server/src/build-identity-contract.json' with { type: 'json' };
 import { bundleBuildInfo, compareIdentity } from '../lib/staging-identity.mjs';
-import { assertPinnedCheckout, expectedIdentity, fetchIdentity, parseArguments, workerIdentityFromLog } from '../verify-staging-identity.mjs';
+import { assertPinnedCheckout, expectedIdentity, fetchIdentity, parseArguments, roleIdentityFromLog, workerIdentityFromLog } from '../verify-staging-identity.mjs';
 
 const revision = 'a'.repeat(40), origin = 'https://staging.example.invalid';
 const root = resolve(fileURLToPath(new URL('../../', import.meta.url)));
@@ -71,6 +71,13 @@ test('every entry/role is hashed; revision, each bundle and effective config mis
     const worker = expectedIdentity(catalog, revision, build, 'worker', () => 'b'.repeat(64), 'caps');
     compareIdentity(workerIdentityFromLog(JSON.stringify({ msg: 'EKO worker ready', identity: worker })), worker);
     assert.throws(() => workerIdentityFromLog(JSON.stringify({ msg: 'EKO server ready', identity: expected })));
+    // Headless roles: the dispatcher's identity line, checked against that role's reviewed environment only.
+    catalog.services.indexer = { environment: { APP_ROLE: 'indexer', RUN_WORKER: 'false' }, secretNames: ['DATABASE_URL'] };
+    const indexer = expectedIdentity(catalog, revision, build, 'indexer', () => 'c'.repeat(64), 'caps');
+    compareIdentity(roleIdentityFromLog(JSON.stringify({ msg: 'EKO role identity', identity: indexer }), 'indexer'), indexer);
+    assert.throws(() => roleIdentityFromLog(JSON.stringify({ msg: 'EKO role identity', identity: indexer }), 'engines'));
+    assert.throws(() => roleIdentityFromLog(JSON.stringify({ msg: 'EKO worker ready', identity: indexer }), 'indexer'));
+    assert.deepEqual(parseArguments([origin, '--revision', revision, '--indexer-identity', 'i.json', '--engines-identity', 'e.json']).enginesIdentity, 'e.json');
     catalog.services.worker.environment.SESSION_SECRET = 'fixture-secret';
     assert.throws(() => expectedIdentity(catalog, revision, build, 'worker', () => 'b'.repeat(64), 'caps'));
   } finally { rmSync(directory, { recursive: true, force: true }); }

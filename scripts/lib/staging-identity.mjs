@@ -17,7 +17,7 @@ export function bundleBuildInfo(directory, revision) {
 }
 export function validateIdentity(identity) {
   assert.deepEqual(Object.keys(identity).sort(), ['build', 'configDigest', 'configVersion', 'role']);
-  assert.ok(['api', 'worker'].includes(identity.role), 'Expected API or worker identity');
+  assert.ok(['api', 'worker', 'indexer', 'engines'].includes(identity.role), 'Expected an API, worker, indexer or engines identity');
   assert.equal(identity.configVersion, contract.configVersion);
   assert.match(identity.configDigest, /^[a-f0-9]{64}$/);
   const build = identity.build;

@@ -14,7 +14,7 @@
 └──────────────────────────┘           │   CandleStore: trades → bars, bar-close ev. │
           │                            │ SignalEngine (worker)                        │
           │ signed tx                  │   rules · provisional · ensembles · expiry   │
-          ▼                            │   AI queue ── ProviderRegistry ──────────────┼──► Anthropic/OpenAI/Google/xAI/…
+          ▼                            │ ProviderRegistry (idle: no model calls)      │
    Robinhood Chain ◄───────────────────┤ ExecutionService                             │
    (Uniswap v3)          eth_call /    │   Paper adapter · UniswapV3Adapter           │
                          receipts      │   reconciler (receipts → confirmed/failed)   │
@@ -55,27 +55,16 @@ A single process keeps the latency path short. Signals, quotes and orders never 
 
 Rules bots run on every bar close and see only closed bars. `strategy.prepare(candles)(i)` uses only `candles[0..i]`, and a property test in `packages/shared/test` checks this for every strategy.
 
-### AI bots
+### AI and agents
 
-0. **Providers.** `ProviderRegistry` gives each provider its direct adapter when its own key is set, otherwise (if `GATEWAY_API_KEY` is set) a Chat Completions adapter against the AI gateway (`${GATEWAY_BASE_URL}/v1/chat/completions`, PPQ by default) with a per-provider gateway model. Health reports `route` and `via` per provider.
-1. At bar close the worker builds a `FeatureSnapshot`: the last 24 closed bars plus fixed indicators, each rounded reproducibly (sub-cent prices keep ≥ 6 significant digits).
-2. Scheduled runs happen only for charts a connected user watches with the bot enabled (or a member of an enabled ensemble). The run checks provider configuration, then the input-hash cache, then the daily $ budget and the per-bot hourly cap.
-3. The provider is called with a JSON-schema-constrained request and a short timeout. At most one retry is made, and only for retryable errors. A circuit breaker opens after repeated failures.
-4. The output is treated as untrusted and validated with `validateModelOutput`. It is rejected when it:
-   - does not match the schema;
-   - cites a bar other than the one supplied;
-   - misquotes the reference price by more than 0.25%;
-   - is stale (more than 1.5 bars old);
-   - contradicts itself (for example a BUY whose invalidation level is above entry);
-   - contains links or markup.
-5. The outcome is recorded:
-   - Rejections are stored in `signal_rejections`.
-   - Every run, including cache and budget skips, is stored in `inference_runs` with latency, tokens and estimated cost.
-   - `abstain` is a first-class outcome and produces no signal.
+There is no server-side LLM bot path: nothing in the server runs a model at bar close, turns model output into signals or serves an "analyze now" route. What exists today:
 
-**Analyze now** (`POST /api/bots/:id/analyze`) runs any bot on the latest closed bar of the requested chart through the same code: `runLlm` for AI bots (queue, cache, budget, validation, persistence and broadcast all apply; it returns an `AnalyzeResult` with a user-facing message), the strategy's `prepare()` for rules bots, and a lookup of the member-agreement signal for ensembles. A repeat on the same bar returns the stored signal or outcome without a model call.
+- **Providers.** `ProviderRegistry` (`apps/server/src/ai/registry.ts`) gives each provider its direct adapter when its own key is set, otherwise (if `GATEWAY_API_KEY` is set) a Chat Completions adapter against the AI gateway (`GATEWAY_BASE_URL`, PPQ by default) with a per-provider gateway model. Health reports `route` and `via` per provider; the legacy `GET /api/ai/usage` reports spend, limits and provider health.
+- **Budget.** `AI_DAILY_BUDGET_USD` (default `0`, which disables inference) is the daily ceiling on estimated model spend across providers. `AI_MAX_CALLS_PER_BOT_HOUR` is reserved: it is parsed and reported but nothing enforces it.
+- **Swarm.** `SwarmWorker` (`apps/server/src/ai/swarm-worker.ts`) is the only model caller in code. It runs only with `SWARM_ENABLED=true`, verified `SWARM_MODELS` and nonzero AI and Swarm budgets, reserves each call's maximum cost under a database lock before calling, and validates every reply as untrusted data. No image role starts it yet (`swarm` is unavailable in `apps/server/src/roles.ts`).
+- **Agent harness.** Agents are the user's own programs. `HarnessService` (`apps/server/src/harness/`) keeps agents, versioned policies and HMAC-hashed API keys behind `/v1/agents`; the MCP server (`apps/mcp`, `APP_ROLE=mcp`) gives key holders Senses reads, advisory preflight and the private journal. EKO calls no model on an agent's behalf.
 
-AI inference is never on the execution path. By the time a signal is on the chart it is a persisted record, and clicking it only requests a quote.
+AI inference is never on the execution path, and model output grants no signing authority.
 
 ### Ensembles
 

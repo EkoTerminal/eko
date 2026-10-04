@@ -1,3 +1,4 @@
+import { roleIdentity } from './build-identity.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -94,6 +95,13 @@ export async function acquireRoleLease(plan: RolePlan, lost: () => void): Promis
 export interface LaunchDependencies {
   lease: typeof acquireRoleLease;
   spawn: (entry: string, env: NodeJS.ProcessEnv) => ChildProcess;
+  /** Logs the build identity of roles that have no ready line of their own; throws to refuse a bad image. */
+  announce?: (plan: RolePlan) => void;
+}
+/** One JSON line the staging verifier compares with the reviewed build: api and worker report theirs themselves. */
+export function announceRoleIdentity(plan: RolePlan) {
+  if (plan.role === 'api' || plan.role === 'worker') return;
+  console.log(JSON.stringify({ msg: 'EKO role identity', identity: roleIdentity(plan.env) }));
 }
 /** Keep the role lease until the only child has exited, forwarding container termination signals.
  * @remarks
@@ -107,6 +115,7 @@ export interface LaunchDependencies {
 export async function runRole(plan: RolePlan, dependencies: LaunchDependencies = {
   lease: acquireRoleLease,
   spawn: (entry, env) => spawn(process.execPath, [entry], { env, stdio: 'inherit' }),
+  announce: announceRoleIdentity,
 }): Promise<number> {
   let child: ChildProcess | undefined;
   let interrupted: NodeJS.Signals | undefined;
@@ -130,6 +139,7 @@ export async function runRole(plan: RolePlan, dependencies: LaunchDependencies =
     });
     if (lost) return 1;
     if (interrupted) return 0;
+    dependencies.announce?.(plan);
     child = dependencies.spawn(plan.entry, plan.env);
     return await new Promise<number>((resolve, reject) => {
       child!.once('error', reject);

@@ -23,5 +23,5 @@ export const SHELL_COPY = {
   missionEyebrow: 'Mission Control', missionGate: 'Mission Control is where you connect a trading agent to EKO and review the checks it runs before each order.',
 };
 /** Display name for a risk mode or preset; the API keeps its `safe` / `Safe` values. */
-export const riskModeLabel = (name: string) => (name === 'Safe' || name === 'safe' ? 'Careful' : name);
+export const riskModeLabel = (name: string) => ({ safe: 'Careful', Safe: 'Careful', balanced: 'Balanced', degen: 'Degen' } as Record<string, string>)[name] ?? name;
 export const RISK_OPTIONS = [{ value: 'safe', label: 'Careful' }, { value: 'balanced', label: 'Balanced' }, { value: 'degen', label: 'Degen' }] as const;

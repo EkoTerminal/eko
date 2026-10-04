@@ -76,7 +76,14 @@ async function launch(role, signal, ready, extra = {}, direct = false, expectedE
     child.once('error', reject);
     child.once('close', (code, exitSignal) => resolve({ code, signal: exitSignal }));
   }).finally(() => { clearTimeout(timeout); if (fixtureDb) rmSync(fixtureDb, { recursive: true, force: true }); });
+  // The dispatcher prints one identity line before starting a role that has no ready line of its own.
+  const isIdentity = line => line.includes('"msg":"EKO role identity"');
+  const identities = stdout.split('\n').filter(isIdentity).map(line => JSON.parse(line));
+  stdout = stdout.split('\n').filter(line => !isIdentity(line)).join('\n');
+  for (const line of identities) assert.equal(line.identity.role, role);
   if (ready) {
+    assert.deepEqual(identities.map(line => line.identity), direct || role === 'api' || role === 'worker' ? []
+      : [{ build: bakedBuild, role, configVersion: 1, configDigest: expectedConfigDigest(env, tradeCapsText) }], `${role} identity line`);
     assert.ok(sent, `${role} readiness missing: ${stdout}\n${stderr}`);
     assert.deepEqual(result, { code: 0, signal: null }, stderr);
     if (role === 'engines') assert.ok(stdout.includes('engines_stopped'));

@@ -28,6 +28,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --prod --audit-level high
       - run: pnpm typecheck
+      # The image builds the landing; build it here too so a broken landing fails before deploy.
+      - run: pnpm --filter @eko/landing build
       # Root gates (doc surface, packs, evals, checkpoints, brand, staging, addresses) and the
       # compiled role-image build; the workspace suites run in node-tests below.
       - run: pnpm test:checks

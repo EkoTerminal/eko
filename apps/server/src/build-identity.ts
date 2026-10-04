@@ -39,6 +39,15 @@ export function readBuildInfo(production: boolean, file = new URL(import.meta.ur
 export function runtimeIdentity(cfg: Config, build = readBuildInfo(cfg.NODE_ENV === 'production')) {
   return { build, role: cfg.APP_ROLE, configVersion: contract.configVersion, configDigest: digest(effectiveIdentityConfiguration(cfg)) };
 }
+/**
+ * Identity for roles without their own ready line (indexer, engines, receipts, mcp, bots): the same baked bundle
+ * hashes and effective-configuration digest the api reports at /v1/build, computed from the role's environment.
+ * Production fails closed on missing or edited build metadata, like the api and worker.
+ */
+export function roleIdentity(env: NodeJS.ProcessEnv, build = readBuildInfo(env.NODE_ENV === 'production')) {
+  const caps = readFileSync(env.TRADE_CAPS_FILE ?? new URL(import.meta.url.includes('/dist/') ? './trading-caps.yaml' : '../config/trading-caps.yaml', import.meta.url), 'utf8');
+  return { build, role: env.APP_ROLE, configVersion: contract.configVersion, configDigest: digest(parseIdentityConfiguration(env, caps)) };
+}
 // Exported in its own deterministic bundle for the offline verifier. Does not boot
 // an app, open a DB, read secrets, generate keys or access providers.
 export function expectedConfigDigest(env: NodeJS.ProcessEnv, tradeCapsText: string): string {

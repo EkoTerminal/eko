@@ -132,7 +132,7 @@ const EnvSchema = z.object({
   GATEWAY_MODEL_GROQ: z.string().optional(),
   /** Hard ceiling on estimated AI spend per UTC day across all providers. */
   AI_DAILY_BUDGET_USD: z.coerce.number().nonnegative().default(0),
-  /** Hard ceiling on model calls per bot per hour. */
+  /** Reserved per-bot hourly call cap: parsed and reported, not enforced (no AI bot path calls InferenceBudget.check). */
   AI_MAX_CALLS_PER_BOT_HOUR: z.coerce.number().int().nonnegative().default(12),
   AI_TIMEOUT_MS: z.coerce.number().int().default(25_000),
 
@@ -169,7 +169,10 @@ export const identityConfigKeys = {
   RPC_PAID_DAILY_BUDGET: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
   LIVE_TRADING_ENABLED: true, SECURITY_COLLECTORS: true,
 } as const;
-const IdentityEnvSchema = EnvSchema.pick(identityConfigKeys);
+// Identity also covers the headless image roles the dispatcher starts (indexer, engines, ...), not only the server's own roles.
+const IdentityEnvSchema = EnvSchema.pick(identityConfigKeys).extend({
+  APP_ROLE: z.enum(['api', 'worker', 'dev', 'indexer', 'engines', 'mcp', 'receipts', 'bots', 'og']).default('api'),
+});
 
 // Parse only allowlisted inputs with the SAME defaults/transforms as runtime boot.
 // No secrets, generated dev secret, file paths or I/O are needed by the verifier.

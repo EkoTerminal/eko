@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **512/512 (100.00%)** documented. Minimum: **90%**.
+Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -191,10 +191,10 @@ Measured: **512/512 (100.00%)** documented. Minimum: **90%**.
 | `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:84](../../apps/engines/src/worker.ts#L84) | Yes |
 | `EngineWorker.stop` | method | [apps/engines/src/worker.ts:96](../../apps/engines/src/worker.ts#L96) | Yes |
 | `EngineWorker.replay` | method | [apps/engines/src/worker.ts:104](../../apps/engines/src/worker.ts#L104) | Yes |
-| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:135](../../apps/engines/src/worker.ts#L135) | Yes |
-| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:170](../../apps/engines/src/worker.ts#L170) | Yes |
-| `EngineWorker.run` | method | [apps/engines/src/worker.ts:322](../../apps/engines/src/worker.ts#L322) | Yes |
-| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:347](../../apps/engines/src/worker.ts#L347) | Yes |
+| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:137](../../apps/engines/src/worker.ts#L137) | Yes |
+| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:174](../../apps/engines/src/worker.ts#L174) | Yes |
+| `EngineWorker.run` | method | [apps/engines/src/worker.ts:348](../../apps/engines/src/worker.ts#L348) | Yes |
+| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:373](../../apps/engines/src/worker.ts#L373) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |
@@ -274,8 +274,8 @@ Measured: **512/512 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.drain` | method | [apps/server/src/ai/swarm-worker.ts:109](../../apps/server/src/ai/swarm-worker.ts#L109) | Yes |
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
-| `buildApp` | function | [apps/server/src/app.ts:103](../../apps/server/src/app.ts#L103) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:331](../../apps/server/src/app.ts#L331) | Yes |
+| `buildApp` | function | [apps/server/src/app.ts:107](../../apps/server/src/app.ts#L107) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:337](../../apps/server/src/app.ts#L337) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:43](../../apps/server/src/exec/actual-order.ts#L43) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:62](../../apps/server/src/exec/actual-order.ts#L62) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:90](../../apps/server/src/exec/actual-order.ts#L90) | Yes |
@@ -416,7 +416,7 @@ Measured: **512/512 (100.00%)** documented. Minimum: **90%**.
 | `webHeaders` | function | [apps/server/src/http/share.ts:107](../../apps/server/src/http/share.ts#L107) | Yes |
 | `registerShareRoutes` | function | [apps/server/src/http/share.ts:122](../../apps/server/src/http/share.ts#L122) | Yes |
 | `spaDocument` | function | [apps/server/src/http/share.ts:155](../../apps/server/src/http/share.ts#L155) | Yes |
-| `accountRoutes` | function | [apps/server/src/http/v1/account.ts:25](../../apps/server/src/http/v1/account.ts#L25) | Yes |
+| `accountRoutes` | function | [apps/server/src/http/v1/account.ts:26](../../apps/server/src/http/v1/account.ts#L26) | Yes |
 | `agentRoutes` | function | [apps/server/src/http/v1/agents.ts:36](../../apps/server/src/http/v1/agents.ts#L36) | Yes |
 | `bagsRoutes` | function | [apps/server/src/http/v1/bags.ts:17](../../apps/server/src/http/v1/bags.ts#L17) | Yes |
 | `configRoutes` | function | [apps/server/src/http/v1/config.ts:20](../../apps/server/src/http/v1/config.ts#L20) | Yes |
@@ -477,10 +477,11 @@ Measured: **512/512 (100.00%)** documented. Minimum: **90%**.
 | `SensesReadService.playbooks` | method | [apps/server/src/read/senses.ts:91](../../apps/server/src/read/senses.ts#L91) | Yes |
 | `SensesReadService.census` | method | [apps/server/src/read/senses.ts:108](../../apps/server/src/read/senses.ts#L108) | Yes |
 | `SensesReadService.receipt` | method | [apps/server/src/read/senses.ts:118](../../apps/server/src/read/senses.ts#L118) | Yes |
-| `roleStartupMessage` | function | [apps/server/src/roles.ts:30](../../apps/server/src/roles.ts#L30) | Yes |
-| `planRole` | function | [apps/server/src/roles.ts:42](../../apps/server/src/roles.ts#L42) | Yes |
-| `acquireRoleLease` | function | [apps/server/src/roles.ts:72](../../apps/server/src/roles.ts#L72) | Yes |
-| `runRole` | function | [apps/server/src/roles.ts:107](../../apps/server/src/roles.ts#L107) | Yes |
+| `roleStartupMessage` | function | [apps/server/src/roles.ts:31](../../apps/server/src/roles.ts#L31) | Yes |
+| `planRole` | function | [apps/server/src/roles.ts:43](../../apps/server/src/roles.ts#L43) | Yes |
+| `acquireRoleLease` | function | [apps/server/src/roles.ts:73](../../apps/server/src/roles.ts#L73) | Yes |
+| `announceRoleIdentity` | function | [apps/server/src/roles.ts:102](../../apps/server/src/roles.ts#L102) | Yes |
+| `runRole` | function | [apps/server/src/roles.ts:115](../../apps/server/src/roles.ts#L115) | Yes |
 | `SanctionsService.constructor` | constructor | [apps/server/src/sanctions/service.ts:26](../../apps/server/src/sanctions/service.ts#L26) | Yes |
 | `SanctionsService.assertWallet` | method | [apps/server/src/sanctions/service.ts:35](../../apps/server/src/sanctions/service.ts#L35) | Yes |
 | `SanctionsService.freshness` | method | [apps/server/src/sanctions/service.ts:54](../../apps/server/src/sanctions/service.ts#L54) | Yes |

@@ -30,6 +30,7 @@ import { PointsService } from './points/service.js';
 import { HarnessService } from './harness/service.js';
 import { auditTradeConfig, TradeAccessService } from './exec/trade-access.js';
 import { AuthService } from './http/auth.js';
+import { addressLimit } from './http/address-limit.js';
 import { registerRoutes } from './http/routes.js';
 import { FlagService } from './flags/service.js';
 import { ghostReportRoutes } from './http/ghost-reports.js';
@@ -90,6 +91,9 @@ export interface Ctx {
   incidents: IncidentService;
   health(): SystemHealth;
 }
+
+/** Requests per minute from one client address across all of its sessions (each session keeps 600). */
+export const ADDRESS_REQUESTS_PER_MINUTE = 1800;
 
 /**
  * Build Fastify, open/migrate storage, wire auth/market/execution/public-share routes (including
@@ -244,6 +248,8 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     keyGenerator: (req) => auth.readCookie(req) ?? req.ip,
     allowList: (req) => req.url.startsWith('/assets/'),
   });
+  // Sessions are free to mint, so one address also gets a ceiling across all of its sessions.
+  app.addHook('onRequest', addressLimit(app, ADDRESS_REQUESTS_PER_MINUTE, req => req.url.startsWith('/assets/')));
   await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
   app.decorateRequest('account', null);
   app.setErrorHandler((err, req, reply) => {

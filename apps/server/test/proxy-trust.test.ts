@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { buildApp } from '../src/app.js';
+import { ADDRESS_REQUESTS_PER_MINUTE, buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 
 const peer = '192.0.2.50';
@@ -57,6 +57,34 @@ describe.each([false, true])('assembled API proxy trust (one trusted hop: %s; of
       const response = await built.app.inject({ url: '/v1/health', remoteAddress: '192.0.2.60',
         headers: { 'x-forwarded-for': forwarded(i, trusted).replace(client, '203.0.113.60') } });
       expect(response.statusCode).toBe(i < 600 ? 200 : 429);
+    }
+  });
+
+  it('caps one address across freshly minted guest sessions, and caps its sign-in attempts', async () => {
+    const at = (n: number) => trusted ? { remoteAddress: peer, headers: { 'x-forwarded-for': `203.0.113.${n}` } as Record<string, string> }
+      : { remoteAddress: `192.0.2.${n}`, headers: {} as Record<string, string> };
+    const mint = async (n: number, count: number) => {
+      const cookies: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const minted = await built.app.inject({ url: '/v1/me', ...at(n) });
+        expect(minted.statusCode).toBe(200);
+        cookies.push(`eko_sid=${minted.cookies.find(c => c.name === 'eko_sid')!.value}`);
+      }
+      expect(new Set(cookies).size).toBe(count);
+      return cookies;
+    };
+    // Each session keeps its own 600/min bucket, but the address stops at 1800/min across all of them.
+    const cookies = await mint(70, 4);
+    for (let i = 4; i < 1805; i++) {
+      const response = await built.app.inject({ url: '/v1/health', ...at(70), headers: { ...at(70).headers, cookie: cookies[i % 4]! } });
+      expect(response.statusCode).toBe(i < ADDRESS_REQUESTS_PER_MINUTE ? 200 : 429);
+    }
+    // A failed signature can fall back to an on-chain check: 60 attempts per address, whatever the session.
+    const signers = await mint(71, 4);
+    for (let i = 0; i < 61; i++) {
+      const response = await built.app.inject({ method: 'POST', url: '/v1/auth/siwe/verify', ...at(71),
+        headers: { ...at(71).headers, cookie: signers[i % 4]!, origin: 'http://localhost:5180' }, payload: {} });
+      expect(response.statusCode === 429).toBe(i >= 60);
     }
   });
 });

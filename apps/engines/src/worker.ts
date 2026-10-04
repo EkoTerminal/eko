@@ -124,6 +124,8 @@ export class EngineWorker {
   }
   private startup=true;
   private yielded=false;
+  /** Coins whose head refresh already ran in the current startup sequence. */
+  private startupDone=new Set<Address>();
   /**
    * Expire traces, refresh registry/clock state, reconcile cursor and process bounded scan/activity
    * work before advancing the engine cursor. Engines role only; missing head returns zero, orphaned
@@ -154,7 +156,9 @@ export class EngineWorker {
     const scans=await this.processScanJobs(to);
     const count=scans+await this.evaluateActivity(0,to,true,this.startup);
     // A startup poll that yielded to a new launch has not refreshed every coin yet; the next poll continues it.
-    this.startup=this.yielded;
+    // Only a startup poll continues: a yielded ordinary poll must not restart the full refresh.
+    this.startup=this.startup && this.yielded;
+    if(!this.startup)this.startupDone.clear();
     await this.db.sql.query("INSERT INTO engine_cursors VALUES('engines',$1,$2) ON CONFLICT(stream) DO UPDATE SET block=excluded.block,hash=excluded.hash",[to,(await resolveClock(this.db,to,undefined,this.clock))?.hash ?? null]);
     return count;
   }
@@ -211,6 +215,7 @@ export class EngineWorker {
     const pending:typeof coins=[];
     const backlog=live ? this.options.liveBacklogSec : undefined,head=clock.at(-1);
     let coalesced=0;
+    const since=new Map<Address,number>();
     for (const coin of coins) {
       const activityInRange=coin.firstBlock>=from || coin.events.some(event=>event.block>=from && event.block<=to);
       if (!activityInRange && !live) continue;
@@ -218,11 +223,12 @@ export class EngineWorker {
       if(live && now-lastActivity>=7*86400)continue;
       const revision=digest({activity:coin.revision,rulesVersion:RULES_VERSION});
       const state=states.get(coin.coin);
-      if(live && !startup && state?.revision===revision && Number(state.through_block)>=to)continue;
+      const refreshHead=startup && !this.startupDone.has(coin.coin);
+      if(live && !refreshHead && state?.revision===revision && Number(state.through_block)>=to)continue;
       if(live && state?.revision!==revision)revised.add(coin.coin);
       const planFrom=live && state ? Math.max(from,Number(state.through_block)+1) : from;
       let plan=checkpoints(coin,clock,planFrom,to,index);
-      if(live && (startup || state?.revision!==revision) && clock.length && now-clock.at(-1)!.sec<7*86400) {
+      if(live && (refreshHead || state?.revision!==revision) && clock.length && now-clock.at(-1)!.sec<7*86400) {
         const head=clock.at(-1)!;
         if(!plan.some(point=>point.block===head.number))plan.push({coin:coin.coin,block:head.number,sec:head.sec});
       }
@@ -230,16 +236,33 @@ export class EngineWorker {
         // A lagging live engine replayed every historical checkpoint in block order. Each one reloads the coin's
         // whole history and rebuilds holders, so lag fed itself. TODO(spec): §6.5 triggers assume no lag; skip, then replay.
         const recent=plan.filter(point=>head.sec-point.sec<=backlog);
-        if(recent.length<plan.length) {coalesced+=plan.length-recent.length;plan=recent.length ? recent : [{coin:coin.coin,block:head.number,sec:head.sec}];}
+        if(recent.length<plan.length) {
+          coalesced+=plan.length-recent.length;
+          // The coin keeps the queue place of its oldest dropped checkpoint, or newer work would starve it.
+          since.set(coin.coin,plan[0].block);
+          plan=recent.length ? recent : [{coin:coin.coin,block:head.number,sec:head.sec}];
+        }
       }
       tasks.push(...plan);pending.push({...coin,revision});
     }
     // Live: a coin with no card yet shows "Scanning…"; its first scan goes before any refresh of scanned coins,
-    // newest launch first. Each coin's own checkpoints stay in block order. Replay keeps strict block order.
+    // newest launch first. One deployer's launches run oldest first, so each sees its siblings in deployer history.
+    // Each coin's own checkpoints stay in block order. Replay keeps strict block order.
     const scanned=live ? new Set((await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest')).rows.map(row=>hex(row.coin))) : undefined;
     const launched=new Map(coins.map(coin=>[coin.coin,coin.firstBlock]));
     const first=(coin:Address)=>!!scanned && !scanned.has(coin);
-    tasks.sort((a,b)=>Number(first(b.coin))-Number(first(a.coin)) || (first(a.coin) ? launched.get(b.coin)!-launched.get(a.coin)! || a.coin.localeCompare(b.coin) || a.block-b.block : a.block-b.block || a.coin.localeCompare(b.coin)));
+    const firstCoins=[...new Set(tasks.filter(task=>first(task.coin)).map(task=>task.coin))];
+    const deployerOf=new Map<Address,string>(firstCoins.map(coin=>[coin,coin]));
+    if(firstCoins.length)for(const row of (await this.db.sql.query<{address:Uint8Array;deployer:Uint8Array|null}>('SELECT address,deployer FROM tokens WHERE address=ANY($1)',[firstCoins.map(binary)])).rows)
+      if(row.deployer)deployerOf.set(hex(row.address),hex(row.deployer));
+    const newestOf=new Map<string,number>();
+    for(const coin of firstCoins){const group=deployerOf.get(coin)!;newestOf.set(group,Math.max(newestOf.get(group) ?? -1,launched.get(coin)!));}
+    const firstOrder=(a:Checkpoint,b:Checkpoint)=>{
+      const ga=deployerOf.get(a.coin)!,gb=deployerOf.get(b.coin)!;
+      return newestOf.get(gb)!-newestOf.get(ga)! || ga.localeCompare(gb) || launched.get(a.coin)!-launched.get(b.coin)! || a.coin.localeCompare(b.coin) || a.block-b.block;
+    };
+    const queued=(task:Checkpoint)=>since.get(task.coin) ?? task.block;
+    tasks.sort((a,b)=>Number(first(b.coin))-Number(first(a.coin)) || (first(a.coin) ? firstOrder(a,b) : queued(a)-queued(b) || a.coin.localeCompare(b.coin) || a.block-b.block));
     const firstScans=tasks.findIndex(task=>!first(task.coin)),priority=firstScans<0 ? tasks.length : firstScans;
     if(live)this.options.onLivePlanned?.({tasks:tasks.length,coins:new Set(tasks.map(t=>t.coin)).size,firstScans:new Set(tasks.slice(0,priority).map(t=>t.coin)).size,coalescedCheckpoints:coalesced,to});
     const remaining=new Map<Address,number>();for(const task of tasks)remaining.set(task.coin,(remaining.get(task.coin) ?? 0)+1);
@@ -309,7 +332,10 @@ export class EngineWorker {
     });this.metrics.writeMs+=performance.now()-start;}
     // A yielded poll records only coins whose checkpoints all ran; the rest are planned again next poll.
     this.yielded=yielded;
-    if(!this.stopped && live)for(const coin of pending)if(!yielded || !remaining.get(coin.coin))await this.db.sql.query('INSERT INTO engine_activity_state VALUES($1,$2,$3) ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision,through_block=excluded.through_block',[binary(coin.coin),coin.revision,to]);
+    if(!this.stopped && live)for(const coin of pending)if(!yielded || !remaining.get(coin.coin)) {
+      if(startup)this.startupDone.add(coin.coin);
+      await this.db.sql.query('INSERT INTO engine_activity_state VALUES($1,$2,$3) ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision,through_block=excluded.through_block',[binary(coin.coin),coin.revision,to]);
+    }
     return completed;
   }
   /**

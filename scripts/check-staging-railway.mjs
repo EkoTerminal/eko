@@ -7,6 +7,9 @@ import { resolve } from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const roles = ['api', 'indexer', 'engines', 'worker', 'mcp', 'receipts', 'bots', 'og'];
+/** Roles allowed a paid RPC budget, and the owner-approved daily request cap for each. */
+const paidRpcRoles = new Set(['indexer', 'engines']);
+const PAID_RPC_DAILY_CAP = 600_000;
 const inert = {
   LIVE_TRADING_ENABLED: 'false', TRADING_ALLOWLIST_ONLY: 'true', TRADE_MAX_USD: '25',
   TRADE_CAPS_FROM: '', FEE_BPS_DEFAULT: '0', FEE_ACTIVE_FROM: '', TIERS_ACTIVE_FROM: '',
@@ -39,7 +42,16 @@ export function validateStaging(catalog, manifests, roleSource) {
     // Only API/web has public ingress in the pinned candidate.
     assert.equal(service.public, role === 'api');
     const env = { ...catalog.commonEnvironment, ...service.environment };
-    for (const [key, value] of Object.entries(inert)) assert.equal(env[key], value, `${role}:${key}`);
+    for (const [key, value] of Object.entries(inert)) {
+      if (paidRpcRoles.has(role) && (key === 'RPC_PAID_DAILY_BUDGET' || key === 'RPC_SESSION_BUDGET')) continue;
+      assert.equal(env[key], value, `${role}:${key}`);
+    }
+    if (paidRpcRoles.has(role)) {
+      // Owner-approved dRPC spend (2026-10-04): chain indexing only, bounded per UTC day; no per-session budget.
+      assert.match(env.RPC_PAID_DAILY_BUDGET, /^[1-9]\d*$/, `${role}:RPC_PAID_DAILY_BUDGET`);
+      assert.ok(Number(env.RPC_PAID_DAILY_BUDGET) <= PAID_RPC_DAILY_CAP, `${role}: paid RPC budget above the approved cap`);
+      assert.equal(env.RPC_SESSION_BUDGET, '', `${role}:RPC_SESSION_BUDGET`);
+    }
     assert.equal(env.NODE_ENV, 'production');
     assert.equal(env.TRUST_PROXY_HOPS, '1', `${role}: Railway edge requires one trusted hop`);
     assert.equal(env.MARKET_DATA_SOURCE, 'onchain');
@@ -81,6 +93,11 @@ if (process.argv.includes('--self-test')) {
     c => { c.services.worker.environment.RUN_WORKER = 'false'; },
     c => { c.services.api.environment.RUN_WORKER = 'true'; },
     c => { c.commonEnvironment.RPC_SESSION_BUDGET = '100'; },
+    c => { c.services.indexer.environment.RPC_PAID_DAILY_BUDGET = '600001'; },
+    c => { c.services.engines.environment.RPC_PAID_DAILY_BUDGET = 'unlimited'; },
+    c => { c.services.engines.environment.RPC_SESSION_BUDGET = '100'; },
+    c => { c.services.api.environment.RPC_PAID_DAILY_BUDGET = '1000'; },
+    c => { c.services.worker.environment.RPC_PAID_DAILY_BUDGET = '1000'; },
     c => { c.commonEnvironment.FLAGS = 'd0'; },
     c => { delete c.commonEnvironment.TRUST_PROXY_HOPS; },
     c => { c.commonEnvironment.TRUST_PROXY_HOPS = '2'; },
@@ -99,15 +116,16 @@ if (process.argv.includes('--self-test')) {
     const changed = structuredClone(catalog); mutate(changed);
     assert.throws(() => validateStaging(changed, manifests, roleSource));
   }
-  for (const mutate of [
+  const manifestMutations = [
     m => { m.worker.deploy.numReplicas = 2; },
     m => { m.engines.deploy.healthcheckPath = '/v1/health'; },
     m => { m.api.build.dockerfilePath = 'missing'; },
-  ]) {
+  ];
+  for (const mutate of manifestMutations) {
     const changed = structuredClone(manifests); mutate(changed);
     assert.throws(() => validateStaging(catalog, changed, roleSource));
   }
-  console.log('Staging rejection checks passed (20 invalid configurations).');
+  console.log(`Staging rejection checks passed (${mutations.length + manifestMutations.length} invalid configurations).`);
 }
 const availableRoles = Object.values(catalog.services).filter(service => service.available).length;
 console.log(`Staging manifests passed; source=${catalog.candidateRevision}; ${availableRoles} available roles, ${roles.length - availableRoles} gated roles; no Railway or live evidence.`);

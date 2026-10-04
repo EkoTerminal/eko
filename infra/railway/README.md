@@ -29,8 +29,8 @@ rejects it rather than starting a substitute process.
 |---|---|---|---|
 | api (web + REST + WS) | available, one replica | TLS 8710; `/v1/health`, `/v1/config`, SPA, `/v1/ws` ack | 1 CPU, 1 GiB |
 | Postgres 16 | separately authorized provisioning | private only; `pg_isready`, `SELECT 1`, migration ledgers | 2 CPU, 4 GiB, 20 GiB volume |
-| indexer | available; no paid budget by default | private; `indexer_started`, `head_tick`, cursor/hash/lag | 1 CPU, 2 GiB |
-| engines | available; no paid budget by default | private; `engines_started`, queue progress and receipt outbox | 1 CPU, 2 GiB |
+| indexer | available; owner-approved paid RPC budget up to 600,000 requests per UTC day (2026-10-04) | private; `indexer_started`, `head_tick`, cursor/hash/lag | 1 CPU, 2 GiB |
+| engines | available; owner-approved paid RPC budget up to 600,000 requests per UTC day (2026-10-04) | private; `engines_started`, queue progress and receipt outbox | 1 CPU, 2 GiB |
 | worker (reconciler) | available, exactly one | no listener; `EKO worker ready`, exclusive Postgres lease | 1 CPU, 2 GiB |
 | mcp | transport compiled; handlers require 094/095; keep unprovisioned pending integration | private only; `/health` and authenticated `/mcp` initialize; future real tool checks | 1 CPU, 2 GiB |
 | receipts | compiled role; keep unprovisioned pending registry/committer acceptance | private; actual registry event/root/proof, not startup alone | 1 CPU, 2 GiB |
@@ -195,12 +195,15 @@ railway variables --service api --set 'APP_ROLE=api' --set 'RUN_WORKER=false'
    an explicit **not accepted** staging state. Do not raise budgets or call it
    healthy to make the probe pass. Only separately approved metered live budgets
    may permit head following/enrichment; record cost, source watermark and lag.
+   The owner approved paid dRPC for indexer and engines on 2026-10-04, capped at
+   600,000 requests per UTC day each with no per-session budget;
+   `scripts/check-staging-railway.mjs` rejects a higher cap or a paid budget on any other role.
 7. Keep mcp/receipts/bots/og unprovisioned until their packets, compiled entries,
    secrets and role dispatch integration have landed and their own tests pass.
    075 supplies trade lifecycle; 080 receipts; 093 MCP; 116 Telegram. Never add a
    keeper, swarm/research job, burn job or unaccepted tool during this rollout.
 8. For an authorized source deployment from the exact pinned clean checkout:
-   set `EKO_SOURCE_REVISION` on **both API and worker services** to the full lowercase
+   set `EKO_SOURCE_REVISION` on the **API, worker, indexer and engines services** to the full lowercase
    40-character SHA of that checkout before building. Railway supplies service
    variables to declared Docker ARGs; `.git` never reaches the build. Missing or
    malformed values stop the Docker build. This is a build argument, not a runtime
@@ -228,7 +231,9 @@ redirects. No deployment, provider RPC, database mutation or signing occurs.
 node scripts/verify-staging-identity.mjs "$STAGING_ORIGIN" --revision "$REVISION"
 node scripts/verify-staging-identity.mjs "$STAGING_ORIGIN" --revision "$REVISION" \
   --expected-config /private/tmp/staging-reviewed.json \
-  --worker-identity /private/tmp/staging-worker-ready.json
+  --worker-identity /private/tmp/staging-worker-ready.json \
+  --indexer-identity /private/tmp/staging-indexer-identity.json \
+  --engines-identity /private/tmp/staging-engines-identity.json
 ```
 
 `--expected-config` defaults to `infra/railway/staging.json`. The file has the
@@ -242,7 +247,7 @@ source identity: the current clean HEAD must equal the explicit `--revision`.
 The verifier rebuilds all server bundles, recomputes their SHA-256 hashes and
 compares the entire baked manifest and API role/config digest. Any mismatch or
 missing identity exits 1. Successful output contains only the compared identity
-and role verdicts; without `--worker-identity`, worker is explicitly `not-checked`.
+and role verdicts; a role whose identity file is not passed is explicitly `not-checked`.
 
 The baked `dist/build-info.json` has format version, source SHA, per-file hashes
 and an aggregate SHA-256 of the sorted canonical hash map. It covers API/worker
@@ -262,7 +267,12 @@ To check the worker, a reviewer with read-only Railway access retrieves the
 **current deployment's** `EKO worker ready` JSON line, keeping only `msg` and
 `identity` in the file passed to `--worker-identity`. Match deployment ID, image
 digest and readiness timestamp in Railway directly; an operator-supplied old
-log is insufficient. No worker listener is added.
+log is insufficient. No worker listener is added. Indexer and engines have no
+ready line of their own: the launcher prints one `EKO role identity` JSON line
+before starting them (`apps/server/src/roles.ts`), with the same `identity`
+schema, and a production image without a valid build identity is refused there.
+Keep `msg` and `identity` from the current deployment's line for
+`--indexer-identity` and `--engines-identity`.
 
 Config version 1 hashes canonical sorted JSON of an explicit allowlist in
 `apps/server/src/config.ts` (`identityConfigKeys`), using the runtime parser's

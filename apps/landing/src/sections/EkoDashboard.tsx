@@ -168,7 +168,7 @@ export default function EkoDashboard({
             <a href="/settings/plan">Listener</a>
             <small>Risk mode</small>
             <div className="ed-risk">
-              Safe <b>Balanced</b> Degen
+              Careful <b>Balanced</b> Degen
             </div>
             <a href="/radar" className="ed-wallet">
               Open terminal ↗

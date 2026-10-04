@@ -20,7 +20,7 @@ export function parseArguments(args) {
   assert.equal(url.username + url.password, '', 'Credential URLs forbidden');
   const result = { origin, expectedConfig: 'infra/railway/staging.json' };
   for (let i = 0; i < options.length; i += 2) {
-    const key = { '--revision': 'revision', '--expected-config': 'expectedConfig', '--worker-identity': 'workerIdentity' }[options[i]];
+    const key = { '--revision': 'revision', '--expected-config': 'expectedConfig', '--worker-identity': 'workerIdentity', '--indexer-identity': 'indexerIdentity', '--engines-identity': 'enginesIdentity' }[options[i]];
     assert.ok(key && options[i + 1] && !options[i + 1].startsWith('--'), 'Invalid arguments');
     assert.ok(!options.slice(0, i).includes(options[i]), 'Duplicate option');
     result[key] = options[i + 1];
@@ -54,6 +54,13 @@ export function workerIdentityFromLog(text) {
   assert.equal(record.identity.role, 'worker');
   return record.identity;
 }
+/** Headless roles (indexer, engines) log one "EKO role identity" line from the dispatcher before they start. */
+export function roleIdentityFromLog(text, role) {
+  const record = JSON.parse(text);
+  assert.equal(record.msg, 'EKO role identity', 'Expected the role identity JSON line');
+  assert.equal(record.identity.role, role);
+  return record.identity;
+}
 export async function verify(options) {
   assertPinnedCheckout(options.revision);
   const catalog = JSON.parse(readFileSync(resolve(root, options.expectedConfig), 'utf8'));
@@ -78,13 +85,21 @@ export async function verify(options) {
     compareIdentity(observed, expectedIdentity(catalog, options.revision, build, 'worker', expectedConfigDigest, caps));
     worker = 'matched';
   }
-  return { event: 'staging_identity_verified', api: 'matched', worker, ...expected };
+  const roles = {};
+  for (const [role, file] of [['indexer', options.indexerIdentity], ['engines', options.enginesIdentity]]) {
+    roles[role] = 'not-checked';
+    if (!file) continue;
+    const observed = roleIdentityFromLog(readFileSync(resolve(file), 'utf8'), role);
+    compareIdentity(observed, expectedIdentity(catalog, options.revision, build, role, expectedConfigDigest, caps));
+    roles[role] = 'matched';
+  }
+  return { event: 'staging_identity_verified', api: 'matched', worker, ...roles, ...expected };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try { console.log(JSON.stringify(await verify(parseArguments(process.argv.slice(2))))); }
   catch {
     // Fixed diagnostics only: no local paths, Git output, configs or provider text.
-    console.error('Staging identity verification failed: check clean pinned HEAD, build, reviewed config and API/worker identities.');
+    console.error('Staging identity verification failed: check clean pinned HEAD, build, reviewed config and API/worker/indexer/engines identities.');
     process.exitCode = 1;
   }
 }

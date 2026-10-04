@@ -7,6 +7,7 @@ import type { Config } from '../../config.js';
 import type { Db } from '../../db/client.js';
 import { linkedIdentities, preferences, referralCodes, referrals } from '../../db/schema.js';
 import { AuthService, SESSION_COOKIE, type Account } from '../auth.js';
+import { addressLimit } from '../address-limit.js';
 import { EntitlementsService } from '../../harness/entitlements.js';
 export { EntitlementsService } from '../../harness/entitlements.js';
 import { parse, sendError } from './helpers.js';
@@ -45,7 +46,9 @@ export async function accountRoutes(app: FastifyInstance, cfg: Config, services:
     const account = await auth.ensure(req, reply);
     return auth.challenge(req, account.id);
   });
-  app.post('/auth/siwe/verify', tight(20), async (req, reply) => {
+  // A failed signature falls back to an on-chain contract-wallet check, so sign-in attempts are also capped per address.
+  const verifyPerAddress = addressLimit(app, 60);
+  app.post('/auth/siwe/verify', { ...tight(20), preHandler: verifyPerAddress }, async (req, reply) => {
     auth.originFor(req, true);
     const body = parse(SiweVerifySchema, req.body);
     const account = await current(req);

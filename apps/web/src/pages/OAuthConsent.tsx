@@ -1,3 +1,4 @@
+import { riskModeLabel } from '../copy/shell';
 import { useEffect, useRef, useState } from 'react';
 import { useConnection } from 'wagmi';
 import { z } from 'zod';
@@ -27,7 +28,7 @@ export function ConsentForm({ request, agents, busy, submit }: { request: OAuthR
         {available.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}<option value="">Create a new agent</option>
       </select></label>
       {!agentId && <><label className="field"><span>New agent name</span><input className="input" maxLength={120} value={name} onChange={e => setName(e.target.value)} /></label>
-        <label className="field"><span>Policy preset</span><select className="input" value={preset} onChange={e => setPreset(e.target.value as typeof preset)}><option value="safe">Conservative</option><option value="balanced">Balanced</option><option value="degen">Degen</option></select></label>
+        <label className="field"><span>Policy preset</span><select className="input" value={preset} onChange={e => setPreset(e.target.value as typeof preset)}><option value="safe">{riskModeLabel('safe')}</option><option value="balanced">Balanced</option><option value="degen">Degen</option></select></label>
         <p>Creation follows your account’s agent limit.</p></>}
     </fieldset>
     {confirm ? <div role="group" aria-label="Confirm connector consent"><p>Allow this client to use the selected scopes as this agent?</p><button className="btn btn-primary" disabled={busy} onClick={() => decision('approve')}>Confirm approval</button><button className="btn" disabled={busy} onClick={() => setConfirm(false)}>Back</button></div>

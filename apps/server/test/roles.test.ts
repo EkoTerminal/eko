@@ -111,6 +111,26 @@ describe('role lifecycle', () => {
     const spawn = vi.fn(() => child);
     return { child, close, lease, spawn };
   }
+  it('announces the build identity of headless roles before starting them, and lets api and worker report their own', async () => {
+    const f = fixture(), announced: string[] = [];
+    const announce = (p: RolePlan) => { if (p.role !== 'api' && p.role !== 'worker') announced.push(p.role); };
+    const done = runRole({ ...plan(), role: 'indexer' } as RolePlan, { ...f, announce });
+    await vi.waitFor(() => expect(f.spawn).toHaveBeenCalledTimes(1));
+    expect(announced).toEqual(['indexer']);
+    f.child.emit('close', 0, null); await done;
+    const failing = fixture();
+    await expect(runRole({ ...plan(), role: 'engines' } as RolePlan, { ...failing, announce: () => { throw new Error('Production build identity missing or invalid'); } })).rejects.toThrow('build identity');
+    expect(failing.spawn).not.toHaveBeenCalled();
+  });
+  it('computes headless role identity with the same digest the staging verifier expects', async () => {
+    const { roleIdentity, expectedConfigDigest } = await import('../src/build-identity.js');
+    const inventory = JSON.parse(readFileSync(new URL('../../../infra/railway/staging.json', import.meta.url), 'utf8'));
+    const env = { ...inventory.commonEnvironment, ...inventory.services.indexer.environment, NODE_ENV: 'test', BURN_WALLET_ADDRESS: '0x000000000000000000000000000000000000dEaD' };
+    const caps = readFileSync(new URL('../config/trading-caps.yaml', import.meta.url), 'utf8');
+    const identity = roleIdentity(env, null);
+    expect(identity.role).toBe('indexer');
+    expect(identity.configDigest).toBe(expectedConfigDigest(env, caps));
+  });
   it.each(['SIGTERM', 'SIGINT'] as const)('starts one child and holds ownership while draining %s', async signal => {
     const f = fixture();
     const done = runRole(plan(), f);
@@ -153,6 +173,18 @@ describe('role lifecycle', () => {
     expect(f.spawn).not.toHaveBeenCalled();
     expect(f.close).toHaveBeenCalledTimes(1);
   });
+});
+
+it('builds browser bundles in their own image stage, away from server sources and the server build', () => {
+  const dockerfile = readFileSync(new URL('Dockerfile', new URL('../../../', import.meta.url)), 'utf8');
+  const stages = dockerfile.split(/^FROM /m).slice(1);
+  const server = stages.find(stage => stage.includes('@eko/server build'))!;
+  expect(server).not.toMatch(/@eko\/(web|landing) build/);
+  expect(server).toContain("pnpm install --frozen-lockfile --filter '!@eko/web' --filter '!@eko/landing'");
+  const frontend = stages.find(stage => stage.includes('@eko/landing build'))!;
+  expect(frontend).not.toMatch(/apps\/server|COPY \. \./);
+  expect(dockerfile).toContain('COPY --from=frontend /repo/apps/web/dist ./web');
+  expect(dockerfile).toContain('COPY --from=frontend /repo/apps/landing/dist ./landing');
 });
 
 it('copies every current workspace manifest before frozen image installation and excludes runtime secrets', () => {

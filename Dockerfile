@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # EKO — one image, one explicitly selected process per container.
 
-FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
+FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS base
 RUN corepack enable && corepack prepare pnpm@11.5.1 --activate
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
@@ -22,15 +22,26 @@ COPY apps/mcp/package.json apps/mcp/
 COPY apps/og-renderer/package.json apps/og-renderer/
 COPY apps/landing/package.json apps/landing/
 COPY contracts/package.json contracts/
-RUN pnpm install --frozen-lockfile
+
+# Browser bundles build in their own stage, so their build plugins never share a filesystem with server sources
+# or bundles. Only their dist folders reach the runtime image.
+FROM base AS frontend
+RUN pnpm install --frozen-lockfile --filter . --filter '@eko/web...' --filter '@eko/landing...'
+COPY packages/shared packages/shared
+COPY packages/untrusted packages/untrusted
+COPY packages/receipts-verifier packages/receipts-verifier
+COPY apps/web apps/web
+COPY apps/landing apps/landing
+RUN pnpm --filter @eko/web build && pnpm --filter @eko/landing build
+
+FROM base AS build
+RUN pnpm install --frozen-lockfile --filter '!@eko/web' --filter '!@eko/landing'
 COPY . .
 ARG EKO_SOURCE_REVISION
 # Railway injects the service variable into this ARG; .git is excluded from context.
 # Refuse an unpinned production image, without placing the revision in bundle bytes.
 RUN node -e "if (!/^[a-f0-9]{40}$/.test(process.env.EKO_SOURCE_REVISION || '')) process.exit(1)"
-RUN pnpm --filter @eko/web build \
- && pnpm --filter @eko/landing build \
- && pnpm --filter @eko/server build \
+RUN pnpm --filter @eko/server build \
  && pnpm --filter @eko/server deploy --prod --legacy /out
 
 FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
@@ -49,8 +60,8 @@ COPY --from=build /out/node_modules ./node_modules
 COPY --from=build /repo/apps/server/package.json ./package.json
 COPY --from=build /repo/apps/server/dist ./dist
 COPY --from=build /repo/apps/server/drizzle ./drizzle
-COPY --from=build /repo/apps/web/dist ./web
-COPY --from=build /repo/apps/landing/dist ./landing
+COPY --from=frontend /repo/apps/web/dist ./web
+COPY --from=frontend /repo/apps/landing/dist ./landing
 RUN mkdir -p /app/.data && chown -R node:node /app/.data
 USER node
 EXPOSE 8710
