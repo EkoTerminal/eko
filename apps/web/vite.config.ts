@@ -5,10 +5,10 @@ import { defineConfig, type Connect, type Plugin } from 'vite';
 import { pwa } from './build/pwa';
 import { budgetGraph } from './build/budget';
 
-// One site: the landing (the EKO scroll story, kept in its own project) is served at "/" and the terminal everywhere
+// One site: the landing (apps/landing; build it first) is served at "/" and the terminal everywhere
 // else. Its files are read unchanged from EKO_SITE; asset paths move under /site/, and public/site-bridge.* adds the
 // ways into the terminal. In production the host does the same: the landing's build at "/", this app for other paths.
-const SITE = path.resolve(process.env.EKO_SITE ?? path.join(process.cwd(), '../../landing'));
+const SITE = path.resolve(process.env.EKO_SITE ?? path.join(process.cwd(), '../landing/dist'));
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf', '.mp4': 'video/mp4' };
 function serveLanding(): Connect.NextHandleFunction {
   return (req, res, next) => {

@@ -4,16 +4,17 @@ import { describe, expect, it } from 'vitest';
 import { Lockup, LogoMark } from './brand';
 import { Workspace } from '../pages/Workspace';
 
-const MARK = 'M26 3a16 16 0 1 0 0 30M23 10a9 9 0 1 0 0 16M20 16a2.5 2.5 0 1 0 0 4';
+const MARK = 'M202 5H122a118 118 0 0 0 0 236h80V151l-52 48-17-17 50-49h-73v-22h73l-50-49 17-17 52 48V5Z';
 
-describe('EKO day-one shell', () => {
-  it('renders the specified echo mark without a retired asset request', () => {
+describe('EKO shell branding', () => {
+  it('renders the approved centre emblem without a retired asset request', () => {
     const html = renderToStaticMarkup(createElement(LogoMark));
-    expect(html).toContain('viewBox="0 0 36 36"');
-    expect(html).toContain('fill="none" stroke="currentColor" stroke-width="1.25"');
+    expect(html).toContain('viewBox="0 0 428 246"');
+    expect(html).toContain('fill="none" stroke="currentColor" stroke-width="6.5"');
     expect(html).toContain(`d="${MARK}"`);
     expect(html).not.toContain('<img');
     expect(renderToStaticMarkup(createElement(Lockup))).toContain('EKO');
+    expect(renderToStaticMarkup(createElement(Lockup))).toContain('class="eko-wordmark"');
   });
 
   it('renders a terminal placeholder after retiring the markets, analyst and paper UI', () => {

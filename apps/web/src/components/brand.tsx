@@ -1,13 +1,18 @@
 import { useId } from 'react';
 import { useApp } from '../store/app';
+import '../styles/brand.css';
 
-/** EKO echo mark from the day-one brand contract. */
+/** Approved EKO centre emblem and Ague Thin wordmark, without the avatar rim. */
 export function Lockup({ height = 30, tone = 'ink' }: { height?: number; tone?: 'ink' | 'white' }) {
-  return <span className="lockup" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: height, color: tone === 'white' ? '#d4f4fa' : 'currentColor' }}><LogoMark size={height} /><span>EKO</span></span>;
+  return <span className="lockup" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: height, color: tone === 'white' ? '#d4f4fa' : 'currentColor' }}><LogoMark size={height} /><span className="eko-wordmark">EKO</span></span>;
 }
 
-export function LogoMark({ size = 28 }: { size?: number }) {
-  return <svg className="logomark" width={size} height={size} viewBox="0 0 36 36" fill="none" stroke="currentColor" strokeWidth="1.25" aria-hidden><path d="M26 3a16 16 0 1 0 0 30M23 10a9 9 0 1 0 0 16M20 16a2.5 2.5 0 1 0 0 4" /></svg>;
+export function LogoMark({ size = 24 }: { size?: number }) {
+  return <svg className="logomark eko-logo" width={size * 428 / 246} height={size} viewBox="0 0 428 246" fill="none" stroke="currentColor" strokeWidth="6.5" strokeLinejoin="miter" aria-hidden>
+    <path d="M202 5H122a118 118 0 0 0 0 236h80V151l-52 48-17-17 50-49h-73v-22h73l-50-49 17-17 52 48V5Z" />
+    <path d="M226 5h80a118 118 0 0 1 0 236h-80V151l52 48 17-17-50-49h73v-22h-73l50-49-17-17-52 48V5Z" />
+    <path d="M202 27h-80a96 96 0 0 0 0 192h80M226 27h80a96 96 0 0 1 0 192h-80M183 111h62v22h-62Z" />
+  </svg>;
 }
 
 const COIN: Record<string, { bg: string; fg?: string }> = {

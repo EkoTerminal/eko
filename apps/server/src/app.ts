@@ -4,13 +4,14 @@ import { ReadStore } from './read/store.js';
 import { readServices } from './http/v1/reads.js';
 import { ReadLive } from './read/live.js';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { MARKETS, type ServerMessage, type SystemHealth } from '@eko/shared';
 import { InferenceBudget } from './ai/budget.js';
 import { ProviderRegistry } from './ai/registry.js';
@@ -57,7 +58,7 @@ import { WatchAlertsService } from './alerts/service.js';
 import { TelegramLinkService } from './telegram/link.js';
 import { createOgRenderer, type OgRenderer } from '@eko/og-renderer';
 import { BagsService } from './read/bags.js';
-import { registerShareRoutes, ShareService, spaDocument } from './http/share.js';
+import { registerShareRoutes, ShareService, spaDocument, webHeaders } from './http/share.js';
 
 export const VERSION = '0.1.0';
 
@@ -286,12 +287,23 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     if (existsSync(dist)) {
       serveSpa = await spaDocument(resolve(dist, 'index.html'));
       await app.register(fastifyStatic, { root: dist, prefix: '/', wildcard: false, index: false, globIgnore: ['**/index.html'], maxAge: '1h', immutable: false });
-      app.get('/', (req, reply) => serveSpa!(req.url, reply, cfg, shares));
+      // The marketing landing is its own build: its document at "/", its assets and docs under /site/, and the
+      // terminal keeps every other path. Without a landing build, "/" stays the terminal's own entry page.
+      const landing = cfg.LANDING_DIST_DIR ? resolve(process.cwd(), cfg.LANDING_DIST_DIR) : null;
+      if (landing && existsSync(resolve(landing, 'index.html'))) {
+        const page = (html: string) => (req: { url: string }, reply: FastifyReply) => {
+          webHeaders(reply, cfg, 'no-cache', req.url.split('?')[0]);
+          return reply.type('text/html; charset=utf-8').send(html);
+        };
+        await app.register(fastifyStatic, { root: landing, prefix: '/site/', decorateReply: false, wildcard: false, index: false, globIgnore: ['**/*.html'], maxAge: '1h', immutable: false });
+        app.get('/', page(await readFile(resolve(landing, 'index.html'), 'utf8')));
+        if (existsSync(resolve(landing, 'docs.html'))) app.get('/site/docs.html', page(await readFile(resolve(landing, 'docs.html'), 'utf8')));
+      } else app.get('/', (req, reply) => serveSpa!(req.url, reply, cfg, shares));
       app.get('/index.html', (req, reply) => serveSpa!(req.url, reply, cfg, shares));
     } else logger.warn({ dist }, 'SERVE_WEB set but web build not found');
   }
   app.setNotFoundHandler((req, reply) => {
-    if (!serveSpa || ['/v1', '/v2', '/og', '/api', '/ws', '/dev'].some(prefix => req.url.startsWith(prefix))) return notFound(reply);
+    if (!serveSpa || ['/v1', '/v2', '/og', '/api', '/ws', '/dev', '/site/'].some(prefix => req.url.startsWith(prefix))) return notFound(reply);
     return serveSpa(req.url, reply, cfg, shares);
   });
 

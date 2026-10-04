@@ -92,7 +92,9 @@ const EnvSchema = z.object({
   /** Run the order reconciler in this process. Exactly one process should. */
   RUN_WORKER: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   WEB_DIST_DIR: z.string().default('../web/dist'),
-  // TODO(spec): §2.4 leaves the OFAC URL/format unverified; configure a verified Treasury SDN XML source before trading.
+  /** Marketing landing build (apps/landing): when set, its document is served at "/" and its files under /site/. */
+  LANDING_DIST_DIR: optionalValue(z.string()),
+  // Treasury SDN XML (§2.4). The live list published 10/02/2026 parses with sanctions/parser.ts (checked 2026-10-04).
   OFAC_SDN_URL: optionalValue(z.url().refine(value => isTreasurySource(new URL(value)),
     'OFAC source must be a public Treasury HTTPS URL')),
   LOG_LEVEL: z.string().default('info'),

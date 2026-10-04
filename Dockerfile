@@ -20,6 +20,7 @@ COPY apps/indexer/package.json apps/indexer/
 COPY apps/engines/package.json apps/engines/
 COPY apps/mcp/package.json apps/mcp/
 COPY apps/og-renderer/package.json apps/og-renderer/
+COPY apps/landing/package.json apps/landing/
 COPY contracts/package.json contracts/
 RUN pnpm install --frozen-lockfile
 COPY . .
@@ -28,6 +29,7 @@ ARG EKO_SOURCE_REVISION
 # Refuse an unpinned production image, without placing the revision in bundle bytes.
 RUN node -e "if (!/^[a-f0-9]{40}$/.test(process.env.EKO_SOURCE_REVISION || '')) process.exit(1)"
 RUN pnpm --filter @eko/web build \
+ && pnpm --filter @eko/landing build \
  && pnpm --filter @eko/server build \
  && pnpm --filter @eko/server deploy --prod --legacy /out
 
@@ -38,6 +40,7 @@ ENV NODE_ENV=production \
     LIVE_TRADING_ENABLED=false \
     SERVE_WEB=true \
     WEB_DIST_DIR=/app/web \
+    LANDING_DIST_DIR=/app/landing \
     MIGRATIONS_DIR=/app/drizzle \
     ADDRESSES_FILE=/app/dist/addresses.4663.yaml \
     PORT=8710
@@ -47,6 +50,7 @@ COPY --from=build /repo/apps/server/package.json ./package.json
 COPY --from=build /repo/apps/server/dist ./dist
 COPY --from=build /repo/apps/server/drizzle ./drizzle
 COPY --from=build /repo/apps/web/dist ./web
+COPY --from=build /repo/apps/landing/dist ./landing
 RUN mkdir -p /app/.data && chown -R node:node /app/.data
 USER node
 EXPOSE 8710

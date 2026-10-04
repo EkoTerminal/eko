@@ -69,6 +69,11 @@
 .rt-flow .flowbar{width:64px;flex:none}
 .rt-flow span{font-size:13px;color:var(--ink2)}
 .rt td.bad{color:var(--danger)}
+/* The guard cell stacks its disclosures (legacy grade, Guard 2 availability) as small lines around the verdict chip,
+   so live rows never spill into the Signal and 1H columns. */
+.rt td.c-guard{white-space:normal;padding-top:6px;padding-bottom:6px;line-height:1.25}
+.rt td.c-guard>.tag,.rt td.c-guard>span:not([class]){display:block;height:auto;padding:0;border:0;background:none;font-size:11px;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+.rt td.c-guard>.tag+*,.rt td.c-guard>*+.tag{margin-top:3px}
 /* Activity shading on rows: a tint and an edge, always with a text tag or verdict beside it. */
 .rt tr.h-hot td{background:#8fcaf00d}.rt tr.h-hot td:first-child{box-shadow:inset 3px 0 var(--accent)}
 .rt tr.h-avoid td{background:#f08c7e0a}.rt tr.h-avoid td:first-child{box-shadow:inset 3px 0 var(--danger)}

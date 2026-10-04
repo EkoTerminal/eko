@@ -1,0 +1,31 @@
+/* Ague Thin is licensed for the hosted site only and is not in the public repository; builds without it fall
+   back to Outfit (SIL OFL, public/fonts/OFL-Outfit.txt) through the src list. */
+@font-face {
+  font-family: 'Ague Thin';
+  src: url('/fonts/AgueThin-Thin.woff2') format('woff2'), url('/fonts/outfit-latin.woff2') format('woff2');
+  font-weight: 100;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Branding only: retain the dashboard's type, spacing and behaviour elsewhere. */
+.apphdr-brand > .eko-wordmark,
+.lockup > .eko-wordmark {
+  display: block;
+  flex-shrink: 0;
+  font-family: 'Ague Thin', var(--sans);
+  font-weight: 100;
+  line-height: 1;
+  letter-spacing: -.02em;
+  translate: 0 .09em;
+}
+.eko-logo { display: block; flex-shrink: 0; }
+.mbar .apphdr-brand .eko-logo { width: 34px; height: auto; }
+@supports (text-box-trim: trim-both) {
+  .apphdr-brand > .eko-wordmark,
+  .lockup > .eko-wordmark {
+    text-box-trim: trim-both;
+    text-box-edge: cap alphabetic;
+    translate: none;
+  }
+}
