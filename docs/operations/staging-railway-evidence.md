@@ -197,3 +197,23 @@ coverage-worker merge). Same rollout and verifier: api **matched**, worker **mat
 | api deployment / image | `f5ac22b2-3741-478a-8b6f-14b47a6d6e25` / `sha256:ab23992d2a27fb0db9f4b851785955e90ce8a478fa8221d05aacde3b8acacce4` |
 | worker deployment / image | `8bdbf207-97d0-4d87-8f89-8416b3f1db38` / `sha256:cc84f8158833724d8d783a3e1cc5059e6a6ffaeae8c0f8753ad9d8c995b50713` |
 | Bundle digest (both roles) | `c09f513c5be82ac2703a574615821b03dd93ff9552975a3dd90e040c9581428e` |
+
+### Redeployed from the public repository and re-verified: 2026-10-04T03:25Z
+
+Staging now builds from the public repository, EkoTerminal/eko, at `24422c89a1874c66f6ebd65547587b577023a8bd` (the
+public sync of source `4641564`), uploaded from a fresh clone of that commit. Same rollout (`EKO_SOURCE_REVISION` set
+on both roles, api first, old worker removed before the new one started) and the same verifier, run from a clean
+checkout of the public commit: api **matched**, worker **matched**; smoke all green. The bundle digest equals the
+`23976fc` build, so the public tree compiles to the same server bundles.
+
+| Field | Value |
+|---|---|
+| api deployment / image | `ffbd008b-ed51-4b6e-aa34-c1ea1e8750b9` / `sha256:3fde1f883a668bc3d59836a3af864db091ecdde68fae34dced53b291a0ee37f7` |
+| worker deployment / image | `b1fa16f2-d606-4d1b-be84-b8511957da83` / `sha256:fba78284de5393cc71484e1071aa1048ac6860c0a452026f1450a9da24d50491` |
+| Bundle digest (both roles) | `c09f513c5be82ac2703a574615821b03dd93ff9552975a3dd90e040c9581428e` |
+| Config digest | `7ca370e811f16532011401076686c92970d1f62ac9af9d14886524061529c029` |
+
+To re-verify from the public repository: `git clone https://github.com/EkoTerminal/eko.git && git -C eko checkout
+24422c89a1874c66f6ebd65547587b577023a8bd`, install, then run `node scripts/verify-staging-identity.mjs
+https://app.staging.ekoterminal.com --revision 24422c89a1874c66f6ebd65547587b577023a8bd` (add `--expected-config`
+and `--worker-identity` when you hold the reviewed config and the worker's ready line).

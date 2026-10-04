@@ -28,7 +28,8 @@ revision maps to a public commit:
 | Source revision | Public commit | Date |
 | --- | --- | --- |
 | `2997466a96d4a62ffd5ac6b9e93f8f8ce343e1ed` | end of the reconstructed history | 2026-10-02 |
-| `4641564ea803184b5e6d6705bb066c16762c285c` | the commit titled "Sync public tree with source 4641564" | 2026-10-03 |
+| `4641564ea803184b5e6d6705bb066c16762c285c` | `c27e406d4053c76c0423e3d69725fad02e5866a4` | 2026-10-03 |
+| `d817eece93a75acbb40559e8151fb30b39dcbdd3` | the commit titled "Sync public tree with source d817eec" | 2026-10-04 |
 
 ## Original export (October 2, 2026)
 
