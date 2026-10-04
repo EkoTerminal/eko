@@ -6,7 +6,7 @@ import { CONFIG_HASH, CONFIG_V1, RULES_VERSION } from '../src/index.js';
 
 it('the human YAML and TypeScript config exactly match BACKEND §7.3', () => {
   const yaml = readFileSync(new URL('../config/v1.yaml', import.meta.url), 'utf8');
-  const spec = readFileSync(new URL('../../../docs/PLAYBOOK_THRESHOLDS.md', import.meta.url), 'utf8');
+  const spec = readFileSync(new URL('../../../docs/eko/04-BACKEND.md', import.meta.url), 'utf8');
   const thresholdSection = spec.split('### 7.3 Thresholds')[1].split('### 7.4')[0];
   expect(yaml.trim()).toBe(thresholdSection.match(/```yaml\n([\s\S]*?)```/)[1].trim());
   // Test-only reader for this restricted one-line flow-map format, not a runtime

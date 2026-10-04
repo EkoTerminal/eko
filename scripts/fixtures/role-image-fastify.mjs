@@ -32,6 +32,17 @@ export default function fixtureFastify(options) {
     assert.equal(spa.statusCode, 200);
     assert.ok(spa.headers['content-type'].includes('text/html'));
     assert.equal(spa.body, readFileSync(join(process.env.WEB_DIST_DIR, 'index.html'), 'utf8'));
+    // Exercise the default production renderer, its copied fonts and native workspace dependency.
+    const scan = await app.inject(`/v1/scan?q=0x${'1'.repeat(40)}`);
+    assert.equal(scan.statusCode, 200);
+    const id = scan.json().id;
+    const meta = await app.inject(`/v1/share-meta?path=${encodeURIComponent(`/scan/${id}`)}`);
+    assert.ok(meta.json().image.endsWith(`/og/scan/${id}.png`));
+    const image = await app.inject(`/og/scan/${id}.png`);
+    assert.equal(image.statusCode, 200);
+    assert.equal(image.rawPayload.readUInt32BE(16), 1200);
+    assert.equal(image.rawPayload.readUInt32BE(20), 630);
+    assert.ok(image.rawPayload.length > 10000);
     console.log(JSON.stringify({ event: 'built_api_routes_ready', socketBound: false }));
     return 'fixture://no-listener';
   };

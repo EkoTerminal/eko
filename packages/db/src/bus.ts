@@ -7,7 +7,7 @@ export class InProcessBus implements EngineBus {
   async subscribe(handler: (message: BusMessage) => void) { this.handlers.add(handler); return async () => { this.handlers.delete(handler); }; }
   publish(message: BusMessage) { for (const handler of this.handlers) handler(message); }
 }
-const topics: BusMessage['topic'][] = ['chain_block','chain_reorg','swap','pair_created','liquidity','pons_exempt','card_updated','verdict_created','guard_evidence_created','guard_coverage_created','guard_role_created','guard_verdict_created','guard_revision_invalidated'];
+const topics: BusMessage['topic'][] = ['chain_block','chain_reorg','swap','pair_created','liquidity','pons_exempt','flow_updated','card_updated','verdict_created','guard_evidence_created','guard_coverage_created','guard_role_created','guard_verdict_created','guard_revision_invalidated'];
 /** A dedicated connection owns LISTEN. Polling continues if this connection drops. */
 export class PostgresBus implements EngineBus {
   constructor(private databaseUrl: string) {}

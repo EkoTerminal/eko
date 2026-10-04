@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { concat, encodeAbiParameters, keccak256, stringToHex } from 'viem';
 import { canonicalize, createGuardReceiptCodec } from '@eko/shared';
 import type { PublicReceiptPayload } from '@eko/shared';
@@ -86,8 +86,17 @@ it('092 recovers private commitments independently of deleted harness rows, with
   await expect(publishPrivateReceipt(db,id,keccak256(stringToHex('other')),at)).rejects.toThrow('identity reused');
   expect(await outbox.getPrivate(id)).toBeNull();expect(await outbox.recover()).toBe(1);expect(await outbox.recover()).toBe(0);
   expect(await outbox.getPrivate(id)).toEqual({id,kind:'harness_private',hash});expect(await outbox.get(id)).toBeNull();
-  const row=(await db.sql.query<{data:unknown;canonical_payload:string;leaf:string}>('SELECT * FROM receipt_items WHERE id=$1',[id])).rows[0]!;
+  expect(await outbox.getItem(id,'harness_private')).toEqual({id,kind:'harness_private',hash});
+  await expect(outbox.getItem('missing-private','harness_private')).rejects.toThrow('selected item missing');
+  await expect(outbox.getItem('missing-public','verdict')).rejects.toThrow('selected item missing');
+  await expect(outbox.getItem('fixture-forecast','verdict')).rejects.toThrow('selected kind mismatch');
+  const row=(await db.sql.query('SELECT * FROM receipt_items WHERE id=$1',[id])).rows[0]!;
   expect(row.data).toEqual({id,kind:'harness_private',hash});expect(row.canonical_payload).toBe(canonicalize(row.data));
   expect(row.leaf).toBe(codec.encodeReceiptLeaf({id,kind:'harness_private',hash}));
+  for (const edit of [{leaf:codec.hash('wrong-leaf')},{data:{...row.data as object,payload:{text:'private-fixture'}}},{canonical_payload:'{}'}]) {
+    const read=vi.spyOn(db.sql,'query').mockResolvedValueOnce({rows:[{...row,...edit}]});
+    try { await expect(outbox.getItem(id,'harness_private')).rejects.toThrow('Private receipt integrity failure'); }
+    finally { read.mockRestore(); }
+  }
   await expect(db.sql.query('DELETE FROM receipt_private_publications WHERE id=$1',[id])).rejects.toThrow('append-only');
 });

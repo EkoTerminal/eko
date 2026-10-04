@@ -1,0 +1,1271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>signalOS · Jelly</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wdth,wght@75..125,300..700&family=JetBrains+Mono:wght@400..800&family=Rubik:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ice:#F2F7FF; --ink:#101634; --ink2:#3A4166; --ink3:#646C90; --line:rgba(16,22,52,.10);
+  --bondi:#00A6D6; --tang:#FF8A1F; --blue:#3D5BFF; --grape:#8B5CF6;
+  --long:#1FBF75; --longink:#07794A; --short:#FF4F7B; --shortink:#C8154A;
+  --smoke:#13162B;
+  --fd:'Fredoka',ui-rounded,sans-serif; --fu:'Rubik',system-ui,sans-serif; --fm:'JetBrains Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:#D5DAE4;padding:40px 0;display:flex;flex-direction:column;align-items:center;gap:40px;font-family:var(--fu);color:var(--ink);-webkit-font-smoothing:antialiased}
+.board{position:relative;width:1600px;height:900px;overflow:hidden;flex:none;background:var(--ice)}
+.mono{font-family:var(--fm)}
+.illo{font:500 11px var(--fu);color:var(--ink3);letter-spacing:.01em}
+.wm{font-family:var(--fd);font-weight:700;letter-spacing:-.025em;color:var(--ink);font-variation-settings:"wdth" 112;line-height:1}
+.wm b{color:var(--tang);font-weight:700}
+
+/* direction chips (the only place long/short colours live) */
+.dir{display:inline-flex;align-items:center;gap:4px;font:700 11px/1 var(--fu);padding:4px 8px;border-radius:99px;white-space:nowrap;letter-spacing:.02em}
+.dir.buy{color:var(--longink);background:rgba(31,191,117,.15);box-shadow:inset 0 0 0 1px rgba(31,191,117,.45)}
+.dir.sell{color:var(--shortink);background:rgba(255,79,123,.13);box-shadow:inset 0 0 0 1px rgba(255,79,123,.45)}
+.dir.faded{opacity:.6}
+.tbuy{color:var(--longink)} .tsell{color:var(--shortink)}
+
+/* ================= BOARD 1 ================= */
+.b1{background:
+  radial-gradient(640px 560px at 1150px 430px, rgba(0,166,214,.24), transparent 70%),
+  radial-gradient(520px 420px at 120px 60px, rgba(139,92,246,.10), transparent 70%),
+  radial-gradient(560px 380px at 460px 860px, rgba(255,138,31,.13), transparent 70%),
+  var(--ice)}
+.b1 .dots{position:absolute;inset:0;background-image:radial-gradient(rgba(16,22,52,.075) 1.3px,transparent 1.6px);background-size:22px 22px;-webkit-mask-image:radial-gradient(700px 520px at 1150px 420px,#000 20%,transparent 75%)}
+.nav{position:absolute;left:64px;right:56px;top:26px;height:52px;display:flex;align-items:center;gap:30px;z-index:8}
+.brand{display:flex;align-items:center;gap:10px}
+.brand .wm{font-size:31px}
+.links{display:flex;gap:30px;font:500 15px var(--fu);color:var(--ink2);margin-left:34px}
+.links span:first-child{color:var(--ink);position:relative}
+.links span:first-child::after{content:"";position:absolute;left:0;right:0;bottom:-8px;height:4px;border-radius:4px;background:var(--tang);opacity:.9}
+.nav .sp{flex:1}
+.chain{display:inline-flex;align-items:center;gap:8px;font:500 13px var(--fu);color:var(--ink2);padding:9px 14px;border-radius:99px;background:rgba(255,255,255,.6);box-shadow:inset 0 0 0 1.5px rgba(16,22,52,.08)}
+.chain i{width:8px;height:8px;border-radius:50%;background:var(--bondi);box-shadow:0 0 0 3px rgba(0,166,214,.18)}
+.jelly-t{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:10px;border-radius:99px;color:#fff;font-family:var(--fu);font-weight:600;
+  background:radial-gradient(120% 140% at 30% 10%,#FFD2A3 0,#FFA24A 28%,#FF8A1F 55%,#E86F00 100%);
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.55),inset 0 -6px 12px rgba(160,60,0,.32),0 4px 0 #D26400,0 14px 26px -8px rgba(255,138,31,.65);text-shadow:0 1px 0 rgba(150,60,0,.35)}
+.jelly-t::before{content:"";position:absolute;left:14%;right:30%;top:4px;height:38%;border-radius:99px;background:linear-gradient(rgba(255,255,255,.75),rgba(255,255,255,0))}
+.btn-s{height:42px;padding:0 20px;font-size:15px}
+
+.hero{position:absolute;left:72px;top:118px;width:760px;z-index:4}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;padding:5px 16px 5px 6px;border-radius:99px;background:rgba(255,255,255,.72);box-shadow:inset 0 0 0 1.5px #fff,0 8px 20px -10px rgba(16,22,52,.3),inset 0 -3px 6px rgba(0,166,214,.10);font:500 14px var(--fu);color:var(--ink2)}
+.eyebrow b{color:var(--ink);font-weight:600}
+.eyebrow .pp{width:28px;height:28px;border-radius:50%;background:#E4F6FD;display:grid;place-items:center;overflow:hidden}
+.h1{font-family:var(--fd);font-weight:600;font-size:74px;line-height:1.02;letter-spacing:-.03em;margin:20px 0 0;color:var(--ink);font-variation-settings:"wdth" 106}
+.h1 .bub{position:relative;display:inline-block;padding:0 26px 5px 22px;margin:4px 0 8px -4px;border-radius:42px;color:#fff;
+  background:radial-gradient(120% 130% at 25% 12%,#D9C9FF 0,#A984FF 26%,#8B5CF6 55%,#6A3AE6 100%);
+  box-shadow:inset 0 3px 0 rgba(255,255,255,.5),inset 0 -10px 18px rgba(70,20,170,.38),0 18px 34px -12px rgba(139,92,246,.7);text-shadow:0 2px 0 rgba(70,20,160,.35)}
+.h1 .bub::before{content:"";position:absolute;left:24px;width:44%;top:6px;height:22px;border-radius:99px;background:linear-gradient(rgba(255,255,255,.7),rgba(255,255,255,0))}
+.h1 .bub::after{content:"";position:absolute;left:34px;bottom:-15px;width:34px;height:30px;background:#7447EC;clip-path:polygon(0 0,100% 0,8% 100%);border-radius:4px}
+.h1 .key{position:relative;display:inline-block;padding:0 24px 7px;margin:8px 0 0 -4px;border-radius:26px;color:#fff;transform:rotate(-2.2deg);
+  background:radial-gradient(120% 140% at 30% 10%,#FFD7AE 0,#FFA24A 30%,#FF8A1F 58%,#EA7000 100%);
+  box-shadow:inset 0 3px 0 rgba(255,255,255,.55),inset 0 -8px 16px rgba(170,70,0,.35),0 10px 0 #D26400,0 26px 36px -10px rgba(255,138,31,.65);text-shadow:0 2px 0 rgba(160,60,0,.35)}
+.h1 .key::before{content:"";position:absolute;left:22px;width:46%;top:6px;height:22px;border-radius:99px;background:linear-gradient(rgba(255,255,255,.75),rgba(255,255,255,0))}
+.sub{font:400 18px/1.5 var(--fu);color:var(--ink2);margin:26px 0 0;width:560px}
+.sub b{font-weight:600;color:var(--ink)}
+.ctas{display:flex;align-items:center;gap:14px;margin-top:22px}
+.cta{height:62px;padding:0 28px 0 32px;font-size:20px}
+.cta svg{margin-left:2px}
+.ghost{display:inline-flex;align-items:center;gap:12px;height:62px;padding:0 24px 0 10px;border-radius:99px;background:rgba(255,255,255,.66);box-shadow:inset 0 0 0 1.5px #fff,inset 0 -4px 10px rgba(0,166,214,.10),0 12px 24px -14px rgba(16,22,52,.35);font:600 17px var(--fu);color:var(--ink)}
+.ghost .stack{display:flex}
+.ghost .stack span{width:42px;height:42px;border-radius:50%;margin-right:-12px;display:grid;place-items:center;background:#fff;box-shadow:0 0 0 2px #fff,0 3px 8px rgba(16,22,52,.15);overflow:hidden}
+.ghost .stack span:nth-child(1){background:#DDF4FC}.ghost .stack span:nth-child(2){background:#FFEBD8}.ghost .stack span:nth-child(3){background:#ECE4FF;margin-right:4px}
+.fine{margin-top:16px;font:400 13px var(--fu);color:var(--ink3);display:flex;gap:10px;align-items:center}
+.fine i{width:4px;height:4px;border-radius:50%;background:rgba(16,22,52,.25)}
+.fine b{font-weight:600;color:var(--ink2)}
+
+.spark{position:absolute;z-index:9;filter:drop-shadow(0 0 6px rgba(255,255,255,.9)) drop-shadow(0 2px 4px rgba(0,110,170,.25))}
+/* gumballs */
+.gum{position:absolute;border-radius:50%;z-index:2}
+.gum::after{content:"";position:absolute;left:18%;top:12%;width:38%;height:30%;border-radius:50%;background:linear-gradient(rgba(255,255,255,.9),rgba(255,255,255,0));transform:rotate(-25deg)}
+.gum.t{background:radial-gradient(circle at 35% 30%,#FFE2C4,#FF9C3F 45%,#E06A00)}
+.gum.g{background:radial-gradient(circle at 35% 30%,#EDE4FF,#A585FF 45%,#6A3AE6);opacity:.95}
+.gum.b{background:radial-gradient(circle at 35% 30%,#D4F6FF,#2EC0EA 45%,#007FA8)}
+
+/* ---- the handheld ---- */
+.floor{position:absolute;left:880px;top:748px;width:560px;height:90px;border-radius:50%;background:radial-gradient(closest-side,rgba(0,150,200,.42),rgba(0,166,214,.18) 55%,transparent);filter:blur(6px);z-index:2}
+.floor::after{content:"";position:absolute;left:44%;top:34%;width:26%;height:26%;border-radius:50%;background:radial-gradient(closest-side,rgba(160,240,255,.95),transparent);filter:blur(3px)}
+.gb{position:absolute;left:915px;top:112px;width:430px;height:660px;transform:rotate(-6deg);z-index:3}
+.gb-side{position:absolute;inset:0;transform:translate(13px,11px);border-radius:36px 36px 124px 36px;background:linear-gradient(160deg,#0B8FBB,#005E85 70%,#004A6B);box-shadow:0 30px 60px -20px rgba(0,70,110,.55)}
+.gb-body{position:absolute;inset:0;border-radius:36px 36px 124px 36px;overflow:hidden;
+  background:
+   radial-gradient(90% 55% at 22% 8%,rgba(200,245,255,.55),transparent 60%),
+   radial-gradient(70% 50% at 90% 95%,rgba(0,70,110,.35),transparent 70%),
+   linear-gradient(168deg,rgba(40,198,240,.80) 0%,rgba(0,166,214,.80) 42%,rgba(0,130,182,.86) 100%);
+  box-shadow:inset 6px 8px 16px rgba(255,255,255,.5),inset -12px -16px 30px rgba(0,50,90,.42),inset 0 0 0 1.5px rgba(255,255,255,.35)}
+.gb-guts{position:absolute;inset:0;opacity:.55}
+.gb-haze{position:absolute;inset:0;background:linear-gradient(180deg,rgba(80,210,245,.18),rgba(0,150,205,.22))}
+.gb-groove{position:absolute;left:24px;right:24px;top:14px;height:3px;border-radius:3px;background:rgba(0,70,110,.25);box-shadow:0 1px 0 rgba(255,255,255,.35)}
+.gb-bezel{position:absolute;left:26px;top:34px;width:378px;height:300px;border-radius:16px 16px 46px 16px;
+  background:linear-gradient(170deg,rgba(28,34,70,.92),rgba(16,22,52,.96));box-shadow:inset 0 2px 0 rgba(255,255,255,.15),inset 0 -3px 8px rgba(0,0,0,.35),0 2px 0 rgba(255,255,255,.3)}
+.gb-bl{position:absolute;left:18px;right:18px;top:10px;display:flex;align-items:center;gap:10px;font:600 11px var(--fu);letter-spacing:.16em;color:rgba(230,240,255,.62);white-space:nowrap}
+.gb-bl i{flex:1;height:3px;border-radius:2px;background:linear-gradient(90deg,var(--tang),var(--grape))}
+.gb-bl i:last-child{background:linear-gradient(90deg,var(--blue),var(--bondi))}
+.gb-led{position:absolute;left:10px;top:96px;width:20px;display:flex;flex-direction:column;align-items:center;gap:10px}
+.gb-led b{width:10px;height:10px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#FFE9CF,#FF8A1F 55%,#C95A00);box-shadow:0 0 10px 3px rgba(255,138,31,.65)}
+.gb-led span{writing-mode:vertical-rl;transform:rotate(180deg);font:700 11px var(--fu);letter-spacing:.18em;color:#FFB36B}
+.gb-screen{position:absolute;left:38px;top:32px;width:320px;height:246px;border-radius:8px;overflow:hidden;
+  background:linear-gradient(180deg,#FBFDFF,#E7F1FE);box-shadow:inset 0 2px 6px rgba(16,22,52,.35),inset 0 0 0 1px rgba(16,22,52,.3)}
+.scr-top{position:absolute;left:0;right:0;top:0;height:24px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;font:600 11px var(--fm);color:var(--ink);border-bottom:1px dashed rgba(16,22,52,.14);background:rgba(255,255,255,.6)}
+.scr-top .pp{font:700 11px var(--fu);letter-spacing:.08em;color:#fff;background:var(--tang);padding:2px 7px;border-radius:5px}
+.scr-chart{position:absolute;left:0;top:24px;width:320px;height:200px}
+.scr-bot{position:absolute;left:0;right:0;bottom:0;height:22px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;background:rgba(255,255,255,.7);border-top:1px dashed rgba(16,22,52,.14)}
+.scr-bot .illo{color:#4A5275}
+.gb-glare{position:absolute;left:38px;top:32px;width:320px;height:246px;border-radius:8px;pointer-events:none;background:linear-gradient(118deg,rgba(255,255,255,0) 52%,rgba(255,255,255,.22) 53%,rgba(255,255,255,.06) 70%,rgba(255,255,255,0) 71%)}
+.gb-print{position:absolute;left:40px;top:350px;display:flex;align-items:baseline;gap:10px}
+.gb-print .gp1{font:italic 700 27px var(--fd);letter-spacing:-.02em;color:#EAFBFF;text-shadow:0 1px 0 rgba(0,70,110,.45),0 -1px 0 rgba(255,255,255,.3)}
+.gb-print .gp2{font:700 20px var(--fd);letter-spacing:.06em}
+.gb-print .gp2 b{font-weight:700;text-shadow:0 1px 0 rgba(0,40,70,.35)}
+.gb-tag{position:absolute;left:42px;top:386px;font:500 13px var(--fu);color:rgba(235,250,255,.88);letter-spacing:.01em;text-shadow:0 1px 0 rgba(0,70,110,.35)}
+.dpad{position:absolute;left:44px;top:430px;width:124px;height:124px}
+.dpad i{position:absolute;border-radius:9px;background:linear-gradient(145deg,#3B4474,#141A3C);box-shadow:inset 0 2px 0 rgba(255,255,255,.22),inset 0 -3px 6px rgba(0,0,0,.4),0 5px 0 rgba(0,40,70,.5),0 10px 16px rgba(0,40,70,.35)}
+.dpad i.h{left:0;top:42px;width:124px;height:40px}
+.dpad i.v{left:42px;top:0;width:40px;height:124px}
+.dpad b{position:absolute;left:52px;top:52px;width:20px;height:20px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#2A3160,#0B1030);box-shadow:inset 0 2px 3px rgba(0,0,0,.6)}
+.dpad s{position:absolute;width:0;height:0;border:6px solid transparent;opacity:.55}
+.ab{position:absolute;width:80px;height:80px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font:800 14px/1 var(--fu);letter-spacing:.06em;text-shadow:0 1px 0 rgba(0,0,0,.25)}
+.ab span{font-size:17px;line-height:1;margin-bottom:3px}
+.ab::before{content:"";position:absolute;left:18%;top:9%;width:52%;height:30%;border-radius:50%;background:linear-gradient(rgba(255,255,255,.85),rgba(255,255,255,0));transform:rotate(-18deg)}
+.ab::after{content:"";position:absolute;inset:-9px;border-radius:50%;background:rgba(0,70,110,.20);box-shadow:inset 0 2px 4px rgba(0,40,70,.35);z-index:-1}
+.ab.buy{left:318px;top:420px;background:radial-gradient(circle at 36% 30%,#C4F7DD 0,#4ED897 24%,#1FBF75 52%,#0E8E53 100%);box-shadow:inset 0 -7px 12px rgba(0,80,40,.4),inset 0 3px 4px rgba(255,255,255,.55),0 6px 0 #0B7443,0 14px 22px rgba(31,191,117,.45)}
+.ab.sell{left:224px;top:466px;background:radial-gradient(circle at 36% 30%,#FFD3DE 0,#FF7A9A 24%,#FF4F7B 52%,#D42A5A 100%);box-shadow:inset 0 -7px 12px rgba(120,0,40,.35),inset 0 3px 4px rgba(255,255,255,.55),0 6px 0 #B01D48,0 14px 22px rgba(255,79,123,.45)}
+.abl{position:absolute;font:700 11px var(--fu);letter-spacing:.14em;color:rgba(235,250,255,.85)}
+.ss{position:absolute;width:52px;height:15px;border-radius:10px;transform:rotate(-24deg);background:linear-gradient(145deg,#4A5178,#1D2347);box-shadow:inset 0 2px 0 rgba(255,255,255,.25),0 3px 0 rgba(0,40,70,.45)}
+.ssl{position:absolute;font:700 11px var(--fu);letter-spacing:.12em;color:rgba(235,250,255,.8);transform:rotate(-24deg)}
+.spk{position:absolute;left:300px;top:548px;display:flex;gap:9px;transform:rotate(-30deg)}
+.spk i{width:7px;height:54px;border-radius:5px;background:rgba(0,45,75,.42);box-shadow:inset 0 2px 3px rgba(0,0,0,.35),0 1px 0 rgba(255,255,255,.3)}
+.gb-spec{position:absolute;pointer-events:none}
+.gb-spec.a{left:9px;top:40px;width:14px;height:520px;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.75),rgba(255,255,255,.08) 70%,rgba(255,255,255,0))}
+.gb-spec.b{left:40px;top:5px;width:300px;height:10px;border-radius:10px;background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.8) 30%,rgba(255,255,255,0))}
+.gb-spec.c{right:20px;top:20px;width:14px;height:14px;border-radius:50%;background:radial-gradient(closest-side,#fff,rgba(255,255,255,0))}
+.gb-spec.d{right:10px;top:60px;width:8px;height:330px;border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,.4),rgba(255,255,255,0))}
+
+/* screen pets */
+.spr{position:absolute;image-rendering:pixelated}
+.pxb{position:absolute;padding:2px;background:var(--ink);clip-path:polygon(4px 0,calc(100% - 4px) 0,calc(100% - 4px) 2px,calc(100% - 2px) 2px,calc(100% - 2px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 2px) calc(100% - 4px),calc(100% - 2px) calc(100% - 2px),calc(100% - 4px) calc(100% - 2px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 2px),2px calc(100% - 2px),2px calc(100% - 4px),0 calc(100% - 4px),0 4px,2px 4px,2px 2px,4px 2px);white-space:nowrap;z-index:3}
+.pxb span{display:block;padding:3px 7px 4px;font:700 13px/1 var(--fd);letter-spacing:.01em;color:var(--ink);clip-path:inherit}
+.pxb.buy span{background:#8FE8BD}
+.pxb.sell span{background:#FFB3C6}
+.pxb.meh span{background:#fff;color:var(--ink2)}
+.pxt{position:absolute;width:6px;height:6px;background:var(--ink);z-index:3}
+.hop{position:absolute;z-index:1}
+
+/* floating chips */
+.chip{position:absolute;border-radius:22px;padding:12px 16px;z-index:6;font-family:var(--fu);color:var(--ink);
+  background:linear-gradient(150deg,rgba(255,255,255,.9),rgba(255,255,255,.55));-webkit-backdrop-filter:blur(14px) saturate(1.6);backdrop-filter:blur(14px) saturate(1.6);
+  box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.95),0 24px 40px -18px rgba(0,90,140,.5),0 3px 8px rgba(16,22,52,.06),inset 0 -5px 12px rgba(0,166,214,.10)}
+.chip::before{content:"";position:absolute;left:16px;right:42%;top:4px;height:9px;border-radius:9px;background:linear-gradient(rgba(255,255,255,1),rgba(255,255,255,0))}
+.chip .cap{font:600 11px var(--fu);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3)}
+.c-sig{left:616px;top:300px;display:flex;align-items:center;gap:12px;padding:10px 18px 10px 10px;transform:rotate(-3deg)}
+.c-sig .av{width:46px;height:46px;border-radius:16px;background:linear-gradient(160deg,#E2F7FE,#BEEBFA);display:grid;place-items:center;box-shadow:inset 0 -3px 6px rgba(0,120,170,.18)}
+.c-sig .l1{display:flex;align-items:center;gap:8px;font:600 15px var(--fu)}
+.c-sig .l2{font:400 12px var(--fu);color:var(--ink3);margin-top:4px}
+.ring{position:relative;width:26px;height:26px}
+.c-paper{left:1352px;top:190px;width:222px;transform:rotate(4deg)}
+.c-paper .l1{display:flex;align-items:center;gap:8px;font:700 16px var(--fd);letter-spacing:.02em}
+.c-paper .l1 i{width:12px;height:12px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#FFE2C4,#FF8A1F 60%);box-shadow:0 0 0 4px rgba(255,138,31,.18)}
+.c-paper .l2{font:400 12px/1.45 var(--fu);color:var(--ink2);margin-top:6px}
+.c-paper .modes{display:flex;gap:6px;margin-top:10px}
+.c-paper .modes span{white-space:nowrap;font:600 11px var(--fu);padding:4px 9px;border-radius:99px;background:rgba(16,22,52,.05);color:var(--ink3)}
+.c-paper .modes span:first-child{background:var(--tang);color:#fff}
+.c-prices{left:716px;top:548px;width:238px;transform:rotate(-2deg);padding:14px 16px 12px}
+.c-prices .row{display:flex;align-items:center;justify-content:space-between;font:500 12px var(--fu);color:var(--ink2);padding:5px 0;border-bottom:1px dashed rgba(16,22,52,.1)}
+.c-prices .row:last-of-type{border-bottom:0}
+.c-prices .row span:first-child{display:flex;align-items:center;gap:7px}
+.c-prices .row i{width:8px;height:8px;border-radius:3px}
+.c-prices .row b{font:600 13px var(--fm);color:var(--ink)}
+.c-prices .row em{font:italic 500 11px var(--fu);color:var(--ink3);padding:2px 7px;border-radius:6px;box-shadow:inset 0 0 0 1px rgba(16,22,52,.18)}
+.c-auto{left:1380px;top:520px;width:188px;transform:rotate(3deg)}
+.tog{display:flex;align-items:center;justify-content:space-between;margin-top:8px;font:700 16px var(--fd)}
+.tog .sw{width:48px;height:28px;border-radius:99px;background:rgba(16,22,52,.12);box-shadow:inset 0 2px 4px rgba(16,22,52,.2);position:relative}
+.tog .sw::after{content:"";position:absolute;left:3px;top:3px;width:22px;height:22px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,#E3EAF6);box-shadow:0 2px 4px rgba(16,22,52,.25)}
+.c-auto .l2{font:400 12px/1.45 var(--fu);color:var(--ink2);margin-top:8px}
+.c-sign{left:1300px;top:686px;transform:rotate(-4deg);display:flex;align-items:center;gap:10px;padding:10px 16px 10px 12px;font:600 13px var(--fu)}
+.c-sign svg{flex:none}
+
+/* strip */
+.strip{position:absolute;left:0;right:0;bottom:0;height:130px;z-index:7;display:flex;align-items:center;gap:30px;padding:0 48px 0 72px;
+  background:linear-gradient(180deg,rgba(255,255,255,.62),rgba(234,243,255,.86));-webkit-backdrop-filter:blur(18px) saturate(1.5);backdrop-filter:blur(18px) saturate(1.5);
+  box-shadow:inset 0 1.5px 0 #fff,0 -14px 30px -20px rgba(16,22,52,.25)}
+.strip .lbl{width:238px;flex:none}
+.strip .lbl .k{font:700 24px var(--fd);letter-spacing:-.01em;color:var(--ink);display:flex;align-items:center;gap:8px}
+.strip .lbl .k svg{margin-top:2px}
+.strip .lbl p{margin:6px 0 0;font:400 13px/1.45 var(--fu);color:var(--ink2)}
+.pgroups{display:flex;gap:18px;flex:1;justify-content:flex-end}
+.pgroup{display:flex;flex-direction:column;gap:2px}
+.pgroup .gl{font:600 11px var(--fu);letter-spacing:.14em;color:var(--ink3);text-transform:uppercase;padding-left:8px;display:flex;align-items:center;gap:8px}
+.pgroup .gl::after{content:"";flex:1;height:1px;background:rgba(16,22,52,.12)}
+.pgroup .ps{display:flex}
+.pcell{width:98px;display:flex;flex-direction:column;align-items:center}
+.pcell .nm{font:600 13px var(--fd);color:var(--ink);margin-top:-2px;letter-spacing:.01em}
+
+/* ================= BOARD 2 ================= */
+.b2{background:
+  radial-gradient(700px 520px at 260px 160px, rgba(0,166,214,.17), transparent 70%),
+  radial-gradient(640px 520px at 1450px 760px, rgba(139,92,246,.14), transparent 70%),
+  radial-gradient(560px 380px at 820px 900px, rgba(255,138,31,.11), transparent 70%),
+  radial-gradient(520px 380px at 1300px 60px, rgba(61,91,255,.08), transparent 70%),
+  #EAF1FC}
+.pn{position:absolute;border-radius:20px;background:linear-gradient(180deg,rgba(255,255,255,.80),rgba(255,255,255,.58));-webkit-backdrop-filter:blur(20px) saturate(1.5);backdrop-filter:blur(20px) saturate(1.5);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.95),inset 0 -3px 8px rgba(61,91,255,.05),0 14px 34px -16px rgba(16,22,52,.26),0 2px 6px rgba(16,22,52,.05)}
+.pn::before{content:"";position:absolute;left:18px;right:18px;top:3px;height:6px;border-radius:6px;background:linear-gradient(rgba(255,255,255,1),rgba(255,255,255,0));pointer-events:none}
+.top{left:14px;right:14px;top:12px;height:60px;display:flex;align-items:center;gap:14px;padding:0 12px 0 16px;white-space:nowrap}
+.top .brand .wm{font-size:23px}
+.vsep{width:1px;height:30px;background:rgba(16,22,52,.1)}
+.mkt{display:flex;align-items:center;gap:10px;padding:6px 12px 6px 8px;border-radius:14px;background:rgba(16,22,52,.04);box-shadow:inset 0 0 0 1px rgba(16,22,52,.06)}
+.mkt .eth{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(160deg,#EEF1FF,#D5DCFF);box-shadow:inset 0 -2px 4px rgba(61,91,255,.2)}
+.mkt .nm{font:600 16px var(--fu)}
+.mkt .nm small{display:block;font:400 11px var(--fu);color:var(--ink3);margin-top:1px}
+.px{display:flex;flex-direction:column}
+.px b{font:700 20px var(--fm);letter-spacing:-.02em}
+.px span{font:500 11px var(--fu);color:var(--ink3)}
+.stat{display:flex;flex-direction:column;gap:2px;font:500 11px var(--fu);color:var(--ink3)}
+.stat b{font:600 12px var(--fm);color:var(--ink)}
+.seg{display:flex;padding:3px;border-radius:12px;background:rgba(16,22,52,.05);box-shadow:inset 0 1px 2px rgba(16,22,52,.08)}
+.seg span{padding:6px 9px;border-radius:9px;font:600 12px var(--fm);color:var(--ink3)}
+.seg span.on{background:#fff;color:var(--ink);box-shadow:0 2px 6px rgba(16,22,52,.12),inset 0 -2px 3px rgba(61,91,255,.08)}
+.modesw{display:flex;align-items:center;padding:4px;border-radius:99px;background:rgba(16,22,52,.06);box-shadow:inset 0 2px 4px rgba(16,22,52,.1)}
+.modesw span{display:flex;align-items:center;gap:7px;height:34px;padding:0 15px;border-radius:99px;font:600 14px var(--fu);color:var(--ink2)}
+.modesw span i{width:9px;height:9px;border-radius:50%}
+.modesw .paper{color:#fff;position:relative;background:radial-gradient(120% 140% at 30% 10%,#FFD2A3 0,#FFA24A 30%,#FF8A1F 58%,#E86F00 100%);box-shadow:inset 0 2px 0 rgba(255,255,255,.55),inset 0 -4px 8px rgba(160,60,0,.3),0 3px 0 #D26400,0 8px 14px -4px rgba(255,138,31,.6)}
+.modesw .paper i{background:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.35)}
+.modesw .test i{background:var(--bondi)}
+.modesw .live i{background:var(--ink);border-radius:2px}
+.modesw .live svg{opacity:.7}
+.modenote{font:400 11px/1.35 var(--fu);color:var(--ink3);white-space:normal;width:112px}
+.wbtn{display:flex;align-items:center;gap:8px;height:40px;padding:0 14px;border-radius:99px;font:600 13px var(--fu);color:var(--ink);background:#fff;box-shadow:inset 0 0 0 1.5px rgba(16,22,52,.1),0 4px 10px -4px rgba(16,22,52,.2)}
+.wbtn small{font:400 11px var(--fu);color:var(--ink3)}
+.icb{width:40px;height:40px;border-radius:14px;display:grid;place-items:center;background:rgba(16,22,52,.04);box-shadow:inset 0 0 0 1px rgba(16,22,52,.06)}
+
+.rail{left:14px;top:84px;width:258px;height:802px;padding:14px 12px}
+.rail .hd{display:flex;align-items:center;justify-content:space-between;padding:0 4px}
+.rail .hd h3{margin:0;font:600 19px var(--fd);display:flex;align-items:center;gap:8px}
+.rail .hd h3 span{font:600 11px var(--fu);padding:3px 8px;border-radius:99px;background:rgba(16,22,52,.07);color:var(--ink2)}
+.rail .hd .add{font:600 12px var(--fu);color:var(--blue)}
+.srch{margin:12px 2px 0;height:34px;border-radius:12px;background:rgba(16,22,52,.045);box-shadow:inset 0 1px 3px rgba(16,22,52,.1);display:flex;align-items:center;gap:8px;padding:0 10px;font:400 12px var(--fu);color:var(--ink3)}
+.fchips{display:flex;gap:5px;margin:10px 2px 4px}
+.fchips span{font:600 11px var(--fu);padding:5px 9px;border-radius:99px;color:var(--ink2);background:rgba(16,22,52,.05)}
+.fchips span.on{background:var(--ink);color:#fff}
+.grp{display:flex;align-items:center;justify-content:space-between;font:600 11px var(--fu);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);padding:12px 6px 4px}
+.grp em{font:italic 400 11px var(--fu);letter-spacing:0;text-transform:none}
+.prow{display:flex;align-items:center;gap:9px;height:46px;padding:0 6px;border-radius:14px;position:relative}
+.prow .av{width:36px;height:36px;border-radius:12px;display:grid;place-items:center;flex:none;overflow:hidden}
+.prow .tx{flex:1;min-width:0}
+.prow .tx b{display:block;font:600 14px var(--fu)}
+.prow .tx small{display:block;font:400 11px var(--fu);color:var(--ink3);margin-top:1px;white-space:nowrap}
+.prow .st{font:500 11px var(--fu);color:var(--ink3);white-space:nowrap}
+.prow.sel{background:linear-gradient(160deg,rgba(0,166,214,.16),rgba(0,166,214,.08));box-shadow:inset 0 0 0 1.5px rgba(0,166,214,.38),inset 0 2px 0 rgba(255,255,255,.7),0 6px 14px -8px rgba(0,120,170,.5)}
+.av.bondi{background:linear-gradient(160deg,#E3F7FE,#C3ECFA)} .av.tangerine{background:linear-gradient(160deg,#FFF1E3,#FFDDBE)} .av.grape{background:linear-gradient(160deg,#F2ECFF,#E0D4FF)} .av.blueberry{background:linear-gradient(160deg,#EEF1FF,#D6DDFF)} .av.snow{background:linear-gradient(160deg,#F6F9FE,#E3EAF5)} .av.graphite{background:linear-gradient(160deg,#EDEFF7,#D3D8EA)} .av.mix{background:linear-gradient(160deg,#FFF3E8,#E9E2FF)}
+.shop{position:absolute;left:12px;right:12px;bottom:12px;border-radius:16px;padding:12px 12px;display:flex;align-items:center;gap:10px;background:linear-gradient(160deg,rgba(139,92,246,.10),rgba(0,166,214,.08));box-shadow:inset 0 0 0 1px rgba(139,92,246,.2)}
+.shop b{display:block;font:600 13px var(--fu)}
+.shop small{display:block;font:400 11px var(--fu);color:var(--ink3);margin-top:2px}
+.shop .go{margin-left:auto;font:600 12px var(--fu);color:var(--grape);white-space:nowrap}
+
+.chart{left:284px;top:84px;width:912px;height:520px}
+.ch-h{position:absolute;left:16px;right:14px;top:12px;height:34px;display:flex;align-items:center;gap:14px}
+.ch-h .t{font:600 15px var(--fu)}
+.ch-h .t span{color:var(--ink3);font-weight:500}
+.ohlc{display:flex;gap:10px;font:500 12px var(--fm);color:var(--ink3)}
+.ohlc b{font-weight:600;color:var(--ink)}
+.tgl{display:flex;gap:6px;margin-left:auto}
+.tgl span{display:flex;align-items:center;gap:6px;font:600 11px var(--fu);padding:6px 10px;border-radius:99px;background:rgba(16,22,52,.05);color:var(--ink2)}
+.tgl span.on{background:rgba(0,166,214,.13);color:#006F93;box-shadow:inset 0 0 0 1px rgba(0,166,214,.35)}
+.tgl span.pp{background:var(--tang);color:#fff}
+.chwrap{position:absolute;left:14px;top:54px;width:830px;height:432px}
+.axis{position:absolute;left:846px;top:54px;width:60px;height:432px}
+.axis span{position:absolute;right:6px;font:500 11px var(--fm);color:var(--ink3);transform:translateY(-50%)}
+.axis .tag{right:0;padding:3px 6px;border-radius:6px;color:#fff;font-weight:600}
+.taxis{position:absolute;left:14px;top:488px;width:830px;height:20px}
+.taxis span{position:absolute;font:500 11px var(--fm);color:var(--ink3);transform:translateX(-50%)}
+.ch-foot{position:absolute;left:30px;top:60px;padding:3px 8px;border-radius:8px;background:rgba(255,255,255,.75);box-shadow:inset 0 0 0 1px rgba(16,22,52,.06);z-index:6}
+.mk{position:absolute;z-index:4}
+.mk .pin{position:absolute;width:2px;background:repeating-linear-gradient(180deg,var(--ink) 0 3px,transparent 3px 6px);opacity:.55}
+.bigsig{position:absolute;display:flex;align-items:center;gap:10px;padding:8px 12px 8px 8px;border-radius:20px;white-space:nowrap;z-index:5;
+  background:linear-gradient(160deg,rgba(255,255,255,.95),rgba(236,255,245,.9));box-shadow:inset 0 0 0 2px rgba(31,191,117,.55),inset 0 -4px 8px rgba(31,191,117,.14),0 16px 28px -12px rgba(7,121,74,.5)}
+.bigsig::after{content:"";position:absolute;right:52px;bottom:-11px;width:18px;height:14px;background:#F4FFF9;clip-path:polygon(0 0,100% 0,70% 100%);filter:drop-shadow(0 2px 0 rgba(31,191,117,.55))}
+.bigsig .av{width:44px;height:44px;border-radius:15px;display:grid;place-items:center;overflow:hidden}
+.bigsig .l1{display:flex;align-items:center;gap:8px}
+.bigsig .l1 b{font:700 18px var(--fd);color:var(--longink);letter-spacing:.01em}
+.bigsig .l1 span{font:600 13px var(--fu)}
+.bigsig .l2{font:400 11px var(--fu);color:var(--ink3);margin-top:3px}
+.bigsig .tl{display:flex;align-items:center;gap:6px;margin-left:6px;padding-left:10px;border-left:1px dashed rgba(16,22,52,.15)}
+.bigsig .tl b{font:700 14px var(--fm);color:var(--ink)}
+.bigsig .tl small{display:block;font:400 11px var(--fu);color:var(--ink3)}
+.smsig{position:absolute;display:flex;align-items:center;gap:5px;padding:3px 8px 3px 3px;border-radius:99px;background:rgba(255,255,255,.9);box-shadow:0 4px 10px -4px rgba(16,22,52,.3),inset 0 0 0 1px rgba(16,22,52,.08);white-space:nowrap;z-index:4}
+.smsig .av{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;overflow:hidden}
+.smsig small{font:500 11px var(--fu);color:var(--ink3)}
+.dot{position:absolute;width:12px;height:12px;border-radius:50%;transform:translate(-50%,-50%);z-index:4}
+.dot.buy{background:#fff;box-shadow:0 0 0 3px var(--long),0 0 0 7px rgba(31,191,117,.2)}
+.dot.sell{background:#fff;box-shadow:0 0 0 3px var(--short),0 0 0 7px rgba(255,79,123,.18)}
+.dot.old{opacity:.6}
+.hline{position:absolute;height:0;border-top:1.5px dashed;z-index:2}
+
+.feed{left:284px;top:616px;width:912px;height:270px;padding:10px 14px}
+.tabs{display:flex;align-items:center;gap:6px;height:34px}
+.tabs span{font:600 13px var(--fu);padding:7px 12px;border-radius:10px;color:var(--ink3)}
+.tabs span.on{color:var(--ink);background:#fff;box-shadow:0 2px 6px rgba(16,22,52,.1),inset 0 -2px 3px rgba(0,166,214,.1)}
+.tabs span small{font:600 11px var(--fu);margin-left:5px;padding:1px 6px;border-radius:6px;background:var(--tang);color:#fff}
+.tabs .note{margin-left:auto;font:400 11px var(--fu);color:var(--ink3);padding:0}
+.fcols{display:flex;gap:14px;margin-top:8px}
+.ftab{flex:1}
+.fr-h,.fr-r{display:grid;grid-template-columns:48px 120px 76px 58px 78px 1fr;align-items:center;gap:8px;padding:0 8px}
+.fr-h{height:24px;font:600 11px var(--fu);letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.fr-r{height:31px;font:500 12px var(--fu);border-top:1px solid rgba(16,22,52,.06)}
+.fr-r .m{font:500 12px var(--fm)}
+.fr-r .who{display:flex;align-items:center;gap:7px;font-weight:600}
+.fr-r .who .av{width:24px;height:24px;border-radius:8px;display:grid;place-items:center;overflow:hidden}
+.fr-r .sts{font:500 11px var(--fu);color:var(--ink3);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.fr-r.hl{background:rgba(0,166,214,.08);border-radius:10px}
+.lv{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--bondi);box-shadow:0 0 0 3px rgba(0,166,214,.2)}
+.pos{width:262px;flex:none;border-radius:16px;padding:10px 12px;background:rgba(255,255,255,.55);box-shadow:inset 0 0 0 1px rgba(16,22,52,.07)}
+.pos .hd{display:flex;justify-content:space-between;align-items:center;font:600 13px var(--fu)}
+.pos .pp{font:700 11px var(--fu);letter-spacing:.08em;color:#fff;background:var(--tang);padding:3px 7px;border-radius:6px}
+.pos .card{margin-top:10px;border-radius:12px;padding:10px;background:#fff;box-shadow:0 4px 12px -6px rgba(16,22,52,.2),inset 0 0 0 1px rgba(16,22,52,.06)}
+.pos .card .r{display:flex;justify-content:space-between;font:400 11px var(--fu);color:var(--ink3);margin-top:5px}
+.pos .card .r b{font:600 12px var(--fm);color:var(--ink)}
+.pos .card .t{display:flex;align-items:center;gap:8px;font:600 13px var(--fu)}
+.pos .btns{display:flex;gap:6px;margin-top:9px}
+.pos .btns span{flex:1;text-align:center;font:600 12px var(--fu);padding:6px 0;border-radius:9px;background:rgba(16,22,52,.05)}
+.pos .empty{margin-top:8px;font:400 11px/1.45 var(--fu);color:var(--ink3)}
+
+.tk{left:1208px;top:84px;width:378px;height:802px;padding:16px 18px;
+  background:linear-gradient(165deg,rgba(255,255,255,.9),rgba(226,244,255,.72) 60%,rgba(236,232,255,.7));
+  box-shadow:inset 0 0 0 1.5px #fff,inset 0 0 0 7px rgba(0,166,214,.06),inset 0 -10px 24px rgba(0,166,214,.10),0 22px 44px -18px rgba(0,90,140,.45),0 2px 6px rgba(16,22,52,.05)}
+.tk .hd{display:flex;align-items:center;gap:10px}
+.tk .hd h3{margin:0;font:600 19px var(--fd)}
+.tk .hd .pp{font:700 11px var(--fu);letter-spacing:.08em;color:#fff;background:var(--tang);padding:4px 8px;border-radius:7px;box-shadow:inset 0 -2px 3px rgba(160,60,0,.3)}
+.tk .hd .x{margin-left:auto;width:28px;height:28px;border-radius:10px;display:grid;place-items:center;background:rgba(16,22,52,.05)}
+.bs{display:flex;gap:8px;margin-top:14px;padding:4px;border-radius:18px;background:rgba(16,22,52,.05);box-shadow:inset 0 2px 4px rgba(16,22,52,.08)}
+.bs span{flex:1;height:44px;border-radius:14px;display:flex;align-items:center;justify-content:center;gap:8px;font:700 16px var(--fd);letter-spacing:.04em}
+.bs .b{position:relative;color:#fff;background:radial-gradient(120% 140% at 30% 10%,#C4F7DD 0,#4ED897 26%,#1FBF75 55%,#0E8E53 100%);box-shadow:inset 0 2px 0 rgba(255,255,255,.5),inset 0 -5px 10px rgba(0,80,40,.3),0 3px 0 #0B7443,0 10px 16px -6px rgba(31,191,117,.6);text-shadow:0 1px 0 rgba(0,70,35,.35)}
+.bs .s{color:var(--shortink);opacity:.75}
+.from{margin-top:12px;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:16px;background:rgba(255,255,255,.7);box-shadow:inset 0 0 0 1px rgba(16,22,52,.07)}
+.from .av{width:46px;height:46px;border-radius:15px;display:grid;place-items:center;overflow:hidden}
+.from .t1{font:600 14px var(--fu);display:flex;align-items:center;gap:6px}
+.from .t2{font:400 11px var(--fu);color:var(--ink3);margin-top:3px}
+.from .cd{margin-left:auto;text-align:center}
+.from .cd b{display:block;font:700 13px var(--fm)}
+.from .cd small{font:400 11px var(--fu);color:var(--ink3)}
+.fp-h{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px}
+.fp-h b{font:600 11px var(--fu);letter-spacing:.14em;text-transform:uppercase;color:var(--ink2)}
+.fp{margin-top:8px;border-radius:16px;overflow:hidden;background:rgba(255,255,255,.72);box-shadow:inset 0 0 0 1px rgba(16,22,52,.07)}
+.fp .r{display:flex;align-items:center;gap:10px;height:43px;padding:0 12px;border-top:1px solid rgba(16,22,52,.06)}
+.fp .r:first-child{border-top:0}
+.fp .r i{width:10px;height:10px;border-radius:4px;flex:none}
+.fp .r .lb{flex:1}
+.fp .r .lb b{display:block;font:600 13px var(--fu)}
+.fp .r .lb small{display:block;font:400 11px var(--fu);color:var(--ink3);margin-top:1px}
+.fp .r .v{font:600 15px var(--fm)}
+.fp .r .pend{font:italic 500 11px var(--fu);color:var(--ink3);padding:5px 9px;border-radius:8px;box-shadow:inset 0 0 0 1.5px rgba(16,22,52,.15);background:repeating-linear-gradient(135deg,rgba(255,138,31,.07) 0 6px,transparent 6px 12px)}
+.amt{margin-top:14px}
+.amt .lb{display:flex;justify-content:space-between;font:600 11px var(--fu);letter-spacing:.14em;text-transform:uppercase;color:var(--ink2)}
+.amt .lb span{letter-spacing:0;text-transform:none;font-weight:400;color:var(--ink3)}
+.amt .in{margin-top:6px;height:52px;border-radius:16px;background:#fff;box-shadow:inset 0 2px 5px rgba(16,22,52,.1),inset 0 0 0 1.5px rgba(61,91,255,.45),0 0 0 4px rgba(61,91,255,.10);display:flex;align-items:center;padding:0 14px;gap:10px}
+.amt .in b{font:600 22px var(--fm)}
+.amt .in .u{font:600 14px var(--fu);color:var(--ink2)}
+.amt .in .eq{margin-left:auto;font:500 12px var(--fm);color:var(--ink3)}
+.pct{display:flex;gap:6px;margin-top:8px}
+.pct span{flex:1;text-align:center;font:600 12px var(--fm);padding:6px 0;border-radius:10px;background:rgba(16,22,52,.05);color:var(--ink2)}
+.pct span.on{background:rgba(61,91,255,.12);color:var(--blue);box-shadow:inset 0 0 0 1px rgba(61,91,255,.35)}
+.dets{margin-top:12px;display:grid;grid-template-columns:1fr auto;row-gap:6px;font:400 12px var(--fu);color:var(--ink3)}
+.dets b{font:600 12px var(--fm);color:var(--ink);text-align:right}
+.hold{position:relative;margin-top:14px;height:60px;border-radius:22px;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:10px;color:#fff;font:700 17px var(--fd);letter-spacing:.04em;text-shadow:0 1px 0 rgba(0,70,35,.4);
+  background:linear-gradient(180deg,#63DCA2,#27C47C);box-shadow:inset 0 3px 0 rgba(255,255,255,.5),inset 0 -8px 14px rgba(0,80,40,.3),0 5px 0 #0B7443,0 18px 26px -10px rgba(31,191,117,.7);transform:scale(1.015,.965)}
+.hold .liq{position:absolute;left:0;top:0;bottom:0;width:46%;background:linear-gradient(180deg,#1FBF75,#0E9A5B);box-shadow:inset -3px 0 0 rgba(255,255,255,.35)}
+.hold .liq::after{content:"";position:absolute;right:-9px;top:0;bottom:0;width:18px;background:radial-gradient(9px 12px at 0 50%,#119E5E 98%,transparent)}
+.hold .sh{position:absolute;left:16px;right:40%;top:5px;height:14px;border-radius:99px;background:linear-gradient(rgba(255,255,255,.7),rgba(255,255,255,0))}
+.hold span{position:relative}
+.hold small{position:relative;font:600 11px var(--fu);letter-spacing:.04em;padding:3px 8px;border-radius:99px;background:rgba(255,255,255,.28)}
+.tk .notes{margin-top:12px;font:400 11px/1.5 var(--fu);color:var(--ink3)}
+.tk .notes b{font-weight:600;color:var(--ink2)}
+.tk .foot{margin-top:10px;display:flex;justify-content:space-between;align-items:center;padding-top:9px;border-top:1px dashed rgba(16,22,52,.12)}
+
+/* ================= BOARD 3 ================= */
+.b3{background:var(--ice)}
+.b3 .L{position:absolute;left:0;top:0;width:880px;height:900px;padding:30px 34px 0 44px;
+  background:radial-gradient(600px 400px at 160px 120px, rgba(255,138,31,.10), transparent 70%),radial-gradient(500px 400px at 700px 700px, rgba(0,166,214,.08), transparent 70%)}
+.lab{display:flex;align-items:center;gap:8px;font:600 11px var(--fu);letter-spacing:.16em;text-transform:uppercase;color:var(--ink3)}
+.lab b{font:700 11px var(--fm);color:var(--tang);letter-spacing:0}
+.card3{position:absolute;border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(255,255,255,.6));box-shadow:inset 0 0 0 1px #fff,0 12px 30px -16px rgba(16,22,52,.25),0 1px 3px rgba(16,22,52,.05)}
+.logo-c{left:44px;top:30px;width:384px;height:252px;overflow:hidden}
+.logo-c .kc{position:absolute;left:6px;top:30px;width:170px;height:222px}
+.logo-c .lock{position:absolute;left:176px;top:46px}
+.logo-c .lock p{margin:10px 0 0;font:400 12px/1.45 var(--fu);color:var(--ink2);width:190px}
+.logo-c .vars{position:absolute;left:176px;top:166px;display:flex;gap:12px;align-items:flex-end}
+.logo-c .vars .v{display:flex;flex-direction:column;align-items:center;gap:6px}
+.logo-c .vars small{font:500 11px var(--fu);color:var(--ink3)}
+.appi{width:54px;height:54px;border-radius:16px;display:grid;place-items:center;background:linear-gradient(160deg,#fff,#E6EFFC);box-shadow:inset 0 0 0 1.5px #fff,inset 0 -4px 8px rgba(0,120,170,.12),0 8px 16px -8px rgba(16,22,52,.35)}
+.appi.dk{background:linear-gradient(160deg,#20244A,#13162B);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.12),0 8px 16px -8px rgba(16,22,52,.5)}
+.pal{left:440px;top:30px;width:406px;height:252px;padding:14px 14px}
+.sw{display:grid;grid-template-columns:repeat(3,1fr);gap:9px 10px;margin-top:10px}
+.sw .s{display:flex;flex-direction:column;min-width:0}
+.sw .blk{position:relative;height:29px;border-radius:11px;display:flex;align-items:center;padding:0 9px;font:600 12px var(--fu);color:#fff;overflow:hidden;box-shadow:inset 0 2px 0 rgba(255,255,255,.4),inset 0 -5px 10px rgba(0,0,0,.14)}
+.sw .blk::before{content:"";position:absolute;left:8px;right:40%;top:3px;height:8px;border-radius:8px;background:linear-gradient(rgba(255,255,255,.7),rgba(255,255,255,0))}
+.sw .hx{font:600 11px/14px var(--fm);color:var(--ink);margin-top:4px}
+.sw .jb{font:400 11px/14px var(--fu);color:var(--ink3);margin-top:1px;white-space:nowrap}
+.type3{left:44px;top:294px;width:802px;height:104px;padding:12px 18px;display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:0}
+.type3 .tc{padding:0 18px;border-left:1px solid rgba(16,22,52,.08)}
+.type3 .tc:first-child{padding-left:0;border-left:0}
+.type3 .fn{display:flex;justify-content:space-between;font:600 12px var(--fu);color:var(--ink)}
+.type3 .fn span{font:400 11px var(--fu);color:var(--ink3)}
+.type3 .sp1{font:700 46px/1 var(--fd);letter-spacing:-.03em;margin-top:10px;font-variation-settings:"wdth" 110;white-space:nowrap}
+.type3 .sp1 span{color:var(--grape)}
+.type3 .sp2{font:500 19px/1.25 var(--fu);margin-top:12px}
+.type3 .sp2 small{display:block;font:400 11px var(--fu);color:var(--ink3);margin-top:6px}
+.type3 .sp3{font:600 30px/1 var(--fm);letter-spacing:-.03em;margin-top:12px}
+.type3 .sp3 small{display:block;font:500 11px var(--fm);color:var(--ink3);margin-top:7px;letter-spacing:0}
+.pets3{left:44px;top:410px;width:802px;height:262px;padding:14px 14px 0}
+.prow3{display:flex;margin-top:8px}
+.p3{width:96.75px;display:flex;flex-direction:column;align-items:center;text-align:center}
+.p3 .nm{font:600 15px var(--fd);margin-top:2px}
+.p3 .kd{font:600 11px var(--fu);margin-top:2px;padding:2px 7px;border-radius:99px;white-space:nowrap}
+.p3 .kd.r{color:#8F3F00;background:rgba(255,138,31,.13)}
+.p3 .kd.a{color:#4A5275;background:rgba(16,22,52,.07)}
+.p3 .kd.e{color:#5B2EC2;background:rgba(139,92,246,.12)}
+.p3 .ac{font:400 11px/1.3 var(--fu);color:var(--ink2);margin-top:5px;padding:0 4px}
+.pets3 .rule{position:absolute;left:14px;right:14px;bottom:12px;font:400 11px var(--fu);color:var(--ink3);display:flex;gap:18px;padding-top:9px;border-top:1px dashed rgba(16,22,52,.1)}
+.pets3 .rule b{font-weight:600;color:var(--ink2)}
+.mot{left:44px;top:684px;width:802px;height:188px;padding:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.mot .mc{position:relative;border-radius:16px;overflow:hidden}
+.night{background:linear-gradient(160deg,#1C2040,#13162B);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);padding:10px 12px;color:#E8EEFF}
+
+.b3 .R{position:absolute;left:880px;top:0;width:720px;height:900px;padding:28px 30px 0 28px;
+  background:
+   repeating-linear-gradient(0deg,rgba(255,255,255,.35) 0 2px,transparent 2px 4px),
+   radial-gradient(500px 360px at 620px 60px, rgba(139,92,246,.20), transparent 70%),
+   radial-gradient(520px 420px at 80px 860px, rgba(0,166,214,.22), transparent 70%),
+   linear-gradient(170deg,#E3F3FF,#ECE8FF);
+  box-shadow:inset 1px 0 0 rgba(16,22,52,.08)}
+.film-h{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
+.film-t{white-space:nowrap;font:700 64px/0.95 var(--fd);letter-spacing:-.02em;font-variation-settings:"wdth" 118;margin-top:8px;
+  background:linear-gradient(180deg,#9BE6FF 0%,#00A6D6 48%,#3D5BFF 100%);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 3px 0 #fff) drop-shadow(0 10px 14px rgba(0,110,170,.3))}
+.film-meta{display:flex;flex-direction:column;align-items:flex-end;gap:6px;padding-bottom:6px}
+.film-meta span{font:600 11px var(--fu);padding:4px 9px;border-radius:99px;background:rgba(255,255,255,.75);box-shadow:inset 0 0 0 1px rgba(16,22,52,.08);color:var(--ink2)}
+.logline{margin:12px 0 0;font:400 14px/1.45 var(--fu);color:var(--ink2)}
+.logline b{font-weight:600;color:var(--ink)}
+.frames{display:grid;grid-template-columns:321px 321px;gap:16px 20px;margin-top:16px}
+.fcell .fr{position:relative;width:321px;height:181px;border-radius:10px;overflow:hidden;box-shadow:0 0 0 3px #fff,0 14px 26px -12px rgba(16,22,52,.4)}
+.fcap{display:flex;align-items:center;gap:8px;margin-top:9px;white-space:nowrap;overflow:hidden}
+.fcap b{font:700 11px var(--fm);color:#fff;background:var(--ink);padding:3px 6px;border-radius:6px}
+.fcap span{font:500 12px var(--fu);color:var(--ink)}
+.film-foot{margin-top:16px;white-space:nowrap;display:flex;align-items:center;gap:10px;font:400 12px/1.4 var(--fu);color:var(--ink2)}
+.film-foot span{flex:none;font:600 11px var(--fu);letter-spacing:.14em;text-transform:uppercase;color:#fff;background:var(--grape);padding:4px 9px;border-radius:99px}
+.wp{background:radial-gradient(160px 120px at 18% 20%,rgba(155,230,255,.9),transparent 70%),radial-gradient(180px 140px at 88% 86%,rgba(214,198,255,.9),transparent 70%),radial-gradient(120px 90px at 70% 18%,rgba(255,214,174,.7),transparent 70%),linear-gradient(160deg,#CFEAFF,#DCD6FF)}
+.wp::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(255,255,255,.25) 0 1px,transparent 1px 3px)}
+.win{position:absolute;border-radius:7px;overflow:hidden;background:#fff;box-shadow:0 0 0 1px rgba(16,22,52,.22),0 8px 16px -6px rgba(16,22,52,.4)}
+.win .tb{height:17px;display:flex;align-items:center;gap:3px;padding:0 6px;font:600 11px/17px var(--fu);color:#fff;text-shadow:0 1px 0 rgba(0,40,70,.35);white-space:nowrap;overflow:hidden;
+  background:linear-gradient(180deg,#B8EEFF 0,#3CC3EA 48%,#00A6D6 52%,#0093C2 100%)}
+.win .tb i{flex:none;width:8px;height:8px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,rgba(255,255,255,.55) 45%,rgba(255,255,255,.3));box-shadow:inset 0 0 0 1px rgba(0,60,90,.3)}
+.win .tb i:nth-of-type(3){margin-right:3px}
+.win .tb.tg{background:linear-gradient(180deg,#FFD8B4 0,#FFA24A 48%,#FF8A1F 52%,#EC7400 100%)}
+.win .tb.gr{background:linear-gradient(180deg,#E2D6FF 0,#A585FF 48%,#8B5CF6 52%,#7646EE 100%)}
+.win .tb.bb{background:linear-gradient(180deg,#C9D3FF 0,#6B83FF 48%,#3D5BFF 52%,#2F4CEE 100%)}
+.win .tb.gf{background:linear-gradient(180deg,#C7CDE6 0,#6C7498 48%,#4E5780 52%,#3D456C 100%)}
+.win .tb.ik{background:linear-gradient(180deg,#5A6390 0,#23294F 48%,#101634 52%,#0B1028 100%)}
+.win .bd{padding:3px 7px 4px;font:400 11px/15px var(--fu);color:var(--ink);background:repeating-linear-gradient(0deg,#fff 0 2px,#F2F6FC 2px 4px);white-space:nowrap}
+.win .bd b{font-weight:600}
+.bud{display:flex;align-items:center;gap:6px;height:14px}
+.bud .dt{width:6px;height:6px;border-radius:50%;background:var(--bondi);margin-left:auto}
+.bud .dt.aw{background:#FFB36B}
+.bud s{display:inline-block;flex:none}
+.toast{position:absolute;display:flex;align-items:center;gap:6px;padding:4px 9px;border-radius:99px;font:600 11px var(--fu);color:var(--ink);background:rgba(255,255,255,.92);box-shadow:0 4px 10px -4px rgba(16,22,52,.35),inset 0 0 0 1px rgba(255,138,31,.45);white-space:nowrap}
+.cursor{position:absolute;z-index:9}
+.bar{position:absolute;left:0;right:0;bottom:0;height:22px;display:flex;align-items:center;gap:4px;padding:0 6px;background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(220,232,250,.9));box-shadow:0 -1px 0 rgba(16,22,52,.15)}
+.bar .st{font:700 11px var(--fd);color:#fff;padding:1px 8px;border-radius:99px;background:linear-gradient(180deg,#FFB36B,#FF8A1F)}
+.bar s{display:inline-grid;place-items:center;width:18px;height:16px;border-radius:4px;background:rgba(255,255,255,.9);box-shadow:inset 0 0 0 1px rgba(16,22,52,.12)}
+</style>
+</head>
+<body>
+
+<!-- =============================================================== BOARD 1 · LANDING HERO -->
+<section class="board b1">
+  <div class="dots"></div>
+  <div class="gum t" style="left:846px;top:96px;width:22px;height:22px"></div>
+  <div class="gum g" style="left:1462px;top:112px;width:46px;height:46px"></div>
+  <div class="gum b" style="left:1470px;top:430px;width:26px;height:26px"></div>
+  <div class="gum g" style="left:826px;top:452px;width:16px;height:16px;opacity:.7"></div>
+
+  <nav class="nav">
+    <div class="brand"><span data-logo="44"></span><span class="wm">signal<b>OS</b></span></div>
+    <div class="links"><span>Pets</span><span>Quant Lab</span><span>Receipts</span><span>Bot shop</span><span>Docs</span></div>
+    <div class="sp"></div>
+    <span class="chain"><i></i>Non-custodial · Robinhood Chain L2</span>
+    <span class="jelly-t btn-s">Start paper trading</span>
+  </nav>
+
+  <div class="hero">
+    <div class="eyebrow"><span class="pp" data-pet="tideline" data-mini data-size="30"></span><b>11 pocket-pet trading bots.</b> Every trade is still your click.</div>
+    <h1 class="h1">Your bots have<br><span class="bub">opinions.</span><br>You have the<br><span class="key">buttons.</span></h1>
+    <p class="sub">Eleven bots pin <b>▲ BUY</b> and <b>▼ SELL</b> calls to the exact candle. You check four labelled prices, press the button and sign in your own wallet.</p>
+    <div class="ctas">
+      <span class="jelly-t cta">Start paper trading <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+      <span class="ghost"><span class="stack"><span data-pet="kinetic" data-mini data-size="40"></span><span data-pet="meridian" data-mini data-size="40"></span><span data-pet="recoil" data-mini data-size="40"></span></span>Watch them argue</span>
+    </div>
+    <div class="fine"><b>Paper by default</b><i></i>no wallet needed<i></i>Testnet &amp; Live are opt-in<i></i>Not investment advice</div>
+  </div>
+
+  <div class="floor"></div>
+  <div class="gb">
+    <div class="gb-side"></div>
+    <div class="gb-body">
+      <svg class="gb-guts" viewBox="0 0 430 660" width="430" height="660">
+        <g fill="none" stroke="#003A5A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="16" y="344" width="398" height="298" rx="30" fill="rgba(0,60,95,.12)"/>
+          <path d="M40 410h54l16 16h70M40 424h40l12 12h44M250 406v30l18 18h60M392 470h-40l-14 14v40M36 596h58l14-14h60l10 10h60M60 470v70M250 560h40l12 12h50" opacity=".9"/>
+          <rect x="176" y="434" width="70" height="46" rx="5" fill="rgba(0,45,75,.22)"/>
+          <path d="M184 434v-7M194 434v-7M204 434v-7M214 434v-7M224 434v-7M234 434v-7M184 480v7M194 480v7M204 480v7M214 480v7M224 480v7M234 480v7"/>
+          <circle cx="360" cy="398" r="24" fill="rgba(0,45,75,.12)"/><circle cx="360" cy="398" r="15"/>
+          <rect x="146" y="332" width="130" height="30" rx="4" fill="rgba(0,45,75,.12)"/>
+          <path d="M156 334v26M166 334v26M176 334v26M186 334v26M196 334v26M206 334v26M216 334v26M226 334v26M236 334v26M246 334v26M256 334v26M266 334v26" stroke-width="1.2"/>
+          <g><circle cx="34" cy="362" r="8"/><path d="M29 362h10M34 357v10"/></g>
+          <g><circle cx="396" cy="362" r="8"/><path d="M391 362h10M396 357v10"/></g>
+          <g><circle cx="34" cy="624" r="8"/><path d="M29 624h10M34 619v10"/></g>
+          <g><circle cx="226" cy="628" r="8"/><path d="M221 628h10M226 623v10"/></g>
+          <circle cx="278" cy="526" r="6"/><circle cx="296" cy="526" r="6"/><rect x="120" y="580" width="22" height="12" rx="3"/><rect x="150" y="580" width="22" height="12" rx="3"/>
+        </g>
+      </svg>
+      <div class="gb-haze"></div>
+      <div class="gb-groove"></div>
+      <div class="gb-bezel">
+        <div class="gb-bl"><i></i><span>DOT MATRIX WITH OPINIONS</span><i></i></div>
+        <div class="gb-led"><b></b><span>PAPER</span></div>
+        <div class="gb-screen">
+          <div class="scr-top"><span>ETH/USD · 15m</span><span class="pp">PAPER</span></div>
+          <div class="scr-chart" id="scrChart"></div>
+          <div class="scr-bot"><span class="illo">Illustration · made-up prices</span><span class="illo mono" style="font-family:var(--fm)">3,412.58</span></div>
+        </div>
+        <div class="gb-glare"></div>
+      </div>
+      <div class="gb-print"><span class="gp1">signalOS</span><span class="gp2"><b style="color:#FFB36B">P</b><b style="color:#fff">O</b><b style="color:#D6C6FF">C</b><b style="color:#FFB36B">K</b><b style="color:#fff">E</b><b style="color:#D6C6FF">T</b></span></div>
+      <div class="gb-tag">Bots call it. You make the call.</div>
+      <div class="dpad"><i class="h"></i><i class="v"></i><b></b></div>
+      <div class="ab sell"><span>▼</span>SELL</div>
+      <div class="ab buy"><span>▲</span>BUY</div>
+      <div class="abl" style="left:238px;top:560px">B</div>
+      <div class="abl" style="left:352px;top:514px">A</div>
+      <div class="ss" style="left:120px;top:590px"></div>
+      <div class="ss" style="left:188px;top:590px"></div>
+      <div class="ssl" style="left:124px;top:614px">MODE</div>
+      <div class="ssl" style="left:196px;top:614px">SIGN</div>
+      <div class="spk"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="gb-spec a"></div><div class="gb-spec b"></div><div class="gb-spec c"></div><div class="gb-spec d"></div>
+    </div>
+  </div>
+
+  <div class="chip c-sig">
+    <div class="av" data-pet="tideline" data-mini data-size="44"></div>
+    <div>
+      <div class="l1"><span class="dir buy">▲ BUY</span>Tideline</div>
+      <div class="l2">pinned to the 20:45 candle · <b style="font-weight:600;color:var(--ink)">02:14 left</b></div>
+    </div>
+  </div>
+  <div class="chip c-paper">
+    <div class="cap">Mode</div>
+    <div class="l1" style="margin-top:6px"><i></i>PAPER · default</div>
+    <div class="l2">Practice with pretend money. No wallet needed. Testnet and Live are opt-in.</div>
+    <div class="modes"><span>Paper</span><span>Testnet</span><span>Live</span></div>
+  </div>
+  <div class="chip c-prices">
+    <div class="cap" style="margin-bottom:4px">Four prices, labelled</div>
+    <div class="row"><span><i style="background:var(--bondi)"></i>Signal reference</span><b id="h-ref">3,398.20</b></div>
+    <div class="row"><span><i style="background:var(--blue)"></i>Chart last</span><b>3,412.58</b></div>
+    <div class="row"><span><i style="background:var(--grape)"></i>Executable quote</span><b>3,413.10</b></div>
+    <div class="row"><span><i style="background:var(--tang)"></i>Fill</span><em>after you sign</em></div>
+    <div class="illo" style="margin-top:6px">Illustration · made-up prices</div>
+  </div>
+  <div class="chip c-auto">
+    <div class="cap">Automation</div>
+    <div class="tog"><span>OFF</span><span class="sw"></span></div>
+    <div class="l2">Pets suggest. Nothing trades until you click.</div>
+  </div>
+  <div class="chip c-sign">
+    <svg width="34" height="22" viewBox="0 0 34 22" fill="none" stroke="#3D5BFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 16c4-10 7-13 8-10s-4 12-1 12 6-12 9-11-1 9 2 9 5-6 7-6 2 4 5 3"/></svg>
+    You sign in your own wallet.
+  </div>
+
+  <div class="spark" style="left:1296px;top:98px"><svg viewBox="0 0 24 24" width="26" height="26"><path d="M12 0C13 7.5 16.5 11 24 12C16.5 13 13 16.5 12 24C11 16.5 7.5 13 0 12C7.5 11 11 7.5 12 0Z" fill="#fff"/></svg></div><div class="spark" style="left:1318px;top:128px"><svg viewBox="0 0 24 24" width="12" height="12"><path d="M12 0C13 7.5 16.5 11 24 12C16.5 13 13 16.5 12 24C11 16.5 7.5 13 0 12C7.5 11 11 7.5 12 0Z" fill="#fff"/></svg></div><div class="spark" style="left:386px;top:250px"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 0C13 7.5 16.5 11 24 12C16.5 13 13 16.5 12 24C11 16.5 7.5 13 0 12C7.5 11 11 7.5 12 0Z" fill="#fff"/></svg></div><div class="spark" style="left:380px;top:424px"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 0C13 7.5 16.5 11 24 12C16.5 13 13 16.5 12 24C11 16.5 7.5 13 0 12C7.5 11 11 7.5 12 0Z" fill="#fff"/></svg></div><div class="spark" style="left:1394px;top:500px"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 0C13 7.5 16.5 11 24 12C16.5 13 13 16.5 12 24C11 16.5 7.5 13 0 12C7.5 11 11 7.5 12 0Z" fill="#fff"/></svg></div>
+  <div class="strip">
+    <div class="lbl">
+      <div class="k">Meet the pets <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#101634" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+      <p>11 bots, 3 species. Each has one job, one shell and a strong opinion.</p>
+    </div>
+    <div class="pgroups">
+      <div class="pgroup"><div class="gl">Rules</div><div class="ps">
+        <div class="pcell"><span data-pet="tideline" data-size="84"></span><span class="nm">Tideline</span></div>
+        <div class="pcell"><span data-pet="kinetic" data-size="84"></span><span class="nm">Kinetic</span></div>
+        <div class="pcell"><span data-pet="recoil" data-size="84"></span><span class="nm">Recoil</span></div>
+        <div class="pcell"><span data-pet="breakline" data-size="84"></span><span class="nm">Breakline</span></div>
+      </div></div>
+      <div class="pgroup"><div class="gl">AI analysts</div><div class="ps">
+        <div class="pcell"><span data-pet="meridian" data-size="84"></span><span class="nm">Meridian</span></div>
+        <div class="pcell"><span data-pet="vector" data-size="84"></span><span class="nm">Vector</span></div>
+        <div class="pcell"><span data-pet="lumen" data-size="84"></span><span class="nm">Lumen</span></div>
+        <div class="pcell"><span data-pet="halcyon" data-size="84"></span><span class="nm">Halcyon</span></div>
+        <div class="pcell"><span data-pet="deepcurrent" data-size="84"></span><span class="nm">Deep Current</span></div>
+      </div></div>
+      <div class="pgroup"><div class="gl">Ensembles</div><div class="ps">
+        <div class="pcell"><span data-pet="quorum" data-size="84"></span><span class="nm">Quorum</span></div>
+        <div class="pcell"><span data-pet="council" data-size="84"></span><span class="nm">Council</span></div>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- =============================================================== BOARD 2 · TRADING WORKSPACE -->
+<section class="board b2">
+  <div class="pn top">
+    <div class="brand"><span data-logo="32"></span><span class="wm">signal<b>OS</b></span></div>
+    <div class="vsep"></div>
+    <div class="mkt">
+      <span class="eth"><svg width="16" height="22" viewBox="0 0 16 24"><path d="M8 0 0 12l8 4.6L16 12z" fill="#3D5BFF"/><path d="M8 0v16.6L16 12z" fill="#2032B8"/><path d="M0 13.6 8 24l8-10.4-8 4.6z" fill="#6B83FF"/></svg></span>
+      <span class="nm">ETH/USD<small>Ethereum</small></span>
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#646C90" stroke-width="2" stroke-linecap="round"><path d="m3 4.5 3 3 3-3"/></svg>
+    </div>
+    <div class="px"><b id="t-last">3,412.58</b><span>Illustration · made-up prices</span></div>
+    <div class="stat">24h range<b><span id="t-lo">3,301.07</span> – <span id="t-hi">3,521.40</span></b></div>
+    <div class="seg"><span>1m</span><span>5m</span><span class="on">15m</span><span>1h</span><span>4h</span><span>1D</span></div>
+    <div style="flex:1"></div>
+    <div class="modesw">
+      <span class="paper"><i></i>Paper</span>
+      <span class="test"><i></i>Testnet</span>
+      <span class="live"><i></i>Live<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#101634" stroke-width="1.6"><rect x="2.5" y="5.5" width="7" height="5" rx="1.2"/><path d="M4 5.5V4a2 2 0 0 1 4 0v1.5"/></svg></span>
+    </div>
+    <div class="modenote">Live is opt-in. ETH ⇄ USDG on Uniswap v3.</div>
+    <span class="wbtn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#101634" stroke-width="1.6"><rect x="1.5" y="3.5" width="13" height="10" rx="2.5"/><path d="M10.5 8.5h4"/><circle cx="11" cy="8.5" r=".6" fill="#101634"/></svg>Wallet <small>not needed on Paper</small></span>
+    <span class="icb"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#3A4166" stroke-width="1.7" stroke-linecap="round"><path d="M3 5h12M3 9h12M3 13h12"/><circle cx="6" cy="5" r="1.8" fill="#fff"/><circle cx="12" cy="9" r="1.8" fill="#fff"/><circle cx="8" cy="13" r="1.8" fill="#fff"/></svg></span>
+  </div>
+
+  <div class="pn rail">
+    <div class="hd"><h3>Pets <span>11</span></h3><span class="add">Watching 7</span></div>
+    <div class="srch"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#646C90" stroke-width="1.8" stroke-linecap="round"><circle cx="6" cy="6" r="4.2"/><path d="m9.2 9.2 3 3"/></svg>Find a pet…</div>
+    <div class="fchips"><span class="on">All</span><span>Rules</span><span>AI</span><span>Ensembles</span></div>
+    <div class="grp">Rules</div>
+    <div class="prow sel"><span class="av bondi" data-pet="tideline" data-mini data-size="34"></span><span class="tx"><b>Tideline</b><small>trend · 15m</small></span><span class="dir buy">▲ BUY</span></div>
+    <div class="prow"><span class="av tangerine" data-pet="kinetic" data-mini data-size="34"></span><span class="tx"><b>Kinetic</b><small>momentum · 15m</small></span><span class="st">quiet</span></div>
+    <div class="prow"><span class="av grape" data-pet="recoil" data-mini data-size="34"></span><span class="tx"><b>Recoil</b><small>mean reversion · 15m</small></span><span class="st">quiet</span></div>
+    <div class="prow"><span class="av blueberry" data-pet="breakline" data-mini data-size="34"></span><span class="tx"><b>Breakline</b><small>breakout · 1h</small></span><span class="st">watching</span></div>
+    <div class="grp">AI analysts <em>operator’s providers</em></div>
+    <div class="prow"><span class="av snow" data-pet="meridian" data-mini data-size="34"></span><span class="tx"><b>Meridian</b><small>AI analyst · 15m</small></span><span class="st">thinking…</span></div>
+    <div class="prow"><span class="av snow" data-pet="vector" data-mini data-size="34"></span><span class="tx"><b>Vector</b><small>AI analyst · 1h</small></span><span class="st">quiet</span></div>
+    <div class="prow"><span class="av snow" data-pet="lumen" data-mini data-size="34"></span><span class="tx"><b>Lumen</b><small>AI analyst · 1h</small></span><span class="st">quiet</span></div>
+    <div class="prow"><span class="av snow" data-pet="halcyon" data-mini data-size="34"></span><span class="tx"><b>Halcyon</b><small>AI analyst · 4h</small></span><span class="st">asleep</span></div>
+    <div class="prow"><span class="av graphite" data-pet="deepcurrent" data-mini data-size="34"></span><span class="tx"><b>Deep Current</b><small>AI analyst · 4h</small></span><span class="st">quiet</span></div>
+    <div class="grp">Ensembles</div>
+    <div class="prow"><span class="av mix" data-pet="quorum" data-mini data-size="34"></span><span class="tx"><b>Quorum</b><small>ensemble · 15m</small></span><span class="st">2 of 3 agree</span></div>
+    <div class="prow"><span class="av mix" data-pet="council" data-mini data-size="34"></span><span class="tx"><b>Council</b><small>ensemble · 1h</small></span><span class="st">split</span></div>
+    <div class="shop"><span data-pet="kinetic" data-mini data-size="30"></span><span><b>Bot shop</b><small>Community pets · moderated</small></span><span class="go">Browse →</span></div>
+  </div>
+
+  <div class="pn chart">
+    <div class="ch-h">
+      <span class="t">ETH/USD <span>· 15m</span></span>
+      <span class="ohlc" id="ohlc"></span>
+      <span class="tgl"><span class="on">● Signals</span><span>Receipts</span><span>Indicators</span><span class="pp">PAPER</span></span>
+    </div>
+    <div class="chwrap" id="mainChart"></div>
+    <div class="axis" id="axis"></div>
+    <div class="taxis" id="taxis"></div>
+    <div class="ch-foot illo">Illustration · made-up prices</div>
+  </div>
+
+  <div class="pn feed">
+    <div class="tabs"><span class="on">Signal feed</span><span>Positions <small>PAPER 1</small></span><span>Receipts</span><span>Quant Lab</span><span class="note">Append-only: every signal is kept · Illustration · made-up prices</span></div>
+    <div class="fcols">
+      <div class="ftab">
+        <div class="fr-h"><span>Time</span><span>Pet</span><span>Call</span><span>Candle</span><span>Ref price</span><span>Status</span></div>
+        <div class="fr-r hl"><span class="m">20:47</span><span class="who"><span class="av bondi" data-pet="tideline" data-mini data-size="24"></span>Tideline</span><span><span class="dir buy">▲ BUY</span></span><span class="m">20:45</span><span class="m" id="f-ref">3,398.20</span><span class="sts"><span class="lv"></span>open · 02:14 left</span></div>
+        <div class="fr-r"><span class="m">20:40</span><span class="who"><span class="av mix" data-pet="quorum" data-mini data-size="24"></span>Quorum</span><span class="st" style="color:var(--ink3)">— no call</span><span class="m">20:30</span><span class="m">—</span><span class="sts">2 of 3 agree · waiting</span></div>
+        <div class="fr-r"><span class="m">18:17</span><span class="who"><span class="av tangerine" data-pet="kinetic" data-mini data-size="24"></span>Kinetic</span><span><span class="dir buy faded">▲ BUY</span></span><span class="m">18:15</span><span class="m" id="f-k">3,341.66</span><span class="sts">expired · receipt #4471</span></div>
+        <div class="fr-r"><span class="m">15:02</span><span class="who"><span class="av grape" data-pet="recoil" data-mini data-size="24"></span>Recoil</span><span><span class="dir sell faded">▼ SELL</span></span><span class="m">15:00</span><span class="m" id="f-r">3,455.90</span><span class="sts">expired · receipt #4468</span></div>
+        <div class="fr-r"><span class="m">13:31</span><span class="who"><span class="av snow" data-pet="meridian" data-mini data-size="24"></span>Meridian</span><span><span class="dir sell faded">▼ SELL</span></span><span class="m">13:30</span><span class="m" id="f-m">3,488.12</span><span class="sts">expired · receipt #4462</span></div>
+        <div class="fr-r"><span class="m">11:46</span><span class="who"><span class="av blueberry" data-pet="breakline" data-mini data-size="24"></span>Breakline</span><span><span class="dir buy faded">▲ BUY</span></span><span class="m">11:45</span><span class="m">3,502.44</span><span class="sts">expired · receipt #4457</span></div>
+      </div>
+      <div class="pos">
+        <div class="hd">Positions <span class="pp">PAPER</span></div>
+        <div class="card">
+          <div class="t"><span class="dir buy">▲ BUY</span>ETH · 0.40</div>
+          <div class="r">Entry (paper fill)<b>3,344.02</b></div>
+          <div class="r">Chart last<b>3,412.58</b></div>
+          <div class="r">Opened from<b style="font-family:var(--fu)">Kinetic · 18:15</b></div>
+          <div class="btns"><span>Close…</span><span>Receipt</span></div>
+        </div>
+        <div class="empty">Illustration · made-up prices. Testnet: no positions. Live: off until you opt in.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pn tk">
+    <div class="hd"><h3>Trade ticket</h3><span class="pp">PAPER</span><span class="x"><svg width="12" height="12" viewBox="0 0 12 12" stroke="#3A4166" stroke-width="1.8" stroke-linecap="round"><path d="m2 2 8 8M10 2l-8 8"/></svg></span></div>
+    <div class="bs"><span class="b">▲ BUY</span><span class="s">▼ SELL</span></div>
+    <div class="from">
+      <span class="av bondi" data-pet="tideline" data-mini data-size="44"></span>
+      <span><span class="t1">Tideline says <span class="dir buy">▲ BUY</span></span><span class="t2" style="display:block">trend · pinned to the 20:45 candle</span></span>
+      <span class="cd"><span class="ring" id="ring2" style="display:inline-block;width:30px;height:30px"></span><b>02:14</b><small>left</small></span>
+    </div>
+    <div class="fp-h"><b>Four prices</b><span class="illo">Illustration · made-up prices</span></div>
+    <div class="fp">
+      <div class="r"><i style="background:var(--bondi)"></i><span class="lb"><b>Signal reference</b><small>close of the signal candle</small></span><span class="v" id="k-ref">3,398.20</span></div>
+      <div class="r"><i style="background:var(--blue)"></i><span class="lb"><b>Chart last</b><small>latest price on the chart</small></span><span class="v">3,412.58</span></div>
+      <div class="r"><i style="background:var(--grape)"></i><span class="lb"><b>Executable quote</b><small>what the paper engine offers now</small></span><span class="v">3,413.10</span></div>
+      <div class="r"><i style="background:var(--tang)"></i><span class="lb"><b>Fill</b><small>set when your trade executes</small></span><span class="pend">after you confirm</span></div>
+    </div>
+    <div class="amt">
+      <div class="lb">Amount <span>Paper balance 10,000.00 USDG</span></div>
+      <div class="in"><b>0.50</b><span class="u">ETH</span><span class="eq">≈ 1,706.55 USDG</span></div>
+      <div class="pct"><span>10%</span><span class="on">25%</span><span>50%</span><span>Max</span></div>
+    </div>
+    <div class="dets">
+      <span>Fee (paper, simulated)</span><b>0.51 USDG</b>
+      <span>Price impact</span><b>0.02%</b>
+      <span>Slippage limit</span><b>0.50% ✎</b>
+    </div>
+    <div class="hold"><div class="liq"></div><div class="sh"></div><span>HOLD TO ▲ BUY · PAPER</span><small>0.6s</small></div>
+    <div class="notes"><b>Paper:</b> no wallet needed. On <b>Testnet</b> and <b>Live</b> you sign in your own wallet, and nothing trades without that signature. Automation is off: every trade is a click.</div>
+    <div class="foot"><span class="illo">Not investment advice</span><span class="illo">Receipt saved to history</span></div>
+  </div>
+</section>
+
+<!-- =============================================================== BOARD 3 · BRAND SHEET + FILM -->
+<section class="board b3">
+  <div class="L">
+    <div class="card3 logo-c">
+      <div class="lab" style="position:absolute;left:18px;top:14px"><b>01</b>Logo · the shell</div>
+      <div class="kc" id="keychain"></div>
+      <div class="lock">
+        <div style="display:flex;align-items:center;gap:6px"><span data-logo="34"></span><span class="wm" style="font-size:33px">signal<b>OS</b></span></div>
+        <p>A tangerine egg shell with a two-pixel face and three signal arcs off its antenna. Clip it to anything.</p>
+      </div>
+      <div class="vars">
+        <div class="v"><span class="appi"><span data-logo="34"></span></span><small>App icon</small></div>
+        <div class="v"><span class="appi dk"><span data-logo="34"></span></span><small>On Smoke</small></div>
+        <div class="v"><span style="height:54px;display:grid;place-items:center;width:34px"><span data-logo="20"></span></span><small>20 px</small></div>
+      </div>
+    </div>
+
+    <div class="card3 pal">
+      <div class="lab"><b>02</b>Palette · candy with jobs</div>
+      <div class="sw">
+        <div class="s"><div class="blk" style="background:#F2F7FF;color:var(--ink);box-shadow:inset 0 0 0 1px rgba(16,22,52,.12),inset 0 -5px 10px rgba(0,0,0,.04)">Ice</div><div class="hx">#F2F7FF</div><div class="jb">Panels. Never cream.</div></div>
+        <div class="s"><div class="blk" style="background:#101634">Ink</div><div class="hx">#101634</div><div class="jb">Text. Live = opaque.</div></div>
+        <div class="s"><div class="blk" style="background:linear-gradient(160deg,#FFB36B,#FF8A1F 50%,#E86F00)">Tangerine</div><div class="hx">#FF8A1F</div><div class="jb">Shell + Paper mode.</div></div>
+        <div class="s"><div class="blk" style="background:linear-gradient(160deg,#5FD3F2,#00A6D6 50%,#008AB5)">Bondi</div><div class="hx">#00A6D6</div><div class="jb">Info + Testnet.</div></div>
+        <div class="s"><div class="blk" style="background:linear-gradient(160deg,#7F93FF,#3D5BFF 50%,#2743E8)">Blueberry</div><div class="hx">#3D5BFF</div><div class="jb">Focus + links.</div></div>
+        <div class="s"><div class="blk" style="background:linear-gradient(160deg,#B79CFF,#8B5CF6 50%,#6D3EE8)">Grape</div><div class="hx">#8B5CF6</div><div class="jb">Personality, rarely.</div></div>
+        <div class="s"><div class="blk" style="background:linear-gradient(160deg,#6FE0A8,#1FBF75 50%,#10A061)">Long</div><div class="hx">#1FBF75</div><div class="jb"><b class="tbuy">▲ BUY</b> only.</div></div>
+        <div class="s"><div class="blk" style="background:linear-gradient(160deg,#FF93AE,#FF4F7B 50%,#E6335F)">Strawberry</div><div class="hx">#FF4F7B</div><div class="jb"><b class="tsell">▼ SELL</b> only.</div></div>
+        <div class="s"><div class="blk" style="background:linear-gradient(160deg,#262B52,#13162B)">Smoke</div><div class="hx">#13162B</div><div class="jb">Night mode base.</div></div>
+      </div>
+    </div>
+
+    <div class="card3 type3">
+      <div class="tc">
+        <div class="fn">Fredoka <span>Display · variable</span></div>
+        <div class="sp1">Hi, <span>pets.</span></div>
+      </div>
+      <div class="tc">
+        <div class="fn">Rubik <span>UI · 400–600</span></div>
+        <div class="sp2">Every trade is a click.<small>Labels, buttons, body copy, tables.</small></div>
+      </div>
+      <div class="tc">
+        <div class="fn">JetBrains Mono <span>Numbers</span></div>
+        <div class="sp3">3,412.58<small>Tabular. Made-up price.</small></div>
+      </div>
+    </div>
+
+    <div class="card3 pets3">
+      <div class="lab"><b>03</b>The pets · a shell, a two-pixel face, and an accessory that is the strategy</div>
+      <div class="prow3">
+        <div class="p3"><span data-pet="tideline" data-size="100"></span><span class="nm">Tideline</span><span class="kd r">trend</span><span class="ac">Surfs the wave it follows.</span></div>
+        <div class="p3"><span data-pet="kinetic" data-size="100"></span><span class="nm">Kinetic</span><span class="kd r">momentum</span><span class="ac">Zippy. Bolt for an antenna.</span></div>
+        <div class="p3"><span data-pet="recoil" data-size="100"></span><span class="nm">Recoil</span><span class="kd r">mean-revert</span><span class="ac">Always springs back.</span></div>
+        <div class="p3"><span data-pet="breakline" data-size="100"></span><span class="nm">Breakline</span><span class="kd r">breakout</span><span class="ac">Straight through the fence.</span></div>
+        <div class="p3"><span data-pet="meridian" data-size="100"></span><span class="nm">Meridian</span><span class="kd a">AI analyst</span><span class="ac">Monocle. Reads slowly.</span></div>
+        <div class="p3"><span data-pet="deepcurrent" data-size="100"></span><span class="nm">Deep Current</span><span class="kd a">AI analyst</span><span class="ac">Snorkels under the surface.</span></div>
+        <div class="p3"><span data-pet="quorum" data-size="100"></span><span class="nm">Quorum</span><span class="kd e">ensemble</span><span class="ac">A trio. Agrees, or stays quiet.</span></div>
+        <div class="p3"><span data-pet="council" data-size="100"></span><span class="nm">Council</span><span class="kd e">ensemble</span><span class="ac">One candy bead per member.</span></div>
+      </div>
+      <div class="rule"><span><b>Solid candy shell</b> = rules bot</span><span><b>Clear shell</b> = AI analyst (you can see the chip)</span><span><b>Many flavours</b> = ensemble</span><span>Never green or strawberry.</span></div>
+    </div>
+
+    <div class="card3 mot">
+      <div class="mc" id="motSig" style="background:linear-gradient(180deg,#fff,#F0F6FF);box-shadow:inset 0 0 0 1px rgba(16,22,52,.06)"></div>
+      <div class="mc" style="background:linear-gradient(180deg,#fff,#F0F6FF);box-shadow:inset 0 0 0 1px rgba(16,22,52,.06);padding:10px 12px">
+        <div class="lab"><b>05</b>Hold to confirm</div>
+        <div class="hold" style="margin-top:24px;height:54px;border-radius:18px;font-size:14px"><div class="liq" style="width:62%"></div><div class="sh"></div><span>HOLD TO ▲ BUY · PAPER</span></div>
+        <div style="display:flex;gap:6px;margin-top:12px"><span style="flex:1;height:6px;border-radius:6px;background:var(--ink)"></span><span style="flex:1;height:6px;border-radius:6px;background:var(--ink)"></span><span style="flex:1;height:6px;border-radius:6px;background:rgba(16,22,52,.1)"></span></div>
+        <div class="illo" style="margin-top:9px;line-height:1.4">Squishes under your thumb and fills like jelly. Let go to cancel.</div>
+      </div>
+      <div class="mc night" id="night">
+        <div class="lab" style="color:#9AA3C7"><b>06</b>Night mode · Smoke</div>
+        <div style="display:flex;align-items:center;gap:7px;margin-top:10px"><span data-logo="22"></span><span class="wm" style="font-size:17px;color:#F2F7FF">signal<b>OS</b></span><span style="margin-left:auto;font:700 11px var(--fu);letter-spacing:.08em;color:#fff;background:var(--tang);padding:2px 6px;border-radius:5px">PAPER</span></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px;padding:7px 8px;border-radius:12px;background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)">
+          <span class="av" data-pet="tideline" data-mini data-size="26" style="width:30px;height:30px;border-radius:10px;display:grid;place-items:center;background:rgba(0,166,214,.22)"></span>
+          <span style="font:600 12px var(--fu)">Tideline</span>
+          <span class="dir buy" style="margin-left:auto;color:#6FF0B0;background:rgba(31,191,117,.18)">▲ BUY</span>
+          <span style="font:600 12px var(--fm);color:#C9D1F0" id="n-ref">3,398.20</span>
+        </div>
+        <div class="illo" style="margin-top:7px;color:#8C95BC">Same jelly, lights off. Illustration · made-up prices</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="R">
+    <div class="film-h">
+      <div>
+        <div class="lab"><b>07</b>Launch film · storyboard</div>
+        <div class="film-t">BUDDY LIST</div>
+      </div>
+      <div class="film-meta"><span>0:40 · screen-life comedy</span><span>16:9 + 9:16 cut-downs</span><span>Sound: door-creaks, pops, keys</span></div>
+    </div>
+    <p class="logline"><b>Logline:</b> Eleven bot buddies instant-message you about the same candle. You type for a very long time, check four prices, press ▲ BUY on PAPER, and one bot replies “k”.</p>
+    <div class="frames">
+      <!-- F1 -->
+      <div class="fcell">
+        <div class="fr wp">
+          <div class="win" style="left:12px;top:10px;width:132px;height:163px">
+            <div class="tb"><i></i><i></i><i></i>Buddy List</div>
+            <div class="bd" style="height:146px">
+              <div class="bud" style="font-weight:600">▾ Pets (11/11)</div>
+              <div class="bud"><s data-spr="bondi"></s>Tideline<span class="dt aw"></span></div>
+              <div class="bud"><s data-spr="tangerine"></s>Kinetic<span class="dt"></span></div>
+              <div class="bud"><s data-spr="grape"></s>Recoil<span class="dt"></span></div>
+              <div class="bud"><s data-spr="blueberry"></s>Breakline<span class="dt"></span></div>
+              <div class="bud"><s data-spr="snow"></s>Meridian<span class="dt aw"></span></div>
+              <div class="bud"><s data-spr="snow"></s>Vector<span class="dt"></span></div>
+              <div class="bud"><s data-spr="snow"></s>Lumen<span class="dt"></span></div>
+              <div class="bud" style="color:var(--ink3)">+4 more online</div>
+            </div>
+          </div>
+          <div class="toast" style="left:156px;top:12px"><svg width="12" height="13" viewBox="0 0 12 13" fill="none" stroke="#FF8A1F" stroke-width="1.6"><rect x="2" y="1" width="8" height="11" rx="1"/><circle cx="7.6" cy="7" r=".8" fill="#FF8A1F"/></svg>*creak* Kinetic is on</div>
+          <div class="win" style="left:156px;top:42px;width:156px">
+            <div class="tb gf"><i></i><i></i><i></i>Away · Meridian</div>
+            <div class="bd" style="white-space:normal"><i>reading the candle.<br>monocle on. brb</i></div>
+          </div>
+          <div class="win" style="left:168px;top:114px;width:144px">
+            <div class="tb"><i></i><i></i><i></i>Away · Tideline</div>
+            <div class="bd"><i>~*~ riding the trend ~*~</i></div>
+          </div>
+        </div>
+        <div class="fcap"><b>00:00</b><span>Door-creak ×11. Every pet signs on.</span></div>
+      </div>
+      <!-- F2 -->
+      <div class="fcell">
+        <div class="fr wp">
+          <div class="win" style="left:72px;top:12px;width:178px;height:120px">
+            <div class="tb ik"><i></i><i></i><i></i>ETH/USD · 15m</div>
+            <div id="f2chart" style="position:relative;height:103px;background:#fff"></div>
+          </div>
+          <div class="win" style="left:10px;top:112px;width:134px">
+            <div class="tb"><i></i><i></i><i></i>IM · Tideline</div>
+            <div class="bd"><b>Tideline:</b> <b class="tbuy">▲ BUY!!</b></div>
+          </div>
+          <div class="win" style="left:168px;top:126px;width:146px">
+            <div class="tb gr"><i></i><i></i><i></i>IM · Recoil</div>
+            <div class="bd"><b>Recoil:</b> nah. <b class="tsell">▼ SELL</b></div>
+          </div>
+        </div>
+        <div class="fcap"><b>00:06</b><span>A 15m candle closes. Two IMs ping.</span></div>
+      </div>
+      <!-- F3 -->
+      <div class="fcell">
+        <div class="fr wp">
+          <div class="win" style="left:8px;top:8px;width:146px"><div class="tb tg"><i></i><i></i><i></i>IM · Kinetic</div><div class="bd"><b class="tbuy">▲ BUY BUY BUY</b></div></div>
+          <div class="win" style="left:166px;top:14px;width:146px"><div class="tb gr"><i></i><i></i><i></i>IM · Recoil</div><div class="bd"><b class="tsell">▼ SELL.</b> obviously.</div></div>
+          <div class="win" style="left:18px;top:54px;width:146px"><div class="tb gf"><i></i><i></i><i></i>IM · Meridian</div><div class="bd">*monocle* <b class="tbuy">▲ BUY</b></div></div>
+          <div class="win" style="left:150px;top:64px;width:162px"><div class="tb bb"><i></i><i></i><i></i>IM · Breakline</div><div class="bd">fence is DOWN. <b class="tbuy">▲ BUY</b></div></div>
+          <div class="win" style="left:6px;top:102px;width:150px"><div class="tb ik"><i></i><i></i><i></i>IM · Deep Current</div><div class="bd"><b class="tsell">▼ SELL</b>, quietly</div></div>
+          <div class="win" style="left:164px;top:114px;width:148px"><div class="tb"><i></i><i></i><i></i>IM · Quorum (3)</div><div class="bd">still voting… 2 of 3</div></div>
+          <div class="toast" style="left:98px;top:152px;box-shadow:0 4px 10px -4px rgba(16,22,52,.35),inset 0 0 0 1px rgba(139,92,246,.45)">+5 more windows opening</div>
+        </div>
+        <div class="fcap"><b>00:12</b><span>Windows pile up. ▲ BUY vs ▼ SELL.</span></div>
+      </div>
+      <!-- F4 -->
+      <div class="fcell">
+        <div class="fr wp">
+          <div class="win" style="left:46px;top:18px;width:230px;height:120px">
+            <div class="tb tg"><i></i><i></i><i></i>IM · You → Pets (11)</div>
+            <div class="bd" style="height:103px;white-space:normal">
+              <div style="color:var(--ink3)"><b>Tideline:</b> so??</div>
+              <div style="color:var(--ink3)"><b>Kinetic:</b> ???</div>
+              <div style="margin-top:8px;height:40px;border-radius:6px;background:#fff;box-shadow:inset 0 0 0 1px rgba(16,22,52,.2);display:flex;align-items:center;gap:8px;padding:0 10px">
+                <svg width="16" height="16" viewBox="0 0 16 16" shape-rendering="crispEdges"><rect x="10" y="2" width="4" height="4" fill="#FF8A1F"/><rect x="8" y="4" width="4" height="4" fill="#FFB36B"/><rect x="6" y="6" width="4" height="4" fill="#FFB36B"/><rect x="4" y="8" width="4" height="4" fill="#FFB36B"/><rect x="2" y="12" width="3" height="3" fill="#101634"/></svg>
+                <span style="font:600 15px var(--fd)">You are typing<span style="color:var(--tang)">…</span></span>
+              </div>
+            </div>
+          </div>
+          <div class="toast" style="left:170px;top:140px;font-family:var(--fm)">hold 00:19 → 00:27</div>
+          <div class="bar"><span class="st">start</span><s data-spr="bondi" data-px="1"></s><s data-spr="tangerine" data-px="1"></s><s data-spr="grape" data-px="1"></s><s data-spr="blueberry" data-px="1"></s><s data-spr="snow" data-px="1"></s><s data-spr="snow" data-px="1"></s><s data-spr="snow" data-px="1"></s><s data-spr="snow" data-px="1"></s><s data-spr="graphite" data-px="1"></s><s data-spr="tangerine" data-px="1"></s><s data-spr="blueberry" data-px="1"></s><span style="margin-left:auto;font:500 11px var(--fm);color:var(--ink2)">20:47</span></div>
+        </div>
+        <div class="fcap"><b>00:19</b><span>You are typing… for eight seconds.</span></div>
+      </div>
+      <!-- F5 -->
+      <div class="fcell">
+        <div class="fr wp">
+          <div class="win" style="left:12px;top:10px;width:196px;height:162px">
+            <div class="tb tg"><i></i><i></i><i></i>Trade ticket · PAPER</div>
+            <div class="bd" style="height:145px;line-height:16px">
+              <div style="display:flex;justify-content:space-between">Signal ref <b class="mono" id="f5ref">3,398.20</b></div>
+              <div style="display:flex;justify-content:space-between">Chart last <b class="mono">3,412.58</b></div>
+              <div style="display:flex;justify-content:space-between">Exec quote <b class="mono">3,413.10</b></div>
+              <div style="display:flex;justify-content:space-between">Fill <i style="color:var(--ink3)">after you sign</i></div>
+              <div style="margin-top:6px;height:28px;border-radius:9px;display:flex;align-items:center;justify-content:center;font:700 12px var(--fd);letter-spacing:.04em;color:#fff;background:linear-gradient(180deg,#63DCA2,#1FBF75);box-shadow:inset 0 2px 0 rgba(255,255,255,.5),0 2px 0 #0B7443">▲ BUY · PAPER</div>
+              <div class="illo" style="margin-top:5px">Illustration · made-up prices</div>
+            </div>
+          </div>
+          <svg class="cursor" style="left:118px;top:118px" width="16" height="20" viewBox="0 0 16 20"><path d="M1 1v15l4-4 3 7 3-1.4-3-6.6h6z" fill="#fff" stroke="#101634" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <div class="win" style="left:220px;top:40px;width:92px">
+            <div class="tb ik"><i></i><i></i><i></i>Sign</div>
+            <div class="bd" style="text-align:center;padding:4px 6px">
+              <svg width="70" height="30" viewBox="0 0 70 30" fill="none" stroke="#3D5BFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22c6-14 10-18 11-14s-5 16-1 16 8-16 12-15-2 12 3 12 6-8 9-8 2 5 6 4 8-6 12-9 6-2 9-1"/></svg>
+              <div style="font-weight:600">signed ✓</div>
+            </div>
+          </div>
+        </div>
+        <div class="fcap"><b>00:27</b><span>Four prices. ▲ BUY on PAPER. Signed.</span></div>
+      </div>
+      <!-- F6 -->
+      <div class="fcell">
+        <div class="fr" style="background:radial-gradient(200px 140px at 50% 40%,rgba(255,138,31,.16),transparent 70%),linear-gradient(170deg,#F7FAFF,#E6EEFF)">
+          <div id="f6logo" style="position:absolute;left:0;right:0;top:20px;display:flex;justify-content:center"></div>
+          <div style="position:absolute;left:0;right:0;top:78px;text-align:center"><span class="wm" style="font-size:28px">signal<b>OS</b></span></div>
+          <div style="position:absolute;left:0;right:0;top:112px;text-align:center;font:600 13px var(--fd)">Bots call it. You make the call.</div>
+          <div style="position:absolute;left:0;right:0;top:134px;display:flex;justify-content:center"><span class="jelly-t" style="height:24px;padding:0 12px;font-size:11px">Start paper trading</span></div>
+          <div class="illo" style="position:absolute;left:0;right:0;bottom:4px;text-align:center">Not investment advice</div>
+          <div class="win" style="left:10px;top:10px;width:92px">
+            <div class="tb"><i></i><i></i><i></i>Tideline</div>
+            <div class="bd" style="font-size:13px"><b>Tideline:</b> k</div>
+          </div>
+        </div>
+        <div class="fcap"><b>00:34</b><span>Tideline replies “k”. End card.</span></div>
+      </div>
+    </div>
+    <div class="film-foot"><span>Edit rules</span>No gains, no confetti. Every price: “Illustration · made-up prices”. Every trade: PAPER.</div>
+  </div>
+</section>
+
+<script src="../shared/chart.js"></script>
+<script>
+(function(){
+let UID = 0;
+const FL = {
+  bondi:{b:'#00A6D6',d:'#006E93',l:'#A6ECFF',k:'#004C68'},
+  tangerine:{b:'#FF8A1F',d:'#C95A00',l:'#FFD6AE',k:'#8F3F00'},
+  blueberry:{b:'#3D5BFF',d:'#2032B8',l:'#BCC8FF',k:'#16237F'},
+  grape:{b:'#8B5CF6',d:'#5B2EC2',l:'#E0D3FF',k:'#3E1D8A'},
+  graphite:{b:'#4E5780',d:'#262B4A',l:'#C3CAE6',k:'#171B33'},
+  snow:{b:'#D4E4F7',d:'#7D93B8',l:'#FFFFFF',k:'#5A6E92'},
+};
+const EGG = 'M50 20C66 20 79 41 79 60C79 78 66 89 50 89C34 89 21 78 21 60C21 41 34 20 50 20Z';
+const INK = '#101634';
+
+function face(e, m){
+  const k = INK; let s = '';
+  const eye = (x, y) => {
+    if (e === 'wide') return `<rect x="${x-.4}" y="${y-.8}" width="5.4" height="6.6" rx="1" fill="${k}"/><rect x="${x+2.4}" y="${y}" width="1.7" height="1.7" fill="#fff"/>`;
+    if (e === 'happy') return `<rect x="${x-1}" y="${y+2.8}" width="2.3" height="2.3" fill="${k}"/><rect x="${x+1.2}" y="${y+.5}" width="2.3" height="2.3" fill="${k}"/><rect x="${x+3.4}" y="${y+2.8}" width="2.3" height="2.3" fill="${k}"/>`;
+    if (e === 'squint') return `<rect x="${x-.6}" y="${y+2}" width="5.8" height="2.3" rx=".6" fill="${k}"/>`;
+    return `<rect x="${x}" y="${y}" width="4.6" height="5.6" rx=".8" fill="${k}"/>`;
+  };
+  s += eye(41, 51.5) + eye(54.4, 51.5);
+  if (m === 'smile') s += `<rect x="45.4" y="60.4" width="2.1" height="2.1" fill="${k}"/><rect x="47.4" y="62.3" width="5.2" height="2.1" fill="${k}"/><rect x="52.5" y="60.4" width="2.1" height="2.1" fill="${k}"/>`;
+  if (m === 'o') s += `<rect x="47.6" y="60" width="4.8" height="4.6" rx="1.5" fill="${k}"/>`;
+  if (m === 'flat') s += `<rect x="46.5" y="61.8" width="7" height="2.1" rx=".6" fill="${k}"/>`;
+  return s;
+}
+
+function shellG(fl, o = {}){
+  const f = FL[fl], id = 'u' + (++UID), t = o.tint ? FL[o.tint] : null, clear = fl === 'snow';
+  let s = `<defs><radialGradient id="${id}b" cx="40%" cy="32%" r="75%"><stop offset="0" stop-color="${f.l}" stop-opacity="${clear ? .6 : .92}"/><stop offset=".55" stop-color="${f.b}" stop-opacity="${clear ? .62 : .86}"/><stop offset="1" stop-color="${f.d}" stop-opacity="${clear ? .8 : .97}"/></radialGradient><linearGradient id="${id}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient><clipPath id="${id}c"><path d="${EGG}"/></clipPath></defs>`;
+  if (o.antenna !== false) s += `<path d="M50 21V12.5" stroke="${f.d}" stroke-width="2.2" stroke-linecap="round"/><circle cx="50" cy="10.5" r="3.7" fill="${(t || f).b}"/><circle cx="48.8" cy="9.3" r="1.2" fill="#fff" opacity=".9"/>`;
+  s += `<path d="${EGG}" fill="url(#${id}b)"/>`;
+  s += `<g clip-path="url(#${id}c)"><g fill="none" stroke="${f.k}" stroke-width="1.3" stroke-linecap="round" opacity="${clear ? .45 : .32}"><path d="M22 76h14l4 4h8M78 74h-10l-3-3h-4M26 40v10h6M74 42v8h-5"/><circle cx="64" cy="80.5" r="4.6"/><circle cx="64" cy="80.5" r="2"/><circle cx="35" cy="80" r="1.6"/></g>`;
+  if (t) s += `<rect x="40" y="72.5" width="20" height="10.5" rx="2.6" fill="${t.b}" opacity=".9"/><path d="M43.5 70.5v2M47.5 70.5v2M51.5 70.5v2M55.5 70.5v2M43.5 83v2M47.5 83v2M51.5 83v2M55.5 83v2" stroke="${t.d}" stroke-width="1.3"/><rect x="42.5" y="74.6" width="6" height="2" rx="1" fill="#fff" opacity=".75"/>`;
+  s += `</g>`;
+  s += `<path d="M73.5 69C70.5 80 61.5 86.2 50 86.8" fill="none" stroke="${f.l}" stroke-width="2.6" stroke-linecap="round" opacity=".9"/>`;
+  s += `<rect x="34" y="45" width="32" height="23" rx="7.5" fill="#F7FBFF" opacity=".96"/><rect x="34" y="45" width="32" height="23" rx="7.5" fill="none" stroke="${f.d}" stroke-opacity=".6" stroke-width="1.3"/><path d="M37 50c.8-1.9 2.4-2.6 4.8-2.6" stroke="#fff" stroke-width="1.4" fill="none" stroke-linecap="round"/>`;
+  s += face(o.eyes || 'dot', o.mouth || 'none');
+  s += `<ellipse cx="36.5" cy="36" rx="6.2" ry="12" transform="rotate(30 36.5 36)" fill="url(#${id}s)"/><circle cx="62.8" cy="30.6" r="2.3" fill="#fff" opacity=".9"/>`;
+  s += `<path d="${EGG}" fill="none" stroke="${f.d}" stroke-opacity=".6" stroke-width="1.2"/>`;
+  return s;
+}
+
+const PETS = {
+  tideline:{fl:'bondi', eyes:'happy', mouth:'smile', acc:'wave'},
+  kinetic:{fl:'tangerine', eyes:'wide', mouth:'o', acc:'zip'},
+  recoil:{fl:'grape', eyes:'squint', mouth:'smile', acc:'spring'},
+  breakline:{fl:'blueberry', eyes:'wide', mouth:'flat', acc:'fence'},
+  meridian:{fl:'snow', tint:'grape', eyes:'dot', mouth:'flat', acc:'monocle'},
+  vector:{fl:'snow', tint:'blueberry', eyes:'dot', mouth:'smile', acc:'prism'},
+  lumen:{fl:'snow', tint:'tangerine', eyes:'happy', mouth:'o', acc:'lamp'},
+  halcyon:{fl:'snow', tint:'bondi', eyes:'squint', mouth:'smile', acc:'compass'},
+  deepcurrent:{fl:'graphite', tint:'bondi', eyes:'dot', mouth:'o', acc:'snorkel'},
+  quorum:{acc:'trio'},
+  council:{fl:'blueberry', eyes:'squint', mouth:'flat', acc:'beads'},
+};
+
+function shadow(fl, y = 94, rx = 27){
+  const f = FL[fl];
+  return `<ellipse cx="50" cy="${y}" rx="${rx}" ry="4.6" fill="${f.b}" opacity=".26"/><ellipse cx="54" cy="${y}" rx="${rx * .42}" ry="1.9" fill="${f.l}" opacity=".95"/>`;
+}
+
+function petSVG(key, size = 80, mini = false){
+  const P = PETS[key];
+  const sh = (fl, o = {}) => shellG(fl, {eyes: P.eyes, mouth: P.mouth, tint: P.tint, ...o});
+  let back = '', body = '', front = '';
+  const f = P.fl ? FL[P.fl] : null;
+  switch (P.acc){
+    case 'wave':
+      if (mini){ body = sh(P.fl); break; }
+      body = `<g transform="rotate(-7 50 60) translate(0 -8)">${sh(P.fl)}</g>`;
+      front = `<g transform="rotate(-7 50 86)"><ellipse cx="50" cy="85" rx="41" ry="5.4" fill="#FFF6EA" stroke="${INK}" stroke-opacity=".3" stroke-width="1"/><path d="M12 85h76" stroke="#FF8A1F" stroke-width="2.2" stroke-linecap="round"/></g>`
+        + `<defs><linearGradient id="wv${UID}" x1="0" x2="1"><stop offset="0" stop-color="#00A6D6" stop-opacity="0"/><stop offset=".16" stop-color="#00A6D6" stop-opacity=".55"/><stop offset=".84" stop-color="#00A6D6" stop-opacity=".55"/><stop offset="1" stop-color="#00A6D6" stop-opacity="0"/></linearGradient><linearGradient id="wf${UID}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset=".55" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient><mask id="wm${UID}"><rect x="-12" y="80" width="124" height="36" fill="url(#wf${UID})"/></mask></defs><g mask="url(#wm${UID})">`
+        + `<path d="M-12 116V101C-5 99 1 92 7 87.5C13 83 22 83.5 25.5 89.5C28 94 23 97.5 19.5 95C31 101 43 95.5 55 97C69 99 84 92.5 112 96V116Z" fill="url(#wv${UID})"/>`
+        + `<path d="M-12 116V106C4 104 18 101 32 104C48 107 66 101 84 102C96 103 104 104 112 103V116Z" fill="url(#wv${UID})"/></g>`
+        + `<path d="M-9 100.5C-3 98 2 92 7 88C12.5 84 21 84 24.5 89.5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="30" cy="99" r="1.6" fill="#fff"/><circle cx="36" cy="97.6" r="1.1" fill="#fff"/>`;
+      break;
+    case 'zip':
+      if (!mini) back = `<g stroke="#FF8A1F" stroke-width="3.4" stroke-linecap="round" opacity=".55"><path d="M-6 46H13M-12 60H10M-4 74H14"/></g><g fill="#fff" stroke="#C3CAE6" stroke-width="1"><circle cx="16" cy="90" r="6.5"/><circle cx="7" cy="92" r="4.5"/><circle cx="24" cy="93" r="4"/></g>` + shadow('tangerine', 94, 24);
+      body = `<g transform="${mini ? '' : 'translate(9 0) skewX(-9)'}"><path d="M53.5 1.5 44.5 13.5h6.2l-3.2 9.5 10.3-13.4h-6.3l3-8.1z" fill="#FF9A38" stroke="#C95A00" stroke-width="1.3" stroke-linejoin="round"/>${sh(P.fl, {antenna:false})}</g>`;
+      break;
+    case 'spring':
+      if (mini){ body = sh(P.fl); break; }
+      back = `<defs><linearGradient id="mt${UID}" x1="0" x2="1"><stop offset="0" stop-color="#E7EBF7"/><stop offset=".5" stop-color="#8A93B8"/><stop offset="1" stop-color="#4E5780"/></linearGradient></defs><ellipse cx="50" cy="107" rx="21" ry="4" fill="#4E5780" opacity=".35"/>`;
+      for (let i = 0; i < 6; i++) back += `<ellipse cx="50" cy="${78 + i * 5.2}" rx="14.5" ry="3.3" fill="none" stroke="url(#mt${UID})" stroke-width="2.8"/>`;
+      body = `<g transform="translate(0 -12)">${sh(P.fl)}</g>`;
+      front = `<g fill="none" stroke="#8B5CF6" stroke-width="2.2" stroke-linecap="round" opacity=".5"><path d="M13 36q-6 7 0 14M8 32q-9 11 0 22M87 36q6 7 0 14M92 32q9 11 0 22"/></g>`;
+      break;
+    case 'fence':
+      if (mini){ body = sh(P.fl); break; }
+      back = `<path d="M50 20 56 36 72 26 66 44 86 44 70 56 84 70 64 68 66 88 50 76 34 88 36 68 16 70 30 56 14 44 34 44 28 26 44 36Z" fill="#DCE4FF" opacity=".95"/>`;
+      [[-10],[4],[84],[98]].forEach(([x]) => back += `<path d="M${x} 106V62l6-7 6 7v44z" fill="#fff" stroke="#3D5BFF" stroke-opacity=".55" stroke-width="1.2"/>`);
+      back += `<path d="M-12 72H20M-12 94H22M80 72H112M78 94H112" stroke="#3D5BFF" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/><path d="M-12 72H20M-12 94H22M80 72H112M78 94H112" stroke="#fff" stroke-width="2" stroke-linecap="round"/>` + shadow('blueberry', 99, 24);
+      body = `<g transform="translate(0 4)">${sh(P.fl)}</g>`;
+      front = `<g transform="rotate(38 92 24)"><path d="M86 8h11v26l-2.8-3.2-2.8 3.6-2.8-3.4-2.6 3z" fill="#fff" stroke="#3D5BFF" stroke-opacity=".6" stroke-width="1.2"/></g><path d="M18 30l-6-5M14 40l-8-1M82 60l7 2" stroke="#3D5BFF" stroke-width="2" stroke-linecap="round" opacity=".6"/>`;
+      break;
+    case 'monocle':
+      if (!mini) back = shadow('grape', 94, 25);
+      body = sh(P.fl);
+      front = `<circle cx="56.7" cy="54.3" r="7.6" fill="#fff" fill-opacity=".25" stroke="#B8860B" stroke-width="2"/><path d="M52 50.5a5.5 5.5 0 0 1 5-2.2" stroke="#fff" stroke-width="1.4" fill="none" stroke-linecap="round"/><path d="M62 60c6 6 8 12 6 20" fill="none" stroke="#B8860B" stroke-width="1.2" stroke-dasharray="1.6 1.6"/>`
+        + `<path d="M40 81l10 3.8 10-3.8v9l-10-3.8-10 3.8z" fill="#8B5CF6" stroke="#5B2EC2" stroke-width="1"/><rect x="47" y="82.4" width="6" height="6.4" rx="1.6" fill="#6D3EE8"/>`;
+      break;
+    case 'prism':
+      if (!mini) back = shadow('blueberry', 94, 25);
+      body = sh(P.fl);
+      front = `<defs><linearGradient id="pg${UID}" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#00A6D6"/><stop offset=".5" stop-color="#3D5BFF"/><stop offset="1" stop-color="#8B5CF6"/></linearGradient></defs><path d="M35 49h14l-7 12z" fill="url(#pg${UID})" stroke="${INK}" stroke-width="1.4" stroke-linejoin="round"/><path d="M51 49h14l-7 12z" fill="url(#pg${UID})" stroke="${INK}" stroke-width="1.4" stroke-linejoin="round"/><path d="M49 50.5h2M35 49l-5-2M65 49l5-2" stroke="${INK}" stroke-width="1.6" stroke-linecap="round"/><path d="M38 51l3 0" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/>`;
+      break;
+    case 'lamp':
+      if (!mini) back = `<path d="M55 30 112 4V40Z" fill="#FFB36B" opacity=".22"/>` + shadow('tangerine', 94, 25);
+      body = sh(P.fl);
+      front = `<path d="M26 40C36 33 64 33 74 40" fill="none" stroke="#FF8A1F" stroke-width="3.2" stroke-linecap="round"/><circle cx="50" cy="34.5" r="5.4" fill="#FFF0DC" stroke="#E06A00" stroke-width="1.6"/><circle cx="50" cy="34.5" r="2.6" fill="#FFB36B"/>`;
+      break;
+    case 'compass':
+      if (!mini) back = shadow('bondi', 94, 25);
+      body = sh(P.fl);
+      front = `<g transform="translate(${mini ? -4 : 0} ${mini ? -2 : 0})"><circle cx="70" cy="79" r="11.5" fill="#fff" stroke="${INK}" stroke-opacity=".55" stroke-width="1.5"/><circle cx="70" cy="79" r="8.4" fill="none" stroke="#00A6D6" stroke-width="1" stroke-dasharray="1.5 2"/><path d="M73 72.5 70 79l-3 6.5z" fill="#FF8A1F"/><path d="M73 72.5 70 79l-3 6.5 3-2z" fill="${INK}" opacity=".85"/><circle cx="70" cy="79" r="1.3" fill="#fff" stroke="${INK}"/><rect x="68" y="65" width="4" height="3" rx="1" fill="#B8860B"/></g>`;
+      break;
+    case 'snorkel':
+      if (!mini) back = shadow('graphite', 94, 25) + `<g fill="#fff" fill-opacity=".7" stroke="#00A6D6" stroke-width="1.2"><circle cx="88" cy="12" r="3.4"/><circle cx="95" cy="3" r="2.3"/><circle cx="84" cy="1" r="1.6"/></g>`;
+      body = sh(P.fl);
+      front = `<path d="M23 56H33M67 56H77" stroke="${INK}" stroke-width="3" stroke-linecap="round"/><rect x="31.5" y="43" width="37" height="27" rx="9" fill="#9BE6FF" fill-opacity=".18" stroke="${INK}" stroke-width="3"/><path d="M36 48.5c1.5-2 3-2.6 5.5-2.6" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M72 66C80 62 81 50 80 30c0-4 2-6 5-6" fill="none" stroke="#FF8A1F" stroke-width="4" stroke-linecap="round"/><path d="M72 66C80 62 81 50 80 30" fill="none" stroke="#FFD6AE" stroke-width="1.2" stroke-linecap="round"/>`;
+      break;
+    case 'beads':
+      if (!mini) back = shadow('blueberry', 94, 25);
+      body = sh(P.fl);
+      { const cols = ['#00A6D6','#FF8A1F','#8B5CF6','#FFFFFF','#3D5BFF','#00A6D6','#FF8A1F','#8B5CF6','#FFFFFF']; let b = '';
+        for (let j = 0; j < 9; j++){ const tt = -1 + j / 4; const x = 50 + tt * 24, y = 72 + (1 - tt * tt) * 7; b += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.6" fill="${cols[j]}" stroke="${INK}" stroke-opacity=".25" stroke-width=".8"/><circle cx="${(x - 1.1).toFixed(1)}" cy="${(y - 1.2).toFixed(1)}" r="1" fill="#fff" opacity=".9"/>`; }
+        front = b; }
+      break;
+    case 'trio': {
+      const one = (fl, tx, ty, s, eyes, mouth) => `<g transform="translate(${tx} ${ty}) scale(${s})">${shellG(fl, {eyes, mouth})}</g>`;
+      back = mini ? '' : `<ellipse cx="50" cy="105" rx="46" ry="5" fill="#8B5CF6" opacity=".16"/>`;
+      body = one('tangerine', 21, 30, .58, 'wide', 'o') + one('bondi', -9.6, 50, .6, 'happy', 'smile') + one('grape', 49.6, 50, .6, 'dot', 'flat');
+      break; }
+  }
+  const vb = mini ? (P.acc === 'trio' ? '-6 34 112 76' : '8 2 84 92') : '-12 0 124 114';
+  const [, , vw, vh] = vb.split(' ').map(Number);
+  const h = Math.round(size * vh / vw);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${h}" viewBox="${vb}" overflow="visible">${back}${body}${front}</svg>`;
+}
+
+function logoSVG(size){
+  const id = 'lg' + (++UID);
+  const E = 'translate(-8 22)';
+  const arc = (r, op) => { const a0 = -70 * Math.PI / 180, a1 = 12 * Math.PI / 180, cx = 42, cy = 29;
+    return `<path d="M${(cx + r * Math.cos(a0)).toFixed(2)} ${(cy + r * Math.sin(a0)).toFixed(2)}A${r} ${r} 0 0 1 ${(cx + r * Math.cos(a1)).toFixed(2)} ${(cy + r * Math.sin(a1)).toFixed(2)}" fill="none" stroke="#FF8A1F" stroke-width="6.4" stroke-linecap="round" opacity="${op}"/>`; };
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${Math.round(size * 1.18)}" viewBox="0 -6 100 118"><defs><radialGradient id="${id}b" cx="36%" cy="34%" r="78%"><stop offset="0" stop-color="#FFE0BF"/><stop offset=".42" stop-color="#FFA24A"/><stop offset=".78" stop-color="#FF8A1F"/><stop offset="1" stop-color="#D86200"/></radialGradient><linearGradient id="${id}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>`
+   + arc(13, 1) + arc(23, .8) + arc(33, .55)
+   + `<path d="M42 44V33" stroke="#C95A00" stroke-width="4.6" stroke-linecap="round"/><circle cx="42" cy="29" r="6.2" fill="#FF8A1F"/><circle cx="40.2" cy="27.2" r="2" fill="#fff" opacity=".9"/>`
+   + `<g transform="${E}"><path d="${EGG}" fill="url(#${id}b)"/><path d="M73.5 69C70.5 80 61.5 86.2 50 86.8" fill="none" stroke="#FFD6AE" stroke-width="3" stroke-linecap="round"/><rect x="33" y="46" width="34" height="24" rx="8" fill="#F7FBFF"/><rect x="40.2" y="53.2" width="6.4" height="7.2" rx="1" fill="${INK}"/><rect x="53.4" y="53.2" width="6.4" height="7.2" rx="1" fill="${INK}"/><ellipse cx="36.5" cy="36" rx="6.4" ry="12.5" transform="rotate(30 36.5 36)" fill="url(#${id}s)"/><circle cx="63" cy="31" r="2.6" fill="#fff" opacity=".9"/></g></svg>`;
+}
+
+/* pixel sprite */
+const SPR = ['......L.....','......k.....','....kkkk....','..kkLLbbkk..','.kLLbbbbbbk.','.kLbbbbbbbk.','kbbssssssbbk','kbbsessesbbk','kbbsessesbbk','kbbssssssbbk','kbbbbbbbbbdk','kbbbbbbbbddk','.kbbbbbbddk.','..kkbbddkk..','....kkkk....'];
+function sprite(fl, px = 3, mouth = true){
+  const f = FL[fl];
+  const col = {k: f.k, b: f.b, L: f.l, d: f.d, s: '#F2F7FF', e: INK};
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${12 * px}" height="${15 * px}" viewBox="0 0 12 15" shape-rendering="crispEdges">`;
+  SPR.forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== '.') s += `<rect x="${c}" y="${r}" width="1.02" height="1.02" fill="${col[ch]}"/>`; }));
+  return s + '</svg>';
+}
+
+/* jelly candles from the shared geometry */
+function vData(n, seed, a = 100, b = 80, z = 97){
+  const r = SOS.rng(seed); const out = []; let p = a;
+  for (let i = 0; i < n; i++){
+    const t = i / (n - 1); const tgt = t < .5 ? a - (a - b) * (t / .5) : b + (z - b) * ((t - .5) / .5);
+    const o = p, c = tgt + (r() - .5) * 3.4;
+    out.push({o, c, h: Math.max(o, c) + .5 + r() * 1.6, l: Math.min(o, c) - .5 - r() * 1.6, v: .3 + r() * .7}); p = c;
+  }
+  return out;
+}
+function geom(data, w, h, padX, padT, padB){
+  const n = data.length, hi = Math.max(...data.map(k => k.h)), lo = Math.min(...data.map(k => k.l));
+  const step = (w - padX * 2) / n; const x = i => padX + i * step + step / 2; const y = v => padT + (hi - v) / (hi - lo) * (h - padT - padB);
+  return {data, step, pt: (i, v) => [x(i), y(v)]};
+}
+function jellyChart(o){
+  const c = o.data ? geom(o.data, o.w, o.h, o.padX ?? o.pad, o.padT ?? o.pad, o.padB ?? o.pad) : SOS.candlesSVG(o);
+  const id = 'jc' + (++UID), w = o.w, h = o.h;
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><defs><linearGradient id="${id}u" x1="0" x2="1"><stop offset="0" stop-color="#8CEBBE"/><stop offset=".42" stop-color="#1FBF75"/><stop offset="1" stop-color="#12975A"/></linearGradient><linearGradient id="${id}d" x1="0" x2="1"><stop offset="0" stop-color="#FFA9BF"/><stop offset=".42" stop-color="#FF4F7B"/><stop offset="1" stop-color="#DA3563"/></linearGradient></defs>`;
+  const volH = o.volume ? h * .18 : 0;
+  if (o.grid !== false) for (let i = 1; i < 5; i++){ const gy = ((h - volH) * i / 5).toFixed(1); s += `<line x1="0" x2="${w}" y1="${gy}" y2="${gy}" stroke="rgba(16,22,52,.07)" stroke-dasharray="2 4"/>`; }
+  const bw = c.step * (o.bodyW || .64);
+  c.data.forEach((k, i) => {
+    const up = k.c >= k.o; const [x, yh] = c.pt(i, k.h); const yl = c.pt(i, k.l)[1];
+    const yo = c.pt(i, k.o)[1], yc = c.pt(i, k.c)[1]; const top = Math.min(yo, yc), bh = Math.max(3, Math.abs(yo - yc));
+    s += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${yh.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="${up ? '#139A5C' : '#D8325F'}" stroke-width="${o.wick || 1.5}" stroke-linecap="round"/>`;
+    s += `<rect x="${(x - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="${Math.min(bw / 2.4, 4).toFixed(1)}" fill="url(#${id}${up ? 'u' : 'd'})" fill-opacity=".92"/>`;
+    if (bh > 6) s += `<rect x="${(x - bw / 2 + bw * .2).toFixed(1)}" y="${(top + 2).toFixed(1)}" width="${(bw * .16).toFixed(1)}" height="${(bh - 4).toFixed(1)}" rx="${(bw * .08).toFixed(1)}" fill="#fff" opacity=".6"/>`;
+    if (o.volume) s += `<rect x="${(x - bw / 2).toFixed(1)}" y="${(h - k.v * volH).toFixed(1)}" width="${bw.toFixed(1)}" height="${(k.v * volH).toFixed(1)}" rx="2" fill="#3D5BFF" opacity=".13"/>`;
+  });
+  return {svg: s + '</svg>', c};
+}
+const fmt = v => v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+function ringSVG(sz, frac, col = '#1FBF75'){
+  const r = sz / 2 - 3, C = 2 * Math.PI * r;
+  return `<svg width="${sz}" height="${sz}" viewBox="0 0 ${sz} ${sz}"><circle cx="${sz/2}" cy="${sz/2}" r="${r}" fill="none" stroke="rgba(16,22,52,.1)" stroke-width="4"/><circle cx="${sz/2}" cy="${sz/2}" r="${r}" fill="none" stroke="${col}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${(C * frac).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 ${sz/2} ${sz/2})"/></svg>`;
+}
+
+/* ---------- populate ---------- */
+document.querySelectorAll('[data-pet]').forEach(el => { el.innerHTML = petSVG(el.dataset.pet, +el.dataset.size || 80, el.hasAttribute('data-mini')); });
+document.querySelectorAll('[data-logo]').forEach(el => { el.innerHTML = logoSVG(+el.dataset.logo); el.style.display = 'inline-flex'; });
+document.querySelectorAll('[data-spr]').forEach(el => { el.innerHTML = sprite(el.dataset.spr, +el.dataset.px || 1); el.style.textDecoration = 'none'; });
+
+/* ---- Board 1: handheld screen ---- */
+(function(){
+  const el = document.getElementById('scrChart');
+  const W = 320, H = 200;
+  const J = jellyChart({w: W, h: H, data: vData(17, 7, 100, 80, 93), padX: 10, padT: 70, padB: 10, bodyW: .7, wick: 1.6, grid: false});
+  const c = J.c, d = c.data;
+  el.innerHTML = J.svg;
+  const add = html => el.insertAdjacentHTML('beforeend', html);
+  const top = i => c.pt(i, d[i].h);
+  // Tideline: standing on the latest candle
+  { const i = 16; const [x, y] = top(i);
+    add(`<div class="spr" style="left:${x - 18}px;top:${y - 46}px">${sprite('bondi', 3)}</div>`);
+    add(`<div class="pxb buy" style="left:${x - 100}px;top:${y - 84}px"><span>▲ BUY!</span></div><div class="pxt" style="left:${x - 38}px;top:${y - 58}px"></div><div class="pxt" style="left:${x - 30}px;top:${y - 51}px;width:4px;height:4px"></div>`); }
+  // Recoil: mid-hop over the slide
+  { const i0 = 5, i1 = 8; const [x0, y0] = top(i0), [x1, y1] = top(i1); const cx = (x0 + x1) / 2, cy = -30;
+    const mx = (x0 + 2 * cx + x1) / 4, my = ((y0 - 4) + 2 * cy + (y1 - 4)) / 4;
+    add(`<svg class="hop" style="left:0;top:0" width="${W}" height="${H}"><path d="M${x0} ${y0 - 4}Q${cx} ${cy} ${x1} ${y1 - 4}" fill="none" stroke="#8B5CF6" stroke-width="2" stroke-dasharray="2 4" stroke-linecap="round"/><ellipse cx="${x1}" cy="${y1 - 2}" rx="9" ry="2.4" fill="#8B5CF6" opacity=".25"/><ellipse cx="${x0}" cy="${y0 - 2}" rx="7" ry="2" fill="#8B5CF6" opacity=".18"/></svg>`);
+    add(`<div class="spr" style="left:${mx - 18}px;top:${my - 30}px;transform:rotate(-10deg) scale(.96,1.08)">${sprite('grape', 3)}</div>`);
+    add(`<div class="pxb sell" style="right:${W - mx + 26}px;top:${my - 34}px"><span>nah, ▼ SELL</span></div><div class="pxt" style="left:${mx - 26}px;top:${my - 16}px"></div>`); }
+  // Kinetic: small, landing, squashed
+  { const i = 11; const [x, y] = top(i);
+    add(`<div class="spr" style="left:${x - 12}px;top:${y - 30}px;transform:scale(1.12,.88);transform-origin:50% 100%">${sprite('tangerine', 2)}</div>`);
+    add(`<div class="pxb meh" style="left:${x + 14}px;top:${y - 50}px"><span>hmm…</span></div>`); }
+})();
+
+/* ---- Board 2: main chart ---- */
+(function(){
+  const el = document.getElementById('mainChart');
+  const W = 830, H = 432, n = 64;
+  const J = jellyChart({w: W, h: H, n, seed: 46630, pad: 18, volume: true, bodyW: .62});
+  const c = J.c, d = c.data;
+  el.innerHTML = J.svg;
+  const lc = d[n - 1].c, K = 6.4, LAST = 3412.58;
+  const P = v => LAST + (v - lc) * K, V = p => lc + (p - LAST) / K;
+  const yOf = p => c.pt(0, V(p))[1];
+  // axis
+  const hi = Math.max(...d.map(k => k.h)), lo = Math.min(...d.map(k => k.l));
+  const ax = document.getElementById('axis');
+  const si0 = n - 5; const tagYs = [c.pt(0, lc)[1], c.pt(si0, d[si0].c)[1]];
+  for (let p = Math.ceil(P(lo) / 25) * 25; p <= P(hi); p += 25){ const y = yOf(p); if (y > 10 && y < H - H * .18 - 6 && tagYs.every(t => Math.abs(t - y) > 16)) ax.insertAdjacentHTML('beforeend', `<span style="top:${y}px">${fmt(p).replace('.00', '')}</span>`); }
+  // time axis
+  const ta = document.getElementById('taxis');
+  for (let i = 4; i < n; i += 8){ const x = c.pt(i, 0)[0]; const mins = 6 * 60 + i * 15; ta.insertAdjacentHTML('beforeend', `<span style="left:${x}px">${String(Math.floor(mins / 60) % 24).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}</span>`); }
+  const tOf = i => { const m = 6 * 60 + i * 15; return `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+  // OHLC
+  const L = d[n - 1];
+  document.getElementById('ohlc').innerHTML = `O <b>${fmt(P(L.o))}</b> H <b>${fmt(P(L.h))}</b> L <b>${fmt(P(L.l))}</b> C <b>${fmt(P(L.c))}</b>`;
+  document.getElementById('t-hi').textContent = fmt(P(hi) + 18.4);
+  document.getElementById('t-lo').textContent = fmt(P(lo) - 6.2);
+  const add = html => el.insertAdjacentHTML('beforeend', html);
+  // last price line
+  { const y = c.pt(0, lc)[1]; add(`<div class="hline" style="left:0;width:${W}px;top:${y}px;border-color:rgba(61,91,255,.55)"></div>`);
+    ax.insertAdjacentHTML('beforeend', `<span class="tag" style="top:${y}px;background:#3D5BFF">${fmt(LAST)}</span>`); }
+  // live signal: Tideline BUY
+  const si = n - 5, sk = d[si]; const ref = P(sk.c);
+  { const [x, yc] = c.pt(si, sk.c); const yH = c.pt(si, sk.h)[1];
+    add(`<div class="hline" style="left:${x}px;width:${W - x}px;top:${yc}px;border-color:rgba(0,166,214,.8)"></div>`);
+    ax.insertAdjacentHTML('beforeend', `<span class="tag" style="top:${yc + (Math.abs(yc - c.pt(0, lc)[1]) < 20 ? 20 : 0)}px;background:#00A6D6">${fmt(ref)}</span>`);
+    add(`<div class="dot buy" style="left:${x}px;top:${yc}px"></div>`);
+    const by = yH - 136;
+    add(`<div class="mk" style="left:${x - 1}px;top:${by + 64}px"><div class="pin" style="left:0;top:0;height:${yH - by - 70}px"></div></div>`);
+    add(`<div class="bigsig" style="left:${x - 272}px;top:${by}px"><span class="av bondi" style="background:linear-gradient(160deg,#E3F7FE,#C3ECFA)">${petSVG('tideline', 44, true)}</span><span><span class="l1"><b>▲ BUY</b><span>Tideline</span></span><span class="l2" style="display:block">trend · ${tOf(si)} candle · ref ${fmt(ref)}</span></span><span class="tl">${ringSVG(28, .62)}<span><b>02:14</b><small>left</small></span></span></div>`);
+    ['k-ref', 'f-ref', 'h-ref', 'f5ref', 'n-ref'].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = fmt(ref); });
+  }
+  // expired receipts
+  const small = (i, dir, pet, cls, label, above = true) => {
+    const k = d[i]; const [x] = c.pt(i, k.c); const yc = c.pt(i, k.c)[1];
+    const near = d.slice(Math.max(0, i - 1), i + 7);
+    const yTop = Math.min(...near.map(q => c.pt(0, q.h)[1])) - 40, yBot = Math.max(...near.map(q => c.pt(0, q.l)[1])) + 12;
+    const ty = above ? yTop : yBot;
+    add(`<div class="dot ${dir} old" style="left:${x}px;top:${yc}px"></div>`);
+    add(`<div class="mk" style="left:${x - 1}px;top:${above ? ty + 28 : yc + 8}px"><div class="pin" style="left:0;top:0;height:${above ? yc - ty - 36 : ty - yc - 8}px;opacity:.35"></div></div>`);
+    add(`<div class="smsig" style="left:${x - 16}px;top:${ty}px;opacity:.92"><span class="av ${cls}">${petSVG(pet, 22, true)}</span><span class="dir ${dir} faded">${dir === 'buy' ? '▲ BUY' : '▼ SELL'}</span><small>${label}</small></div>`);
+    return P(k.c);
+  };
+  const rR = small(36, 'sell', 'recoil', 'grape', 'expired');
+  const rK = small(49, 'buy', 'kinetic', 'tangerine', 'expired', false);
+  const rM = small(30, 'sell', 'meridian', 'snow', 'expired');
+  document.getElementById('f-r').textContent = fmt(rR);
+  document.getElementById('f-k').textContent = fmt(rK);
+  document.getElementById('f-m').textContent = fmt(rM);
+  document.getElementById('ring2').innerHTML = ringSVG(30, .62);
+})();
+
+/* ---- Board 3 ---- */
+(function(){
+  // keychain
+  const kc = document.getElementById('keychain');
+  { const L = 128, lx = 18, ly = 58; const bx = lx + 42 * L / 100, by = ly + (29 + 6) * L / 100 * 1.0;
+    const rx = 40, ry = 14; let beads = '';
+    for (let i = 0; i <= 14; i++){ const t = i / 14; const x = rx + (bx - rx) * t + Math.sin(t * Math.PI) * -10, y = ry + 9 + (by - 8 - ry - 9) * t; beads += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="url(#bd)"/>`; }
+    const ey = ly + (111 + 6) * L / 100 * 1.0;
+    kc.innerHTML = `<svg width="170" height="222" viewBox="0 0 170 222" style="position:absolute;left:0;top:0"><defs><radialGradient id="bd" cx="35%" cy="35%"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#8A93B8"/></radialGradient></defs><ellipse cx="${lx + 42 * L / 100}" cy="${Math.min(ey, 214)}" rx="58" ry="7" fill="#FF8A1F" opacity=".22"/><ellipse cx="${lx + 48 * L / 100}" cy="${Math.min(ey, 214)}" rx="22" ry="2.8" fill="#FFD6AE"/>${beads}<circle cx="${rx}" cy="${ry}" r="9" fill="none" stroke="#A0A8C8" stroke-width="3.4"/></svg><div style="position:absolute;left:${lx}px;top:${ly}px">${logoSVG(L)}</div>`; }
+
+  // signal-bubble motif
+  const ms = document.getElementById('motSig');
+  const J = jellyChart({w: 234, h: 104, data: vData(14, 11, 100, 86, 97), padX: 8, padT: 40, padB: 6, bodyW: .58, grid: false});
+  ms.innerHTML = `<div class="lab" style="position:absolute;left:12px;top:10px"><b>04</b>Signal bubble</div><div style="position:absolute;left:6px;top:34px">${J.svg}</div>`;
+  const c = J.c, d = c.data, i = 11; const [x, y] = c.pt(i, d[i].h);
+  ms.insertAdjacentHTML('beforeend', `<div class="dot buy" style="left:${x + 6}px;top:${c.pt(i, d[i].c)[1] + 34}px"></div><div style="position:absolute;left:${x + 6}px;top:${y + 34 - 30}px;width:2px;height:22px;background:repeating-linear-gradient(180deg,#101634 0 3px,transparent 3px 6px);opacity:.5"></div><div style="position:absolute;left:${x - 110}px;top:${y + 34 - 58}px;display:flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border-radius:14px;background:#fff;box-shadow:inset 0 0 0 1.5px rgba(31,191,117,.6),0 8px 14px -6px rgba(7,121,74,.4);white-space:nowrap"><span style="width:28px;height:28px;border-radius:9px;display:grid;place-items:center;background:#DDF4FC">${petSVG('tideline', 26, true)}</span><b style="font:700 13px var(--fd);color:var(--longink)">▲ BUY</b><span style="font:600 11px var(--fm)">02:14</span></div><div class="illo" style="position:absolute;left:12px;bottom:9px">Pinned to the exact candle, with time left.</div>`);
+
+  // F2 mini chart
+  const f2 = document.getElementById('f2chart');
+  const J2 = jellyChart({w: 178, h: 103, n: 12, seed: 46630, pad: 10, bodyW: .58, grid: false});
+  f2.innerHTML = J2.svg;
+  { const c2 = J2.c, d2 = c2.data, k = d2[11]; const [x, yh] = c2.pt(11, k.h), yl = c2.pt(11, k.l)[1];
+    f2.insertAdjacentHTML('beforeend', `<div style="position:absolute;left:${x - 9}px;top:${yh - 5}px;width:18px;height:${yl - yh + 10}px;border-radius:7px;box-shadow:0 0 0 2px #FF8A1F,0 0 0 6px rgba(255,138,31,.2)"></div><div style="position:absolute;left:${x - 70}px;top:${yh - 6}px;font:700 11px var(--fu);color:#fff;background:#FF8A1F;padding:2px 6px;border-radius:5px">close!</div>`); }
+  document.getElementById('f6logo').innerHTML = logoSVG(50);
+})();
+})();
+</script>
+</body>
+</html>

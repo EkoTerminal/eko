@@ -196,6 +196,87 @@ contract ReceiptsRegistryTest is ReceiptFixture {
         assertEq(stored.committer, address(0));
     }
 
+    function testZeroLeafAndEmptyProofNeverVerifyUnknownBatch() public {
+        bytes32[] memory proof = new bytes32[](0);
+        assertFalse(registry.verify(0, bytes32(0), proof));
+        assertFalse(registry.verify(1, bytes32(0), proof));
+        commitFixture();
+        assertFalse(registry.verify(0, bytes32(0), proof));
+        assertFalse(registry.verify(2, bytes32(0), proof));
+        assertFalse(registry.verify(type(uint64).max, bytes32(0), proof));
+    }
+
+    function testSingleLeafBoundaryRootsCountsAndTimestamps() public {
+        bytes32[2] memory roots = [bytes32(uint256(1)), bytes32(type(uint256).max)];
+        uint32[2] memory counts = [uint32(1), type(uint32).max];
+        uint64[2] memory times = [uint64(0), type(uint64).max];
+        bytes32[] memory proof = new bytes32[](0);
+        for (uint64 i; i < 2; ++i) {
+            vm.warp(times[i]);
+            vm.expectEmit(true, true, true, true, address(registry));
+            emit BatchCommitted(i + 1, roots[i], counts[i], committer);
+            vm.prank(committer);
+            assertEq(registry.commit(roots[i], counts[i]), i + 1);
+            assertEq(registry.lastBatchId(), i + 1);
+            assertStoredBatch(i + 1, roots[i], counts[i], times[i], committer);
+            // Proof verification uses the root; leafCount is the committer's recorded count.
+            assertTrue(registry.verify(i + 1, roots[i], proof));
+            assertFalse(registry.verify(i + 1, roots[1 - i], proof));
+        }
+        assertStoredBatch(1, roots[0], counts[0], times[0], committer);
+        assertTrue(registry.verify(1, roots[0], proof));
+    }
+
+    function testRejectedCallsPreserveAllBatchFieldsAndSequence() public {
+        vm.warp(987654);
+        commitFixture();
+        address[2] memory callers = [address(1), address(type(uint160).max)];
+        for (uint256 i; i < callers.length; ++i) {
+            vm.prank(callers[i]);
+            vm.expectRevert(ReceiptsRegistry.NotCommitter.selector);
+            registry.commit(bytes32(0), 0);
+            assertEq(registry.lastBatchId(), 1);
+            assertEq(registry.committer(), committer);
+            assertStoredBatch(1, fixtureRoot, uint32(fixtureLeaves.length), 987654, committer);
+            assertStoredBatch(2, bytes32(0), 0, 0, address(0));
+        }
+        vm.prank(committer);
+        vm.expectRevert(ReceiptsRegistry.EmptyBatch.selector);
+        registry.commit(bytes32(0), 0);
+        assertEq(registry.lastBatchId(), 1);
+        assertStoredBatch(1, fixtureRoot, uint32(fixtureLeaves.length), 987654, committer);
+        assertStoredBatch(2, bytes32(0), 0, 0, address(0));
+        assertEq(commitFixture(), 2);
+    }
+
+    function testSameAndZeroCommitterRotationsEmitExactArguments() public {
+        vm.expectEmit(true, true, false, true, address(registry));
+        emit CommitterChanged(committer, committer);
+        vm.prank(owner);
+        registry.setCommitter(committer);
+        assertEq(registry.committer(), committer);
+        assertEq(registry.lastBatchId(), 0);
+        vm.expectEmit(true, true, false, true, address(registry));
+        emit CommitterChanged(committer, address(0));
+        vm.prank(owner);
+        registry.setCommitter(address(0));
+        assertEq(registry.committer(), address(0));
+        vm.expectEmit(true, true, false, true, address(registry));
+        emit CommitterChanged(address(0), nextCommitter);
+        vm.prank(owner);
+        registry.setCommitter(nextCommitter);
+        assertEq(registry.committer(), nextCommitter);
+        assertEq(registry.lastBatchId(), 0);
+    }
+
+    function assertStoredBatch(uint64 id, bytes32 root, uint32 count, uint64 timestamp, address sender) internal view {
+        ReceiptsRegistry.Batch memory stored = registry.batch(id);
+        assertEq(stored.root, root);
+        assertEq(stored.leafCount, count);
+        assertEq(stored.committedAt, timestamp);
+        assertEq(stored.committer, sender);
+    }
+
     // These behaviours are preserved from §14.2 and flagged for the launch review.
     function testZeroCommitterCanBeSetAndRecovered() public {
         vm.prank(owner);
@@ -222,5 +303,21 @@ contract ReceiptsRegistryTest is ReceiptFixture {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
         registry.setCommitter(nextCommitter);
+    }
+
+    function testNonOwnerCannotRenounceOwnership() public {
+        address pending = makeAddr("pending-owner");
+        vm.prank(owner);
+        registry.transferOwnership(pending);
+        address[2] memory callers = [committer, pending];
+        for (uint256 i; i < callers.length; ++i) {
+            vm.prank(callers[i]);
+            vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, callers[i]));
+            registry.renounceOwnership();
+            assertEq(registry.owner(), owner);
+            assertEq(registry.pendingOwner(), pending);
+            assertEq(registry.committer(), committer);
+        }
+        assertEq(commitFixture(), 1);
     }
 }

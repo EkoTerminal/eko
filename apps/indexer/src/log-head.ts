@@ -40,12 +40,24 @@ export class LogHeadFollower {
   private window: number;
   private timings = emptyTimings();
   private async remote<T>(read:()=>Promise<T>): Promise<T> { const began=performance.now(); try { return await read(); } finally { this.timings.rpcWallMs += performance.now()-began; } }
+  /**
+   * Validate positive integer tick/window/cache/reorg settings and initialize concurrency control.
+   * Indexer operator construction only; invalid settings/concurrency throw before acquisition.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   constructor(readonly client: ChainClient, readonly db: ChainDb, readonly decoder: BlockDecoder, readonly options: Options) {
     for (const value of [options.tickMs ?? 1000, options.maxRange ?? 200, options.codeCacheSec ?? 3600, options.reorgDepth]) if (!Number.isInteger(value) || value < 1) throw new Error('Invalid log head configuration');
     this.pipeline=options.pipeline??false;
     this.window = options.maxRange ?? 200;
     this.rpc = new Semaphore(options.concurrency ?? 32);
   }
+  /**
+   * Request stop and wake the poll sleep. Host lifecycle only; in-flight acquisition drains through
+   * run cleanup rather than being synchronously cancelled.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   stop() { this.stopping = true; this.wake?.(); }
   private get logger() { return this.options.logger ?? log; }
   private header(n: bigint) { return this.client.header?.(n) ?? this.client.block(n); }
@@ -59,6 +71,13 @@ export class LogHeadFollower {
     });
     return b;
   }
+  /**
+   * Search retained sparse blocks within the configured depth, delete chain state above a canonical
+   * ancestor/reset both head cursors and invalidate caches. Indexer role only; RPC/SQL failures or
+   * depth exhaustion reject. Sparse anchors still count depth in blocks.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async rollback(from: bigint) {
     for (let depth = 0, n = from; n >= 0n && depth < this.options.reorgDepth; depth++, n--) {
       const stored = await this.db.blockHash(n);
@@ -101,7 +120,15 @@ export class LogHeadFollower {
     for (const part of budgetedQueries(filter)) result.push(...await this.query(part));
     return result;
   }
-  /** One bounded window. Exposed for offline replay and a lead's budgeted comparison. */
+  /** One bounded window. Exposed for offline replay and a lead's budgeted comparison.
+   * @remarks
+   * Share one in-flight bounded log window, collecting timings while preparing and persisting
+   * canonical source data/cursors. Indexer role only; consistency/provider/budget/SQL failures
+   * reject and the in-flight latch clears in finally. Caller must use the configured chain; run
+   * performs the chain-id check.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   tick():Promise<void> {
     return this.ticking??=this.tickOnce().finally(()=>{this.ticking=undefined;});
   }
@@ -160,7 +187,7 @@ export class LogHeadFollower {
       for(const address of [pool.currency0,pool.currency1])if(lower(address)!==native&&!tokens.has(lower(address))){tokens.add(lower(address));scope.tokenRows.push({address:binary(address),curve:null,launchpad:scope.tokens.has(lower(address))?'pons':null,symbol:null,name:null,decimals:null});}
       if(pools.has(id))continue;pools.add(id);
       const hooks=initializations.get(id);
-      scope.poolRows.push({id:binary(id),venue:id.length===66?'uniswap_v4':'uniswap_v3',currency0:binary(pool.currency0),currency1:binary(pool.currency1),fee:pool.fee,tick_spacing:pool.tickSpacing,hooks:hooks?binary(hooks):null});
+      scope.poolRows.push({id:binary(id),venue:id.length===66?'uniswap_v4':'uniswap_v3',currency0:binary(pool.currency0),currency1:binary(pool.currency1),fee:pool.fee,tick_spacing:pool.tickSpacing,hooks:hooks?binary(hooks):null,creation_verified:false,created_block:'0'});
     }
     return scope;
   }
@@ -421,6 +448,13 @@ export class LogHeadFollower {
       this.decoder.metrics.observeLogs(newest, head - to);
       this.window=Math.min(this.options.maxRange??200,this.window*2);
   }
+  /**
+   * Require chain 4663, enable bounded look-ahead pipeline and poll until stop or RPC closure,
+   * draining discarded work in finally. Indexer operator only; chain mismatch,
+   * provider/budget/consistency/SQL failures reject rather than continuing on an unverified branch.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async run() {
     if (await this.client.chainId() !== 4663) throw new Error('RPC chain ID must be 4663');
     this.pipeline=true;

@@ -9,40 +9,35 @@ import './styles/pages.css';
 import './styles/lab.css';
 import './styles/ui.css';
 import './styles/shell.css';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import { WagmiProvider } from 'wagmi';
-import { App } from './App';
-import { installErrorReporting } from './lib/telemetry';
-import { navigate, usePath } from './lib/router';
+import { usePath } from './lib/router';
+import { useMainFocus } from './lib/mainFocus';
 import { arrive } from './lib/expand';
-import { wagmiConfig } from './lib/wallet';
-import { useApp } from './store/app';
+import Landing from './pages/scan/Landing';
+import { initializePwa } from './lib/pwa';
+import { ConnectionStatus } from './components/Pwa';
 
-installErrorReporting();
-if (import.meta.env.DEV) (window as unknown as { __eko: typeof useApp }).__eko = useApp;
-const queryClient = new QueryClient();
-
-// "/" is the landing site (the EKO scroll story), served by the host and by vite.config.ts in dev. If the SPA is ever
-// asked for "/" (no landing configured), it opens Radar. The previous marketing pages are retired.
+window.addEventListener('error', e => { void import('./lib/telemetry').then(m => m.reportClientError(e.error)); });
+window.addEventListener('unhandledrejection', e => { void import('./lib/telemetry').then(m => m.reportClientError(e.reason)); });
+window.addEventListener('pagehide', () => { void import('./lib/telemetry').then(m => m.flushTelemetry()); });
+initializePwa();
+const TerminalApp = lazy(() => import('./TerminalApp'));
 const UI = import.meta.env.DEV ? lazy(() => import('./pages/UI')) : null;
 
 function Root() {
   const path = usePath();
+  useMainFocus(path);
   if (import.meta.env.DEV && path === '/__ui' && UI) return <Suspense fallback={null}><UI /></Suspense>;
-  if (path === '/') { queueMicrotask(() => navigate('/radar', true)); return null; }
-  return (
-    <WagmiProvider config={wagmiConfig}>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </WagmiProvider>
-  );
+  // "/" is the landing site (the EKO scroll story, kept in its own project), served by the host and by vite.config.ts
+  // in dev. The Scan landing lives at /scan; if the SPA is ever asked for "/", it shows the Scan landing too.
+  if (path === '/' || path === '/scan') return <Landing />;
+  return <Suspense fallback={null}><TerminalApp /></Suspense>;
 }
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <ConnectionStatus />
     <Root />
   </StrictMode>,
 );

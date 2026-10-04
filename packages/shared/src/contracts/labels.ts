@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AddressSchema } from './common.js';
-import { ChartMarkerSchema, CoinCardSchema } from './coin.js';
+import { ChartMarkerSchema, CoinCardSchema, AttributionCoverageGapSchema } from './coin.js';
 // BACKEND §5.5: precedence and lower-inclusive confidence bands.
 export const WALLET_LABEL_PRECEDENCE = ['declared_agent', 'crew', 'likely_agent', 'human'] as const;
 export const LABEL_CONFIDENCE_BANDS = {
@@ -24,5 +24,5 @@ export function labelTier(confidence: number): LabelTier | undefined {
 // coin, block and ChartMarker fields, the smallest event described by those sections.
 export const FlowEventSchema = ChartMarkerSchema.extend({ coin: AddressSchema, block: z.number() });
 export type FlowEvent = z.infer<typeof FlowEventSchema>;
-export const FlowSchema = CoinCardSchema.shape.flow.extend({ meta: z.object({ confidence:z.number(),asOfBlock:z.number(),unavailable:z.boolean().optional(),missing:z.array(z.string()).optional(),flags:z.array(z.string()).optional() }).optional() });
+export const FlowSchema = CoinCardSchema.shape.flow.extend({ meta: z.object({ confidence:z.number(),asOfBlock:z.number(),unavailable:z.boolean().optional(),missing:z.array(z.string()).optional(),flags:z.array(z.string()).optional(),coverageGaps:z.record(z.string(),AttributionCoverageGapSchema).optional() }).optional() });
 export type Flow = z.infer<typeof FlowSchema>;

@@ -1,0 +1,84 @@
+name: Pinned fork tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      block:
+        description: 'Fork block number. Default: public RPC head minus 20 (the public RPC keeps no archive state; older pins need an archive endpoint).'
+        required: false
+        default: ''
+  schedule:
+    - cron: '17 4 * * *'
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fork:
+    # The public endpoint refuses historical state to hosted runners. Reliable runs need an archive endpoint in the
+    # repository secret FORK_RPC_URL; scheduled runs stay off until the repository variable FORK_SCHEDULE is 'on'.
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.FORK_SCHEDULE == 'on' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      FOUNDRY_OFFLINE: 'false'
+      FORK_URL: ${{ secrets.FORK_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com' }}
+      FORK_ENDPOINT: ${{ secrets.FORK_RPC_URL != '' && 'secret FORK_RPC_URL' || 'public rpc.mainnet.chain.robinhood.com' }}
+      ANVIL_BIN: anvil
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: v1.7.1
+      - run: pnpm install --frozen-lockfile
+      - name: Record candidate and pin
+        env:
+          BLOCK_INPUT: ${{ inputs.block }}
+        run: |
+          if [[ -n "${BLOCK_INPUT:-}" ]]; then
+            [[ "$BLOCK_INPUT" =~ ^[1-9][0-9]*$ ]] || { echo "block must be a positive integer" >&2; exit 1; }
+            pin="$BLOCK_INPUT"
+          else
+            head=$(curl -fsS -X POST -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' "$FORK_URL" | jq -r .result)
+            pin=$(( head - 20 ))
+          fi
+          echo "FORK_BLOCK_NUMBER=$pin" >> "$GITHUB_ENV"
+          export FORK_BLOCK_NUMBER="$pin"
+          mkdir -p fork-results
+          git rev-parse HEAD > fork-results/revision.txt
+          printf '%s\n' "$FORK_ENDPOINT" "$FORK_BLOCK_NUMBER" > fork-results/pin.txt
+          date -u +%FT%TZ > fork-results/date.txt
+      - name: Registry fork
+        timeout-minutes: 5
+        run: RPC_HTTP_URL="$FORK_URL" pnpm --filter @eko/contracts test:fork 2>&1 | perl -pe 'BEGIN { $u = $ENV{FORK_URL} } s/\Q$u\E/<fork-url>/g' | tee fork-results/contracts.log
+      - name: Live chain dependencies and read-only contract probe
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: pnpm --filter @eko/chain exec vitest run --config vitest.fork.config.ts 2>&1 | perl -pe 'BEGIN { $u = $ENV{FORK_URL} } s/\Q$u\E/<fork-url>/g' | tee fork-results/chain.log
+      - name: Server live route on loopback Anvil
+        if: ${{ !cancelled() }}
+        timeout-minutes: 8
+        run: pnpm test:fork 2>&1 | perl -pe 'BEGIN { $u = $ENV{FORK_URL} } s/\Q$u\E/<fork-url>/g' | tee fork-results/server.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: fork-results
+          path: fork-results/
+          if-no-files-found: error
+          retention-days: 14

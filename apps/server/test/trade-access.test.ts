@@ -142,7 +142,13 @@ describe('migrated storage, admin routes and execution revalidation (no chain ca
   it('revalidates current caps/membership and immediate runtime switch on orders and idempotent retries', async () => {
     const fresh = async (id: string) => { quoteStore.put(quote(id, 'buy', 20), accountId); return { quoteId: id, idempotencyKey: id }; };
     const first = await fresh('access-first');
-    expect((await exec.place(accountId, wallet, first)).tx).toBeDefined();
+    await expect(exec.place(accountId, wallet, first)).rejects.toMatchObject({ code: 'guard_refused' });
+    // Persist an older awaiting-signature intent to exercise retained live retry admission too.
+    const retained = quote('access-first', 'buy', 20);
+    await built.ctx.dbh.db.insert(orders).values({ accountId, mode: 'live', market: retained.market, side: retained.side,
+      network: retained.network, venue: retained.venue, assetIn: retained.assetIn, assetOut: retained.assetOut,
+      amountIn: retained.amountIn, expectedOut: retained.expectedOut, minOut: retained.minOut, quotePrice: retained.price,
+      slippageBps: retained.slippageBps, quote: retained, status: 'awaiting_signature', idempotencyKey: first.idempotencyKey });
     enabled = false;
     // Incident stops must apply immediately, even inside the product flag cache window.
     await expect(exec.place(accountId, wallet, first)).rejects.toMatchObject({ code: 'trading_paused' });
@@ -186,7 +192,14 @@ describe('migrated storage, admin routes and execution revalidation (no chain ca
     try {
       const q = await exec.quote(accountId, input);
       const first = { quoteId: q.id, idempotencyKey: 'sanctions-first' };
-      expect((await exec.place(accountId, wallet, first)).tx).toBeDefined();
+      await expect(exec.place(accountId, wallet, first)).rejects.toMatchObject({ code: 'guard_refused' });
+      // Persist an older intent to exercise sanctions on retained live retries.
+      const retained = quote(q.id, 'buy', 20);
+      expect(q.tx).toBeUndefined();
+      await built.ctx.dbh.db.insert(orders).values({ accountId, mode: 'live', market: retained.market, side: retained.side,
+        network: retained.network, venue: retained.venue, assetIn: retained.assetIn, assetOut: retained.assetOut,
+        amountIn: retained.amountIn, expectedOut: retained.expectedOut, minOut: retained.minOut, quotePrice: retained.price,
+        slippageBps: retained.slippageBps, quote: retained, status: 'awaiting_signature', idempotencyKey: first.idempotencyKey });
       const pending = await exec.quote(accountId, input);
       await new SanctionsWorker(built.ctx.dbh.chain, 'https://ofac.treasury.gov/fixture.xml', async () => sdnFixture(wallet), () => Date.now() + 86400000).tick();
       adapter.quote = vi.fn(adapter.quote);

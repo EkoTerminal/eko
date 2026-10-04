@@ -3,6 +3,7 @@ export const SCANNING = 'Scanning…';
 export const NOT_FULLY_CHECKED = 'Not fully checked';
 export const NOT_CHECKED = 'not checked yet';
 export const PENDING_ORDER = 'Not fully checked. Some required checks have not run; review the missing checks before placing an order.';
+export const NOT_INDEXED = 'Not indexed yet';
 export const CARD_UNAVAILABLE = 'Coin card unavailable';
 export const CARD_WAIT = 'Search the indexed token identity for its current status.';
 export const NEAR_GRAD = 'Curve at 75% or more';

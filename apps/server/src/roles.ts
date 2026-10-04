@@ -21,10 +21,24 @@ export interface RolePlan { role: ImageRole; entry: string; singleton: boolean; 
 
 // Only errors constructed here may be printed by the dispatcher. Raw provider errors stay private.
 export class RoleStartupError extends Error {}
+/**
+ * Format only RoleStartupError messages and suppress arbitrary provider error details. Host
+ * dispatcher only; no account authentication; other errors produce fixed withheld-detail text.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function roleStartupMessage(error: unknown): string {
   return `EKO role startup failed: ${error instanceof RoleStartupError ? error.message : 'runtime entry point failed (details withheld)'}`;
 }
 
+/**
+ * Require an available closed-allowlist role, existing image entry and valid production Postgres
+ * configuration; derive RUN_WORKER only for worker role. Host operator controls env/directory; no
+ * wallet auth. Unknown/unavailable/missing roles or invalid database config throw RoleStartupError
+ * and no role enables trading.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function planRole(env: NodeJS.ProcessEnv, directory: string): RolePlan {
   const role = env.APP_ROLE;
   if (!role || !Object.hasOwn(imageRoles, role)) throw new RoleStartupError('Unknown or missing APP_ROLE');
@@ -46,7 +60,15 @@ export function planRole(env: NodeJS.ProcessEnv, directory: string): RolePlan {
 }
 
 export interface RoleLease { close(): Promise<void> }
-/** Session ownership spans startup, runtime and draining; a second owner fails immediately. */
+/** Session ownership spans startup, runtime and draining; a second owner fails immediately.
+ * @remarks
+ * Acquire a session advisory lock for configured singleton Postgres roles before spawn; non-
+ * singleton/local roles return a no-op lease. Host-only call; connection/duplicate ownership
+ * failures reject with bounded RoleStartupError. DB loss invokes lost; local PGlite locking
+ * belongs to the database adapter.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function acquireRoleLease(plan: RolePlan, lost: () => void): Promise<RoleLease> {
   // Local PGlite owns its directory through packages/db's process lock instead.
   if (!plan.singleton || !plan.env.DATABASE_URL) return { close: async () => {} };
@@ -73,7 +95,15 @@ export interface LaunchDependencies {
   lease: typeof acquireRoleLease;
   spawn: (entry: string, env: NodeJS.ProcessEnv) => ChildProcess;
 }
-/** Keep the role lease until the only child has exited, forwarding container termination signals. */
+/** Keep the role lease until the only child has exited, forwarding container termination signals.
+ * @remarks
+ * Hold the role lease through child exit, forward termination signals and force termination after
+ * ten seconds; lost ownership kills the child. Host-only plan execution; no wallet auth.
+ * Spawn/lease failures reject, otherwise return the child's exit status and release the lease in
+ * finally.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function runRole(plan: RolePlan, dependencies: LaunchDependencies = {
   lease: acquireRoleLease,
   spawn: (entry, env) => spawn(process.execPath, [entry], { env, stdio: 'inherit' }),

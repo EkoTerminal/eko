@@ -23,6 +23,7 @@ describe('v1 environment and phase', () => {
     expect(cfg.LEGACY_API).toBe(true);
     expect(cfg.LEGACY_SIGNALS).toBe(false);
     expect(cfg.LIVE_TRADING_ENABLED).toBe(false);
+    expect(cfg.AI_DAILY_BUDGET_USD).toBe(0);
     expect(cfg.FEE_BPS_DEFAULT).toBe(50);
     expect(cfg.TRADE_MAX_USD).toBeUndefined();
     expect(loadConfig({ ...base, FLAGS: 'd0', LEGACY_API: 'false', LEGACY_SIGNALS: 'true', TRADE_MAX_USD: '25' })).toMatchObject({ LEGACY_API: false, LEGACY_SIGNALS: true, TRADE_MAX_USD: 25 });
@@ -118,7 +119,8 @@ describe('feature flags and runtime route hiding', () => {
     expect(all).not.toHaveProperty('swarm_ranking');
     expect(all).not.toHaveProperty('future_unknown');
     expect(await flags.isOpsOn('trading_live')).toBe(true);
-    expect(await flags.isOpsOn('swarm_ranking')).toBe(true);
+    // A raw ops row cannot bypass the Swarm calibration acceptance gate.
+    expect(await flags.isOpsOn('swarm_ranking')).toBe(false);
     rows[0]!.enabled = false;
     all.approvals = false; // Callers can't alter the cached snapshot.
     now = 9999;

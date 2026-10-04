@@ -8,6 +8,8 @@ export interface InferenceRequest {
   schemaName: string;
   model: string;
   timeoutMs: number;
+  /** Optional hard output ceiling for capped consumers such as Swarm. */
+  maxOutputTokens?: number;
 }
 
 export interface InferenceResult {

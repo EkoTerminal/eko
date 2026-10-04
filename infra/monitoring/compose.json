@@ -1,7 +1,7 @@
 {
   "services": {
     "prometheus": {
-      "image": "prom/prometheus:v3.2.1",
+      "image": "prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62",
       "command": [
         "--config.file=/etc/prometheus/prometheus.json"
       ],
@@ -12,17 +12,17 @@
       "restart": "unless-stopped"
     },
     "alertmanager": {
-      "image": "prom/alertmanager:v0.28.1",
+      "image": "prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba",
       "command": [
         "--config.file=/etc/alertmanager/alertmanager.json"
       ],
       "volumes": [
-        "./alertmanager.json:/etc/alertmanager/alertmanager.json:ro"
+        "${EKO_ALERTMANAGER_CONFIG:?Render receiver configuration first}:/etc/alertmanager/alertmanager.json:ro"
       ],
       "restart": "unless-stopped"
     },
     "grafana": {
-      "image": "grafana/grafana:11.6.0",
+      "image": "grafana/grafana:11.6.16@sha256:d67af92050b8d93b393dc741864752a69c9da1ffa39c1bb9af49ad5d9e47d2c3",
       "volumes": [
         "./grafana-datasources.json:/etc/grafana/provisioning/datasources/eko.yaml:ro",
         "./grafana-dashboards.json:/etc/grafana/provisioning/dashboards/eko.yaml:ro",
@@ -31,7 +31,7 @@
       "restart": "unless-stopped"
     },
     "uptime-kuma": {
-      "image": "louislam/uptime-kuma:1.23.16",
+      "image": "louislam/uptime-kuma:1.23.17@sha256:3d632903e6af34139a37f18055c4f1bfd9b7205ae1138f1e5e8940ddc1d176f9",
       "volumes": [
         "kuma-data:/app/data"
       ],

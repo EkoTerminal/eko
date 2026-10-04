@@ -7,6 +7,7 @@ dist
 coverage
 playwright-report
 test-results
+.audit-grade/runs/
 .DS_Store
 apps/web/e2e/.artifacts
 brand/video/out
@@ -24,5 +25,7 @@ brand/video/out
 !token*.sol
 !token*.md
 brand/tokens/
+
+apps/og-renderer/samples-tmp/
 __pycache__/
 *.pyc

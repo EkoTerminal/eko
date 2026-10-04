@@ -45,7 +45,8 @@ describe('scoped wallet protocol evidence',()=>{
     expect(result.rows.get('userops')).toHaveLength(0);
     const coverage=data(result.rows.get('wallet_protocol_coverage')[0]);
     expect(coverage.rawProtocolLogs).toHaveLength(2);
-    expect(coverage.entryPoints.every((p:{status:string})=>p.status==='missing_verified_deployment')).toBe(true);
+    expect(coverage.entryPoints.every((p:{status:string})=>p.status==='registry_verified')).toBe(true);
+    expect(coverage.holderAttribution.reason).toBe('unverified_entry_point');
     expect(coverage.userOperationEvents).toBe('missing_verified_events');
     expect(coverage.principalBindings).toBe('missing_043');
     expect([...result.actors.values()].every(a=>a.missing)).toBe(true);
@@ -90,6 +91,14 @@ describe('scoped wallet protocol evidence',()=>{
     expect(data(missing.rows.get('wallet_protocol_coverage')[0]).receipt).toBe('missing');
     receipts[0].synthetic=true;
     expect(data((await collectWalletProtocol(block,receipts,registry,remote())).rows.get('wallet_protocol_coverage')[0]).receipt).toBe('missing');
+  });
+  it('retains acquired calldata and transaction gas for Watcher, with scoped inputs explicitly missing',async()=>{
+    const {block,receipts}=inputs();block.transactions[0].gas='0x186a0';receipts[0].gasUsed='0x13880';
+    const full=await collectWalletProtocol(block,receipts,registry,remote());
+    expect(data(full.rows.get('wallet_protocol_coverage')[0]).transaction).toEqual({input:block.transactions[0].input,gasLimit:'0x186a0',gasUsed:'0x13880'});
+    block.transactionsComplete=false;
+    const scoped=await collectWalletProtocol(block,receipts,registry,remote());
+    expect(data(scoped.rows.get('wallet_protocol_coverage')[0]).transaction).toBeNull();
   });
   it('rejects mixed forks and duplicate receipts',async()=>{
     const {block,receipts}=inputs();

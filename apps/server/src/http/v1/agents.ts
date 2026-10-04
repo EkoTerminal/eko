@@ -25,6 +25,14 @@ const SavePolicy = PolicySchema.strict().refine(validLimits, 'Limits must be non
   .refine(policy => Number.isInteger(policy.version) && policy.version >= 1, 'Invalid policy version');
 
 export interface AgentServices { auth: AuthService; harness: HarnessService }
+/**
+ * Register public presets and wallet-owner agent/policy/key APIs. All agent operations require
+ * wallet sessions; mutations reject demos, require allowed Origin and applicable flags/quotas.
+ * HarnessError becomes the shared error envelope; validation/storage failures propagate. No bearer
+ * secret is returned by key-list reads.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function agentRoutes(app: FastifyInstance, cfg: Config, flags: FlagService, services: AgentServices) {
   const { auth, harness } = services, entitlements = new EntitlementsService(cfg);
   app.addHook('onRequest', async (_req, reply) => { reply.header('Cache-Control', 'private, no-store'); });

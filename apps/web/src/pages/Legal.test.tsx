@@ -7,7 +7,8 @@ import { BUILT_ON, DYOR, NON_AFFILIATION } from '../copy';
 import { findPolicy, LEGAL_COPY, POLICY_DRAFTS, POLICY_REVIEW } from '../copy/legal';
 import { resolveRoute } from '../routes';
 import { CoinVerdict } from './terminal/CoinCard';
-import { DisabledTradePanel, InspectorGuard } from './terminal/RadarParts';
+import { TradePanel } from '../components/trade/TradePanel';
+import { InspectorGuard } from './terminal/RadarParts';
 import { createRadarCard, createRadarRows } from '../mocks/demo/radar';
 import Legal from './Legal';
 
@@ -71,7 +72,7 @@ describe('versioned launch policy drafts', () => {
     for (const html of [
       renderToStaticMarkup(<CoinVerdict verdict={card.verdict} />),
       renderToStaticMarkup(<InspectorGuard card={card} href={`/coin/${row.address}`} />),
-      renderToStaticMarkup(<DisabledTradePanel row={row} />),
+      renderToStaticMarkup(<TradePanel coin={row.address} priceUsd={row.priceUsd} />),
       renderToStaticMarkup(<AnalysisPolicyNotice />),
     ]) {
       expect(html).toContain(DYOR);

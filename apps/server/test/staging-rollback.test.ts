@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { ChainClients } from '../src/exec/chain.js';
+import { runtimeIdentity } from '../src/build-identity.js';
 
 it('rehearses isolated config rollback without reversing migrations or losing receipts', async () => {
   const catalog = JSON.parse(await readFile(new URL('../../../infra/railway/staging.json', import.meta.url), 'utf8'));
@@ -54,6 +55,10 @@ it('rehearses isolated config rollback without reversing migrations or losing re
     const health = await running.app.inject('/v1/health');
     expect(health.statusCode).toBe(200);
     expect(health.json()).toMatchObject({ ok: true, rpc: { sessionUnits: 0 } });
+    const identity = await running.app.inject('/v1/build');
+    expect(identity.statusCode).toBe(200);
+    expect(identity.json()).toEqual(runtimeIdentity(running.ctx.cfg));
+    expect(identity.headers['cache-control']).toBe('no-store');
     const config = await running.app.inject('/v1/config');
     expect(config.statusCode).toBe(200);
     expect(config.json().trading).toMatchObject({ liveEnabled: false, maxTradeUsd: 25 });

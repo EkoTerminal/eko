@@ -82,7 +82,7 @@ describe('remaining Mission Control screens', () => {
   it('uses Pack.stage for the Claude connector fallback, independent of flags', () => {
     const connector = PackSchema.parse({ ...demoPacks[0], stage: 'D0' });
     expect(packAvailable(connector, flags, 'launch_week')).toBe(false);
-    expect(packAvailable(connector, {}, 'token_live')).toBe(true);
+    expect(packAvailable(connector, {}, 'token_live')).toBe(false);
     expect(packAvailable(demoPacks[0], {}, 'launch_week')).toBe(true);
   });
   it('gates prototype on-chain and venue connection panels independently', () => {

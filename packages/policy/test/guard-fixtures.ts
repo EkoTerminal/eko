@@ -2,7 +2,7 @@
 import { GuardAssessmentV2Schema, GUARD_CHECK_IDS, GUARD_CHECK_TIERS } from '@eko/shared';
 import type { CheckId, GuardAssessmentV2, ObservedLevel, Verdict } from '@eko/shared';
 import { assessment, coverage, missingCoverage, factor } from '../../shared/test/fixtures/contracts/guard-v2.js';
-import { ASSET, verdict } from './fixtures.js';
+import { ASSET, verdict, NOW } from './fixtures.js';
 
 export function guardFixture(observed: ObservedLevel = 'lower', gaps: CheckId[] = [],
   status: Exclude<GuardAssessmentV2['checks'][number]['status'], 'complete' | 'not_applicable'> = 'missing',
@@ -10,7 +10,8 @@ export function guardFixture(observed: ObservedLevel = 'lower', gaps: CheckId[] 
   const critical = !gaps.some(id => GUARD_CHECK_TIERS[id] === 'buy_critical');
   const lower = !gaps.some(id => GUARD_CHECK_TIERS[id] === 'lower_tier');
   const score = decisive ? 0 : observed === 'high' ? 60 : observed === 'elevated' ? 30 : 0;
-  return GuardAssessmentV2Schema.parse({ ...assessment, coin: ASSET, mode: 'active',
+  const cursor = { ...assessment.cursor, timestampSec: String(NOW / 1000) };
+  return GuardAssessmentV2Schema.parse({ ...assessment, cursor, availabilityCut: { ...assessment.availabilityCut, cursor }, coin: ASSET, mode: 'active',
     observedLevel: observed, level: observed === 'high' ? 'high' : !critical ? 'incomplete' : !lower ? 'elevated' : observed,
     levelFloorReason: critical && !lower && observed === 'lower' ? 'lower_tier_gap' : null,
     completeness: { buyCriticalComplete: critical, lowerTierComplete: lower, missing: gaps },

@@ -47,12 +47,13 @@ type Data = Map<bigint, { block: RpcBlock; receipts: RpcReceipt[] }>;
 function memory(data: Data): ChainClient {
   return { chainId: async () => 4663, head: async () => [...data.keys()].reduce((a, b) => a > b ? a : b), block: async n => data.get(n)!.block, header: async n => data.get(n)!.block, receipts: async n => data.get(n)!.receipts,
     logs: async ({ from, to, address: emitter, addresses, topics }) => [...data].filter(([n]) => n >= from && n <= to).flatMap(([, b]) => b.receipts.flatMap(r => r.logs)).filter(l => (!emitter || lower(emitter) === lower(l.address)) && (!addresses || addresses.some(a => lower(a) === lower(l.address))) && topics.includes(l.topics[0])),
-    code: async () => '0x', tokenMetadata: async a => ({ symbol: '<sample>', name: '<sample>', decimals: lower(a) === lower(registry.requireAddress('tokens.USDG')) ? 6 : 18 }), v3Pool: async () => null, ethUsdRate: async () => null };
+    code: async () => '0x', tokenMetadata: async a => ({ symbol: '<sample>', name: '<sample>', decimals: lower(a) === lower(registry.requireAddress('tokens.USDG')) ? 6 : 18 }), v3Pool: async () => null, ethUsdRate: async n => ({value:2000,block:n,source:{ address: address(110), venue: 'uniswap_v3' as const, fee: 3000 }}) };
 }
 function follower(db: ChainDb, client: ChainClient, options = {}, customRegistry = registry) { return new LogHeadFollower(client, db, new BlockDecoder(client, customRegistry, new Metrics(quiet), quiet), { startBlock: 1n, maxRange:200, reorgDepth: 256, logger: quiet, ...options }); }
 async function seed(db: ChainDb) {
   await db.insert('tokens', { address: binary(coin), curve: binary(curve), decimals: 18, symbol: '<sample>', name: '<sample>', launchpad: 'pons', first_block: '0', block: '0' });
-  // Shared historical reference swap: both paths price from the same chain evidence.
+  // Shared historical reference swap with prior canonical PoolCreated verification.
+  await db.insert('pools', { id: binary(address(110)), venue: 'uniswap_v3', currency0: binary(registry.requireAddress('tokens.WETH')), currency1: binary(registry.requireAddress('tokens.USDG')), fee: 3000, tick_spacing: 60, creation_verified: true, created_block: '0', block: '0' });
   await db.ensurePartitions(new Date(Number(BigInt(empty(0).timestamp)) * 1000));
   await db.insert('swaps', { ts: new Date(Number(BigInt(empty(0).timestamp)) * 1000), block: '0', tx_hash: binary(hash(9000)), log_index: 0, venue: 'uniswap_v3', pool_id: binary(address(110)), coin: binary(registry.requireAddress('tokens.WETH')), quote_asset: binary(registry.requireAddress('tokens.USDG')), trader: binary(actor), tx_from: binary(actor), tx_to: binary(target), side: 1, amount_coin: '1', amount_quote: '2000', price_quote: 2000 });
 }
@@ -209,7 +210,7 @@ describe('logs-first head', () => {
       if (r.method === 'eth_getLogs') { const f = r.params[0] as { fromBlock: string; toBlock: string; topics: Hex[][]; address?: Address[] }; const logs=await oldClient.logs({ from: BigInt(f.fromBlock), to: BigInt(f.toBlock), topics: f.topics[0], addresses: f.address });return zeroTimestamps?logs.map(l=>({...l,blockTimestamp:'0x0' as Hex})):logs; }
       throw new Error(`Unexpected head RPC ${r.method}`);
     });
-    const client = createClients(env, registry, meter, { head: true });client.ethUsdRate=async()=>null;
+    const client = createClients(env, registry, meter, { head: true });client.ethUsdRate=oldClient.ethUsdRate;
     const ticks=2000/maxRange,totalCalls=zeroTimestamps?2032:900+ticks*3+1;
     const ticksLog:Record<string,unknown>[]=[];const live = follower(db, client,{maxRange, logger:(event:string,fields:Record<string,unknown>)=>{if(event==='head_tick')ticksLog.push(fields);} });
     for (let tick = 0; tick < ticks; tick++) await live.tick();
@@ -369,7 +370,8 @@ describe('logs-first head', () => {
     expect(Number((await db.sql.query('SELECT count(*) AS n FROM token_transfers')).rows[0].n)).toBe(expected);
     expect(maxPreparedTokens).toBeLessThanOrEqual(4);expect(maxPreparedPools).toBeLessThanOrEqual(1);
     console.log(JSON.stringify({event:'offline_dense_head_benchmark',local_prepare_ms:localPrepareMs,max_prepared_tokens:maxPreparedTokens,max_prepared_pools:maxPreparedPools,fetch_blocks:maxRange,registry_tokens:2000,registry_pools:2000,logs_per_nonempty_block:12,receipt_share:.15,public_latency_ms:350,paid_latency_ms:150,public_range_ms_per_block:8,paid_range_ms_per_block:6,receipt_tail_every_blocks:100,prepare_ms_per_block:15,write_ms_per_200:3500,caught_up_ms:caughtAt,caught_up_block:caughtBlock.toString(),final_gap:(head()-covered).toString(),catchup_calls:Object.fromEntries(['public','paid'].map(p=>[p,catchupTrace.filter(r=>r.provider===p).length])),steady_elapsed_ms:clock.now()-caughtAt,steady_calls:Object.fromEntries(['public','paid'].map(p=>[p,trace.slice(catchupTrace.length).filter(r=>r.provider===p).length])),head_ticks:full.slice(0,3)}));
-  },120000);
+  // Dense fixture has an explicit timeout; preserve its normal limit under V8 overhead.
+  }, process.env.EKO_CORE_COVERAGE === '1' ? 300000 : 120000);
 
   it.each(['pons_coin','pons_quote'] as const)('commits raw swaps with an unknown %s currency and retains resolved Pons senders in live and backfill',async pair=>{
     const {db,client,other,amount0,amount1}=await deferredToken(pair);
@@ -611,7 +613,8 @@ describe('logs-first head', () => {
     const client = memory(data); client.v3Pool = async a => pools.get(lower(a)) ?? null;
     for (const d of [oldDb,db]) {
       for (const a of tokenAddresses) await d.insert('tokens',{ address: binary(a), ...await client.tokenMetadata(a,0n), first_block:'0',block:'0' });
-      for (const [id,p] of pools) await d.insert('pools',{ id:binary(id),venue:'uniswap_v3',currency0:binary(p.currency0),currency1:binary(p.currency1),fee:p.fee,tick_spacing:p.tickSpacing,creation_verified:false,created_block:'0',block:'0' });
+      // Model canonical creation evidence for the reference pair; other pool reads remain provisional.
+      for (const [id,p] of pools) await d.insert('pools',{ id:binary(id),venue:'uniswap_v3',currency0:binary(p.currency0),currency1:binary(p.currency1),fee:p.fee,tick_spacing:p.tickSpacing,creation_verified:[p.currency0,p.currency1].every(a=>[lower(registry.requireAddress('tokens.WETH')),lower(registry.requireAddress('tokens.USDG'))].includes(lower(a))),created_block:'0',block:'0' });
     }
     const old = new HeadFollower(client,oldDb,new BlockDecoder(client,registry,new Metrics(quiet),quiet),{reorgDepth:256,logger:quiet});
     for (const b of data.values()) await old.ingest(b.block,b.receipts);
@@ -673,6 +676,49 @@ describe('logs-first head', () => {
     expect((await db.sql.query('SELECT * FROM pools')).rows).toHaveLength(1);
   });
 
+  it('attributes smart-account swaps identically in backfill and live follower, and enriches old null rows',async()=>{
+    const liveDb=await database(),backfillDb=await database(),legacyDb=await database();await seed(liveDb);await seed(backfillDb);await seed(legacyDb);
+    const b=trade(1),tx=b.block.transactions[0],entry=registry.requireAddress('entryPoints.v08'),first=address(210),second=address(211),paymaster=address(212);
+    tx.to=entry;b.receipts[0].to=entry;
+    const aa=parseAbi(['event BeforeExecution()', 'event UserOperationEvent(bytes32 indexed userOpHash, address indexed sender, address indexed paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)']);
+    const original=b.receipts[0].logs;
+    b.receipts[0].logs=[event(aa[0],entry,{},b.block,tx.hash,0),...original.map((l,i)=>({...l,logIndex:toHex(i+1)})),
+      event(aa[1],entry,{userOpHash:hash(213),sender:first,paymaster,nonce:0n,success:true,actualGasCost:1n,actualGasUsed:1n},b.block,tx.hash,3),
+      ...original.map((l,i)=>({...l,logIndex:toHex(i+4)})),
+      event(aa[1],entry,{userOpHash:hash(214),sender:second,paymaster:native,nonce:1n,success:true,actualGasCost:1n,actualGasUsed:1n},b.block,tx.hash,6)];
+    const data:Data=new Map([[0n,{block:empty(0),receipts:[]}],[1n,b]]),client=memory(data);
+    client.ethUsdRate=async()=>({value:2000,block:0n,source:{ address: address(110), venue: 'uniswap_v3' as const, fee: 3000 }});
+    await follower(liveDb,client).tick();
+    await backfillDb.sql.query("INSERT INTO ingest_ranges(stream,from_block,to_block,status) VALUES('logs:pons_factory',0,1,'done')");
+    const backfill=new PonsBackfill(client,backfillDb,new BlockDecoder(client,registry,new Metrics(quiet),quiet),{workers:1,logRange:10,logger:quiet});
+    const logRead=vi.spyOn(client,'logs');
+    await backfill.run('logs:pons_curves',1n,1n);
+    expect(logRead).toHaveBeenCalled();
+    expect((await backfillDb.sql.query('SELECT * FROM pons_events')).rows).toHaveLength(2);
+    const read=async(db:ChainDb)=>(await db.sql.query('SELECT block,trader,tx_from,tx_to,log_index,amount_coin,usd FROM swaps WHERE coin=$1 ORDER BY log_index',[binary(coin)])).rows;
+    expect(await read(backfillDb)).toEqual(await read(liveDb));
+    expect((await read(liveDb)).map(r=>hex(r.trader as Uint8Array))).toEqual([first,second]);
+    const coverage=async(db:ChainDb)=>JSON.parse(JSON.stringify((await db.sql.query<{data:{holderAttribution:unknown;principalBindings:string}}>('SELECT data FROM wallet_protocol_coverage WHERE tx_hash=$1',[binary(tx.hash)])).rows[0].data));
+    expect((await coverage(backfillDb)).holderAttribution).toEqual((await coverage(liveDb)).holderAttribution);
+    expect((await coverage(liveDb)).principalBindings).toBe('missing_043');
+    // A previously unknown deployment records a terminal gap. Its registry revision
+    // differs after verification, so existing null rows become enrichment candidates.
+    const priorRegistry=new AddressRegistry({...registry.data,entryPoints:{...registry.data.entryPoints,v08:{address:'TODO'}}});
+    const priorDecoder=new BlockDecoder(client,priorRegistry,new Metrics(quiet),quiet),priorState=await priorDecoder.prepare(legacyDb,b.block,b.receipts);
+    await legacyDb.tx(tx=>priorDecoder.collect(b.block,b.receipts,priorState).flush(tx));
+    expect((await read(legacyDb)).map(r=>r.trader)).toEqual([null,null]);
+    expect((await enrichSenders(legacyDb,coin,client)).enriched).toBe(2);
+    expect(await read(legacyDb)).toEqual(await read(liveDb));
+    expect((await enrichSenders(legacyDb,coin,client)).enriched).toBe(0);
+    await backfillDb.sql.query('UPDATE swaps SET trader=NULL,senders_pending=false WHERE coin=$1',[binary(coin)]);
+    expect((await enrichSenders(backfillDb,coin,client)).enriched).toBe(2);
+    expect(await read(backfillDb)).toEqual(await read(liveDb));
+    // Re-decoding already stored canonical rows also fills missing actors without replacing amounts.
+    await liveDb.sql.query('UPDATE swaps SET trader=NULL WHERE coin=$1',[binary(coin)]);
+    const decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet),state=await decoder.prepare(liveDb,b.block,b.receipts);
+    await liveDb.tx(tx=>decoder.collect(b.block,b.receipts,state).flush(tx));expect(await read(liveDb)).toEqual(await read(backfillDb));
+  });
+
   it('keeps delegation caches per address, shares in-flight reads, and refreshes only changed or expired entries',async()=>{
     const client=memory(new Map()),decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);
     const other=address(160);let now=1000;
@@ -702,7 +748,7 @@ describe('logs-first head', () => {
       if(n===1)b.receipts[0].logs.unshift(event(v3Abi[0],registry.requireAddress('uniswapV3.factory'),{token0:coin,token1:quote,fee:3000,tickSpacing:60,pool},b.block,tx,0));
       data.set(BigInt(n),b);
     }
-    const client=memory(data);client.tokenMetadata=vi.fn(client.tokenMetadata);client.ethUsdRate=vi.fn(async n=>({value:2000,block:n}));
+    const client=memory(data);client.tokenMetadata=vi.fn(client.tokenMetadata);client.ethUsdRate=vi.fn(async n=>({value:2000,block:n,source:{ address: address(110), venue: 'uniswap_v3' as const, fee: 3000 }}));
     await follower(db,client).tick();
     expect(client.tokenMetadata).toHaveBeenCalledOnce();
     expect(lower(vi.mocked(client.tokenMetadata).mock.calls[0][0])).toBe(lower(quote));expect(vi.mocked(client.tokenMetadata).mock.calls[0][1]).toBe(1n);

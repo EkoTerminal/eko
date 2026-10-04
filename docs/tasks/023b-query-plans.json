@@ -1,0 +1,2855 @@
+{
+  "environment": "Offline in-memory PGlite, Fastify inject, concurrent verification running. Six samples per initial route, one per cursor page.",
+  "shape": {
+    "carded": 2475,
+    "identityOnly": 2683,
+    "engineRuns": 120001,
+    "swaps": 400001,
+    "verdictEvents": 120001,
+    "playbookMatches": 12000,
+    "blockClocks": 200001
+  },
+  "timings": [
+    {
+      "route": "/v1/radar",
+      "coldMs": 142.05,
+      "p95Ms": 87.72,
+      "maxMs": 142.05
+    },
+    {
+      "route": "/v1/pairs?stage=new",
+      "coldMs": 55.41,
+      "p95Ms": 63.8,
+      "maxMs": 63.8
+    },
+    {
+      "route": "/v1/pairs?stage=near_grad",
+      "coldMs": 56.01,
+      "p95Ms": 58.71,
+      "maxMs": 58.71
+    },
+    {
+      "route": "/v1/pairs?stage=migrated",
+      "coldMs": 67.35,
+      "p95Ms": 58.9,
+      "maxMs": 67.35
+    },
+    {
+      "route": "/v1/feed",
+      "coldMs": 10.62,
+      "p95Ms": 12.56,
+      "maxMs": 12.56
+    },
+    {
+      "route": "/v1/feed?kinds=verdict",
+      "coldMs": 13.65,
+      "p95Ms": 13.54,
+      "maxMs": 13.65
+    },
+    {
+      "route": "/v1/feed?kinds=new_pair",
+      "coldMs": 5.74,
+      "p95Ms": 6.85,
+      "maxMs": 6.85
+    },
+    {
+      "route": "/v1/feed?kinds=playbook,wash",
+      "coldMs": 10.8,
+      "p95Ms": 8.75,
+      "maxMs": 10.8
+    },
+    {
+      "route": "/v1/feed?kinds=burn",
+      "coldMs": 1.52,
+      "p95Ms": 1.44,
+      "maxMs": 1.52
+    },
+    {
+      "route": "/v1/coins/<coin>",
+      "coldMs": 2.87,
+      "p95Ms": 2.29,
+      "maxMs": 2.87
+    },
+    {
+      "route": "/v1/coins/<coin>/verdict",
+      "coldMs": 3.75,
+      "p95Ms": 2.46,
+      "maxMs": 3.75
+    },
+    {
+      "route": "/v1/coins/<coin>/flow",
+      "coldMs": 3.1,
+      "p95Ms": 3.56,
+      "maxMs": 3.56
+    },
+    {
+      "route": "/v1/coins/<coin>/candles?tf=5m&from=<seconds>&to=<seconds>",
+      "coldMs": 7.66,
+      "p95Ms": 6.23,
+      "maxMs": 7.66
+    },
+    {
+      "route": "/v1/coins/<coin>/markers?from=<seconds>&to=<seconds>",
+      "coldMs": 1.27,
+      "p95Ms": 1.8,
+      "maxMs": 1.8
+    },
+    {
+      "route": "/v1/scan?q=<coin>",
+      "coldMs": 3.24,
+      "p95Ms": 4.16,
+      "maxMs": 4.16
+    },
+    {
+      "route": "/v1/scan?q=$POOL",
+      "coldMs": 7.66,
+      "p95Ms": 5.93,
+      "maxMs": 7.66
+    },
+    {
+      "route": "/v1/radar (next page)",
+      "coldMs": 75.67,
+      "p95Ms": 75.67,
+      "maxMs": 75.67
+    },
+    {
+      "route": "/v1/pairs?stage=new (next page)",
+      "coldMs": 53.48,
+      "p95Ms": 53.48,
+      "maxMs": 53.48
+    },
+    {
+      "route": "/v1/feed (next page)",
+      "coldMs": 11.88,
+      "p95Ms": 11.88,
+      "maxMs": 11.88
+    },
+    {
+      "route": "/v1/feed?kinds=verdict (next page)",
+      "coldMs": 10.97,
+      "p95Ms": 10.97,
+      "maxMs": 10.97
+    }
+  ],
+  "plans": [
+    {
+      "route": "/v1/radar",
+      "sql": "SELECT coin,tier,volume FROM read_coins\n      WHERE activity>$1  ORDER BY tier,-volume,coin LIMIT 101",
+      "executionMs": 0.374,
+      "planningMs": 0.215,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.258,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "read_coins",
+            "Index Name": "read_coins_rank",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.157,
+            "Rows Removed by Filter": 0,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar",
+      "sql": "WITH selected AS (\n      SELECT t.*,c.data,r.activity,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address AND c.coin=ANY($2::bytea[])\n      LEFT JOIN read_coins r ON r.coin=t.address AND r.coin=ANY($2::bytea[]) WHERE t.address=ANY($2::bytea[])\n    ), market AS (\n      SELECT b.coin,(array_agg(close ORDER BY minute DESC))[1] AS price,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-3600)))[1] AS previous1h,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-86400)))[1] AS previous24h,\n        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume\n      FROM bars_1m b WHERE b.coin=ANY($2::bytea[]) GROUP BY b.coin\n    ), buckets AS (\n      SELECT b.coin,floor(extract(epoch FROM minute)/600) AS bucket,(array_agg(close ORDER BY minute DESC))[1] AS close\n      FROM bars_1m b \n      WHERE b.coin=ANY($2::bytea[]) AND minute>=to_timestamp(floor($1::double precision/600)*600-47*600) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket\n    ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)\n    SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,\n      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,s.points AS spark\n    FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address\n    LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block",
+      "executionMs": 43.4,
+      "planningMs": 3.219,
+      "plan": {
+        "Node Type": "Nested Loop",
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Actual Total Time": 43.178,
+        "Plans": [
+          {
+            "Node Type": "Nested Loop",
+            "Actual Rows": 100,
+            "Actual Loops": 1,
+            "Actual Total Time": 40.116,
+            "Plans": [
+              {
+                "Node Type": "Hash Join",
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+                "Actual Total Time": 39.714,
+                "Plans": [
+                  {
+                    "Node Type": "Merge Join",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 38.999,
+                    "Plans": [
+                      {
+                        "Node Type": "Merge Join",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 18.383,
+                        "Plans": [
+                          {
+                            "Node Type": "Merge Join",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 0.563,
+                            "Plans": [
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "tokens",
+                                "Index Name": "tokens_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.196,
+                                "Index Searches": 1
+                              },
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "coin_card_latest",
+                                "Index Name": "coin_card_latest_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.072,
+                                "Index Searches": 1
+                              }
+                            ]
+                          },
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 17.594,
+                            "Plans": [
+                              {
+                                "Node Type": "Merge Append",
+                                "Actual Rows": 16200,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 9.862,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 16200,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 5.207,
+                                    "Index Searches": 1
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_11",
+                                    "Index Name": "bars_1m_2026_11_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.007,
+                                    "Index Searches": 1
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_12",
+                                    "Index Name": "bars_1m_2026_12_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.006,
+                                    "Index Searches": 1
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "Node Type": "Aggregate",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 20.377,
+                        "Plans": [
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 4700,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 18.729,
+                            "Plans": [
+                              {
+                                "Node Type": "Incremental Sort",
+                                "Actual Rows": 5300,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 13.552,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 5300,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 5.046,
+                                    "Index Searches": 89
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Node Type": "Hash",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.508,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "read_coins",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.47,
+                        "Rows Removed by Filter": 2375
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Node Type": "Memoize",
+                "Actual Rows": 1,
+                "Actual Loops": 100,
+                "Actual Total Time": 0.002,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "engine_block_times",
+                    "Index Name": "engine_block_times_pkey",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.012,
+                    "Index Searches": 1
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Node Type": "Memoize",
+            "Actual Rows": 1,
+            "Actual Loops": 100,
+            "Actual Total Time": 0.001,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.008,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar",
+      "sql": "SELECT tier,count(*) AS n FROM read_coins WHERE activity>$1 GROUP BY tier",
+      "executionMs": 1.075,
+      "planningMs": 0.138,
+      "plan": {
+        "Node Type": "Aggregate",
+        "Actual Rows": 3,
+        "Actual Loops": 1,
+        "Actual Total Time": 1.041,
+        "Plans": [
+          {
+            "Node Type": "Seq Scan",
+            "Relation Name": "read_coins",
+            "Actual Rows": 2475,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.512,
+            "Rows Removed by Filter": 0
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar",
+      "sql": "SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN read_coins r ON r.coin=e.coin WHERE e.sec>=$1 AND r.activity>$2",
+      "executionMs": 36.37,
+      "planningMs": 0.497,
+      "plan": {
+        "Node Type": "Aggregate",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 36.317,
+        "Plans": [
+          {
+            "Node Type": "Sort",
+            "Actual Rows": 24210,
+            "Actual Loops": 1,
+            "Actual Total Time": 31.888,
+            "Plans": [
+              {
+                "Node Type": "Hash Join",
+                "Actual Rows": 24210,
+                "Actual Loops": 1,
+                "Actual Total Time": 18.447,
+                "Plans": [
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "engine_runs",
+                    "Index Name": "engine_runs_sec_coin",
+                    "Actual Rows": 24210,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 5.523,
+                    "Index Searches": 1
+                  },
+                  {
+                    "Node Type": "Hash",
+                    "Actual Rows": 2475,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 1.723,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "read_coins",
+                        "Actual Rows": 2475,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.941,
+                        "Rows Removed by Filter": 0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/pairs?stage=new",
+      "sql": "SELECT coin,pair_block,buyers FROM read_coins\n      WHERE launchpad='pons' AND pair_column=$1  ORDER BY pair_block DESC,coin DESC LIMIT 101",
+      "executionMs": 0.119,
+      "planningMs": 0.194,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.087,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "read_coins",
+            "Index Name": "read_coins_pair",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.062,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/pairs?stage=new",
+      "sql": "WITH selected AS (\n      SELECT t.*,c.data,r.activity,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address AND c.coin=ANY($2::bytea[])\n      LEFT JOIN read_coins r ON r.coin=t.address AND r.coin=ANY($2::bytea[]) WHERE t.address=ANY($2::bytea[])\n    ), market AS (\n      SELECT b.coin,(array_agg(close ORDER BY minute DESC))[1] AS price,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-3600)))[1] AS previous1h,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-86400)))[1] AS previous24h,\n        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume\n      FROM bars_1m b WHERE b.coin=ANY($2::bytea[]) GROUP BY b.coin\n    ), buckets AS (\n      SELECT b.coin,floor(extract(epoch FROM minute)/600) AS bucket,(array_agg(close ORDER BY minute DESC))[1] AS close\n      FROM bars_1m b \n      WHERE b.coin=ANY($2::bytea[]) AND minute>=to_timestamp(floor($1::double precision/600)*600-47*600) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket\n    ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)\n    SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,\n      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,s.points AS spark\n    FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address\n    LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block",
+      "executionMs": 39.235,
+      "planningMs": 2.033,
+      "plan": {
+        "Node Type": "Nested Loop",
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Actual Total Time": 39.057,
+        "Plans": [
+          {
+            "Node Type": "Nested Loop",
+            "Actual Rows": 100,
+            "Actual Loops": 1,
+            "Actual Total Time": 36.607,
+            "Plans": [
+              {
+                "Node Type": "Hash Join",
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+                "Actual Total Time": 36.211,
+                "Plans": [
+                  {
+                    "Node Type": "Merge Join",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 35.635,
+                    "Plans": [
+                      {
+                        "Node Type": "Merge Join",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 16.039,
+                        "Plans": [
+                          {
+                            "Node Type": "Merge Join",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 0.718,
+                            "Plans": [
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "tokens",
+                                "Index Name": "tokens_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.155,
+                                "Index Searches": 2
+                              },
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "coin_card_latest",
+                                "Index Name": "coin_card_latest_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.298,
+                                "Index Searches": 1
+                              }
+                            ]
+                          },
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 15.142,
+                            "Plans": [
+                              {
+                                "Node Type": "Merge Append",
+                                "Actual Rows": 15940,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 8.879,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 15940,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.873,
+                                    "Index Searches": 28
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_11",
+                                    "Index Name": "bars_1m_2026_11_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.024,
+                                    "Index Searches": 1
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_12",
+                                    "Index Name": "bars_1m_2026_12_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.023,
+                                    "Index Searches": 1
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "Node Type": "Aggregate",
+                        "Actual Rows": 99,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 19.402,
+                        "Plans": [
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 4653,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 17.841,
+                            "Plans": [
+                              {
+                                "Node Type": "Incremental Sort",
+                                "Actual Rows": 5247,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 13.234,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 5247,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.929,
+                                    "Index Searches": 92
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Node Type": "Hash",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.398,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "read_coins",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.372,
+                        "Rows Removed by Filter": 2375
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Node Type": "Memoize",
+                "Actual Rows": 1,
+                "Actual Loops": 100,
+                "Actual Total Time": 0.002,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "engine_block_times",
+                    "Index Name": "engine_block_times_pkey",
+                    "Actual Rows": 1,
+                    "Actual Loops": 2,
+                    "Actual Total Time": 0.011,
+                    "Index Searches": 2
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Node Type": "Memoize",
+            "Actual Rows": 1,
+            "Actual Loops": 100,
+            "Actual Total Time": 0.001,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 2,
+                "Actual Total Time": 0.007,
+                "Index Searches": 2
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/pairs?stage=near_grad",
+      "sql": "SELECT coin,pair_block,buyers FROM read_coins\n      WHERE launchpad='pons' AND pair_column=$1  ORDER BY pair_block DESC,coin DESC LIMIT 101",
+      "executionMs": 0.132,
+      "planningMs": 0.127,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.104,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "read_coins",
+            "Index Name": "read_coins_pair",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.08,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/pairs?stage=near_grad",
+      "sql": "WITH selected AS (\n      SELECT t.*,c.data,r.activity,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address AND c.coin=ANY($2::bytea[])\n      LEFT JOIN read_coins r ON r.coin=t.address AND r.coin=ANY($2::bytea[]) WHERE t.address=ANY($2::bytea[])\n    ), market AS (\n      SELECT b.coin,(array_agg(close ORDER BY minute DESC))[1] AS price,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-3600)))[1] AS previous1h,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-86400)))[1] AS previous24h,\n        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume\n      FROM bars_1m b WHERE b.coin=ANY($2::bytea[]) GROUP BY b.coin\n    ), buckets AS (\n      SELECT b.coin,floor(extract(epoch FROM minute)/600) AS bucket,(array_agg(close ORDER BY minute DESC))[1] AS close\n      FROM bars_1m b \n      WHERE b.coin=ANY($2::bytea[]) AND minute>=to_timestamp(floor($1::double precision/600)*600-47*600) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket\n    ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)\n    SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,\n      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,s.points AS spark\n    FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address\n    LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block",
+      "executionMs": 41.138,
+      "planningMs": 1.821,
+      "plan": {
+        "Node Type": "Nested Loop",
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Actual Total Time": 40.94,
+        "Plans": [
+          {
+            "Node Type": "Nested Loop",
+            "Actual Rows": 100,
+            "Actual Loops": 1,
+            "Actual Total Time": 38.241,
+            "Plans": [
+              {
+                "Node Type": "Hash Join",
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+                "Actual Total Time": 37.891,
+                "Plans": [
+                  {
+                    "Node Type": "Merge Join",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 37.034,
+                    "Plans": [
+                      {
+                        "Node Type": "Merge Join",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 18.148,
+                        "Plans": [
+                          {
+                            "Node Type": "Merge Join",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 0.55,
+                            "Plans": [
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "tokens",
+                                "Index Name": "tokens_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.2,
+                                "Index Searches": 4
+                              },
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "coin_card_latest",
+                                "Index Name": "coin_card_latest_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.142,
+                                "Index Searches": 4
+                              }
+                            ]
+                          },
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 17.42,
+                            "Plans": [
+                              {
+                                "Node Type": "Merge Append",
+                                "Actual Rows": 16100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 10.568,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 16100,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 5.607,
+                                    "Index Searches": 100
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_11",
+                                    "Index Name": "bars_1m_2026_11_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.022,
+                                    "Index Searches": 1
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_12",
+                                    "Index Name": "bars_1m_2026_12_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.022,
+                                    "Index Searches": 1
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "Node Type": "Aggregate",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 18.686,
+                        "Plans": [
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 4700,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 17.177,
+                            "Plans": [
+                              {
+                                "Node Type": "Incremental Sort",
+                                "Actual Rows": 5262,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 12.569,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 5262,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.707,
+                                    "Index Searches": 100
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Node Type": "Hash",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.652,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "read_coins",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.622,
+                        "Rows Removed by Filter": 2375
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Node Type": "Memoize",
+                "Actual Rows": 1,
+                "Actual Loops": 100,
+                "Actual Total Time": 0.002,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "engine_block_times",
+                    "Index Name": "engine_block_times_pkey",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.016,
+                    "Index Searches": 1
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Node Type": "Memoize",
+            "Actual Rows": 1,
+            "Actual Loops": 100,
+            "Actual Total Time": 0.001,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.011,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/pairs?stage=migrated",
+      "sql": "SELECT coin,pair_block,buyers FROM read_coins\n      WHERE launchpad='pons' AND pair_column=$1  ORDER BY pair_block DESC,coin DESC LIMIT 101",
+      "executionMs": 0.136,
+      "planningMs": 0.143,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.107,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "read_coins",
+            "Index Name": "read_coins_pair",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.082,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/pairs?stage=migrated",
+      "sql": "WITH selected AS (\n      SELECT t.*,c.data,r.activity,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address AND c.coin=ANY($2::bytea[])\n      LEFT JOIN read_coins r ON r.coin=t.address AND r.coin=ANY($2::bytea[]) WHERE t.address=ANY($2::bytea[])\n    ), market AS (\n      SELECT b.coin,(array_agg(close ORDER BY minute DESC))[1] AS price,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-3600)))[1] AS previous1h,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-86400)))[1] AS previous24h,\n        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume\n      FROM bars_1m b WHERE b.coin=ANY($2::bytea[]) GROUP BY b.coin\n    ), buckets AS (\n      SELECT b.coin,floor(extract(epoch FROM minute)/600) AS bucket,(array_agg(close ORDER BY minute DESC))[1] AS close\n      FROM bars_1m b \n      WHERE b.coin=ANY($2::bytea[]) AND minute>=to_timestamp(floor($1::double precision/600)*600-47*600) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket\n    ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)\n    SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,\n      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,s.points AS spark\n    FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address\n    LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block",
+      "executionMs": 39.411,
+      "planningMs": 1.992,
+      "plan": {
+        "Node Type": "Nested Loop",
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Actual Total Time": 39.202,
+        "Plans": [
+          {
+            "Node Type": "Nested Loop",
+            "Actual Rows": 100,
+            "Actual Loops": 1,
+            "Actual Total Time": 36.47,
+            "Plans": [
+              {
+                "Node Type": "Hash Join",
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+                "Actual Total Time": 36.138,
+                "Plans": [
+                  {
+                    "Node Type": "Merge Join",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 35.546,
+                    "Plans": [
+                      {
+                        "Node Type": "Merge Join",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 16.711,
+                        "Plans": [
+                          {
+                            "Node Type": "Merge Join",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 0.79,
+                            "Plans": [
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "tokens",
+                                "Index Name": "tokens_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.245,
+                                "Index Searches": 5
+                              },
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "coin_card_latest",
+                                "Index Name": "coin_card_latest_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.184,
+                                "Index Searches": 5
+                              }
+                            ]
+                          },
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 15.736,
+                            "Plans": [
+                              {
+                                "Node Type": "Merge Append",
+                                "Actual Rows": 16100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 9.213,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 16100,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.943,
+                                    "Index Searches": 100
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_11",
+                                    "Index Name": "bars_1m_2026_11_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.05,
+                                    "Index Searches": 1
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_12",
+                                    "Index Name": "bars_1m_2026_12_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.079,
+                                    "Index Searches": 1
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "Node Type": "Aggregate",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 18.625,
+                        "Plans": [
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 4700,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 17.111,
+                            "Plans": [
+                              {
+                                "Node Type": "Incremental Sort",
+                                "Actual Rows": 5251,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 12.369,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 5251,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.598,
+                                    "Index Searches": 100
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Node Type": "Hash",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.405,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "read_coins",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.379,
+                        "Rows Removed by Filter": 2375
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Node Type": "Memoize",
+                "Actual Rows": 1,
+                "Actual Loops": 100,
+                "Actual Total Time": 0.001,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "engine_block_times",
+                    "Index Name": "engine_block_times_pkey",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.011,
+                    "Index Searches": 1
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Node Type": "Memoize",
+            "Actual Rows": 1,
+            "Actual Loops": 100,
+            "Actual Total Time": 0.001,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.006,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed",
+      "sql": "SELECT * FROM read_feed  ORDER BY block DESC,id DESC LIMIT 101",
+      "executionMs": 0.142,
+      "planningMs": 0.15,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.098,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "read_feed",
+            "Index Name": "read_feed_cursor",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.065,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed",
+      "sql": "SELECT coin,block FROM read_first_verdict WHERE coin=ANY($1::bytea[])",
+      "executionMs": 0.189,
+      "planningMs": 0.165,
+      "plan": {
+        "Node Type": "Bitmap Heap Scan",
+        "Relation Name": "read_first_verdict",
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.157,
+        "Plans": [
+          {
+            "Node Type": "Bitmap Index Scan",
+            "Index Name": "read_first_verdict_pkey",
+            "Actual Rows": 100,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.104,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed",
+      "sql": "SELECT number,ts FROM engine_block_times WHERE number=ANY($1::bigint[])\n      UNION ALL SELECT number,ts FROM chain_blocks WHERE number=ANY($1::bigint[])",
+      "executionMs": 0.552,
+      "planningMs": 0.192,
+      "plan": {
+        "Node Type": "Append",
+        "Actual Rows": 400,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.487,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "engine_block_times",
+            "Index Name": "engine_block_times_pkey",
+            "Actual Rows": 200,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.216,
+            "Index Searches": 7
+          },
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "chain_blocks",
+            "Index Name": "chain_blocks_pkey",
+            "Actual Rows": 200,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.188,
+            "Index Searches": 7
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=verdict",
+      "sql": "SELECT * FROM ((SELECT * FROM read_feed WHERE kind=$1  ORDER BY block DESC,id DESC LIMIT 101)) kinds ORDER BY block DESC,id DESC LIMIT 101",
+      "executionMs": 0.273,
+      "planningMs": 0.139,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.243,
+        "Plans": [
+          {
+            "Node Type": "Limit",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.219,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "read_feed",
+                "Index Name": "read_feed_cursor",
+                "Actual Rows": 101,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.196,
+                "Rows Removed by Filter": 364,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=verdict",
+      "sql": "SELECT coin,block FROM read_first_verdict WHERE coin=ANY($1::bytea[])",
+      "executionMs": 0.147,
+      "planningMs": 0.112,
+      "plan": {
+        "Node Type": "Bitmap Heap Scan",
+        "Relation Name": "read_first_verdict",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.115,
+        "Plans": [
+          {
+            "Node Type": "Bitmap Index Scan",
+            "Index Name": "read_first_verdict_pkey",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.061,
+            "Index Searches": 2
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=verdict",
+      "sql": "SELECT number,ts FROM engine_block_times WHERE number=ANY($1::bigint[])\n      UNION ALL SELECT number,ts FROM chain_blocks WHERE number=ANY($1::bigint[])",
+      "executionMs": 0.442,
+      "planningMs": 0.281,
+      "plan": {
+        "Node Type": "Append",
+        "Actual Rows": 404,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.352,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "engine_block_times",
+            "Index Name": "engine_block_times_pkey",
+            "Actual Rows": 202,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.125,
+            "Index Searches": 4
+          },
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "chain_blocks",
+            "Index Name": "chain_blocks_pkey",
+            "Actual Rows": 202,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.137,
+            "Index Searches": 4
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=new_pair",
+      "sql": "SELECT * FROM ((SELECT * FROM read_feed WHERE kind=$1  ORDER BY block DESC,id DESC LIMIT 101)) kinds ORDER BY block DESC,id DESC LIMIT 101",
+      "executionMs": 0.128,
+      "planningMs": 0.13,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.102,
+        "Plans": [
+          {
+            "Node Type": "Limit",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.078,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "read_feed",
+                "Index Name": "read_feed_kind_cursor",
+                "Actual Rows": 101,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.057,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=new_pair",
+      "sql": "SELECT coin,block FROM read_first_verdict WHERE coin=ANY($1::bytea[])",
+      "executionMs": 0.134,
+      "planningMs": 0.092,
+      "plan": {
+        "Node Type": "Bitmap Heap Scan",
+        "Relation Name": "read_first_verdict",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.1,
+        "Plans": [
+          {
+            "Node Type": "Bitmap Index Scan",
+            "Index Name": "read_first_verdict_pkey",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.052,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=new_pair",
+      "sql": "SELECT number,ts FROM engine_block_times WHERE number=ANY($1::bigint[])\n      UNION ALL SELECT number,ts FROM chain_blocks WHERE number=ANY($1::bigint[])",
+      "executionMs": 0.278,
+      "planningMs": 0.361,
+      "plan": {
+        "Node Type": "Append",
+        "Actual Rows": 204,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.225,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "engine_block_times",
+            "Index Name": "engine_block_times_pkey",
+            "Actual Rows": 102,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.116,
+            "Index Searches": 3
+          },
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "chain_blocks",
+            "Index Name": "chain_blocks_pkey",
+            "Actual Rows": 102,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.059,
+            "Index Searches": 3
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=playbook,wash",
+      "sql": "SELECT * FROM ((SELECT * FROM read_feed WHERE kind=$1  ORDER BY block DESC,id DESC LIMIT 101) UNION ALL (SELECT * FROM read_feed WHERE kind=$2  ORDER BY block DESC,id DESC LIMIT 101)) kinds ORDER BY block DESC,id DESC LIMIT 101",
+      "executionMs": 0.197,
+      "planningMs": 0.197,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.158,
+        "Plans": [
+          {
+            "Node Type": "Merge Append",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.134,
+            "Plans": [
+              {
+                "Node Type": "Limit",
+                "Actual Rows": 51,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.06,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "read_feed",
+                    "Index Name": "read_feed_kind_cursor",
+                    "Actual Rows": 51,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.048,
+                    "Index Searches": 1
+                  }
+                ]
+              },
+              {
+                "Node Type": "Limit",
+                "Actual Rows": 51,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.044,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "read_feed",
+                    "Index Name": "read_feed_kind_cursor",
+                    "Actual Rows": 51,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.033,
+                    "Index Searches": 1
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=playbook,wash",
+      "sql": "SELECT coin,block FROM read_first_verdict WHERE coin=ANY($1::bytea[])",
+      "executionMs": 0.169,
+      "planningMs": 0.068,
+      "plan": {
+        "Node Type": "Bitmap Heap Scan",
+        "Relation Name": "read_first_verdict",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.098,
+        "Plans": [
+          {
+            "Node Type": "Bitmap Index Scan",
+            "Index Name": "read_first_verdict_pkey",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.049,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=playbook,wash",
+      "sql": "SELECT number,ts FROM engine_block_times WHERE number=ANY($1::bigint[])\n      UNION ALL SELECT number,ts FROM chain_blocks WHERE number=ANY($1::bigint[])",
+      "executionMs": 0.528,
+      "planningMs": 0.197,
+      "plan": {
+        "Node Type": "Append",
+        "Actual Rows": 406,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.456,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "engine_block_times",
+            "Index Name": "engine_block_times_pkey",
+            "Actual Rows": 203,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.193,
+            "Index Searches": 5
+          },
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "chain_blocks",
+            "Index Name": "chain_blocks_pkey",
+            "Actual Rows": 203,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.167,
+            "Index Searches": 5
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=burn",
+      "sql": "SELECT * FROM ((SELECT * FROM read_feed WHERE kind=$1  ORDER BY block DESC,id DESC LIMIT 101)) kinds ORDER BY block DESC,id DESC LIMIT 101",
+      "executionMs": 0.027,
+      "planningMs": 0.097,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 0,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.013,
+        "Plans": [
+          {
+            "Node Type": "Limit",
+            "Actual Rows": 0,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.012,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "read_feed",
+                "Index Name": "read_feed_kind_cursor",
+                "Actual Rows": 0,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.011,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>",
+      "sql": "SELECT data FROM coin_card_latest WHERE coin=$1",
+      "executionMs": 0.038,
+      "planningMs": 0.078,
+      "plan": {
+        "Node Type": "Index Scan",
+        "Relation Name": "coin_card_latest",
+        "Index Name": "coin_card_latest_pkey",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.021,
+        "Index Searches": 1
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>",
+      "sql": "SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1",
+      "executionMs": 0.072,
+      "planningMs": 0.106,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.052,
+        "Plans": [
+          {
+            "Node Type": "Append",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.049,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "engine_block_times",
+                "Index Name": "engine_block_times_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.046,
+                "Index Searches": 1
+              },
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 0,
+                "Actual Loops": 0,
+                "Actual Total Time": 0,
+                "Index Searches": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>/verdict",
+      "sql": "SELECT data FROM verdicts v WHERE coin=$1 AND NOT EXISTS\n      (SELECT 1 FROM verdict_events e WHERE e.verdict_id=v.id AND e.kind='orphaned') ORDER BY valid_from_block DESC,id DESC LIMIT 1",
+      "executionMs": 0.137,
+      "planningMs": 0.325,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.111,
+        "Plans": [
+          {
+            "Node Type": "Incremental Sort",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.108,
+            "Plans": [
+              {
+                "Node Type": "Nested Loop",
+                "Actual Rows": 2,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.093,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "verdicts",
+                    "Index Name": "verdicts_coin_block",
+                    "Actual Rows": 2,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.062,
+                    "Index Searches": 1
+                  },
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "verdict_events",
+                    "Index Name": "verdict_events_verdict_kind",
+                    "Actual Rows": 0,
+                    "Actual Loops": 2,
+                    "Actual Total Time": 0.009,
+                    "Index Searches": 2
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>/flow",
+      "sql": "SELECT data FROM coin_card_latest WHERE coin=$1",
+      "executionMs": 0.026,
+      "planningMs": 0.049,
+      "plan": {
+        "Node Type": "Index Scan",
+        "Relation Name": "coin_card_latest",
+        "Index Name": "coin_card_latest_pkey",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.013,
+        "Index Searches": 1
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>/flow",
+      "sql": "SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1",
+      "executionMs": 0.034,
+      "planningMs": 0.135,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.016,
+        "Plans": [
+          {
+            "Node Type": "Append",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.014,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "engine_block_times",
+                "Index Name": "engine_block_times_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.012,
+                "Index Searches": 1
+              },
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 0,
+                "Actual Loops": 0,
+                "Actual Total Time": 0,
+                "Index Searches": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>/candles?tf=5m&from=<seconds>&to=<seconds>",
+      "sql": "SELECT 1 FROM tokens WHERE address=$1",
+      "executionMs": 0.039,
+      "planningMs": 0.092,
+      "plan": {
+        "Node Type": "Index Only Scan",
+        "Relation Name": "tokens",
+        "Index Name": "tokens_pkey",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.019,
+        "Index Searches": 1
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>/candles?tf=5m&from=<seconds>&to=<seconds>",
+      "sql": "SELECT extract(epoch FROM to_timestamp(floor(extract(epoch FROM ts)/$4)*$4)) AS ts,\n    (array_agg(open ORDER BY ts,first_block,log_index,tx_hash))[1] AS o,max(high) AS h,min(low) AS l,\n    (array_agg(close ORDER BY ts DESC,last_block DESC,log_index DESC,tx_hash DESC))[1] AS c,sum(volume_usd) AS v,sum(trades)::integer AS trades,max(last_block) AS last_block\n    FROM (SELECT coin,minute AS ts,open,high,low,close,volume_usd,trades,first_block,last_block,0 AS log_index,coin AS tx_hash FROM bars_1m) s WHERE coin=$1 AND ts >= to_timestamp($2) AND ts < to_timestamp($3) GROUP BY to_timestamp(floor(extract(epoch FROM ts)/$4)*$4) ORDER BY to_timestamp(floor(extract(epoch FROM ts)/$4)*$4)",
+      "executionMs": 0.331,
+      "planningMs": 0.223,
+      "plan": {
+        "Node Type": "Aggregate",
+        "Actual Rows": 40,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.289,
+        "Plans": [
+          {
+            "Node Type": "Sort",
+            "Actual Rows": 40,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.142,
+            "Plans": [
+              {
+                "Node Type": "Bitmap Heap Scan",
+                "Relation Name": "bars_1m_2026_10",
+                "Actual Rows": 40,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.111,
+                "Plans": [
+                  {
+                    "Node Type": "Bitmap Index Scan",
+                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                    "Actual Rows": 40,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.015,
+                    "Index Searches": 1
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>/candles?tf=5m&from=<seconds>&to=<seconds>",
+      "sql": "SELECT min(ts) AS first,max(ts) AS last FROM swaps WHERE coin=$1",
+      "executionMs": 0.061,
+      "planningMs": 0.365,
+      "plan": {
+        "Node Type": "Result",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.039,
+        "Plans": [
+          {
+            "Node Type": "Limit",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.022,
+            "Plans": [
+              {
+                "Node Type": "Append",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.02,
+                "Plans": [
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "swaps_2026_10",
+                    "Index Name": "swaps_2026_10_coin_ts_idx",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.018,
+                    "Index Searches": 1
+                  },
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "swaps_2026_11",
+                    "Index Name": "swaps_2026_11_coin_ts_idx",
+                    "Actual Rows": 0,
+                    "Actual Loops": 0,
+                    "Actual Total Time": 0,
+                    "Index Searches": 0
+                  },
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "swaps_2026_12",
+                    "Index Name": "swaps_2026_12_coin_ts_idx",
+                    "Actual Rows": 0,
+                    "Actual Loops": 0,
+                    "Actual Total Time": 0,
+                    "Index Searches": 0
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Node Type": "Limit",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.013,
+            "Plans": [
+              {
+                "Node Type": "Append",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.013,
+                "Plans": [
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "swaps_2026_12",
+                    "Index Name": "swaps_2026_12_coin_ts_idx",
+                    "Actual Rows": 0,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.002,
+                    "Index Searches": 1
+                  },
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "swaps_2026_11",
+                    "Index Name": "swaps_2026_11_coin_ts_idx",
+                    "Actual Rows": 0,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.001,
+                    "Index Searches": 1
+                  },
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "swaps_2026_10",
+                    "Index Name": "swaps_2026_10_coin_ts_idx",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.009,
+                    "Index Searches": 1
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>/candles?tf=5m&from=<seconds>&to=<seconds>",
+      "sql": "SELECT total_supply,decimals,supply_block FROM tokens WHERE address=$1",
+      "executionMs": 0.041,
+      "planningMs": 0.092,
+      "plan": {
+        "Node Type": "Index Scan",
+        "Relation Name": "tokens",
+        "Index Name": "tokens_pkey",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.022,
+        "Index Searches": 1
+      }
+    },
+    {
+      "route": "/v1/coins/<coin>/markers?from=<seconds>&to=<seconds>",
+      "sql": "SELECT 1 FROM tokens WHERE address=$1",
+      "executionMs": 0.031,
+      "planningMs": 0.082,
+      "plan": {
+        "Node Type": "Index Only Scan",
+        "Relation Name": "tokens",
+        "Index Name": "tokens_pkey",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.017,
+        "Index Searches": 1
+      }
+    },
+    {
+      "route": "/v1/scan?q=<coin>",
+      "sql": "SELECT t.address,t.name,t.symbol,t.launchpad,t.curve,t.graduated_block,c.data->'verdict'->>'level' AS level FROM tokens t\n      LEFT JOIN coin_card_latest c ON c.coin=t.address AND c.coin=ANY($1::bytea[]) WHERE t.address=ANY($1::bytea[]) ORDER BY t.address",
+      "executionMs": 0.071,
+      "planningMs": 0.228,
+      "plan": {
+        "Node Type": "Nested Loop",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.049,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "tokens",
+            "Index Name": "tokens_pkey",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.01,
+            "Index Searches": 1
+          },
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "coin_card_latest",
+            "Index Name": "coin_card_latest_pkey",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.003,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/scan?q=<coin>",
+      "sql": "SELECT data FROM coin_card_latest WHERE coin=$1",
+      "executionMs": 0.021,
+      "planningMs": 0.039,
+      "plan": {
+        "Node Type": "Index Scan",
+        "Relation Name": "coin_card_latest",
+        "Index Name": "coin_card_latest_pkey",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.01,
+        "Index Searches": 1
+      }
+    },
+    {
+      "route": "/v1/scan?q=<coin>",
+      "sql": "SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1",
+      "executionMs": 0.027,
+      "planningMs": 0.076,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.015,
+        "Plans": [
+          {
+            "Node Type": "Append",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.012,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "engine_block_times",
+                "Index Name": "engine_block_times_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.01,
+                "Index Searches": 1
+              },
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 0,
+                "Actual Loops": 0,
+                "Actual Total Time": 0,
+                "Index Searches": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/scan?q=$POOL",
+      "sql": "WITH matches AS MATERIALIZED (\n      (SELECT address FROM tokens WHERE lower(symbol)=$1 ORDER BY address LIMIT 101) UNION\n      (SELECT address FROM tokens WHERE read_name_terms(name) @> ARRAY[left($1,least(length($1),3))] AND position($1 in lower(name))>0 LIMIT 101)\n    ) SELECT address FROM matches ORDER BY address LIMIT 101",
+      "executionMs": 0.632,
+      "planningMs": 0.267,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.571,
+        "Plans": [
+          {
+            "Node Type": "Aggregate",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.446,
+            "Plans": [
+              {
+                "Node Type": "Append",
+                "Actual Rows": 202,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.367,
+                "Plans": [
+                  {
+                    "Node Type": "Limit",
+                    "Actual Rows": 101,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.066,
+                    "Plans": [
+                      {
+                        "Node Type": "Index Only Scan",
+                        "Relation Name": "tokens",
+                        "Index Name": "tokens_symbol_address",
+                        "Actual Rows": 101,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.043,
+                        "Index Searches": 1
+                      }
+                    ]
+                  },
+                  {
+                    "Node Type": "Limit",
+                    "Actual Rows": 101,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.256,
+                    "Plans": [
+                      {
+                        "Node Type": "Bitmap Heap Scan",
+                        "Relation Name": "tokens",
+                        "Actual Rows": 101,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.233,
+                        "Rows Removed by Filter": 0,
+                        "Plans": [
+                          {
+                            "Node Type": "Bitmap Index Scan",
+                            "Index Name": "tokens_name_terms",
+                            "Actual Rows": 2683,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 0.151,
+                            "Index Searches": 1
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Node Type": "Sort",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.544,
+            "Plans": [
+              {
+                "Node Type": "CTE Scan",
+                "Actual Rows": 101,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.489
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/scan?q=$POOL",
+      "sql": "SELECT t.address,t.name,t.symbol,t.launchpad,t.curve,t.graduated_block,c.data->'verdict'->>'level' AS level FROM tokens t\n      LEFT JOIN coin_card_latest c ON c.coin=t.address AND c.coin=ANY($1::bytea[]) WHERE t.address=ANY($1::bytea[]) ORDER BY t.address",
+      "executionMs": 0.14,
+      "planningMs": 0.348,
+      "plan": {
+        "Node Type": "Merge Join",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.098,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "tokens",
+            "Index Name": "tokens_pkey",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.05,
+            "Index Searches": 1
+          },
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "coin_card_latest",
+            "Index Name": "coin_card_latest_pkey",
+            "Actual Rows": 0,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.007,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar?cursor=<next>",
+      "sql": "SELECT coin,tier,volume FROM read_coins\n      WHERE activity>$1 AND (tier,-volume,coin)>($2,$3,$4) ORDER BY tier,-volume,coin LIMIT 101",
+      "executionMs": 0.124,
+      "planningMs": 0.131,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.095,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "read_coins",
+            "Index Name": "read_coins_rank",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.071,
+            "Rows Removed by Filter": 0,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar?cursor=<next>",
+      "sql": "WITH selected AS (\n      SELECT t.*,c.data,r.activity,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address AND c.coin=ANY($2::bytea[])\n      LEFT JOIN read_coins r ON r.coin=t.address AND r.coin=ANY($2::bytea[]) WHERE t.address=ANY($2::bytea[])\n    ), market AS (\n      SELECT b.coin,(array_agg(close ORDER BY minute DESC))[1] AS price,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-3600)))[1] AS previous1h,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-86400)))[1] AS previous24h,\n        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume\n      FROM bars_1m b WHERE b.coin=ANY($2::bytea[]) GROUP BY b.coin\n    ), buckets AS (\n      SELECT b.coin,floor(extract(epoch FROM minute)/600) AS bucket,(array_agg(close ORDER BY minute DESC))[1] AS close\n      FROM bars_1m b \n      WHERE b.coin=ANY($2::bytea[]) AND minute>=to_timestamp(floor($1::double precision/600)*600-47*600) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket\n    ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)\n    SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,\n      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,s.points AS spark\n    FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address\n    LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block",
+      "executionMs": 37.122,
+      "planningMs": 2.144,
+      "plan": {
+        "Node Type": "Nested Loop",
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Actual Total Time": 36.83,
+        "Plans": [
+          {
+            "Node Type": "Nested Loop",
+            "Actual Rows": 100,
+            "Actual Loops": 1,
+            "Actual Total Time": 34.21,
+            "Plans": [
+              {
+                "Node Type": "Hash Join",
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+                "Actual Total Time": 33.843,
+                "Plans": [
+                  {
+                    "Node Type": "Merge Join",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 31.85,
+                    "Plans": [
+                      {
+                        "Node Type": "Merge Join",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 14.467,
+                        "Plans": [
+                          {
+                            "Node Type": "Merge Join",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 0.386,
+                            "Plans": [
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "tokens",
+                                "Index Name": "tokens_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.121,
+                                "Index Searches": 1
+                              },
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "coin_card_latest",
+                                "Index Name": "coin_card_latest_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.065,
+                                "Index Searches": 1
+                              }
+                            ]
+                          },
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 13.922,
+                            "Plans": [
+                              {
+                                "Node Type": "Merge Append",
+                                "Actual Rows": 16200,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 8.06,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 16200,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.327,
+                                    "Index Searches": 1
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_11",
+                                    "Index Name": "bars_1m_2026_11_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.007,
+                                    "Index Searches": 1
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_12",
+                                    "Index Name": "bars_1m_2026_12_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.006,
+                                    "Index Searches": 1
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "Node Type": "Aggregate",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 17.168,
+                        "Plans": [
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 4700,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 15.83,
+                            "Plans": [
+                              {
+                                "Node Type": "Incremental Sort",
+                                "Actual Rows": 5300,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 11.776,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 5300,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.333,
+                                    "Index Searches": 94
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Node Type": "Hash",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 1.808,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "read_coins",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 1.75,
+                        "Rows Removed by Filter": 2375
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Node Type": "Memoize",
+                "Actual Rows": 1,
+                "Actual Loops": 100,
+                "Actual Total Time": 0.002,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "engine_block_times",
+                    "Index Name": "engine_block_times_pkey",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.034,
+                    "Index Searches": 1
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Node Type": "Memoize",
+            "Actual Rows": 1,
+            "Actual Loops": 100,
+            "Actual Total Time": 0.001,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.01,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar?cursor=<next>",
+      "sql": "SELECT tier,count(*) AS n FROM read_coins WHERE activity>$1 GROUP BY tier",
+      "executionMs": 1.082,
+      "planningMs": 0.134,
+      "plan": {
+        "Node Type": "Aggregate",
+        "Actual Rows": 3,
+        "Actual Loops": 1,
+        "Actual Total Time": 1.04,
+        "Plans": [
+          {
+            "Node Type": "Seq Scan",
+            "Relation Name": "read_coins",
+            "Actual Rows": 2475,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.508,
+            "Rows Removed by Filter": 0
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar?cursor=<next>",
+      "sql": "SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN read_coins r ON r.coin=e.coin WHERE e.sec>=$1 AND r.activity>$2",
+      "executionMs": 32.169,
+      "planningMs": 0.73,
+      "plan": {
+        "Node Type": "Aggregate",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 32.1,
+        "Plans": [
+          {
+            "Node Type": "Sort",
+            "Actual Rows": 24210,
+            "Actual Loops": 1,
+            "Actual Total Time": 27.712,
+            "Plans": [
+              {
+                "Node Type": "Hash Join",
+                "Actual Rows": 24210,
+                "Actual Loops": 1,
+                "Actual Total Time": 15.33,
+                "Plans": [
+                  {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "engine_runs",
+                    "Index Name": "engine_runs_sec_coin",
+                    "Actual Rows": 24210,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 4.793,
+                    "Index Searches": 1
+                  },
+                  {
+                    "Node Type": "Hash",
+                    "Actual Rows": 2475,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 1.098,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "read_coins",
+                        "Actual Rows": 2475,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.594,
+                        "Rows Removed by Filter": 0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/pairs?stage=new&cursor=<next>",
+      "sql": "SELECT coin,pair_block,buyers FROM read_coins\n      WHERE launchpad='pons' AND pair_column=$1 AND (pair_block,coin)<($2,$3) ORDER BY pair_block DESC,coin DESC LIMIT 101",
+      "executionMs": 0.129,
+      "planningMs": 0.153,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.099,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "read_coins",
+            "Index Name": "read_coins_pair",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.074,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/pairs?stage=new&cursor=<next>",
+      "sql": "WITH selected AS (\n      SELECT t.*,c.data,r.activity,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address AND c.coin=ANY($2::bytea[])\n      LEFT JOIN read_coins r ON r.coin=t.address AND r.coin=ANY($2::bytea[]) WHERE t.address=ANY($2::bytea[])\n    ), market AS (\n      SELECT b.coin,(array_agg(close ORDER BY minute DESC))[1] AS price,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-3600)))[1] AS previous1h,\n        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-86400)))[1] AS previous24h,\n        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume\n      FROM bars_1m b WHERE b.coin=ANY($2::bytea[]) GROUP BY b.coin\n    ), buckets AS (\n      SELECT b.coin,floor(extract(epoch FROM minute)/600) AS bucket,(array_agg(close ORDER BY minute DESC))[1] AS close\n      FROM bars_1m b \n      WHERE b.coin=ANY($2::bytea[]) AND minute>=to_timestamp(floor($1::double precision/600)*600-47*600) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket\n    ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)\n    SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,\n      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,s.points AS spark\n    FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address\n    LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block",
+      "executionMs": 38.829,
+      "planningMs": 1.669,
+      "plan": {
+        "Node Type": "Nested Loop",
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Actual Total Time": 38.635,
+        "Plans": [
+          {
+            "Node Type": "Nested Loop",
+            "Actual Rows": 100,
+            "Actual Loops": 1,
+            "Actual Total Time": 35.542,
+            "Plans": [
+              {
+                "Node Type": "Hash Join",
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+                "Actual Total Time": 35.031,
+                "Plans": [
+                  {
+                    "Node Type": "Merge Join",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 34.445,
+                    "Plans": [
+                      {
+                        "Node Type": "Merge Join",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 15.376,
+                        "Plans": [
+                          {
+                            "Node Type": "Merge Join",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 0.474,
+                            "Plans": [
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "tokens",
+                                "Index Name": "tokens_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.162,
+                                "Index Searches": 1
+                              },
+                              {
+                                "Node Type": "Index Scan",
+                                "Relation Name": "coin_card_latest",
+                                "Index Name": "coin_card_latest_pkey",
+                                "Actual Rows": 100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 0.089,
+                                "Index Searches": 1
+                              }
+                            ]
+                          },
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 100,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 14.741,
+                            "Plans": [
+                              {
+                                "Node Type": "Merge Append",
+                                "Actual Rows": 16100,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 8.555,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 16100,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.607,
+                                    "Index Searches": 25
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_11",
+                                    "Index Name": "bars_1m_2026_11_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.023,
+                                    "Index Searches": 1
+                                  },
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_12",
+                                    "Index Name": "bars_1m_2026_12_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 0,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 0.021,
+                                    "Index Searches": 1
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "Node Type": "Aggregate",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 18.815,
+                        "Plans": [
+                          {
+                            "Node Type": "Aggregate",
+                            "Actual Rows": 4700,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 17.426,
+                            "Plans": [
+                              {
+                                "Node Type": "Incremental Sort",
+                                "Actual Rows": 5300,
+                                "Actual Loops": 1,
+                                "Actual Total Time": 12.819,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Index Only Scan",
+                                    "Relation Name": "bars_1m_2026_10",
+                                    "Index Name": "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+                                    "Actual Rows": 5300,
+                                    "Actual Loops": 1,
+                                    "Actual Total Time": 4.69,
+                                    "Index Searches": 92
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Node Type": "Hash",
+                    "Actual Rows": 100,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.391,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "read_coins",
+                        "Actual Rows": 100,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 0.365,
+                        "Rows Removed by Filter": 2375
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Node Type": "Memoize",
+                "Actual Rows": 1,
+                "Actual Loops": 100,
+                "Actual Total Time": 0.003,
+                "Plans": [
+                  {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "engine_block_times",
+                    "Index Name": "engine_block_times_pkey",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 0.01,
+                    "Index Searches": 1
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Node Type": "Memoize",
+            "Actual Rows": 1,
+            "Actual Loops": 100,
+            "Actual Total Time": 0.001,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "chain_blocks",
+                "Index Name": "chain_blocks_pkey",
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.006,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?cursor=<next>",
+      "sql": "SELECT * FROM read_feed WHERE (block,id)<($1,$2) ORDER BY block DESC,id DESC LIMIT 101",
+      "executionMs": 0.111,
+      "planningMs": 0.297,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.077,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "read_feed",
+            "Index Name": "read_feed_cursor",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.05,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?cursor=<next>",
+      "sql": "SELECT coin,block FROM read_first_verdict WHERE coin=ANY($1::bytea[])",
+      "executionMs": 0.189,
+      "planningMs": 0.115,
+      "plan": {
+        "Node Type": "Bitmap Heap Scan",
+        "Relation Name": "read_first_verdict",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.156,
+        "Plans": [
+          {
+            "Node Type": "Bitmap Index Scan",
+            "Index Name": "read_first_verdict_pkey",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.105,
+            "Index Searches": 6
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?cursor=<next>",
+      "sql": "SELECT number,ts FROM engine_block_times WHERE number=ANY($1::bigint[])\n      UNION ALL SELECT number,ts FROM chain_blocks WHERE number=ANY($1::bigint[])",
+      "executionMs": 0.922,
+      "planningMs": 0.192,
+      "plan": {
+        "Node Type": "Append",
+        "Actual Rows": 406,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.779,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "engine_block_times",
+            "Index Name": "engine_block_times_pkey",
+            "Actual Rows": 203,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.336,
+            "Index Searches": 7
+          },
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "chain_blocks",
+            "Index Name": "chain_blocks_pkey",
+            "Actual Rows": 203,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.295,
+            "Index Searches": 7
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=verdict&cursor=<next>",
+      "sql": "SELECT * FROM ((SELECT * FROM read_feed WHERE kind=$3 AND (block,id)<($1,$2) ORDER BY block DESC,id DESC LIMIT 101)) kinds ORDER BY block DESC,id DESC LIMIT 101",
+      "executionMs": 0.176,
+      "planningMs": 0.303,
+      "plan": {
+        "Node Type": "Limit",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.133,
+        "Plans": [
+          {
+            "Node Type": "Limit",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.108,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Relation Name": "read_feed",
+                "Index Name": "read_feed_cursor",
+                "Actual Rows": 101,
+                "Actual Loops": 1,
+                "Actual Total Time": 0.087,
+                "Rows Removed by Filter": 10,
+                "Index Searches": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=verdict&cursor=<next>",
+      "sql": "SELECT coin,block FROM read_first_verdict WHERE coin=ANY($1::bytea[])",
+      "executionMs": 0.205,
+      "planningMs": 0.168,
+      "plan": {
+        "Node Type": "Bitmap Heap Scan",
+        "Relation Name": "read_first_verdict",
+        "Actual Rows": 101,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.14,
+        "Plans": [
+          {
+            "Node Type": "Bitmap Index Scan",
+            "Index Name": "read_first_verdict_pkey",
+            "Actual Rows": 101,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.074,
+            "Index Searches": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/feed?kinds=verdict&cursor=<next>",
+      "sql": "SELECT number,ts FROM engine_block_times WHERE number=ANY($1::bigint[])\n      UNION ALL SELECT number,ts FROM chain_blocks WHERE number=ANY($1::bigint[])",
+      "executionMs": 0.575,
+      "planningMs": 0.247,
+      "plan": {
+        "Node Type": "Append",
+        "Actual Rows": 406,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.477,
+        "Plans": [
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "engine_block_times",
+            "Index Name": "engine_block_times_pkey",
+            "Actual Rows": 203,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.159,
+            "Index Searches": 3
+          },
+          {
+            "Node Type": "Index Scan",
+            "Relation Name": "chain_blocks",
+            "Index Name": "chain_blocks_pkey",
+            "Actual Rows": 203,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.223,
+            "Index Searches": 3
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar (minute refresh)",
+      "sql": "SELECT window_sec FROM read_rank_clock WHERE singleton=true FOR UPDATE",
+      "executionMs": 0.047,
+      "planningMs": 0.077,
+      "plan": {
+        "Node Type": "LockRows",
+        "Actual Rows": 1,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.03,
+        "Plans": [
+          {
+            "Node Type": "Seq Scan",
+            "Relation Name": "read_rank_clock",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.014,
+            "Rows Removed by Filter": 0
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar (minute refresh)",
+      "sql": "UPDATE read_coins SET volume=0 WHERE volume<>0",
+      "executionMs": 32.208,
+      "planningMs": 0.174,
+      "plan": {
+        "Node Type": "ModifyTable",
+        "Relation Name": "read_coins",
+        "Actual Rows": 0,
+        "Actual Loops": 1,
+        "Actual Total Time": 32.163,
+        "Plans": [
+          {
+            "Node Type": "Seq Scan",
+            "Relation Name": "read_coins",
+            "Actual Rows": 2474,
+            "Actual Loops": 1,
+            "Actual Total Time": 1.135,
+            "Rows Removed by Filter": 1
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar (minute refresh)",
+      "sql": "UPDATE read_coins r SET volume=b.volume FROM (SELECT coin,sum(volume_usd) AS volume FROM bars_1m WHERE minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision) GROUP BY coin) b WHERE r.coin=b.coin",
+      "executionMs": 94.702,
+      "planningMs": 0.524,
+      "plan": {
+        "Node Type": "ModifyTable",
+        "Relation Name": "read_coins",
+        "Actual Rows": 0,
+        "Actual Loops": 1,
+        "Actual Total Time": 74.999,
+        "Plans": [
+          {
+            "Node Type": "Hash Join",
+            "Actual Rows": 2474,
+            "Actual Loops": 1,
+            "Actual Total Time": 20.504,
+            "Plans": [
+              {
+                "Node Type": "Seq Scan",
+                "Relation Name": "read_coins",
+                "Actual Rows": 2475,
+                "Actual Loops": 1,
+                "Actual Total Time": 1.457
+              },
+              {
+                "Node Type": "Hash",
+                "Actual Rows": 2474,
+                "Actual Loops": 1,
+                "Actual Total Time": 16.48,
+                "Plans": [
+                  {
+                    "Node Type": "Subquery Scan",
+                    "Actual Rows": 2474,
+                    "Actual Loops": 1,
+                    "Actual Total Time": 15.771,
+                    "Plans": [
+                      {
+                        "Node Type": "Aggregate",
+                        "Actual Rows": 2474,
+                        "Actual Loops": 1,
+                        "Actual Total Time": 14.872,
+                        "Plans": [
+                          {
+                            "Node Type": "Index Only Scan",
+                            "Relation Name": "bars_1m_2026_10",
+                            "Index Name": "bars_1m_2026_10_minute_coin_volume_usd_idx",
+                            "Actual Rows": 16528,
+                            "Actual Loops": 1,
+                            "Actual Total Time": 7.282,
+                            "Index Searches": 1
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "route": "/v1/radar (minute refresh)",
+      "sql": "UPDATE read_rank_clock SET window_sec=$1 WHERE singleton=true",
+      "executionMs": 0.059,
+      "planningMs": 0.069,
+      "plan": {
+        "Node Type": "ModifyTable",
+        "Relation Name": "read_rank_clock",
+        "Actual Rows": 0,
+        "Actual Loops": 1,
+        "Actual Total Time": 0.032,
+        "Plans": [
+          {
+            "Node Type": "Seq Scan",
+            "Relation Name": "read_rank_clock",
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Actual Total Time": 0.007,
+            "Rows Removed by Filter": 0
+          }
+        ]
+      }
+    }
+  ]
+}

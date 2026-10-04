@@ -1,5 +1,5 @@
 import { binary, hex, type BusMessage, type EngineBus } from '@eko/db';
-import { CoinCardSchema, VerdictSchema, type Address, type Tick } from '@eko/shared';
+import { VerdictSchema, type Address, type Tick } from '@eko/shared';
 import type { ReadServices } from '../http/v1/reads.js';
 import type { Hub } from '../ws/hub.js';
 import { reportError } from '../obs/errors.js';
@@ -10,6 +10,8 @@ export class ReadLive {
   private queue:Promise<void>=Promise.resolve();
   private rerank?:ReturnType<typeof setTimeout>;
   private timer?:ReturnType<typeof setInterval>;
+  private flows=new Map<Address,import('@eko/shared').Flow>();
+  private markers=new Map<string,string>();
   private ticks=new Map<Address,Tick>();
   private seen=new Set<string>();
   private swaps=new Set<string>();
@@ -21,10 +23,10 @@ export class ReadLive {
     });
     this.unsubscribe=await bus.subscribe(message=>{
       if(this.closed)return;
-      if(!['card_updated','verdict_created','pair_created','swap','guard_verdict_created','guard_revision_invalidated'].includes(message.topic))return;
+      if(!['flow_updated','card_updated','verdict_created','pair_created','swap','guard_verdict_created','guard_revision_invalidated'].includes(message.topic))return;
       this.queue=this.queue.then(()=>this.handle(message)).catch(error=>reportError(error,{where:'read live'}));
     });
-    this.timer=setInterval(()=>{for(const [coin,tick] of this.ticks)this.hub.publish<'coin','tick'>(`coin:${coin}`,'tick',tick);this.ticks.clear();},1000);
+    this.timer=setInterval(()=>{for(const [coin,tick] of this.ticks)this.hub.publish<'coin','tick'>(`coin:${coin}`,'tick',tick);this.ticks.clear();for(const [coin,flow] of this.flows)this.hub.publish<'flow','flow'>(`flow:${coin}`,'flow',flow);this.flows.clear();},1000);
     this.timer.unref();
   }
   async drain(){for(;;){const queue=this.queue;await queue;if(queue===this.queue)return;}}
@@ -32,6 +34,13 @@ export class ReadLive {
     const db=this.services.store.db;
     let coin=message.ids.coin as Address | undefined;
     let block:number | undefined;
+    if(message.topic==='flow_updated') {
+      if(!coin)return;
+      const flow=await this.services.coins.flow(coin,'1h');if(flow)this.flows.set(coin,flow);
+      const events=(await db.sql.query<{id:string;data:import('@eko/shared').FlowEvent}>(`SELECT e.id,e.data FROM flow_events e JOIN chain_blocks b ON b.number=e.block AND b.hash=e.block_hash WHERE e.model_version=(SELECT model_version FROM watcher_flow_model WHERE singleton) AND e.coin=$1 AND e.block<=$2 AND e.ts>(SELECT as_of FROM flow_windows WHERE coin=e.coin AND window_kind='24h')-interval '24 hours' AND NOT EXISTS(SELECT 1 FROM flow_dirty d WHERE d.coin=e.coin) ORDER BY e.ts,e.id LIMIT 5000`,[binary(coin),message.ids.block])).rows;
+      for(const event of events){const data={...event.data,beta:flow?.beta??true},revision=JSON.stringify(data);if(this.markers.get(event.id)===revision)continue;this.markers.set(event.id,revision);if(this.markers.size>5000)this.markers.delete(this.markers.keys().next().value!);this.hub.publish<'flow','marker'>(`flow:${coin}`,'marker',data);}
+      await this.upsert(coin);return;
+    }
     if(message.topic==='guard_verdict_created' || message.topic==='guard_revision_invalidated') {
       const affected=message.topic==='guard_verdict_created' ? (await db.sql.query<{coin:string}>('SELECT coin FROM guard_verdict_revisions WHERE id=$1',[message.ids.id])).rows : (await db.sql.query<{coin:string}>(`SELECT DISTINCT coin FROM guard_verdict_revisions WHERE id IN (SELECT target_id FROM guard_verdict_events WHERE id=$1)`,[message.ids.id])).rows;
       for(const row of affected)if(this.hub.hasV2Subscribers(row.coin as Address)) {const card=await this.services.guard.card(row.coin as Address);this.hub.publishV2(row.coin as Address,'card',card);this.hub.publishV2(row.coin as Address,'verdict',card?.verdict ?? null);}
@@ -42,7 +51,7 @@ export class ReadLive {
       const result=await db.sql.query<{coin:Uint8Array;data:unknown;valid_from_block:string}>(`SELECT coin,data,valid_from_block FROM ${card ? 'coin_cards' : 'verdicts'} WHERE id=$1`,[message.ids.id]);
       const source=result.rows[0];if(!source)return;
       coin=hex(source.coin);block=Number(source.valid_from_block);
-      if(card)this.hub.publish<'coin','card'>(`coin:${coin}`,'card',CoinCardSchema.parse(source.data));
+      if(card){const projected=await this.services.coins.card(coin);if(projected)this.hub.publish<'coin','card'>(`coin:${coin}`,'card',projected);}
       else this.hub.publish<'coin','verdict'>(`coin:${coin}`,'verdict',VerdictSchema.parse(source.data));
     } else if(message.topic==='swap') {
       const result=await db.sql.query<{coin:Uint8Array;ts:Date;block:string;usd:number | null;amount_coin:string;decimals:number | null}>(`SELECT s.*,t.decimals FROM swaps s JOIN tokens t ON t.address=s.coin WHERE tx_hash=$1 AND log_index=$2 ORDER BY ts DESC LIMIT 1`,[binary(String(message.ids.txHash)),message.ids.logIndex]);

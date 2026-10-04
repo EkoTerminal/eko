@@ -23,5 +23,11 @@
   "apps/engines/src/control-observations.ts",
   "apps/engines/src/control-acquisition.ts",
   "apps/engines/src/supply-v2.ts",
-  "apps/engines/src/graduation-inventory.ts"
+  "apps/engines/src/graduation-inventory.ts",
+  "apps/engines/src/qualified-graph-input.ts",
+  "apps/engines/src/qualified-graphs.ts",
+  "apps/engines/src/grouped-coverage-input.ts",
+  "apps/engines/src/grouped-coverage.ts",
+  "apps/engines/src/incremental-guard.ts",
+  "apps/engines/src/guard-performance.ts"
 ]

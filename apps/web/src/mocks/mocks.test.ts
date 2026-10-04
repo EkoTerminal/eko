@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import * as shared from '@eko/shared';
-import { contractFixtures } from './fixtures';
+import { contractFixtures, createAlertSettings, createTradeQuoteRequest } from './fixtures';
 import { createConfig, endpoints } from './responses';
 import { createMockTransport } from './transport';
 import { createApi } from '../lib/api';
@@ -56,5 +56,15 @@ describe('FACTS §7 responses and CA transport', () => {
     const result = await createMockTransport()('/v1/og/scan/scan-1.png');
     expect(result.headers.get('content-type')).toBe('image/png');
     expect(new Uint8Array(await result.arrayBuffer()).slice(0, 8)).toEqual(new Uint8Array([137,80,78,71,13,10,26,10]));
+  });
+  it('keeps alerts and Telegram linking available alongside trade quotes', async () => {
+    const api = createApi('/v1', createMockTransport());
+    const settings = { ...createAlertSettings(), telegram: true, agentTradeAboveUsd: 250 };
+    await api.parse('/alerts/settings', shared.AlertSettingsSchema, { method: 'PUT', body: settings });
+    const input = { ...createTradeQuoteRequest(), amountUsd: 25 };
+    expect(await api.parse('/trade/quote', shared.TradeQuoteSchema, { body: input })).toMatchObject({ coin: input.coin, side: input.side, amountUsd: 25, guard: { decision: 'refuse' } });
+    expect(await api.parse('/alerts/settings', shared.AlertSettingsSchema)).toEqual(settings);
+    expect(await api.request('/alerts')).toEqual({ rows: [], cursor: null, seq: 0 });
+    expect(await api.request('/telegram/link', { method: 'POST' })).toMatchObject({ url: 'https://t.me/demo_bot?start=demo-link-code', expiresAt: expect.any(String) });
   });
 });

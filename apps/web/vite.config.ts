@@ -2,6 +2,8 @@ import react from '@vitejs/plugin-react';
 import fs from 'node:fs';
 import path from 'node:path';
 import { defineConfig, type Connect, type Plugin } from 'vite';
+import { pwa } from './build/pwa';
+import { budgetGraph } from './build/budget';
 
 // One site: the landing (the EKO scroll story, kept in its own project) is served at "/" and the terminal everywhere
 // else. Its files are read unchanged from EKO_SITE; asset paths move under /site/, and public/site-bridge.* adds the
@@ -31,15 +33,21 @@ const landing = (): Plugin => ({ name: 'eko-landing', configureServer: (s) => { 
 const api = process.env.EKO_API ?? 'http://localhost:8710';
 
 export default defineConfig({
-  plugins: [react(), landing()],
+  plugins: [react(), landing(), pwa(), budgetGraph()],
   server: {
     port: Number(process.env.WEB_PORT ?? 5180),
     strictPort: true,
     proxy: {
       '/v1': { target: api, ws: true, changeOrigin: false },
+      '/v2': { target: api, changeOrigin: false },
       '/api': { target: api, changeOrigin: false },
       '/ws': { target: api.replace(/^http/, 'ws'), ws: true, changeOrigin: false },
     },
   },
-  build: { target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 1500 },
+  preview: { host: '127.0.0.1', proxy: { '/v1': { target: api, ws: true }, '/v2': { target: api }, '/api': { target: api } } },
+  build: { target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 1500,
+    rollupOptions: { output: { manualChunks(id) {
+      if (/node_modules\/viem\/_esm\/(utils\/abi|errors\/abi|utils\/cursor)/.test(id)) return 'wallet-abi';
+    } } },
+  },
 });

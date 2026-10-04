@@ -7,7 +7,7 @@ import { loadConfig } from '../src/config.js';
 
 it('boots with static web assets and shares one API 404 / SPA fallback handler', async () => {
   const web = await mkdtemp(join(tmpdir(), 'eko-spa-fixture-'));
-  const html = '<!doctype html><title>EKO fixture</title><main>Fixture</main>';
+  const html = '<!doctype html><head><!--eko:head--><title>EKO</title></head><main>Fixture</main>';
   await writeFile(join(web, 'index.html'), html);
   try {
     const built = await buildApp(loadConfig({

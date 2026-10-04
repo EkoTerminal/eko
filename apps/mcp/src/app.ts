@@ -1,9 +1,11 @@
 import Fastify, { LogController, type FastifyError, type FastifyServerOptions } from 'fastify';
 import { z } from 'zod';
-import type { Agent, Entitlements } from '@eko/shared';
+import type { Agent, Entitlements, OAuthScope } from '@eko/shared';
 import type { RateLimits } from './limits.js';
 import { ToolRegistry, toolContracts, UNTRUSTED_NOTICE, type ToolContext } from './tools.js';
+import { OAuthTokenError, type OAuthTokenService } from '../../server/src/harness/oauth-tokens.js';
 import { OAuthDiscoveryError, type OAuthDiscovery } from './oauth.js';
+import { proxyTrust } from '../../server/src/proxy-trust.js';
 
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18'] as const;
 const id = z.union([z.string().max(128), z.number().int()]);
@@ -21,27 +23,42 @@ class PrivateRequestLogs extends LogController { override disableRequestLogging 
 
 export interface McpDependencies {
   /** Resolve on EVERY request using the API-owned HMAC/revocation service. */
-  authenticate(bearer: string): Promise<{ accountId: string; agent: Agent; keyId: string } | null>;
+  authenticate(bearer: string): Promise<{ accountId: string; agent: Agent; keyId: string; scopes?: OAuthScope[] } | null>;
   entitlements(accountId: string): Promise<Entitlements> | Entitlements;
   limits: RateLimits;
   tools: ToolRegistry;
   publicUrl: string;
-  /** Prepared discovery endpoints only. Runtime omits this until the task 099 connector gate. */
+  trustProxyHops?: number;
+  /** Prepared endpoints only; runtime omits them pending deployed connector acceptance. */
   oauth?: OAuthDiscovery;
+  oauthTokens?: OAuthTokenService;
   allowedOrigins?: string[];
   close?(): Promise<void>;
 }
 
-/** Stateless Streamable HTTP: JSON POST responses; no GET stream or DELETE session. */
+/** Stateless Streamable HTTP: JSON POST responses; no GET stream or DELETE session.
+ * @remarks
+ * Build stateless Streamable HTTP POST transport with bounded bodies, protocol/schema checks, per-
+ * IP/key/group limits and current bearer authentication on every transport request. API keys
+ * use the injected harness authenticator; OAuth access tokens require the optional token service. Cookies
+ * grant no tool access; agent must be active and entitled. Foreign Origin, malformed requests,
+ * missing auth, denied entitlement, rate/storage/handler failures refuse with bounded responses.
+ * Optional injected OAuth services register discovery/registration/authorization and token/revoke
+ * routes; the production runtime omits them pending acceptance. No GET stream or DELETE session
+ * is implemented.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function buildMcpApp(deps: McpDependencies, options: Pick<FastifyServerOptions, 'logger' | 'loggerInstance'> = {}) {
   const url = new URL(deps.publicUrl);
   if (url.protocol !== 'https:' || url.pathname !== '/mcp' || url.search || url.hash || url.username || url.password) {
     throw new Error('MCP_PUBLIC_URL must be an HTTPS /mcp URL');
   }
-  const app = Fastify({ ...options, logController: new PrivateRequestLogs(), bodyLimit: 128 * 1024,
+  const app = Fastify({ ...options, trustProxy: proxyTrust(deps.trustProxyHops ?? 0), logController: new PrivateRequestLogs(), bodyLimit: 128 * 1024,
     requestTimeout: 30_000, forceCloseConnections: true, exposeHeadRoutes: false });
   const controller = new AbortController();
   const contexts = new WeakMap<object, ToolContext>();
+  if (deps.oauthTokens && (!deps.oauth || deps.oauthTokens.config.resource !== deps.publicUrl)) throw new Error('OAuth token resource mismatch');
   if (deps.oauth && deps.oauth.config.publicUrl !== deps.publicUrl) throw new Error('OAuth resource mismatch');
   app.addHook('preClose', async () => { controller.abort(); });
   app.addHook('onClose', async () => { await deps.close?.(); });
@@ -54,15 +71,28 @@ export function buildMcpApp(deps: McpDependencies, options: Pick<FastifyServerOp
   app.get('/health', async () => ({ ok: !controller.signal.aborted, transport: 'streamable-http', oauthEnabled: false }));
   if (deps.oauth) app.register(async oauthApp => {
     const oauth = deps.oauth!;
+    oauthApp.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, body, done) => {
+      const params = new URLSearchParams(body as string);
+      if ([...params.keys()].some(key => params.getAll(key).length !== 1)) return done(new OAuthTokenError('invalid_request'));
+      done(null, Object.fromEntries(params));
+    });
+    if (deps.oauthTokens) {
+      oauthApp.post('/oauth/token', async (req, reply) => reply.header('Pragma', 'no-cache').send(await deps.oauthTokens!.exchange(req.body)));
+      oauthApp.post('/oauth/revoke', async (req, reply) => {
+        await deps.oauthTokens!.revoke(req.body);
+        return reply.code(200).send();
+      });
+    }
     oauthApp.addHook('onRequest', async (req, reply) => {
       reply.header('Cache-Control', 'no-store');
       if (controller.signal.aborted) return reply.code(503).send({ error: 'temporarily_unavailable' });
       // TODO(spec): §9.1 gives only the DCR hourly budget. Use 60/min per IP
-      // for discovery/authorize until connector evidence defines their separate budget.
+      // for OAuth routes until connector evidence defines their separate budgets.
       const limit = await deps.limits.consume(`oauth-ip:${req.ip}`, 60);
       if (!limit.allowed) return reply.header('Retry-After', limit.retryAfterSec).code(429).send({ error: 'rate_limited' });
     });
     oauthApp.setErrorHandler<FastifyError>((error, _req, reply) => {
+      if (error instanceof OAuthTokenError) return reply.code(400).send({ error: error.code });
       if (error instanceof OAuthDiscoveryError) {
         const failure = error as OAuthDiscoveryError;
         if (failure.redirectUri) {
@@ -99,8 +129,11 @@ export function buildMcpApp(deps: McpDependencies, options: Pick<FastifyServerOp
       const global = await deps.limits.consume(`ip:${req.ip}`, 600);
       if (!global.allowed) return reply.header('Retry-After', global.retryAfterSec).code(429)
         .send(rpcError(null, -32000, 'Rate limited', { retryAfterSec: global.retryAfterSec }));
-      const match = /^Bearer (eko_live_[0-9a-f]{16}_[A-Za-z0-9_-]{43})$/i.exec(req.headers.authorization ?? '');
-      const identity = match ? await deps.authenticate(match[1]) : null;
+      const match = /^Bearer (eko_(?:live|oat)_[0-9a-f]{16}_[A-Za-z0-9_-]{43})$/i.exec(req.headers.authorization ?? '');
+      const bearer = match?.[1];
+      const identity = bearer?.startsWith('eko_oat_')
+        ? await deps.oauthTokens?.authenticate(bearer, deps.publicUrl)
+        : bearer ? await deps.authenticate(bearer) : null;
       if (!identity || identity.agent.status !== 'active' || !identity.accountId || !identity.keyId) {
         const challenge = deps.oauth ? `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource"` : 'Bearer realm="eko-mcp"';
         return reply.header('WWW-Authenticate', challenge).code(401).send(rpcError(null, -32001, 'Unauthorized'));

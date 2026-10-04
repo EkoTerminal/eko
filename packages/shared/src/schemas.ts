@@ -184,6 +184,12 @@ export interface Fill {
 
 /** First-run guidance progress. Every field defaults, so partial or missing (legacy) values still parse. */
 export const OnboardingChecklistSchema = z.object({
+  scan_coin: z.boolean().default(false),
+  open_evidence: z.boolean().default(false),
+  scan_bags: z.boolean().default(false),
+  guarded_trade: z.boolean().default(false),
+  connect_agent: z.boolean().default(false),
+  // Retained for backward-compatible preference parsing; not launch checklist actions.
   paper_trade: z.boolean().default(false),
   close_position: z.boolean().default(false),
   go_live: z.boolean().default(false),

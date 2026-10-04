@@ -23,6 +23,8 @@ import {
 import { api, fetchParsed } from '../lib/api';
 import { socket, type WsState } from '../lib/ws';
 import { useShell } from './shell';
+import { SETTINGS_COPY } from '../copy/settings';
+import { useUi, applyUiMotion } from './ui';
 
 function accountFromMe(me: import('@eko/shared').Me): Account {
   return { id: me.account.id, kind: me.account.wallet ? 'wallet' : 'guest', walletAddress: me.account.wallet?.toLowerCase() ?? null, displayName: null, role: 'user' };
@@ -84,6 +86,7 @@ interface Actions {
   setLayout(p: Partial<WorkspaceLayout>): void;
   setPreferences(p: Partial<Preferences>): Promise<void>;
   refreshSession(): Promise<void>;
+  signOut(): Promise<void>;
   refreshOrders(): Promise<void>;
   setMode(m: TradingMode): void;
   upsertOrder(o: Order): void;
@@ -95,6 +98,7 @@ interface Actions {
 const LS_LAYOUT = 'eko.layout';
 let layoutTimer: number | null = null;
 let toastId = 1;
+let sessionRevision = 0;
 
 function readLocalLayout(): Partial<WorkspaceLayout> {
   try {
@@ -136,7 +140,7 @@ export const useApp = create<State & Actions>((set, get) => ({
         mode: prefs.defaultMode === 'live' ? 'paper' : prefs.defaultMode,
         boot: 'ready',
       });
-      applyMotionPref(prefs.reducedMotion);
+      applyUiMotion(useUi.getState().reducedMotion);
       socket.on(onMessage);
       socket.onState((s) => set({ wsState: s }));
       socket.onReconnect = () => {
@@ -166,19 +170,31 @@ export const useApp = create<State & Actions>((set, get) => ({
   },
 
   async setPreferences(p) {
+    const revision = sessionRevision, accountId = get().account?.id;
     const prefs = { ...get().preferences, ...p };
-    set({ preferences: prefs });
-    applyMotionPref(prefs.reducedMotion);
     const saved = await fetchParsed('/me/preferences', PreferencesSchema, { method: 'PUT', body: prefs });
+    if (revision !== sessionRevision || get().account?.id !== accountId) throw new Error(SETTINGS_COPY.accountChanged);
     set({ preferences: saved });
   },
 
   async refreshSession() {
+    const revision = ++sessionRevision;
     const me = await fetchParsed('/me', MeSchema);
     const prefs = await fetchParsed('/me/preferences', PreferencesSchema);
+    if (revision !== sessionRevision) return;
     set({ account: accountFromMe(me), preferences: prefs });
     useShell.setState({ me });
-    applyMotionPref(prefs.reducedMotion);
+    applyUiMotion(useUi.getState().reducedMotion);
+  },
+
+  async signOut() {
+    await api('/auth/logout', { method: 'POST' });
+    sessionRevision++;
+    set({ account: null, preferences: DEFAULT_PREFERENCES, mode: 'paper' });
+    useShell.setState({ me: null, approvalIds: [] });
+    useShell.getState().realtime?.setSignedIn(false);
+    // Logout succeeded even if loading the new anonymous session fails.
+    await get().refreshSession().catch(() => undefined);
   },
 
   async refreshOrders() {
@@ -206,12 +222,6 @@ export const useApp = create<State & Actions>((set, get) => ({
   },
 
 }));
-
-function applyMotionPref(p: Preferences['reducedMotion']) {
-  const el = document.documentElement;
-  if (p === 'system') el.removeAttribute('data-motion');
-  else el.setAttribute('data-motion', p === 'on' ? 'off' : 'on');
-}
 
 export function prefersReducedMotion(): boolean {
   const attr = document.documentElement.getAttribute('data-motion');

@@ -25,7 +25,15 @@ function privateItem(row: Publication): ReceiptItem {
   return item;
 }
 /** MCP publishes only commitments in its journal transaction; receipts alone
- * writes receipt_items. Survives private-row deletion before outbox recovery. */
+ * writes receipt_items. Survives private-row deletion before outbox recovery.
+ * @remarks
+ * Persist only a validated commitment/id/time in the caller's private-journal transaction and
+ * compare an existing id for exact commitment equality. Authenticated journal caller supplies
+ * identity; invalid commitment/reused identity or SQL failure rejects. No account/payload/salt
+ * metadata enters this publication.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export async function publishPrivateReceipt(db: ChainDb, id: string, commitment: Hex, recordedAt: string) {
   if (!/^0x[0-9a-f]{64}$/.test(commitment)) throw new Error('Invalid private commitment');
   await db.sql.query('INSERT INTO receipt_private_publications(id,commitment,recorded_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [id,commitment,recordedAt]);
@@ -49,7 +57,15 @@ function same(a:Publication,b:Publication) {
 
 /** Call in the producer's persistence transaction. A crash after commit leaves
  * the exact public bytes available to recover(), without card reconstruction.
- * No forecast producer is run or output synthesized by this adapter. */
+ * No forecast producer is run or output synthesized by this adapter.
+ * @remarks
+ * Validate and canonically hash the immutable public payload, check revision references and
+ * idempotent identity equality, then persist in the producer transaction. Authorized producer
+ * supplies data; invalid producer/schema/canonical bytes/reference/reused id or SQL failure
+ * rejects. No forecast output is synthesized.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export async function publishReceipt(db:ChainDb, producer:string, raw:PublicReceiptPayload) {
   if (!producer || producer==='guard') throw new Error('Invalid public receipt producer');
   const payload=PublicReceiptPayloadSchema.parse(raw), canonicalPayload=canonicalize(payload);
@@ -83,7 +99,20 @@ export async function publishReceipt(db:ChainDb, producer:string, raw:PublicRece
  * volatile cursor or notification. Retries and concurrent readers are harmless. */
 export class ReceiptOutbox {
   readonly writer='receipts';
+  /**
+   * Retain receipts-role storage for immutable publication recovery. Host-only construction; no
+   * producer authentication/enqueue/query occurs here.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   constructor(readonly db:ChainDb) {}
+  /**
+   * Require exactly one durable publication, verify immutable payload/commitment binding and leaf,
+   * and idempotently insert the receipts-owned item in a transaction. Receipts worker caller only;
+   * ambiguous/missing/tampered/reused input or SQL failure rejects.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async enqueue(id:string) {
     return this.db.tx(async tx=>{
       const rows=(await tx.sql.query<Publication>(`SELECT * FROM (${sources}) p WHERE id=$1`,[id])).rows;
@@ -100,7 +129,15 @@ export class ReceiptOutbox {
     });
   }
   /** Bounded replay includes pre-079 Guard payloads and every correction, even
-   * at the same block. Failed rows remain pending; a retry cannot lose them. */
+   * at the same block. Failed rows remain pending; a retry cannot lose them.
+   * @remarks
+   * Bound replay to 1-10000 pending durable publications and enqueue each, including
+   * corrections/private commitments. Receipts worker only; invalid limit or failed integrity/SQL
+   * operation rejects; failed rows remain recoverable and prior individual item transactions may
+   * already be committed.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async recover(limit=100) {
     if (!Number.isSafeInteger(limit) || limit<1 || limit>10000) throw new Error('Invalid receipt recovery limit');
     const rows=(await this.db.sql.query<{id:string}>(`SELECT p.id FROM (${sources}) p
@@ -108,6 +145,13 @@ export class ReceiptOutbox {
     for (const row of rows) await this.enqueue(row.id);
     return rows.length;
   }
+  /**
+   * Read a private receipt item and authenticate its public commitment/leaf/canonical envelope,
+   * returning only the item or null. Receipts worker/internal read without user session auth;
+   * integrity/SQL failure rejects and no journal keys/plaintext are accessed.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async getPrivate(id: string) {
     const row = (await this.db.sql.query<Publication & {leaf:Hex}>('SELECT * FROM receipt_items WHERE id=$1 AND kind=$2', [id,'harness_private'])).rows[0];
     if (!row) return null;
@@ -115,6 +159,27 @@ export class ReceiptOutbox {
     if (row.canonical_payload !== canonicalize(item) || row.leaf !== codec.encodeReceiptLeaf(item)) throw new Error('Private receipt integrity failure');
     return item;
   }
+  /**
+   * Read the validated leaf representation for a selected receipt kind, including private
+   * commitments without journal payloads or salts. Receipts worker only; missing items or kind
+   * mismatches reject as integrity failures, and reader validation/SQL errors propagate.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
+  async getItem(id: string, kind: ReceiptItem['kind']): Promise<ReceiptItem> {
+    const item = kind === 'harness_private' ? await this.getPrivate(id) : (await this.get(id))?.item;
+    if (!item) throw new Error('Receipt item integrity failure: selected item missing');
+    if (item.id !== id || item.kind !== kind) throw new Error('Receipt item integrity failure: selected kind mismatch');
+    return item;
+  }
+  /**
+   * Read/validate original public payload bytes, leaf, stored anchor references and revision events,
+   * returning null for missing/private items. Internal receipt consumer, no wallet auth;
+   * integrity/SQL errors reject. This read uses stored anchor facts; public live canonical
+   * verification belongs to ReceiptApiStore.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async get(id:string) {
     const row=(await this.db.sql.query<Publication & {leaf:Hex}>('SELECT * FROM receipt_items WHERE id=$1',[id])).rows[0];
     if (!row || row.kind === 'harness_private') return null;

@@ -12,7 +12,14 @@ export type SharedGroundTruth = { kind: JournalEntry['kind']; side?: 'buy' | 'se
   notionalBucket?: string; quantityBucket?: string };
 /** MCP-owned writer; runs in the same transaction as its encrypted journal row. */
 export interface GroundTruthWriter { readonly writer: 'mcp'; write(tx: ChainDb, data: SharedGroundTruth): Promise<void> }
-export const groundTruthWriter: GroundTruthWriter = { writer: 'mcp', async write(tx, data) {
+export const groundTruthWriter: GroundTruthWriter = { writer: 'mcp', /**
+   * Write the supplied canonical shared ground-truth object in the caller's transaction.
+   * Authenticated journal callers must pass the filtered opt-in projection; this adapter itself does
+   * not strip fields or authenticate. Canonicalization/SQL failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
+  async write(tx, data) {
   await tx.sql.query('INSERT INTO ground_truth_shared(data) VALUES($1)', [canonicalize(data)]);
 } };
 function sharedData(input: JournalWrite): SharedGroundTruth {
@@ -34,7 +41,15 @@ function sharedData(input: JournalWrite): SharedGroundTruth {
  * rather than bypassing the account lock or destruction-first transaction. */
 export interface PrivateDataCleaner { cleanup(tx: ChainDb, accountId: string, deletedAt: string): Promise<void> }
 const exists = async (tx: ChainDb, table: string) => !!(await tx.sql.query<{name:string|null}>('SELECT to_regclass($1)::text AS name', [table])).rows[0]?.name;
-export const privateDataCleaner: PrivateDataCleaner = { async cleanup(tx, accountId, deletedAt) {
+export const privateDataCleaner: PrivateDataCleaner = { /**
+   * Revoke keys and any present OAuth state, then delete implemented private
+   * harness/preferences/notes while retaining account/session and financial/public receipt records.
+   * Caller must authorize deletion and record destruction first under the account lock; SQL failures
+   * reject for retry.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
+  async cleanup(tx, accountId, deletedAt) {
   await tx.sql.query('UPDATE agent_keys SET revoked_at=COALESCE(revoked_at,$2) WHERE agent_id IN (SELECT id FROM agents WHERE account_id=$1)', [accountId, deletedAt]);
   // These additive tables are owned by later packets; don't create substitutes.
   if (await exists(tx, 'oauth_grants')) {
@@ -57,6 +72,13 @@ export const privateDataCleaner: PrivateDataCleaner = { async cleanup(tx, accoun
 /** Only this API-owned adapter writes user_keys, including MCP first-write calls. */
 export const journalKeyWriter = {
   writer: 'api' as const,
+  /**
+   * Wrap a fresh 256-bit DEK at version one for the supplied account/KEK id, insert it in the caller
+   * transaction and zero the temporary DEK. Caller must hold the account lock and validate
+   * consent/destruction; crypto/SQL failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
   async provision(tx: ChainDb, accountId: string, key: { kek: Buffer; id: string }): Promise<KeyRow> {
     const dek = randomBytes(32);
     try {
@@ -65,12 +87,25 @@ export const journalKeyWriter = {
       return { version: 1, kek_id: key.id, wrapped_dek: wrapped, destroyed_at: null };
     } finally { dek.fill(0); }
   },
+  /**
+   * Null wrapped DEKs and retain the first destruction timestamp for the supplied account. Caller
+   * must authenticate ownership and persist the destruction ledger first; SQL failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
   async destroy(tx: ChainDb, accountId: string, deletedAt: string) {
     await tx.sql.query('UPDATE user_keys SET wrapped_dek=NULL,destroyed_at=COALESCE(destroyed_at,$2) WHERE account_id=$1', [accountId,deletedAt]);
   },
 };
 
 export class JournalService {
+  /**
+   * Wire storage, current destruction ledger, KEK/id and trusted sharing/cleanup/points adapters.
+   * Host-only construction; no key provisioning or account authentication occurs. Missing optional
+   * state is refused by operations that need it.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
   constructor(private db: ChainDb, private ledger?: JournalDestructionLedger,
     private key?: { kek: Buffer; id: string }, private sharing: GroundTruthWriter = groundTruthWriter,
     private cleaner: PrivateDataCleaner = privateDataCleaner,
@@ -94,10 +129,35 @@ export class JournalService {
     const row = (await tx.sql.query('SELECT id FROM agents WHERE id=$1 AND account_id=$2', [agentId, accountId])).rows[0];
     if (!row) throw new HarnessError('not_found', 'Not found');
   }
+  /**
+   * Lock the account and require owned agent, readable encryption/destruction state and opt-in
+   * within the caller's transaction. Caller supplies authenticated identities; missing owner/agent,
+   * deleted data, missing keys/consent or storage failure rejects. Shared by writes and replay.
+   */
+  async authorizeInTransaction(tx: ChainDb, accountId: string, agentId: string) {
+    await this.locked(tx, accountId); await this.owned(tx, accountId, agentId);
+    this.readable(accountId);
+    const consent = (await tx.sql.query<{opted_in:boolean}>('SELECT opted_in FROM journal_consent WHERE account_id=$1', [accountId])).rows[0];
+    if (!consent?.opted_in) throw new HarnessError('forbidden', 'Journal opt-in is required');
+  }
+  /**
+   * Return persisted opt-in only when the destruction ledger does not mark this account deleted.
+   * Caller supplies authenticated account identity; an opted-in row triggers the destruction check.
+   * Absent/malformed ledger when consulted, or SQL failure, rejects.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
   async consent(accountId: string) {
     const row = (await this.db.sql.query<{opted_in:boolean}>('SELECT opted_in FROM journal_consent WHERE account_id=$1', [accountId])).rows[0];
     return { optedIn: !!row?.opted_in && !this.destroyed(accountId) };
   }
+  /**
+   * Lock the account and upsert explicit opt-in; opting in also requires readable key/ledger state.
+   * Caller authenticates owner; unknown/deleted account, unavailable journal state or SQL failure
+   * rejects.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
   async setConsent(accountId: string, optedIn: boolean) {
     return this.db.tx(async tx => {
       await this.locked(tx, accountId);
@@ -107,46 +167,69 @@ export class JournalService {
     });
   }
   /** Called by authenticated MCP handlers, with the resolved key's owner/agent.
-   * No bearer-supplied account identity, no private WS/log/telemetry publishing. */
+   * No bearer-supplied account identity, no private WS/log/telemetry publishing.
+   * @remarks
+   * Validate an object payload capped at 16 KB, lock account/agent ownership, require consent and
+   * readable keys, encrypt payload/salt and publish only its commitment atomically. Optional sharing
+   * stores the filtered projection and points. MCP supplies authenticated owner/agent identity; bad
+   * input, nonownership, missing consent/preflight or crypto/storage failure rejects with bounded
+   * HarnessError text.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
   async append(accountId: string, agentId: string, raw: unknown) {
     try {
-      const parsed = JournalWriteSchema.safeParse(raw);
-      if (!parsed.success) throw new HarnessError('bad_request', 'Invalid journal input');
-      let input: JournalWrite;
-      try { input = { ...parsed.data, payload: JSON.parse(journalBytes(parsed.data.payload).toString()) }; }
-      catch { throw new HarnessError('bad_request', 'Journal payload must be JSON and at most 16 KB'); }
-      return await this.db.tx(async tx => {
-        await this.locked(tx, accountId); await this.owned(tx, accountId, agentId);
-        const key = this.readable(accountId);
-        const consent = (await tx.sql.query<{opted_in:boolean}>('SELECT opted_in FROM journal_consent WHERE account_id=$1', [accountId])).rows[0];
-        if (!consent?.opted_in) throw new HarnessError('forbidden', 'Journal opt-in is required');
-        if (input.preflightId) {
-          if (!await exists(tx, 'preflights') || !(await tx.sql.query('SELECT id FROM preflights WHERE id=$1 AND agent_id=$2', [input.preflightId,agentId])).rows.length)
-            throw new HarnessError('not_found', 'Not found');
-        }
-        let row = (await tx.sql.query<KeyRow>('SELECT * FROM user_keys WHERE account_id=$1 ORDER BY version DESC LIMIT 1', [accountId])).rows[0];
-        if (!row) row = await journalKeyWriter.provision(tx,accountId,key);
-        const dek = this.openKey(accountId, row);
-        try {
-          const id = randomUUID(), ts = new Date().toISOString(), sealed = sealEntry(dek,id,agentId,input.payload);
-          await tx.sql.query(`INSERT INTO harness_journal(id,account_id,agent_id,ts,kind,preflight_id,key_version,iv,ciphertext,salt_ct,commitment,share,receipt_item_id)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-          [id,accountId,agentId,ts,input.kind,input.preflightId ?? null,row.version,sealed.iv,sealed.ciphertext,sealed.saltCt,sealed.commitment,input.share,id]);
-          await publishPrivateReceipt(tx,id,sealed.commitment,ts);
-          if (input.share) {
-            await this.sharing.write(tx,sharedData(input));
-            await this.points.sharedJournal(tx,{accountId,sourceId:id,occurredAt:ts});
-          }
-          return JournalEntrySchema.parse({ id,agentId,ts,...input,commitment:sealed.commitment });
-        } finally { dek.fill(0); }
-      });
+      return await this.db.tx(tx => this.appendInTransaction(tx, accountId, agentId, raw));
     } catch (error) { return this.failure(error); }
+  }
+  /**
+   * Validate a JSON object payload capped at 16 KB, authorize owner/agent and encrypt the entry
+   * with its account DEK. Provision a missing DEK, publish the private commitment and optionally
+   * write filtered sharing/points in the caller's transaction. Caller supplies authenticated
+   * identities and owns commit; preflight binding, crypto or SQL failures propagate so preflight,
+   * journal, sharing and private receipt roll back together. Temporary DEK bytes are zeroed.
+   */
+  async appendInTransaction(tx: ChainDb, accountId: string, agentId: string, raw: unknown) {
+    const parsed = JournalWriteSchema.safeParse(raw);
+    if (!parsed.success) throw new HarnessError('bad_request', 'Invalid journal input');
+    let input: JournalWrite;
+    try { input = { ...parsed.data, payload: JSON.parse(journalBytes(parsed.data.payload).toString()) }; }
+    catch { throw new HarnessError('bad_request', 'Journal payload must be JSON and at most 16 KB'); }
+    await this.authorizeInTransaction(tx, accountId, agentId);
+    const key = this.readable(accountId);
+    if (input.preflightId) {
+      if (!await exists(tx, 'preflights') || !(await tx.sql.query('SELECT id FROM preflights WHERE id=$1 AND agent_id=$2', [input.preflightId,agentId])).rows.length)
+        throw new HarnessError('not_found', 'Not found');
+    }
+    let row = (await tx.sql.query<KeyRow>('SELECT * FROM user_keys WHERE account_id=$1 ORDER BY version DESC LIMIT 1', [accountId])).rows[0];
+    if (!row) row = await journalKeyWriter.provision(tx,accountId,key);
+    const dek = this.openKey(accountId, row);
+    try {
+      const id = randomUUID(), ts = new Date().toISOString(), sealed = sealEntry(dek,id,agentId,input.payload);
+      await tx.sql.query(`INSERT INTO harness_journal(id,account_id,agent_id,ts,kind,preflight_id,key_version,iv,ciphertext,salt_ct,commitment,share,receipt_item_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [id,accountId,agentId,ts,input.kind,input.preflightId ?? null,row.version,sealed.iv,sealed.ciphertext,sealed.saltCt,sealed.commitment,input.share,id]);
+      await publishPrivateReceipt(tx,id,sealed.commitment,ts);
+      if (input.share) {
+        await this.sharing.write(tx,sharedData(input));
+        await this.points.sharedJournal(tx,{accountId,sourceId:id,occurredAt:ts});
+      }
+      return JournalEntrySchema.parse({ id,agentId,ts,...input,commitment:sealed.commitment });
+    } finally { dek.fill(0); }
   }
   private openKey(accountId: string, row: KeyRow) {
     const key = this.readable(accountId);
     if (!row.wrapped_dek || row.destroyed_at || row.kek_id !== key.id) throw new HarnessError('internal_error', 'Journal key is unavailable');
     return unwrapDek(key.kek,accountId,row.version,row.kek_id,Buffer.from(row.wrapped_dek));
   }
+  /**
+   * Read owned journal rows by descending timestamp/id using an owner-resolved UUID cursor, limit
+   * 1-100 and optional kind; authenticate/decrypt each payload. Caller supplies authenticated owner
+   * identity. Invalid cursor/page, deletion, missing key or crypto/storage failures reject without
+   * forwarding private error details.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
   async page(accountId: string, agentId: string, input: { limit?: number; cursor?: string; kind?: JournalEntry['kind'] } = {}) {
     try {
       return await this.db.tx(async tx => {
@@ -178,6 +261,13 @@ export class JournalService {
       });
     } catch (error) { return this.failure(error); }
   }
+  /**
+   * Lock the account and durably append destruction before key nulling and cleanup; retries retain
+   * the original deletion timestamp. Caller authenticates owner. SQL rollback does not undo the file
+   * ledger; ledger/cleanup failures reject with bounded errors and require retry.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Journal encryption and destruction invariants}
+   */
   async deleteData(accountId: string) {
     try {
       return await this.db.tx(async tx => {

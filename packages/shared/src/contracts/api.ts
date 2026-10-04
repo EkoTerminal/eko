@@ -97,10 +97,19 @@ export const CensusSchema = z.object({
   methodologyUrl: z.string(),
   gate: z.object({
     metric: z.literal('likely_agent_precision'),
+    wilsonLower: z.number().nullable().optional(),
+    recall: z.number().nullable().optional(),
     value: z.union([z.number(), z.null()]),
     threshold: z.number(),
     modelVersion: z.string(),
     evaluatedAt: z.union([z.string(), z.null()]),
+    expiresAt: z.string().nullable().optional(),
+    modelHash: z.string().nullable().optional(),
+    datasetHash: z.string().nullable().optional(),
+    evidence: z.object({
+      declared: z.number().int().nonnegative(), agents: z.number().int().nonnegative(), humans: z.number().int().nonnegative(),
+      disagreements: z.number().int().nonnegative(), predictedAgents: z.number().int().nonnegative(),
+    }).nullable().optional(),
   }),
   chain: z.array(z.object({
     window: z.enum(['24h', '7d']),
@@ -143,7 +152,7 @@ export const PerpContextSchema = z.object({
 export type PerpContext = z.infer<typeof PerpContextSchema>;
 export const WatchBodySchema = z.object({
   kind: z.enum(['coin', 'wallet', 'crew']),
-  target: z.string(),
+  target: z.string().min(1).max(128),
 });
 export type WatchBody = z.infer<typeof WatchBodySchema>;
 export const AlertSettingsSchema = z.object({
@@ -151,8 +160,8 @@ export const AlertSettingsSchema = z.object({
   push: z.boolean(),
   minLevel: LevelSchema,
   kinds: z.array(z.enum(['verdict_change', 'playbook', 'crew_active', 'agent_flow_spike', 'approval', 'order'])),
-  quietHoursUtc: z.tuple([z.number(), z.number()]).optional(),
-  agentTradeAboveUsd: z.number().optional(),
+  quietHoursUtc: z.tuple([z.number().int().min(0).max(23), z.number().int().min(0).max(23)]).optional(),
+  agentTradeAboveUsd: z.number().finite().nonnegative().optional(),
 });
 export type AlertSettings = z.infer<typeof AlertSettingsSchema>;
 export const AlertSchema = z.object({

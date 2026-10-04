@@ -5,7 +5,7 @@ import type { Address, Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { canonicalize, createGuardReceiptCodec, GuardReceiptPayloadSchema, GuardAssessmentV2Schema } from '@eko/shared';
 import type { PublicReceiptPayload, ReceiptItem } from '@eko/shared';
-import { migrate, migrateEngines, openDb, publishReceipt, ReceiptCommitJournal, ReceiptOutbox, currentReceiptAnchor, GuardSourceStore, GuardVerdictStore, GuardReceiptStore, guardManifestId } from '@eko/db';
+import { migrate, migrateEngines, openDb, publishReceipt, publishPrivateReceipt, ReceiptCommitJournal, ReceiptOutbox, currentReceiptAnchor, GuardSourceStore, GuardVerdictStore, GuardReceiptStore, guardManifestId } from '@eko/db';
 import type { ChainDb, GuardRegistryReader, ReceiptBatch, ReceiptCommitAttempt } from '@eko/db';
 import { authenticateCommit, commitData, ReceiptWorker, receiptsAbi, validateCommitAttempt } from '../src/receipts/worker.js';
 import type { ReceiptChain } from '../src/receipts/worker.js';
@@ -56,6 +56,56 @@ async function pending(f:Awaited<ReturnType<typeof setup>>) {
   return {batch,attempt};
 }
 describe('080 synthetic committer, no chain access', () => {
+  it('rejects missing selected public/private items before signing, including stored-batch recovery', async () => {
+    const f=await setup('missing-public');
+    await publishPrivateReceipt(f.db,'missing-private',hash('fixture-commitment'),at);
+    const publicRead=vi.spyOn(ReceiptOutbox.prototype,'get').mockResolvedValueOnce(null);
+    await expect(f.worker.tick()).rejects.toThrow('Receipt item integrity failure: selected item missing');
+    publicRead.mockRestore();
+    const privateRead=vi.spyOn(ReceiptOutbox.prototype,'getPrivate').mockResolvedValueOnce(null);
+    await expect(f.worker.tick()).rejects.toThrow('Receipt item integrity failure: selected item missing');
+    privateRead.mockRestore();
+    expect(f.chain.signs).toBe(0);
+    expect((await f.db.sql.query('SELECT * FROM receipt_batches')).rows).toEqual([]);
+    const batch=(await f.journal.batch(now))!;
+    for (const method of ['get','getPrivate'] as const) {
+      const read=vi.spyOn(ReceiptOutbox.prototype,method).mockResolvedValueOnce(null);
+      await expect(f.worker.tick()).rejects.toThrow('Receipt item integrity failure: selected item missing');
+      read.mockRestore();
+    }
+    expect(f.chain.signs).toBe(0);
+    expect(await f.journal.batch(now)).toEqual(batch);
+    await f.worker.tick();expect(f.chain.signs).toBe(1);
+  });
+  it('refuses every fenced journal mutation from a worker without the active lease', async () => {
+    const f=await setup('foreign-worker');
+    const {batch,attempt}=await pending(f);
+    const foreign=new ReceiptCommitJournal(f.db);
+    const anchor=authenticateCommit(f.chain.confirmation(batch,attempt),attempt,batch);
+    for (const action of [
+      () => foreign.heartbeat(), () => foreign.batch(now), () => foreign.saveAttempt(attempt),
+      () => foreign.failed(attempt,50n,f.chain.canonical), () => foreign.anchor(batch,anchor),
+      () => foreign.anchorEvent('00000000-0000-4000-8000-000000000001','orphaned'),
+    ]) await expect(action()).rejects.toThrow('Receipt lease lost');
+    const lease=await f.db.sql.query('SELECT owner,lease_until FROM receipt_worker_lease WHERE chain_id=4663');
+    await foreign.release();
+    expect((await f.db.sql.query('SELECT owner,lease_until FROM receipt_worker_lease WHERE chain_id=4663')).rows).toEqual(lease.rows);
+    expect(await f.journal.acquire()).toBe(true);
+    expect(await f.journal.attempt(batch)).toEqual(attempt);
+    expect(await f.journal.unfinalized()).toEqual([]);
+    expect((await f.db.sql.query('SELECT * FROM receipt_commit_failures')).rows).toEqual([]);
+  });
+  it('run rejects a foreign chain without signing or broadcasting and releases on shutdown', async () => {
+    const f=await setup('foreign-chain');
+    f.chain.getChainId=async () => 1;
+    const worker=new ReceiptWorker(f.journal,f.chain,registry,(event) => {
+      if (event==='receipt_worker_error') worker.stop();
+    },() => now);
+    await worker.run(1);
+    expect(f.chain.signs).toBe(0);expect(f.chain.sent).toEqual([]);
+    expect(await f.journal.unfinalized()).toEqual([]);
+    expect(await new ReceiptCommitJournal(f.db).acquire()).toBe(true);
+  });
   it('reproduces every frozen V1/V2 leaf and proof without altering the fixtures', () => {
     for (const name of ['v1','guard-v2']) {
       const fixture=JSON.parse(readFileSync(new URL(`../../../packages/shared/test/fixtures/receipts/${name}.json`,import.meta.url),'utf8'));
@@ -154,6 +204,12 @@ describe('080 synthetic committer, no chain access', () => {
     const raw=await f.chain.account.signTransaction({chainId:4663,nonce:2,to:other,value:1n,gas:21000n,gasPrice:1n});
     await expect(validateCommitAttempt({...attempt,raw_transaction:raw,tx_hash:keccak256(raw),nonce:'2'},batch,registry)).rejects.toThrow('envelope');
     await expect(validateCommitAttempt({...attempt,committer:other},batch,registry)).rejects.toThrow('envelope');
+    const sent=[...f.chain.sent];
+    f.chain.receipts.set(attempt.tx_hash,tx);
+    vi.spyOn(f.journal,'attempt').mockResolvedValue({...attempt,committer:other});
+    await expect(f.worker.tick()).rejects.toThrow('envelope');
+    expect(f.chain.sent).toEqual(sent);
+    expect(await currentReceiptAnchor(f.db,'junk')).toBeNull();
   });
   it('requeues an orphaned anchor with the same tree/transaction, preserves history, and stops rechecking finalized anchors', async () => {
     const f=await setup('reorg'),{batch,attempt}=await pending(f);

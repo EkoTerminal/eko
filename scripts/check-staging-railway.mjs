@@ -19,6 +19,9 @@ export function validateStaging(catalog, manifests, roleSource) {
   assert.equal(catalog.purpose, 'staging-only');
   assert.match(catalog.candidateRevision, /^[a-f0-9]{40}$/);
   assert.equal(catalog.rollbackTargetSeconds, 600);
+  assert.deepEqual(catalog.identityAttestation, {
+    buildArgument: 'EKO_SOURCE_REVISION', buildRoute: '/v1/build', configVersion: 1, workerReadyMessage: 'EKO worker ready',
+  });
   assert.deepEqual(catalog.opsDefaults, { trading_live: false, swarm_ranking: false });
   assert.deepEqual(Object.keys(catalog.services).sort(), [...roles].sort());
   const dispatch = roleSource.match(/export const imageRoles = \{([\s\S]*?)\} as const;/)?.[1];
@@ -38,6 +41,7 @@ export function validateStaging(catalog, manifests, roleSource) {
     const env = { ...catalog.commonEnvironment, ...service.environment };
     for (const [key, value] of Object.entries(inert)) assert.equal(env[key], value, `${role}:${key}`);
     assert.equal(env.NODE_ENV, 'production');
+    assert.equal(env.TRUST_PROXY_HOPS, '1', `${role}: Railway edge requires one trusted hop`);
     assert.equal(env.MARKET_DATA_SOURCE, 'onchain');
     assert.ok(service.secretNames.includes('DATABASE_URL'));
     for (const key of service.secretNames) {
@@ -78,12 +82,18 @@ if (process.argv.includes('--self-test')) {
     c => { c.services.api.environment.RUN_WORKER = 'true'; },
     c => { c.commonEnvironment.RPC_SESSION_BUDGET = '100'; },
     c => { c.commonEnvironment.FLAGS = 'd0'; },
+    c => { delete c.commonEnvironment.TRUST_PROXY_HOPS; },
+    c => { c.commonEnvironment.TRUST_PROXY_HOPS = '2'; },
+    c => { c.services.api.environment.TRUST_PROXY_HOPS = 'true'; },
     c => { c.opsDefaults.trading_live = true; },
     c => { c.services.mcp.available = !c.services.mcp.available; },
     c => { c.services.engines.environment.DATABASE_URL = 'postgres://fixture.invalid/sample'; },
     c => { c.services.receipts.secretNames.push('KEEPER_KEY'); },
     c => { c.sim.private = false; },
     c => { c.candidateRevision = 'main'; },
+    c => { delete c.identityAttestation; },
+    c => { c.identityAttestation.configVersion = 2; },
+    c => { c.identityAttestation.buildArgument = 'SOURCE_REVISION'; },
   ];
   for (const mutate of mutations) {
     const changed = structuredClone(catalog); mutate(changed);
@@ -97,7 +107,7 @@ if (process.argv.includes('--self-test')) {
     const changed = structuredClone(manifests); mutate(changed);
     assert.throws(() => validateStaging(catalog, changed, roleSource));
   }
-  console.log('Staging rejection checks passed (14 invalid configurations).');
+  console.log('Staging rejection checks passed (20 invalid configurations).');
 }
 const availableRoles = Object.values(catalog.services).filter(service => service.available).length;
 console.log(`Staging manifests passed; source=${catalog.candidateRevision}; ${availableRoles} available roles, ${roles.length - availableRoles} gated roles; no Railway or live evidence.`);

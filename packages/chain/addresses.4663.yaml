@@ -21,12 +21,20 @@ pons:
   v4Hook: { address: "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044", verified: 2026-10-01, check: code, required_for: T }
   router: { address: "0xe33E9E479dF8802cb0866d5d05258bEc4cF62948", verified: 2026-10-01, check: code }
 virtuals: { VIRTUAL: { address: TODO, hint: "0xc6911796…9c31" }, bondingCurve: { address: TODO, hint: "0xd4cCBFA3…d007" } }
-entryPoints: { v06: TODO, v07: TODO, v08: TODO }        # canonical eth-infinitism releases; VERIFY bytecode
+entryPoints:   # canonical eth-infinitism releases; bytecode compared with Ethereum mainnet on 2026-10-02
+  v06: { address: "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789", verified: 2026-10-02, check: code }   # identical bytecode
+  v07: { address: "0x0000000071727De22E5E9d8BAf0edAc6f37da032", verified: 2026-10-02, check: code }   # identical bytecode
+  v08: { address: "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108", verified: 2026-10-02, check: code }   # identical except EIP-712 immutables (chain id 4663, domain separator)
 fingerprints:
   unknownRouters: [ { address: TODO, hint: "0x198f7836…6a76" }, { address: TODO, hint: "0x96899…8341" } ]
   orbioCreditExchange: { address: TODO }
 ours:
-  receiptsRegistry: TODO               # the only new contract of ours at D0 (§14.2)
+  receiptsRegistry:                    # the only new contract of ours at D0 (§14.2)
+    address: TODO
+    owner: TODO                         # verified registry-owner Safe; public role address
+    committer: TODO                     # separate gas-only hot signer; public role address
+    build_record: contracts/release/ReceiptsRegistry.build.json
+    required_for: D0
   burnWallet: { address: TODO, required_for: D0 }                     # public hardware wallet: fee-leg destination, x402 payTo on Base (§12.5); required_for: D0
   devWallet: TODO                      # public; Pons creator-fee recipient; launch buy-and-burn signer (§12.5)
   burnEngine: TODO                     # Drop 7 (target) only (§14.3, §14.9)

@@ -25,18 +25,23 @@ export async function installMockWallet(page: Page, opts: { key: Hex; chainId: n
   await page.addInitScript(
     ({ address, chainId, rejectSend }) => {
       let chain = chainId;
-      let connected = false;
+      // Model extension authorization across document reloads, scoped to this synthetic tab/account.
+      let connected = sessionStorage.getItem('eko.testWallet.connected') === address;
       const listeners: Record<string, ((...a: unknown[]) => void)[]> = {};
       const emit = (e: string, ...a: unknown[]) => (listeners[e] ?? []).forEach((f) => f(...a));
       const w = window as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+      const requests: { method: string; params?: unknown[] }[] = [];
+      Object.assign(window, { __ekoWalletRequests: requests });
       const provider = {
         isMockWallet: true,
         on: (e: string, f: (...a: unknown[]) => void) => ((listeners[e] ??= []).push(f), provider),
         removeListener: (e: string, f: (...a: unknown[]) => void) => ((listeners[e] = (listeners[e] ?? []).filter((x) => x !== f)), provider),
         async request({ method, params }: { method: string; params?: unknown[] }) {
+          requests.push({ method, params });
           switch (method) {
             case 'eth_requestAccounts':
               connected = true;
+              sessionStorage.setItem('eko.testWallet.connected', address);
               emit('accountsChanged', [address]);
               return [address];
             case 'eth_accounts':

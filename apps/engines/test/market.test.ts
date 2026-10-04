@@ -5,6 +5,9 @@ import { MarketWindow,exactRanks,liveRanks,type MarketRow } from '../src/market.
 import { sqlRanks } from './market-oracle.js';
 import { refreshClock,type ClockCache } from '../src/activity.js';
 import { growingReplayFixture,sampleAddress } from './replay-fixture.js';
+// Dense PGlite fixture construction and SQL oracles are correctness checks, not a benchmark.
+// Cover up to 90s of fixture startup plus 30s for comparisons and database close under load.
+const denseMarketBudgetMs=120000;
 const epoch=Date.parse('2026-10-01T00:00:00Z')/1000;
 async function rows(db:Awaited<ReturnType<typeof growingReplayFixture>>):Promise<MarketRow[]>{return (await db.sql.query<{coin:Uint8Array;block:string;sec:number;usd:number}>('SELECT coin,block,extract(epoch FROM ts)::double precision AS sec,usd FROM swaps WHERE usd>0 ORDER BY block,ts,tx_hash,log_index')).rows.map(r=>({coin:`0x${Buffer.from(r.coin).toString('hex')}`,block:Number(r.block),sec:r.sec,usd:r.usd}));}
 describe('replay market window',()=>{
@@ -24,7 +27,7 @@ describe('replay market window',()=>{
    // Retrospective horizons must agree too, without moving the forward lane back.
    expect(await cache.ranked(2,epoch+13)).toEqual(await sqlRanks(db,2,epoch+13));
   }finally{await db.close();}
- },30000);
+ },denseMarketBudgetMs);
  it('ranks exact fractional sums and address ties identically in live and replay, excluding non-finite USD even on historical reads',async()=>{
   const db=await growingReplayFixture({coins:3,swapsPerCoin:3,holdersPerCoin:3,hours:1});
   try{
@@ -64,6 +67,6 @@ describe('replay market window',()=>{
    try{historical=await cache.ranked(2,epoch+13);expect(query).not.toHaveBeenCalled();}finally{query.mockRestore();}
    expect(historical).toEqual(await liveRanks(db,2,epoch+13));
   }finally{await db.close();}
- },30000);
+ },denseMarketBudgetMs);
 
 });

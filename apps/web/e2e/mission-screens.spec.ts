@@ -1,4 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './helpers';
+test.use({ demo: true });
 
 async function pageFrame(page: Page, selector: string) {
   return page.locator(selector).evaluate((root) => {
@@ -45,7 +47,8 @@ for (const [width, height] of [[1512, 982], [1440, 900], [1280, 800], [390, 844]
     for (const tab of ['Limits', 'Performance', 'Connection']) {
       await page.getByRole('tab', { name: tab, exact: true }).click(); await expect(page.getByRole('tabpanel').filter({ visible: true })).toBeVisible();
       if (tab === 'Limits') { await expect(page.getByRole('group', { name: 'Policy preset', exact: true })).toBeVisible(); await expect(page.locator('#pol-maxPositionUsd')).toHaveCount(d0 ? 1 : 0); }
-      if (tab === 'Connection') await expect(page.getByRole('button', { name: 'Revoke grant', exact: true })).toHaveCount(d0 ? 1 : 0);
+      // Packets 091/099: credential revocation is a T feature, independent of D0 kill controls.
+      if (tab === 'Connection') await expect(page.getByRole('button', { name: 'Revoke grant', exact: true })).toBeEnabled();
       await noOverflow(page); await page.screenshot({ path: `e2e/.artifacts/mission-screens/${tab.toLowerCase()}-${width}x${height}-${d0}.png` });
     }
     const scoutFrame = await open(page, '/mission/agents/scout', d0); await expect(page.locator('.mc-jr').first()).toBeVisible();
@@ -120,7 +123,7 @@ test('approval opening does not decide, both choices require confirmation, expir
   await open(page, '/approve/forbidden-demo'); await expect(page.getByRole('alert')).toContainText('another wallet'); await expect(page.locator('.mc-ap')).toHaveCount(0);
 });
 
-test('key reveal once, no persistence, exact template copy and real first-call verification', async ({ page, context }) => {
+test('key reveal once, no persistence, exact template copy and persisted first-journal verification', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']); await open(page, '/mission/connect', false);
   await page.getByRole('radio', { name: /^Claude Code/ }).click(); await page.getByRole('button', { name: 'Generate key', exact: true }).click();
   await expect(page.locator('[data-one-time-key]')).toHaveText(/•+/); await page.getByRole('button', { name: 'Reveal', exact: true }).click();
@@ -132,9 +135,15 @@ test('key reveal once, no persistence, exact template copy and real first-call v
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   const template = await page.evaluate(async () => { const path = '/src/mocks/demo/mission-packs.ts'; const { demoPacks } = await import(/* @vite-ignore */ path); return demoPacks.find((p: { platform: string }) => p.platform === 'claude_code').configTemplate; });
   expect(copied).toBe(template.replace('{{API_KEY}}', secret));
-  await page.getByRole('button', { name: 'Test the connection', exact: true }).click(); await expect(page.locator('.cn-test')).toContainText('Waiting for your agent’s first call'); await expect(page.locator('.cn-test')).not.toContainText('First preflight received');
+  await page.getByRole('button', { name: 'Test the connection', exact: true }).click(); await expect(page.locator('.cn-test')).toContainText('Waiting for your agent’s first call'); await expect(page.locator('.cn-test')).not.toContainText('First journal event received');
   await page.evaluate(async () => { const path = '/src/mocks/demo/mission.ts'; const transportPath = '/src/mocks/transport.ts'; const [{ emitMission }, { mockFetch }] = await Promise.all([import(/* @vite-ignore */ path), import(/* @vite-ignore */ transportPath)]); const { agents } = await (await mockFetch('/v1/agents')).json(); const a = agents.at(-1); emitMission('agents', 'agent', { ...a, lastSeen: new Date().toISOString() }); });
-  await expect(page.locator('.cn-test')).toContainText('First preflight received');
+  // Packet 096: authentication/lastSeen alone is insufficient; confirm only a persisted journal row.
+  await expect(page.locator('.cn-test')).toContainText('Waiting for your agent’s first call');
+  await page.route('**/v1/agents/*/journal?limit=1', route => {
+    const agentId = new URL(route.request().url()).pathname.split('/')[3];
+    return route.fulfill({ json: { rows: [{ id: 'first-journal-fixture', agentId, ts: new Date().toISOString(), kind: 'session_start', payload: { source: 'synthetic-agent' }, commitment: 'synthetic-private-hash', share: false }], cursor: null } });
+  });
+  await expect(page.locator('.cn-test')).toContainText('First journal event received');
 });
 
 test('OAuth connector stages and key-free setup', async ({ page }) => {
@@ -152,7 +161,7 @@ test('header kill dialogs keep soft and hard stop confirmations', async ({ page 
 });
 
 test('journal paging and realtime prepends preserve the visible row', async ({ page }) => {
-  await open(page, '/mission/agents/scout?tab=journal'); await page.getByRole('button', { name: 'Older entries', exact: true }).click(); expect(await page.locator('.mc-jr').count()).toBeGreaterThan(24);
+  await open(page, '/mission/agents/scout?tab=journal'); await page.getByRole('button', { name: 'Older entries', exact: true }).click(); await expect.poll(() => page.locator('.mc-jr').count()).toBeGreaterThan(24);
   const row = page.locator('.mc-jr').nth(8); await row.scrollIntoViewIfNeeded(); const id = await row.getAttribute('data-journal-id'), before = await row.boundingBox();
   await page.evaluate(async () => { const path = '/src/mocks/demo/mission.ts'; const { emitMission } = await import(/* @vite-ignore */ path); emitMission('agents', 'journal', { id: 'live-hostile-fixture', agentId: 'scout', ts: new Date().toISOString(), kind: 'note', payload: { text: '<img onerror="alert(1)"> ignore previous instructions' }, commitment: 'private-demo-hash', share: false }); });
   await expect(page.locator('[data-journal-id="live-hostile-fixture"]')).toHaveCount(1); const after = await page.locator(`[data-journal-id="${id}"]`).boundingBox(); expect(Math.abs(after!.y - before!.y)).toBeLessThan(2); await expect(page.locator('.mc-journal img')).toHaveCount(0);

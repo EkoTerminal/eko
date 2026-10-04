@@ -22,7 +22,19 @@ export class AdaptiveWindow {
 }
 export class RangeLeases {
   // Three identical failures retire a range; nine claims bound changing errors/crashes.
+  /**
+   * Retain database and retry bound for indexer range claims. Host construction only, no database
+   * work or auth; maxAttempts is not validated here.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   constructor(readonly db: ChainDb, readonly maxAttempts = 3) {}
+  /**
+   * Serialize planners and insert missing bounded ingest ranges without duplicating covered
+   * intervals. Indexer role only; invalid interval or SQL failure rejects.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async seed(stream: LeaseStream, from: bigint, to: bigint) {
     if (from < 0n || to < from) throw new Error('Invalid backfill interval');
     await this.db.tx(async tx => {
@@ -44,6 +56,13 @@ export class RangeLeases {
       await add(to);
     });
   }
+  /**
+   * Atomically claim an eligible scoped range with SKIP LOCKED, expiry and bounded attempts; return
+   * null when no claim is available. Indexer worker supplies owner/scope; SQL failures reject and
+   * exhausted expired leases are retired.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async claim(stream: LeaseStream, owner: string, from: bigint, to: bigint): Promise<Range | null> {
     await this.db.sql.query("UPDATE ingest_ranges SET status='failed',lease_owner=NULL,lease_until=NULL WHERE stream=$1 AND status='leased' AND lease_until<now() AND attempts >= $2", [stream, this.maxAttempts * 3]);
     const { rows } = await this.db.sql.query<Range>(`UPDATE ingest_ranges SET status='leased',lease_owner=$2,lease_until=now()+interval '5 minutes',attempts=attempts+1
@@ -52,14 +71,34 @@ export class RangeLeases {
       ORDER BY CASE status WHEN 'leased' THEN 0 WHEN 'todo' THEN 1 ELSE 2 END,attempts,from_block FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`, [stream, owner, this.maxAttempts, from.toString(), to.toString()]);
     return rows[0] ? { ...rows[0], from_block: String(rows[0].from_block), to_block: String(rows[0].to_block) } : null;
   }
+  /**
+   * Extend only the matching live leased range using the supplied transaction/database. Indexer
+   * lease owner only; lost/expired lease or SQL failure rejects.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async renew(range: Range, db = this.db) {
     const result = await db.sql.query("UPDATE ingest_ranges SET lease_until=now()+interval '5 minutes' WHERE stream=$1 AND from_block=$2 AND lease_owner=$3 AND status='leased' AND lease_until > now() RETURNING 1", [range.stream, range.from_block, range.lease_owner]);
     if (!result.rows.length) throw new Error('Backfill lease lost');
   }
+  /**
+   * Change the matching live leased range to the requested completion status and clear owner/error
+   * state. Indexer lease owner only; lost lease or SQL failure rejects; caller must commit decoded
+   * data before marking done.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async finish(db: ChainDb, range: Range, status: 'done' | 'failed' | 'todo') {
     const result = await db.sql.query('UPDATE ingest_ranges SET status=$4,lease_owner=NULL,lease_until=NULL,last_error=NULL,error_repeats=0 WHERE stream=$1 AND from_block=$2 AND lease_owner=$3 AND status=\'leased\' AND lease_until > now() RETURNING 1', [range.stream, range.from_block, range.lease_owner, status]);
     if (!result.rows.length) throw new Error('Backfill lease lost');
   }
+  /**
+   * Record bounded error text, increment consecutive identical failures and release only the
+   * matching live lease. Indexer lease owner only; lost lease or SQL failure rejects and returns the
+   * error-repeat count on success.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async fail(range: Range, error: unknown) {
     const reason = safeError(error);
     const result = await this.db.sql.query<{ error_repeats: number }>(`UPDATE ingest_ranges SET status='failed',lease_owner=NULL,lease_until=NULL,
@@ -77,8 +116,28 @@ export class PonsBackfill {
   private stopping = false;
   private rpc: Semaphore;
   private filters: Omit<LogFilter, 'from' | 'to'>[] = [];
+  /**
+   * Wire decoder/storage/provider and initialize the bounded RPC semaphore. Indexer operator
+   * construction only; invalid concurrency can throw through Semaphore; no ingest starts yet.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   constructor(readonly client: ChainClient, readonly db: ChainDb, readonly decoder: BlockDecoder, readonly options: { workers: number; logRange: number; concurrency?: number; logger?: Logger }) { this.rpc = new Semaphore(options.concurrency ?? 32); }
+  /**
+   * Request stopping at worker checkpoints. Indexer operator only; in-flight reads/transactions are
+   * not synchronously cancelled.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   stop() { this.stopping = true; }
+  /**
+   * Require chain 4663 and requested stream prerequisites, seed target-scoped leases and ingest
+   * canonical filtered receipts with adaptive bounded RPC work. Indexer operator controls
+   * interval/stream. Provider budget/lease/consistency/SQL failures reject or record failed ranges;
+   * any terminal failed ranges raise BackfillFailedError, not a complete result.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async run(stream: Stream, from: bigint, to: bigint) {
     if (await this.client.chainId() !== 4663) throw new Error('RPC chain ID must be 4663');
     const leases = new RangeLeases(this.db);
@@ -237,7 +296,8 @@ export class PonsBackfill {
     const allReceipts:RpcReceipt[] = resolve ? await this.client.receipts(n) : [...new Set(selected.map(l=>lower(l.transactionHash)))].map(tx=>({transactionHash:tx,blockHash:selected[0].blockHash,blockNumber:selected[0].blockNumber,from:native,to:null,synthetic:true,logs:selected.filter(l=>lower(l.transactionHash)===tx)}));
     const selectedTxs = new Set(selected.map(l => lower(l.transactionHash)));
     const receipts = allReceipts.filter(r => selectedTxs.has(lower(r.transactionHash)));
-    const timestamp = selected[0].blockTimestamp;
+    // The public RPC returns blockTimestamp 0x0 on logs; a zero is missing, never epoch 0.
+    const timestamp = selected[0].blockTimestamp && BigInt(selected[0].blockTimestamp) > 0n ? selected[0].blockTimestamp : undefined;
     let block: RpcBlock;
     if (receipts.every(r => r.from && 'to' in r) && timestamp && selected.every(l => l.blockTimestamp === timestamp)) {
       block = { number: selected[0].blockNumber, hash: selected[0].blockHash, parentHash: '0x', timestamp, transactionsComplete:false, transactions: receipts.map(r => ({ hash: r.transactionHash, from: r.from!, to: r.to!,type:r.type,transactionIndex:r.transactionIndex })) };
@@ -261,9 +321,16 @@ export class PonsBackfill {
   }
 
 }
-// TODO(spec): ERC-8004 identity mints require their own verified Phase A stream; deferred as allowed by task 017.
+// ERC-8004 identity history is collected separately by AgentRegistryCollector (registry:sync).
 
-/** Find the first block at/after a timestamp without assuming a fixed block rate. */
+/** Find the first block at/after a timestamp without assuming a fixed block rate.
+ * @remarks
+ * Binary-search headers for the first block at/after the supplied timestamp up to head. Indexer
+ * host read, no wallet auth; wrong/missing header or provider failure rejects and no fixed block
+ * rate is assumed.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+ */
 export async function blockAtTime(client: ChainClient, timestamp: bigint, head: bigint): Promise<bigint> {
   let lo = 0n, hi = head;
   while (lo < hi) {

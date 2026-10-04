@@ -22,7 +22,14 @@ const address = (a: Address) => {
   if (!isAddress(a, { strict: false }) || same(a, zeroAddress)) throw new Error('Invalid Pons address');
 };
 
-/** Attach these bindings to a reviewed 039/040 native route, never to an arbitrary curve by brand. */
+/** Attach these bindings to a reviewed 039/040 native route, never to an arbitrary curve by brand.
+ * @remarks
+ * Validate a nonzero curve address and attach the checked-in buy/sell selectors with static
+ * amount/minimum/recipient word bindings. Public pure preparation without auth; invalid address
+ * throws. This alone does not authenticate deployed curve code.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export function ponsV2Execution(curve: Address): PonsCurveRoute['execution'] {
   address(curve);
   const words: ('amount' | 'recipient' | Hex)[] = ['amount', toHex(0n, { size: 32 }), 'recipient'];
@@ -37,6 +44,13 @@ export interface PonsAbiPin {
   /** Dispatcher selectors checked in this curve's deployed code at the pin. */
   buySelector: Hex; sellSelector: Hex;
 }
+/**
+ * Check reviewed route/address/code/evidence pins and exact selector/word bindings against
+ * supplied ABI pin. Public pure validation without auth or RPC; missing/inconsistent pins return
+ * false and malformed typed inputs can throw. Caller must acquire/review the underlying evidence.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export function verifiedPonsExecution(route: PonsCurveRoute, pin: PonsAbiPin | null): boolean {
   const v = route.verification;
   return !!pin && route.venue === 'pons_curve' && v.reviewed &&
@@ -57,7 +71,15 @@ export interface PonsUnsignedTrade {
   refundRecipient: Address | null;
   approval: { token: Address; spender: Address; amount: string; kind: 'erc20'; tx: UnsignedTx } | null;
 }
-/** Reviewable unsigned bytes only. This does not grant permission to submit an order. */
+/** Reviewable unsigned bytes only. This does not grant permission to submit an order.
+ * @remarks
+ * Require supplied route/ABI pin agreement and valid account/recipient/raw units, then build
+ * unsigned native buy or sell with explicit ERC20 approval. Caller authenticates account and owns
+ * admission; invalid ABI/address/amount/encoding throws. Native buy refund is attributed to
+ * sender; no signing/submission occurs.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export function buildPonsTrade(route: PonsCurveRoute, pin: PonsAbiPin | null, input: {
   side: 'buy' | 'sell'; account: Address; recipient: Address; amountIn: bigint; minOut: bigint;
 }): PonsUnsignedTrade {
@@ -105,9 +127,23 @@ export interface PonsTradeForkCase {
 export type PonsTradeForkGate =
   | { status: 'pending'; reason: 'metered_fork_evidence_missing'; cases: [] }
   | { status: 'supplied'; cases: PonsTradeForkCase[] };
+/**
+ * Return explicit pending metered-fork-evidence state with no cases. Public pure operation without
+ * auth/failure side effects; it cannot open execution.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export const pendingPonsTradeForkGate = (): PonsTradeForkGate => ({ status: 'pending', reason: 'metered_fork_evidence_missing', cases: [] });
 
-/** Validate supplied evidence; synthetic envelopes can test this contract but cannot accept a deployment. */
+/** Validate supplied evidence; synthetic envelopes can test this contract but cannot accept a deployment.
+ * @remarks
+ * Check supplied measured case matrix, route/block/recipient/refund/fee/tax and raw balance
+ * bindings and return named gaps. Caller supplies reviewed evidence; no RPC/authentication.
+ * Pending returns missing evidence; malformed typed data can throw; fixtures cannot accept
+ * deployment.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export function ponsTradeForkGateIssues(route: PonsCurveRoute, gate: PonsTradeForkGate): string[] {
   if (gate.status === 'pending') return ['metered_fork_evidence_missing'];
   const fingerprint = referenceDigest(route);
@@ -149,7 +185,14 @@ export interface PonsActualAccountRevalidation {
 }
 
 export interface PonsVenueLinks { ponsCurve: string; allowedOrigins: readonly string[] }
-/** Configuration owns the link. Never reflect token metadata or manufacture a token-page URL. */
+/** Configuration owns the link. Never reflect token metadata or manufacture a token-page URL.
+ * @remarks
+ * Validate the operator-configured credential-free HTTPS venue link against exact allowed origins.
+ * Public configuration projection without wallet auth; malformed/foreign URL throws and token
+ * metadata is never used to construct it.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export function ponsVenueLink(config: PonsVenueLinks): string {
   const u = new URL(config.ponsCurve);
   if (u.protocol !== 'https:' || u.username || u.password || !config.allowedOrigins.includes(u.origin)) throw new Error('Pons venue link is not allowlisted');
@@ -166,7 +209,22 @@ export interface PonsCurveQuote {
 }
 /** Pure native Pons adapter. State acquisition stays in metered 039/040; no server keys, transport or submission. */
 export class PonsCurveAdapter {
+  /**
+   * Validate and retain the operator-owned allowed venue link. Host-only construction;
+   * invalid/foreign URL throws and no chain/state acquisition occurs.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   constructor(private readonly links: PonsVenueLinks) { ponsVenueLink(links); }
+  /**
+   * Validate inputs/pins/native state and modeled ordinary/creator fee schedule, then compute
+   * candidate raw amounts/refunds and optional unsigned bytes. Caller owns account auth/state
+   * acquisition; invalid input/fees throw, evidence/model/capacity gaps stay unavailable. Always
+   * binding=false/executable=false with zero terminal fee; fork observations and future actual-
+   * account revalidation remain gates.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   quote(input: {
     route: PonsCurveRoute; abiPin: PonsAbiPin | null; snapshot: PonsQuoteSnapshot; forkGate: PonsTradeForkGate;
     side: 'buy' | 'sell'; amountIn: bigint; slippageBps: number; account?: Address; recipient?: Address; quotedAtMs: number;
@@ -223,7 +281,13 @@ export class PonsCurveAdapter {
     });
     return out;
   }
-  /** TODO(spec): connect task 052 only after its actual-account revalidation implementation lands. */
+  /** TODO(spec): connect task 052 only after its actual-account revalidation implementation lands.
+   * @remarks
+   * Return actual_account_revalidation_052_missing unconditionally. Public preparation endpoint
+   * without auth or I/O; it cannot emit executable order bytes.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   prepareExecution(): { status: 'unavailable'; code: 'actual_account_revalidation_052_missing' } {
     return { status: 'unavailable', code: 'actual_account_revalidation_052_missing' };
   }

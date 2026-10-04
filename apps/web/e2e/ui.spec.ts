@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { test } from './helpers';
 
 test('Desk controls, inert source text, focus, persistence and resizing', async ({ page }) => {
   const errors: string[] = [];

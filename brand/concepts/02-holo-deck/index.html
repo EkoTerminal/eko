@@ -1,0 +1,1000 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Holo Deck · SignalOS concept 02</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Tilt+Warp&family=Mona+Sans:wdth,wght@75..125,200..900&family=Martian+Mono:wdth,wght@75..112.5,100..800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#07060B;--card:#14121C;--edge:#2A2640;--text:#F4F1FF;--mute:#A9A2C4;--dim:#746D96;
+  --long:#4DF0FF;--short:#FF4F9A;--pk:#FF7AD9;--cy:#7FE3FF;--ap:#FFC98A;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#1c1b20}
+body{display:flex;flex-direction:column;align-items:center;gap:40px;padding:40px 0;overflow-x:hidden;font-family:'Mona Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text)}
+.board{position:relative;width:1600px;height:900px;flex:none;overflow:hidden;background:var(--void);color:var(--text)}
+.tw{font-family:'Tilt Warp',sans-serif;font-weight:400}
+.mono{font-family:'Martian Mono',monospace;font-stretch:88%}
+.abs{position:absolute}
+a{color:inherit;text-decoration:none}
+.ftext{background:linear-gradient(100deg,#FF7AD9 0%,#FFB6EC 22%,#7FE3FF 50%,#FFC98A 88%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.up{color:var(--long)}.dn{color:var(--short)}
+.grain{position:absolute;inset:0;pointer-events:none;mix-blend-mode:overlay;opacity:.5}
+
+/* ---------- foil editions (tied to bot TYPE, never performance) ---------- */
+.ed-silver{--c1:#F6F8FD;--c2:#8A93AB;--c3:#DCE1EC;--tint:.24;--tintc:200,212,235}
+.ed-prism{--c1:#FF7AD9;--c2:#7FE3FF;--c3:#FFC98A;--tint:0;--tintc:127,227,255}
+.ed-gold{--c1:#FFF0C6;--c2:#BA8633;--c3:#FFD98C;--tint:.14;--tintc:255,201,138}
+.foil{background:
+  linear-gradient(var(--sa,112deg),rgba(255,255,255,0) 30%,rgba(255,255,255,.55) 40%,rgba(255,255,255,0) 49%,rgba(255,255,255,0) 63%,rgba(255,255,255,.24) 69%,rgba(255,255,255,0) 75%),
+  repeating-linear-gradient(60deg,rgba(255,255,255,.13) 0 1px,rgba(255,255,255,0) 1px 4px),
+  repeating-linear-gradient(var(--fa,128deg),rgba(255,122,217,var(--tint)) 0,rgba(127,227,255,var(--tint)) 50px,rgba(255,201,138,var(--tint)) 100px,rgba(255,122,217,var(--tint)) 150px),
+  repeating-linear-gradient(var(--fb,142deg),var(--c1) 0,var(--c2) var(--fs,44px),var(--c3) calc(var(--fs,44px)*2),var(--c1) calc(var(--fs,44px)*3));}
+
+/* ---------- the card ---------- */
+.card{position:relative;width:250px;height:350px;border-radius:16px;padding:6px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 40px 70px -18px rgba(0,0,0,.85),0 12px 24px rgba(0,0,0,.45)}
+.card .in{position:relative;height:100%;border-radius:11px;overflow:hidden;display:flex;flex-direction:column;padding:9px 11px 10px;
+  background:radial-gradient(120% 60% at 50% 0%,rgba(var(--tintc),.10),rgba(0,0,0,0) 60%),#14121C;box-shadow:0 0 0 1px rgba(0,0,0,.55)}
+.card .hd{display:flex;align-items:center;justify-content:space-between;height:28px}
+.card .nm{font-family:'Tilt Warp';font-size:23px;line-height:1}
+.card .no{font:500 12px/1 'Martian Mono';font-stretch:80%;color:var(--mute)}
+.card .art{position:relative;margin-top:6px;height:128px;border-radius:8px;padding:1.5px;flex:none}
+.win{position:relative;height:100%;border-radius:7px;overflow:hidden;
+  background:radial-gradient(circle at 50% 50%,rgba(var(--tintc),.20),rgba(0,0,0,0) 62%),#09080F}
+.win svg{position:absolute;inset:0;width:100%;height:100%}
+.win::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(118deg,rgba(255,255,255,0) 35%,rgba(255,255,255,.10) 47%,rgba(255,255,255,0) 58%),repeating-linear-gradient(125deg,rgba(255,122,217,.10) 0 18px,rgba(127,227,255,.10) 36px,rgba(255,201,138,.10) 54px,rgba(255,122,217,.10) 72px)}
+.ed-prism .win{background:radial-gradient(ellipse 70% 80% at 50% 50%,rgba(9,8,15,.9) 22%,rgba(9,8,15,.25) 80%),conic-gradient(from 200deg at 50% 50%,rgba(255,122,217,.6),rgba(127,227,255,.6),rgba(255,201,138,.6),rgba(255,122,217,.6)),#09080F}
+.ed-gold .win{background:radial-gradient(ellipse 70% 80% at 50% 50%,rgba(9,8,15,.9) 22%,rgba(9,8,15,.35) 80%),conic-gradient(from 200deg at 50% 50%,rgba(255,201,138,.42),rgba(186,134,51,.16),rgba(255,240,198,.42),rgba(186,134,51,.16),rgba(255,201,138,.42)),#09080F}
+.ed-silver .win{background:radial-gradient(ellipse 70% 80% at 50% 50%,rgba(9,8,15,.9) 22%,rgba(9,8,15,.35) 80%),conic-gradient(from 200deg at 50% 50%,rgba(230,236,248,.34),rgba(140,150,172,.1),rgba(230,236,248,.34),rgba(140,150,172,.1),rgba(230,236,248,.34)),#09080F}
+.ed-silver .win::after{background:linear-gradient(118deg,rgba(255,255,255,0) 35%,rgba(255,255,255,.10) 47%,rgba(255,255,255,0) 58%),repeating-linear-gradient(125deg,rgba(230,236,248,.06) 0 18px,rgba(140,150,172,.03) 36px,rgba(230,236,248,.06) 54px)}
+.ed-gold .win::after{background:linear-gradient(118deg,rgba(255,255,255,0) 35%,rgba(255,240,200,.10) 47%,rgba(255,255,255,0) 58%),repeating-linear-gradient(125deg,rgba(255,201,138,.08) 0 18px,rgba(255,240,198,.04) 36px,rgba(255,201,138,.08) 54px)}
+.card .edn{position:absolute;right:6px;bottom:6px;z-index:2;font:800 12px/1 'Mona Sans';letter-spacing:.12em;padding:4px 6px 4px 7px;border-radius:4px;color:#0B0A10}
+.card .ty{margin-top:8px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;flex:none;
+  font:800 12px/1 'Mona Sans';letter-spacing:.09em;color:#0B0A10;text-transform:uppercase}
+.card .st{margin-top:9px;font:750 15px/1.18 'Mona Sans';letter-spacing:-.005em}
+.card .ds{margin-top:4px;font:500 12.5px/1.28 'Mona Sans';color:var(--mute)}
+.card .ft{margin-top:auto;display:flex;gap:6px}
+.card .ft div{flex:1;border:1px solid var(--edge);border-radius:5px;padding:4px 6px 5px;font:500 12px/1.1 'Martian Mono';font-stretch:78%;white-space:nowrap}
+.card .ft b{display:block;font:700 12px/1 'Mona Sans';letter-spacing:.05em;color:var(--dim);margin-bottom:3px}
+.card .sheen{position:absolute;inset:0;border-radius:16px;pointer-events:none;mix-blend-mode:screen;
+  background:linear-gradient(var(--sha,115deg),rgba(255,255,255,0) 34%,rgba(255,255,255,.16) 45%,rgba(255,255,255,0) 55%)}
+
+/* mini card */
+.mc{position:relative;width:92px;height:128px;border-radius:10px;padding:4px;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 14px 26px rgba(0,0,0,.6)}
+.mc .in{height:100%;border-radius:7px;background:#14121C;display:flex;flex-direction:column;align-items:center;padding:5px 5px 0;overflow:hidden}
+.mc .art{width:100%;height:64px;border-radius:5px;padding:1px;flex:none}
+.mc .win{border-radius:4px}
+.mc .nm{margin-top:7px;font:750 12px/1.05 'Mona Sans';font-stretch:82%;text-align:center;white-space:nowrap}
+.mc .tp{margin-top:3px;font:600 11px/1 'Mona Sans';font-stretch:80%;color:var(--mute);white-space:nowrap}
+.mc .sheen{position:absolute;inset:0;border-radius:10px;mix-blend-mode:screen;background:linear-gradient(118deg,rgba(255,255,255,0) 35%,rgba(255,255,255,.14) 46%,rgba(255,255,255,0) 56%)}
+
+/* emblem chip */
+.em{display:inline-grid;place-items:center;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 2px 6px rgba(0,0,0,.4)}
+
+/* ================= BOARD 1 ================= */
+.b1 .bloom{position:absolute;left:760px;top:40px;width:900px;height:760px;border-radius:50%;
+  background:radial-gradient(closest-side,rgba(127,227,255,.10),rgba(255,122,217,.05) 55%,rgba(0,0,0,0) 100%)}
+.nav{position:absolute;left:0;right:0;top:0;height:84px;display:flex;align-items:center;padding:0 56px 0 60px;z-index:20}
+.brand{display:flex;align-items:center;gap:10px}
+.brand .tw{font-size:25px;letter-spacing:.005em}
+.nav .links{display:flex;gap:34px;margin-left:72px;font:600 14.5px/1 'Mona Sans';color:#CFC8E8}
+.nav .links a:first-child{color:var(--text)}
+.nav .r{margin-left:auto;display:flex;align-items:center;gap:18px}
+.pill{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 13px;border-radius:999px;border:1px solid var(--edge);font:600 12.5px/1 'Mona Sans';color:#CFC8E8;background:rgba(20,18,28,.6)}
+.pill i{width:7px;height:7px;border-radius:50%;background:#F4F1FF;box-shadow:0 0 0 3px rgba(244,241,255,.14)}
+.btn-sm{height:38px;padding:0 18px;border-radius:999px;display:inline-flex;align-items:center;font:700 14px/1 'Mona Sans';background:var(--text);color:#07060B}
+.hero{position:absolute;left:68px;top:120px;width:600px;z-index:12}
+.eyebrow{display:flex;align-items:center;gap:12px;font:600 13px/1 'Mona Sans';color:#CFC8E8;letter-spacing:.02em}
+.eyebrow .chip{height:26px;padding:0 10px;border-radius:6px;display:inline-flex;align-items:center;font:800 11.5px/1 'Mona Sans';letter-spacing:.14em;color:#0B0A10}
+.hero h1{margin-top:22px;font-family:'Tilt Warp';font-weight:400;font-size:88px;line-height:.9;letter-spacing:-.01em}
+.hero h1 span{display:block}
+.hero .sub{margin-top:22px;width:530px;font:500 17px/1.5 'Mona Sans';color:#D6D0EC}
+.hero .sub b{font-weight:800;white-space:nowrap}
+.ctas{margin-top:26px;display:flex;gap:14px;align-items:center}
+.btn-p{position:relative;height:56px;padding:0 26px 0 22px;border-radius:14px;display:inline-flex;align-items:center;gap:12px;font:800 17px/1 'Mona Sans';background:var(--text);color:#07060B;
+  box-shadow:0 0 0 1px rgba(255,255,255,.4),0 18px 40px -12px rgba(127,227,255,.45),0 8px 30px -10px rgba(255,122,217,.5)}
+.btn-p .mk{width:22px;height:30px;border-radius:5px;transform:rotate(12deg)}
+.btn-g{height:56px;padding:0 24px;border-radius:14px;display:inline-flex;align-items:center;gap:10px;font:700 17px/1 'Mona Sans';border:1.5px solid #3A3556;color:var(--text);background:rgba(20,18,28,.55)}
+.facts{margin-top:24px;display:flex;gap:20px;font:600 12.5px/1 'Mona Sans';color:#BDB6D8}
+.facts div{display:flex;gap:7px;align-items:center;white-space:nowrap}
+.facts svg{flex:none}
+.nia{margin-top:14px;font:600 12px/1 'Mona Sans';color:var(--dim);letter-spacing:.02em}
+.fan-stage{position:absolute;left:530px;top:22px;width:1040px;height:700px;perspective:1700px;perspective-origin:50% 30%;z-index:10}
+.fan{position:absolute;inset:0;transform-style:preserve-3d;transform:rotateX(11deg) rotateY(-6deg)}
+.fc{position:absolute;transform-style:preserve-3d}
+.glint{position:absolute;z-index:14;pointer-events:none;mix-blend-mode:screen}
+.standee{position:absolute;z-index:11}
+.strip{position:absolute;left:0;right:0;bottom:0;height:150px;z-index:16;
+  background:linear-gradient(to bottom,rgba(7,6,11,0),rgba(7,6,11,.92) 22%,#07060B 40%);}
+.strip:before{content:"";position:absolute;left:60px;right:0;top:18px;height:1px;background:linear-gradient(90deg,#2A2640,rgba(42,38,64,.2))}
+.strip .l{position:absolute;left:68px;top:36px;width:360px}
+.strip .k{font:800 11.5px/1 'Mona Sans';letter-spacing:.16em;color:var(--mute)}
+.strip .t{margin-top:9px;font-size:27px;line-height:1}
+.strip .lg{margin-top:12px;display:flex;flex-wrap:wrap;gap:6px 14px;font:650 12px/1 'Mona Sans';color:#D6D0EC}
+.strip .lg span{display:inline-flex;align-items:center;gap:6px}
+.strip .lg i{width:12px;height:16px;border-radius:3px;display:inline-block}
+.strip .nt{margin-top:9px;font:500 12px/1.3 'Mona Sans';color:var(--dim)}
+.strip .r{position:absolute;left:452px;top:34px;display:flex;gap:10px}
+
+/* ================= BOARD 2 ================= */
+.b2{background:#07060B}
+.tb{position:absolute;left:0;right:0;top:0;height:60px;display:flex;align-items:center;padding:0 16px 0 20px;border-bottom:1px solid #1B1827;gap:18px;background:#0A0910}
+.tb .brand .tw{font-size:19px}
+.tabs{display:flex;gap:4px;font:600 13px/1 'Mona Sans';color:#A9A2C4}
+.tabs a{padding:9px 11px;border-radius:8px}
+.tabs a.on{color:var(--text);background:#1A1726}
+.sep{width:1px;height:28px;background:#221F31}
+.mkt{display:flex;align-items:center;gap:9px;height:38px;padding:0 12px 0 8px;border-radius:10px;border:1px solid var(--edge);background:#100E17}
+.coin{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:#1E1B2C;border:1px solid #3A3556}
+.mkt b{font:750 15px/1 'Mona Sans'}
+.mkt small{font:500 12px/1 'Mona Sans';color:var(--mute)}
+.lastpx{display:flex;flex-direction:column;gap:4px}
+.lastpx b{font:600 17px/1 'Martian Mono';font-stretch:85%}
+.lastpx small{font:600 11px/1 'Mona Sans';color:var(--dim)}
+.tfs{display:flex;gap:2px;padding:3px;border-radius:10px;background:#100E17;border:1px solid #1E1B2B}
+.tfs a{font:600 12px/1 'Martian Mono';font-stretch:85%;color:#A9A2C4;padding:8px 9px;border-radius:7px}
+.tfs a.on{background:#2A2640;color:var(--text)}
+.modes{margin-left:auto;display:flex;padding:3px;border-radius:11px;background:#100E17;border:1px solid var(--edge)}
+.modes a{display:flex;align-items:center;gap:7px;padding:0 13px;height:32px;border-radius:8px;font:700 13px/1 'Mona Sans';color:#A9A2C4}
+.modes a.on{background:var(--text);color:#07060B}
+.modes a.on i{width:7px;height:7px;border-radius:50%;background:#07060B}
+.modes small{font:600 11px/1 'Mona Sans';color:var(--dim)}
+.acct{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.acct small{font:600 11px/1 'Mona Sans';color:var(--dim);letter-spacing:.06em}
+.acct b{font:600 14px/1 'Martian Mono';font-stretch:85%}
+.cp{position:absolute;left:14px;top:72px;width:1112px;height:666px;border-radius:14px;border:1px solid #1C1929;background:#0B0A11;overflow:hidden}
+.cp .hdr{position:absolute;left:0;right:0;top:0;height:50px;display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid #17141F}
+.cp .hdr .ttl{font:750 15px/1 'Mona Sans'}
+.ohlc{font:500 12px/1 'Martian Mono';font-stretch:85%;color:#A9A2C4;display:flex;gap:12px}
+.ohlc em{font-style:normal;color:var(--dim);margin-right:3px}
+.illu{font:600 11px/1 'Mona Sans';color:#8C84AE;border:1px dashed #3A3556;border-radius:5px;padding:4px 6px;white-space:nowrap}
+.ontable{margin-left:auto;display:flex;align-items:center;gap:8px;font:600 12px/1 'Mona Sans';color:#A9A2C4}
+.ontable .ema{display:inline-flex;align-items:center;gap:6px;margin-left:10px}
+.ontable .ema i{width:18px;height:3px;border-radius:2px;display:inline-block}
+.cp .plot{position:absolute;left:0;top:50px}
+.mk2{position:absolute;z-index:3}
+.aside{position:absolute;left:1140px;top:72px;width:446px}
+.tcard{position:relative;border-radius:16px;background:#12101A;border:1px solid var(--edge);overflow:hidden;box-shadow:0 24px 50px -20px rgba(0,0,0,.8)}
+.tcard .band{height:42px;background:var(--long);color:#041014;display:flex;align-items:center;padding:0 14px 0 16px;gap:12px}
+.tcard .band .tw{font-size:22px;letter-spacing:.01em}
+.tcard .band .pair{font:800 14px/1 'Mona Sans';letter-spacing:.04em}
+.tcard .band .pp{margin-left:auto;font:800 11.5px/1 'Mona Sans';letter-spacing:.14em;background:#041014;color:var(--long);padding:6px 8px;border-radius:6px}
+.tcard .body{padding:12px 14px 12px}
+.from{display:flex;align-items:center;gap:11px}
+.from .who b{font:750 15px/1 'Mona Sans'}
+.from .who span{font:600 12px/1 'Mona Sans';color:var(--mute);margin-left:6px}
+.from .who div{margin-top:6px;font:500 11.5px/1 'Martian Mono';font-stretch:85%;color:#A9A2C4}
+.from .who div em{font-style:normal;color:var(--text)}
+.timer{margin-left:auto;text-align:right}
+.timer b{display:block;font:600 16px/1 'Martian Mono';font-stretch:85%}
+.timer small{display:block;margin-top:5px;font:600 11px/1 'Mona Sans';color:var(--dim)}
+.also{display:flex;align-items:center;gap:10px;margin-top:9px;font:600 11.5px/1 'Mona Sans';color:var(--mute);white-space:nowrap}
+.also .m{display:inline-flex;align-items:center;gap:5px;color:#D6D0EC}
+.prices{margin-top:11px;padding-top:11px;border-top:1px solid #1F1C2C;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pr{border:1px solid #221F31;border-radius:10px;padding:7px 11px 8px;background:#0D0C13}
+.pr label{display:block;font:750 11px/1 'Mona Sans';letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.pr b{display:block;margin-top:6px;font:600 18px/1 'Martian Mono';font-stretch:85%}
+.pr small{display:block;margin-top:5px;font:500 11px/1 'Mona Sans';color:var(--dim)}
+.pr.fill{border-style:dashed}
+.pr.fill b{color:#6F6890}
+.amt{margin-top:10px;display:flex;align-items:center;gap:10px}
+.amt label{font:750 11px/1 'Mona Sans';letter-spacing:.1em;text-transform:uppercase;color:var(--mute);width:58px}
+.inp{flex:1;height:42px;border-radius:10px;border:1px solid #3A3556;background:#0D0C13;display:flex;align-items:center;gap:8px;padding:0 12px}
+.inp b{font:600 17px/1 'Martian Mono';font-stretch:85%}
+.inp span{font:700 13px/1 'Mona Sans';color:var(--mute)}
+.inp em{margin-left:auto;font:500 12px/1 'Martian Mono';font-stretch:85%;color:var(--dim);font-style:normal}
+.qk{display:flex;gap:4px}
+.qk a{font:650 11.5px/1 'Mona Sans';color:#A9A2C4;border:1px solid #221F31;border-radius:7px;padding:8px 7px}
+.costs{margin-top:10px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:9px 11px;border-radius:10px;background:#0D0C13}
+.costs span{display:block;font:600 11px/1 'Mona Sans';color:var(--dim)}
+.costs b{display:block;margin-top:5px;font:500 12.5px/1 'Martian Mono';font-stretch:85%}
+.acts{margin-top:10px;display:flex;gap:8px}
+.acts .buy{flex:1;height:48px;border-radius:12px;background:var(--long);color:#041014;display:flex;align-items:center;justify-content:center;gap:8px;font:850 16px/1 'Mona Sans';letter-spacing:.01em;box-shadow:0 10px 30px -12px rgba(77,240,255,.7)}
+.acts .pass{width:86px;height:48px;border-radius:12px;border:1px solid #3A3556;display:grid;place-items:center;font:700 14px/1 'Mona Sans';color:#CFC8E8}
+.fine{margin-top:9px;font:500 11px/1.35 'Mona Sans';color:var(--dim)}
+.feed{margin-top:10px;border-radius:14px;border:1px solid #1C1929;background:#0B0A11;height:var(--fh,160px);overflow:hidden}
+.feed .fh{display:flex;align-items:center;gap:4px;height:36px;padding:0 8px;border-bottom:1px solid #17141F;font:650 12.5px/1 'Mona Sans';color:#A9A2C4}
+.feed .fh a{padding:6px 9px;border-radius:7px}
+.feed .fh a.on{background:#1A1726;color:var(--text)}
+.feed .fh .rc{margin-left:auto;font-size:12px;color:var(--dim)}
+.row{display:flex;align-items:center;gap:9px;height:30px;white-space:nowrap;padding:0 12px;border-bottom:1px solid #131120;font:600 12.5px/1 'Mona Sans'}
+.row .n{width:84px}
+.row .d{width:64px;font-weight:850;font-size:12px;letter-spacing:.02em}
+.row .m{width:66px;font:500 11.5px/1 'Martian Mono';font-stretch:85%;color:var(--mute)}
+.row .s{margin-left:auto;font:500 11.5px/1 'Martian Mono';font-stretch:85%;color:#CFC8E8}
+.row .s.x{color:var(--dim)}
+.hand{position:absolute;left:0;right:0;bottom:0;height:156px;border-top:1px solid #1B1827;
+  background:radial-gradient(60% 120% at 50% 130%,rgba(127,227,255,.07),rgba(0,0,0,0) 70%),#09080E}
+.hand .hl{position:absolute;left:22px;top:24px;width:190px}
+.hand .hl .tw{font-size:21px}
+.hand .hl .s{margin-top:7px;font:600 12px/1.35 'Mona Sans';color:var(--mute)}
+.hand .hl .chip{margin-top:12px;display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--edge);font:700 11.5px/1 'Mona Sans';color:#D6D0EC}
+.hand .hl .chip i{width:18px;height:10px;border-radius:5px;background:#2A2640;position:relative}
+.hand .hl .chip i:after{content:"";position:absolute;left:2px;top:2px;width:6px;height:6px;border-radius:50%;background:#746D96}
+.hand .hc{position:absolute;left:236px;top:0;width:1110px;height:156px}
+.hand .hr{position:absolute;right:16px;top:26px;width:214px;display:flex;flex-direction:column;gap:8px}
+.hand .hr a{height:40px;border-radius:10px;border:1px solid var(--edge);display:flex;align-items:center;gap:8px;padding:0 12px;white-space:nowrap;font:700 13px/1 'Mona Sans';color:#D6D0EC;background:#100E17}
+.hand .hr a small{margin-left:auto;font:600 11px/1 'Mona Sans';color:var(--dim)}
+.hcard{position:absolute;transform-origin:50% 100%}
+.hcard.on:after{content:"ON TABLE";position:absolute;left:50%;top:-9px;transform:translateX(-50%);font:800 11px/1 'Mona Sans';letter-spacing:.14em;color:#07060B;background:#F4F1FF;padding:4px 7px;border-radius:5px;white-space:nowrap;box-shadow:0 4px 10px rgba(0,0,0,.5)}
+.hcard.off{filter:saturate(.55) brightness(.62)}
+
+/* ================= BOARD 3 ================= */
+.b3 .sheet{position:absolute;left:0;top:0;width:884px;height:900px;padding:30px 36px 0 40px}
+.b3 .film{position:absolute;left:884px;top:0;width:716px;height:900px;padding:30px 30px 0 30px;background:#0A0910;border-left:1px solid #1B1827}
+.lbl{font:800 11.5px/1 'Mona Sans';letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+.lbl b{color:var(--text)}
+.sh-top{display:flex;justify-content:space-between;align-items:baseline}
+.sh-top .tw{font-size:15px;letter-spacing:.04em}
+.lgrow{margin-top:14px;display:flex;gap:14px;height:232px}
+.lgmain{position:relative;width:392px;border-radius:16px;border:1px solid #1E1B2B;overflow:hidden;
+  background:radial-gradient(70% 90% at 30% 40%,rgba(127,227,255,.10),rgba(255,122,217,.05) 50%,rgba(0,0,0,0) 80%),#0B0A11}
+.lgmain .mark{position:absolute;left:14px;top:26px}
+.lgmain .wm{position:absolute;left:196px;top:70px;font-size:44px;line-height:1}
+.lgmain .wm small{display:block;margin-top:10px;font:600 12px/1.35 'Mona Sans';color:var(--mute);letter-spacing:0}
+.lgmain .cons{position:absolute;left:18px;bottom:14px;right:18px;display:flex;gap:14px;font:600 11px/1 'Martian Mono';font-stretch:80%;color:var(--dim)}
+.lgctx{position:relative;flex:1;border-radius:16px;border:1px solid #1E1B2B;overflow:hidden;background:#0B0A11}
+.cback{position:absolute;width:128px;height:180px;border-radius:12px;padding:5px;box-shadow:0 20px 40px -10px rgba(0,0,0,.8)}
+.cback .in{height:100%;border-radius:8px;background:#0C0B12;position:relative;overflow:hidden;display:grid;place-items:center}
+.cback .in svg.ros{position:absolute;inset:0;width:100%;height:100%;opacity:.8}
+.appicon{position:absolute;width:76px;height:76px;border-radius:19px;background:#0E0C15;border:1px solid #2A2640;display:grid;place-items:center;box-shadow:0 14px 30px -10px rgba(0,0,0,.8)}
+.ctxcap{position:absolute;font:600 11px/1.3 'Mona Sans';color:var(--dim)}
+.navmini{position:absolute;left:14px;right:14px;bottom:14px;height:40px;border-radius:10px;border:1px solid #221F31;background:#07060B;display:flex;align-items:center;padding:0 12px;gap:8px}
+.navmini .tw{font-size:15px}
+.navmini .x{margin-left:auto;height:24px;padding:0 10px;border-radius:999px;background:var(--text);color:#07060B;font:750 11px/24px 'Mona Sans'}
+.pal{margin-top:16px;display:grid;grid-template-columns:repeat(9,1fr);gap:6px}
+.sw .chip{height:50px;border-radius:9px;border:1px solid rgba(255,255,255,.08)}
+.sw b{display:block;margin-top:7px;font:750 12px/1 'Mona Sans'}
+.sw code{display:block;margin-top:4px;font:500 11px/1 'Martian Mono';font-stretch:78%;color:#CFC8E8}
+.sw span{display:block;margin-top:4px;font:550 11px/1.2 'Mona Sans';color:var(--dim)}
+.types{margin-top:16px;display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:10px}
+.ts{border-radius:12px;border:1px solid #1E1B2B;background:#0B0A11;padding:12px 14px;height:108px;position:relative;overflow:hidden}
+.ts .meta{font:600 11px/1 'Mona Sans';color:var(--dim);letter-spacing:.02em}
+.ts .meta b{color:var(--text);font-weight:750;margin-right:4px}
+.set{margin-top:16px}
+.set .row3{margin-top:10px;display:flex;gap:13px}
+.set .grp{display:flex;flex-direction:column;gap:8px}
+.set .grp .gl{font:750 11px/1 'Mona Sans';letter-spacing:.1em;text-transform:uppercase;color:var(--mute);display:flex;align-items:center;gap:6px}
+.set .grp .gl i{width:10px;height:14px;border-radius:2px;display:inline-block}
+.set .cards{display:flex;gap:6px}
+.set .mc{width:66px;height:94px;border-radius:8px;padding:3px}
+.set .mc .in{border-radius:6px;padding:4px 3px 0}
+.set .mc .art{height:46px}
+.set .mc .nm{margin-top:5px;font-size:11px;font-stretch:75%}
+.set .mc .tp{display:none}
+.motifs{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mo{position:relative;height:92px;border-radius:12px;border:1px solid #1E1B2B;background:#0B0A11;overflow:hidden}
+.mo .cap{position:absolute;left:12px;top:10px;font:750 11px/1 'Mona Sans';letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.voice{margin-top:12px;height:46px;border-radius:12px;border:1px solid #1E1B2B;background:#0B0A11;display:flex;align-items:center;gap:18px;padding:0 16px}
+.voice .tag{font-size:19px;white-space:nowrap}
+.voice .vs{font:550 12.5px/1.3 'Mona Sans';color:#CFC8E8;white-space:nowrap}
+.voice .vs b{display:inline-block;font:800 11px/1 'Mona Sans';letter-spacing:.12em;text-transform:uppercase;color:#07060B;background:#F4F1FF;padding:4px 6px;border-radius:4px;margin-right:6px}
+.voice .vs.no b{background:#2A2640;color:#F4F1FF}
+.fl-title{display:flex;align-items:baseline;gap:14px}
+.fl-title .tw{font-size:60px;line-height:.9;letter-spacing:.02em}
+.logline{margin-top:10px;font:500 13.5px/1.45 'Mona Sans';color:#D6D0EC;width:640px}
+.frames{margin-top:16px;display:grid;grid-template-columns:320px 320px;gap:14px 16px}
+.fr .scr{position:relative;width:320px;height:180px;border-radius:10px;overflow:hidden;background:#040308;box-shadow:0 0 0 1px #221F31}
+.fr .scr svg{display:block}
+.fr .ts2{position:absolute;left:8px;top:8px;font:600 11px/1 'Martian Mono';font-stretch:85%;color:#F4F1FF;background:rgba(7,6,11,.72);border:1px solid rgba(255,255,255,.14);padding:4px 6px;border-radius:5px}
+.fr .no2{position:absolute;right:8px;top:8px;font:750 11px/1 'Mona Sans';letter-spacing:.12em;color:rgba(244,241,255,.75)}
+.fr p{margin-top:7px;font:500 12px/1.35 'Mona Sans';color:#CFC8E8}
+.fr p b{color:var(--text);font-weight:750}
+</style>
+</head>
+<body>
+
+<!-- global paint: foil gradients, glow, glove, hand -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="gPrism" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF7AD9"/><stop offset=".5" stop-color="#7FE3FF"/><stop offset="1" stop-color="#FFC98A"/></linearGradient>
+    <linearGradient id="gSilver" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset=".35" stop-color="#98A1B8"/><stop offset=".62" stop-color="#EEF1F8"/><stop offset="1" stop-color="#7D869D"/></linearGradient>
+    <linearGradient id="gGold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFF4D6"/><stop offset=".35" stop-color="#D19D45"/><stop offset=".62" stop-color="#FFE3A1"/><stop offset="1" stop-color="#9A6A25"/></linearGradient>
+    <linearGradient id="hPrism" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="16" y2="16"><stop offset="0" stop-color="#FF7AD9"/><stop offset=".5" stop-color="#7FE3FF"/><stop offset="1" stop-color="#FFC98A"/></linearGradient>
+    <linearGradient id="hSilver" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="16" y2="16"><stop offset="0" stop-color="#FFFFFF"/><stop offset=".4" stop-color="#A3ABC0"/><stop offset=".65" stop-color="#F2F4FA"/><stop offset="1" stop-color="#8A93A9"/></linearGradient>
+    <linearGradient id="hGold" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="16" y2="16"><stop offset="0" stop-color="#FFF4D6"/><stop offset=".4" stop-color="#D9A64D"/><stop offset=".65" stop-color="#FFE7AC"/><stop offset="1" stop-color="#A5742B"/></linearGradient>
+    <linearGradient id="gLogo" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF7AD9"/><stop offset=".26" stop-color="#FFB8EE"/><stop offset=".5" stop-color="#7FE3FF"/><stop offset=".78" stop-color="#FFE0B8"/><stop offset="1" stop-color="#FFC98A"/></linearGradient>
+    <radialGradient id="gGlow"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset=".25" stop-color="#fff" stop-opacity=".32"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <linearGradient id="gGlove" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#B5AECB"/></linearGradient>
+    <radialGradient id="gSpot" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#2C2548"/><stop offset=".55" stop-color="#171230"/><stop offset="1" stop-color="#07060B" stop-opacity="0"/></radialGradient>
+    <linearGradient id="gBeam" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".20"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <filter id="fb4" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4"/></filter>
+    <filter id="fb10" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="10"/></filter>
+    <filter id="fb22" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="22"/></filter>
+    <symbol id="hand" viewBox="0 0 60 100">
+      <g fill="url(#gGlove)" stroke="#6F6890" stroke-width=".7">
+        <rect x="3" y="44" width="10" height="30" rx="5" transform="rotate(-30 8 70)"/>
+        <rect x="12.5" y="14" width="9.5" height="40" rx="4.75"/>
+        <rect x="22.5" y="7" width="10" height="46" rx="5"/>
+        <rect x="33" y="11" width="9.5" height="42" rx="4.75"/>
+        <rect x="43" y="21" width="8.5" height="33" rx="4.25"/>
+        <path d="M12 45 Q12 38 18 38 L46 38 Q52 38 52 45 L52 64 Q52 78 40 81 L25 81 Q12 78 12 64 Z"/>
+      </g>
+      <rect x="15" y="77" width="36" height="23" rx="2" fill="#0D0B14" stroke="#2A2640" stroke-width=".7"/>
+      <circle cx="33" cy="83" r="2.4" fill="url(#gPrism)"/>
+    </symbol>
+  </defs>
+</svg>
+
+<!-- ======================= BOARD 1 · LANDING HERO ======================= -->
+<section class="board b1" id="b1">
+  <div class="bloom"></div>
+  <div id="table" class="abs" style="inset:0;z-index:1"></div>
+  <nav class="nav">
+    <div class="brand"><span id="navlogo"></span><span class="tw">SignalOS</span></div>
+    <div class="links"><a>The Deck</a><a>The Table</a><a>Quant Lab</a><a>Receipts</a><a>Bot Shop</a></div>
+    <div class="r"><span class="pill"><i></i>Paper mode · no wallet needed</span><a class="btn-sm">Open the table</a></div>
+  </nav>
+  <div class="hero">
+    <div class="eyebrow"><span class="chip foil ed-prism" style="--fs:30px">BASE SET 01</span><span>11 trading bots · on Robinhood Chain</span></div>
+    <h1><span>Pick your</span><span>crew.</span><span class="ftext">Make the</span><span class="ftext">call.</span></h1>
+    <p class="sub">SignalOS deals eleven trading bots as holographic cards. Each one pins its <b class="up">▲ BUY</b> or <b class="dn">▼ SELL</b> to the exact candle. Bots call it. You make the call, signed in your own wallet.</p>
+    <div class="ctas"><a class="btn-p"><span class="mk foil ed-prism" style="--fs:16px"></span>Start paper trading</a><a class="btn-g">Meet the deck <span style="font-size:18px">→</span></a></div>
+    <div class="facts">
+      <div><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#F4F1FF" stroke-width="1.6"><rect x="3" y="2" width="10" height="12" rx="2"/><path d="M6 6h4M6 9h4"/></svg>Paper by default, no wallet</div>
+      <div><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#F4F1FF" stroke-width="1.6"><path d="M3 11c2-1 3-5 5-5s1.5 4 3 4 1.5-2 2-3"/><path d="M3 14h10"/></svg>Your wallet signs every trade</div>
+      <div><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#F4F1FF" stroke-width="1.6"><rect x="2" y="5" width="12" height="6" rx="3"/><circle cx="5" cy="8" r="1.4" fill="#F4F1FF"/></svg>Automation off</div>
+    </div>
+    <div class="nia">Not investment advice. Live mode is opt-in: ETH ⇄ USDG on Uniswap v3.</div>
+  </div>
+  <div class="fan-stage"><div class="fan" id="fan"></div></div>
+  <div id="glints"></div>
+  <div class="strip">
+    <div class="l">
+      <div class="k">02 · MEET THE DECK</div>
+      <div class="tw t">11 cards in the base set</div>
+      <div class="lg"><span><i class="foil ed-silver" style="--fs:8px"></i>Silver · Rules ×4</span><span><i class="foil ed-prism" style="--fs:8px"></i>Prism · AI ×5</span><span><i class="foil ed-gold" style="--fs:8px"></i>Gold · Ensemble ×2</span></div>
+      <div class="nt">Foil follows what a bot is, never how it did.</div>
+    </div>
+    <div class="r" id="strip"></div>
+  </div>
+</section>
+
+<!-- ======================= BOARD 2 · TRADING WORKSPACE ======================= -->
+<section class="board b2" id="b2">
+  <header class="tb">
+    <div class="brand"><span id="tblogo"></span><span class="tw">SignalOS</span></div>
+    <nav class="tabs"><a class="on">Table</a><a>Deck</a><a>Quant Lab</a><a>Receipts</a><a>Shop</a></nav>
+    <span class="sep"></span>
+    <div class="mkt"><span class="coin"><svg width="12" height="14" viewBox="0 0 12 14" fill="#CFC8E8"><path d="M6 0 11 7 6 9.6 1 7Z"/><path d="M6 10.6 11 8 6 14 1 8Z" opacity=".7"/></svg></span><b>ETH/USD</b><small>Ether</small><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#A9A2C4" stroke-width="1.6"><path d="M2 3.5 5 6.5 8 3.5"/></svg></div>
+    <div class="lastpx"><b id="tb-last">2,441.60</b><small>Illustration · made-up prices</small></div>
+    <div class="tfs"><a>1m</a><a>5m</a><a>15m</a><a class="on">1h</a><a>4h</a><a>1d</a></div>
+    <div class="modes"><a class="on"><i></i>Paper</a><a>Testnet</a><a>Live <small>opt-in</small></a></div>
+    <div class="acct"><small>PAPER CASH</small><b>$10,000.00</b></div>
+  </header>
+
+  <div class="cp">
+    <div class="hdr">
+      <span class="ttl">ETH/USD · 1h</span>
+      <span class="ohlc" id="ohlc"></span>
+      <span class="illu">Illustration · made-up prices</span>
+      <div class="ontable"><span>On the table</span><span id="ontable" style="display:flex;gap:4px"></span><span class="ema"><i style="background:linear-gradient(90deg,#fff,#98A1B8,#EEF1F8)"></i>Tideline EMA 9 / 21</span></div>
+    </div>
+    <div class="plot" id="plot"></div>
+  </div>
+
+  <aside class="aside">
+    <div class="tcard">
+      <div class="band"><span class="tw">▲ BUY</span><span class="pair">ETH / USD · 1h</span><span class="pp">PAPER</span></div>
+      <div class="body">
+        <div class="from"><span id="tc-em"></span>
+          <div class="who"><b>Tideline</b><span>Rules bot · Trend</span><div>Signal on the 13:00 candle</div></div>
+          <div class="timer"><b>1h 38m</b><small>left to act</small></div>
+        </div>
+        <div class="also"><span>Same candle, same call:</span><span id="tc-agree" style="display:flex;gap:10px"></span></div>
+        <div class="prices">
+          <div class="pr"><label>Signal reference</label><b id="p-ref"></b><small>13:00 candle close</small></div>
+          <div class="pr"><label>Chart last</label><b id="p-last"></b><small>live chart · 15:22</small></div>
+          <div class="pr"><label>Executable quote</label><b id="p-q"></b><small>paper quote, right now</small></div>
+          <div class="pr fill"><label>Fill</label><b>— — —</b><small>set when you confirm</small></div>
+        </div>
+        <div class="amt"><label>Amount</label><div class="inp"><b>0.200</b><span>ETH</span><em id="p-usd"></em></div><div class="qk"><a>25%</a><a>50%</a><a>Max</a></div></div>
+        <div class="costs"><div><span>Fee (simulated)</span><b id="p-fee"></b></div><div><span>Price impact</span><b>0.02%</b></div><div><span>Slippage limit</span><b>0.50%</b></div></div>
+        <div class="acts"><a class="buy">▲ BUY 0.200 ETH · PAPER</a><a class="pass">Pass</a></div>
+        <div class="fine">Paper fills are simulated. On Testnet and Live, nothing trades until you sign.</div>
+      </div>
+    </div>
+    <div class="feed">
+      <div class="fh"><a class="on">Signal feed</a><a>Positions</a><a>Receipts</a><span class="rc">append-only</span></div>
+      <div id="feed"></div>
+    </div>
+  </aside>
+
+  <footer class="hand">
+    <div class="hl"><div class="tw">Your hand</div><div class="s">11 cards · 3 on the table.<br>Tap a card to deal it in.</div><div class="chip"><i></i>Automation OFF</div></div>
+    <div class="hc" id="handrow"></div>
+    <div class="hr"><a>Bot shop <small>official</small></a><a>Community bots <small>moderated</small></a></div>
+  </footer>
+</section>
+
+<!-- ======================= BOARD 3 · BRAND SHEET + FILM ======================= -->
+<section class="board b3" id="b3">
+  <div class="sheet">
+    <div class="sh-top"><div class="lbl">SignalOS · Concept 02 · <b>Holo Deck</b></div><div class="lbl">Brand sheet</div></div>
+    <div class="lgrow">
+      <div class="lgmain">
+        <div class="mark" id="biglogo"></div>
+        <div class="wm tw">SignalOS<small>Card tilted 12°. A signal wave<br>die-cut straight through it.</small></div>
+        <div class="cons"><span>TILT 12°</span><span>CARD 5:7</span><span>WAVE 1 PERIOD</span><span>FILL PRISM FOIL</span></div>
+      </div>
+      <div class="lgctx" id="lgctx"></div>
+    </div>
+    <div class="pal" id="pal"></div>
+    <div class="types">
+      <div class="ts"><div class="meta"><b>Tilt Warp</b>Titles, names, the big call</div><div class="tw" style="font-size:38px;line-height:1;margin-top:14px">Make the <span class="ftext">call.</span></div><div class="meta" style="margin-top:8px">Aa Bb Cc 0123 — one weight, loud on purpose</div></div>
+      <div class="ts"><div class="meta"><b>Mona Sans</b>UI, body, labels</div><div style="margin-top:12px;font:800 20px/1.1 'Mona Sans'">Executable quote</div><div style="margin-top:5px;font:500 14px/1.3 'Mona Sans';color:#CFC8E8">Fees, price impact &amp; slippage, always shown.</div></div>
+      <div class="ts"><div class="meta"><b>Martian Mono</b>Stats, prices, timers</div><div class="mono" style="margin-top:14px;font-size:21px;font-weight:600">2,441.60</div><div class="mono" style="margin-top:7px;font-size:13px;color:#CFC8E8">1h · 1h 38m left · v1.2.0</div></div>
+    </div>
+    <div class="set">
+      <div class="lbl">Bot identity · the base set · editions by type, never by results</div>
+      <div class="row3" id="setrow"></div>
+    </div>
+    <div class="motifs">
+      <div class="mo" id="mo1"><div class="cap">Motif · signal mini-card pinned to its candle</div></div>
+      <div class="mo" id="mo2"><div class="cap">Rule · foil says who, flat colour says which way</div></div>
+    </div>
+    <div class="voice">
+      <div class="tag"><span class="tw">Pick your crew.</span> <span class="tw ftext">Make the call.</span></div>
+      <div class="vs"><b>Say</b> deal, crew, hand, the call</div>
+      <div class="vs no"><b>Never</b> win rate, streaks, returns</div>
+    </div>
+  </div>
+
+  <div class="film">
+    <div class="lbl">Launch film · 30 s · card magic, one spotlight</div>
+    <div class="fl-title" style="margin-top:12px"><span class="tw ftext">THE DRAW</span></div>
+    <p class="logline">A dealer's hands shuffle eleven foil bots onto a chart-felt table. Each card flips to show its call on a candle, two of them disagree, and the last card dealt is blank. It's yours.</p>
+    <div class="frames" id="frames"></div>
+  </div>
+</section>
+
+<script src="../shared/chart.js"></script>
+<script>
+(function () {
+// ---------------------------------------------------------------- data
+const GLYPHS = {
+  wave: '<path d="M2 10c1.6 0 1.6-4 3.2-4s1.6 4 3.2 4 1.6-4 3.2-4 1.6 4 2.4 4" />',
+  bolt: '<path d="M9.4 2 4.5 9h3.6l-1 5L12 7H8.4l1-5Z" />',
+  spring: '<path d="M3 12.5 5.2 3.5 7.4 12.5 9.6 3.5 11.8 12.5 13 7.5" />',
+  gate: '<path d="M4 3v10M12 3v10" /><path d="M2 8h8.5M8.5 5.5 11 8l-2.5 2.5" />',
+  hex: '<path d="M8 2.2 13 5v6l-5 2.8L3 11V5l5-2.8Z" /><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none" />',
+  orbit: '<circle cx="8" cy="8" r="2.4" /><ellipse cx="8" cy="8" rx="6" ry="3.2" transform="rotate(-24 8 8)" /><circle cx="13.2" cy="5.6" r="1.1" fill="currentColor" stroke="none" />',
+  prism: '<path d="M8 2.5 13.5 12.5h-11L8 2.5Z" /><path d="M8 2.5v10" />',
+  compass: '<circle cx="8" cy="8" r="5.6" /><path d="m10.4 5.6-1.6 3.2-3.2 1.6 1.6-3.2 3.2-1.6Z" fill="currentColor" />',
+  flare: '<path d="M8 2v3M8 11v3M2 8h3M11 8h3M3.8 3.8l2 2M10.2 10.2l2 2M12.2 3.8l-2 2M5.8 10.2l-2 2" />',
+  delta: '<path d="M8 3 13.5 13h-11L8 3Z" /><path d="M5.5 10h5" />',
+  ring: '<circle cx="8" cy="8" r="5.6" /><circle cx="8" cy="8" r="2.8" /><circle cx="8" cy="2.4" r="1" fill="currentColor" stroke="none" />',
+};
+const RULE_TF = '1m → 1d', RULE_MK = '6 markets', AI_TF = '15m·1h·4h', AI_MK = 'ETH·BTC·SOL';
+const BOTS = [
+  { id: 'tideline', no: '01', name: 'Tideline', ed: 'silver', glyph: 'wave', kind: 'Rules bot', style: 'Trend', strat: 'EMA 9/21 trend + ADX filter', desc: 'Rides established trends, steps aside in chop.', tf: RULE_TF, mk: RULE_MK },
+  { id: 'kinetic', no: '02', name: 'Kinetic', ed: 'silver', glyph: 'bolt', kind: 'Rules bot', style: 'Momentum', strat: 'MACD 12/26/9 + RSI ceiling', desc: 'Momentum shifts confirmed by RSI regime.', tf: RULE_TF, mk: RULE_MK },
+  { id: 'recoil', no: '03', name: 'Recoil', ed: 'silver', glyph: 'spring', kind: 'Rules bot', style: 'Reversion', strat: 'Bollinger 20 · 2σ + RSI', desc: 'Fades stretched moves back toward the mean.', tf: RULE_TF, mk: RULE_MK },
+  { id: 'breakline', no: '04', name: 'Breakline', ed: 'silver', glyph: 'gate', kind: 'Rules bot', style: 'Breakout', strat: 'Donchian 20 + volume filter', desc: 'Range breaks that arrive with real volume.', tf: RULE_TF, mk: RULE_MK },
+  { id: 'meridian', no: '05', name: 'Meridian', ed: 'prism', glyph: 'orbit', kind: 'AI analyst', style: 'Balanced', strat: 'Multi-factor read of closed bars', desc: 'Runs on the AI provider your operator sets.', tf: AI_TF, mk: AI_MK },
+  { id: 'vector', no: '06', name: 'Vector', ed: 'prism', glyph: 'prism', kind: 'AI analyst', style: 'Trend', strat: 'Trend-only read of closed bars', desc: 'Reads trend structure and nothing else.', tf: AI_TF, mk: AI_MK },
+  { id: 'lumen', no: '07', name: 'Lumen', ed: 'prism', glyph: 'flare', kind: 'AI analyst', style: 'Contrarian', strat: 'Mean-reversion read of closed bars', desc: 'Looks for stretched moves worth fading.', tf: AI_TF, mk: AI_MK },
+  { id: 'halcyon', no: '08', name: 'Halcyon', ed: 'prism', glyph: 'compass', kind: 'AI analyst', style: 'Risk-first', strat: 'Risk-first read of closed bars', desc: 'States the invalidation before the call.', tf: AI_TF, mk: AI_MK },
+  { id: 'deep-current', no: '09', name: 'Deep Current', ed: 'prism', glyph: 'delta', kind: 'AI analyst', style: 'Balanced', strat: 'Balanced read, schema-checked', desc: 'Every answer validated server-side.', tf: AI_TF, mk: AI_MK },
+  { id: 'quorum', no: '10', name: 'Quorum', ed: 'gold', glyph: 'hex', kind: 'Ensemble', style: 'Rules', strat: 'Calls when 2 of 4 rules bots agree', desc: 'Tideline, Kinetic, Recoil, Breakline.', tf: RULE_TF, mk: RULE_MK },
+  { id: 'council', no: '11', name: 'Council', ed: 'gold', glyph: 'ring', kind: 'Ensemble', style: 'AI', strat: 'Calls when 2 of 5 AI analysts agree', desc: 'Only configured providers can vote.', tf: AI_TF, mk: AI_MK },
+];
+const B = Object.fromEntries(BOTS.map((b) => [b.id, b]));
+const EDN = { silver: 'SILVER', prism: 'PRISM', gold: 'GOLD' };
+const GB = { silver: 'gSilver', prism: 'gPrism', gold: 'gGold' };
+const GH = { silver: 'hSilver', prism: 'hPrism', gold: 'hGold' };
+const fmt = (v) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const $ = (s) => document.querySelector(s);
+const glyph = (g, paint) => GLYPHS[g].replace(/currentColor/g, paint);
+
+// ---------------------------------------------------------------- art
+/** Guilloché "portrait": woven foil bands + dial + medallion + the bot glyph. Deterministic per bot. */
+function rosette(b, vw = 200, vh = 140) {
+  const idx = BOTS.indexOf(b);
+  const R = SOS.rng(1300 + idx * 97);
+  const k1 = 5 + Math.floor(R() * 5), k2 = 8 + Math.floor(R() * 6), k3 = 11 + Math.floor(R() * 6);
+  const cx = vw / 2, cy = vh / 2;
+  const g = `url(#${GB[b.ed]})`;
+  const band = (R0, A, k, m, op, sw) => {
+    let d = '';
+    for (let j = 0; j < m; j++) {
+      for (let t = 0; t <= 300; t++) {
+        const th = (t / 300) * Math.PI * 2;
+        const r = R0 + A * Math.sin(k * th + (j * 2 * Math.PI) / m);
+        d += (t ? 'L' : 'M') + (cx + r * Math.cos(th)).toFixed(1) + ' ' + (cy + r * Math.sin(th)).toFixed(1);
+      }
+      d += 'Z';
+    }
+    return `<path d="${d}" fill="none" stroke="${g}" stroke-width="${sw}" opacity="${op}"/>`;
+  };
+  let s = `<svg viewBox="0 0 ${vw} ${vh}" preserveAspectRatio="xMidYMid slice">`;
+  s += band(112, 12, k1, 9, 0.4, 0.65);
+  s += band(84, 9, k2, 8, 0.55, 0.65);
+  s += band(60, 5, k3, 6, 0.6, 0.6);
+  let t = '';
+  for (let i = 0; i < 96; i++) {
+    const a = (i / 96) * Math.PI * 2, r1 = 47, r2 = i % 8 === 0 ? 41 : 44;
+    t += `M${(cx + r1 * Math.cos(a)).toFixed(1)} ${(cy + r1 * Math.sin(a)).toFixed(1)}L${(cx + r2 * Math.cos(a)).toFixed(1)} ${(cy + r2 * Math.sin(a)).toFixed(1)}`;
+  }
+  s += `<path d="${t}" stroke="${g}" stroke-width=".8" opacity=".75"/>`;
+  s += `<circle cx="${cx}" cy="${cy}" r="38" fill="#0A0910" stroke="${g}" stroke-width="1.6"/><circle cx="${cx}" cy="${cy}" r="33" fill="none" stroke="${g}" stroke-width=".6" opacity=".55"/>`;
+  s += `<circle cx="${cx}" cy="${cy}" r="30" fill="url(#gGlow)" opacity=".10"/>`;
+  s += `<g transform="translate(${cx - 25.6} ${cy - 25.6}) scale(3.2)" fill="none" stroke="url(#${GH[b.ed]})" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round">${glyph(b.glyph, `url(#${GH[b.ed]})`)}</g>`;
+  return s + '</svg>';
+}
+
+/** Small foil emblem chip with the glyph die-cut in ink. */
+function emblem(b, size, radius, extra = '') {
+  const r = radius ?? Math.round(size * 0.26);
+  return `<span class="em foil ed-${b.ed}" style="width:${size}px;height:${size}px;border-radius:${r}px;--fs:${Math.round(size * 0.55)}px;${extra}"><svg width="${Math.round(size * 0.62)}" height="${Math.round(size * 0.62)}" viewBox="0 0 16 16" fill="none" stroke="#0B0A10" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${glyph(b.glyph, '#0B0A10')}</svg></span>`;
+}
+
+function card(b, o = {}) {
+  return `<div class="card foil ed-${b.ed}" style="--sa:${o.sa ?? 112}deg;--fb:${o.fb ?? 142}deg;--sha:${o.sha ?? 115}deg">
+    <div class="in">
+      <div class="hd"><span class="nm">${b.name}</span><span class="no">No. ${b.no}/11</span></div>
+      <div class="art foil ed-${b.ed}" style="--sa:${(o.sa ?? 112) + 20}deg"><div class="win">${rosette(b)}<span class="edn foil ed-${b.ed}" style="--fs:20px">${EDN[b.ed]}</span></div></div>
+      <div class="ty foil ed-${b.ed}" style="--fs:60px"><span>${b.kind}</span><span>${b.style}</span></div>
+      <div class="st">${b.strat}</div>
+      <div class="ds">${b.desc}</div>
+      <div class="ft"><div><b>TIMEFRAMES</b>${b.tf}</div><div><b>MARKETS</b>${b.mk}</div></div>
+    </div><div class="sheen"></div></div>`;
+}
+
+function mini(b, o = {}) {
+  return `<div class="mc foil ed-${b.ed}" style="--fs:26px;--sa:${o.sa ?? 112}deg;${o.style || ''}"><div class="in">
+    <div class="art foil ed-${b.ed}" style="--fs:24px"><div class="win">${rosette(b, 150, 110)}</div></div>
+    <div class="nm">${b.name}</div><div class="tp">${b.kind}</div></div><div class="sheen"></div></div>`;
+}
+
+let LG = 0;
+/** Logo: a foil card tilted 12° with a one-period signal wave (an "S") die-cut straight through it. */
+function logo(size, o = {}) {
+  const id = 'lg' + LG++;
+  let w = '';
+  for (let t = 0; t <= 60; t++) {
+    const u = t / 60, yy = 2 + u * 96, xx = 50 - 13.5 * Math.sin(u * 2 * Math.PI);
+    w += (t ? 'L' : 'M') + xx.toFixed(2) + ' ' + yy.toFixed(2);
+  }
+  const cut = o.cut ?? 9.5;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 100 100" style="display:block;overflow:visible"><defs>
+    <mask id="${id}m" maskUnits="userSpaceOnUse" x="-10" y="-10" width="120" height="120"><rect x="-10" y="-10" width="120" height="120" fill="#fff"/><path d="${w}" fill="none" stroke="#000" stroke-width="${cut}" transform="rotate(12 50 50)"/></mask>
+    <linearGradient id="${id}s" x1="0" y1="0" x2="1" y2="1"><stop offset=".2" stop-color="#fff" stop-opacity="0"/><stop offset=".38" stop-color="#fff" stop-opacity=".7"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity="0"/><stop offset=".78" stop-color="#fff" stop-opacity=".3"/><stop offset=".86" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <pattern id="${id}p" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(60)"><rect width="1" height="3" fill="#fff" opacity=".16"/></pattern>
+    </defs>
+    ${o.shadow ? `<g transform="rotate(12 50 50) translate(3 6)" opacity=".55"><rect x="23" y="12" width="54" height="76" rx="8" fill="#000" filter="url(#fb4)"/></g>` : ''}
+    <g mask="url(#${id}m)"><g transform="rotate(12 50 50)">
+      <rect x="23" y="12" width="54" height="76" rx="8" fill="${o.mono ? o.mono : 'url(#gLogo)'}"/>
+      ${o.mono ? '' : `<rect x="23" y="12" width="54" height="76" rx="8" fill="url(#${id}p)"/><rect x="23" y="12" width="54" height="76" rx="8" fill="url(#${id}s)"/>`}
+      <rect x="23.6" y="12.6" width="52.8" height="74.8" rx="7.6" fill="none" stroke="#fff" stroke-opacity="${o.mono ? 0 : 0.55}" stroke-width="1"/>
+    </g></g></svg>`;
+}
+
+function glint(size, o = {}) {
+  const arm = o.arm ?? 48;
+  return `<svg width="${size}" height="${size}" viewBox="-50 -50 100 100" style="display:block"><circle r="26" fill="url(#gGlow)" opacity="${o.halo ?? 0.9}"/>
+    <path d="M0 -${arm} C2.5 -7 7 -2.5 ${arm} 0 C7 2.5 2.5 7 0 ${arm} C-2.5 7 -7 2.5 -${arm} 0 C-7 -2.5 -2.5 -7 0 -${arm}Z" fill="#fff"/>
+    <path d="M0 -${arm * 0.45} L1.2 -1.2 ${arm * 0.45} 0 1.2 1.2 0 ${arm * 0.45} -1.2 1.2 -${arm * 0.45} 0 -1.2 -1.2Z" fill="#fff" transform="rotate(45)" opacity=".7"/></svg>`;
+}
+
+// ================================================================ BOARD 1
+$('#navlogo').innerHTML = logo(40);
+
+(function table() {
+  // A candlestick chart lying flat on the "table", drawn with a true perspective projection.
+  const W = 1600, H = 900, cx = 1080, hy = 250, f = 900, Hc = 400, z0 = 560;
+  const P = (X, Z) => [cx + (X * f) / (Z + z0), hy + (Hc * f) / (Z + z0)];
+  const n = 60, d = SOS.series(n, 20417);
+  const hi = Math.max(...d.map((k) => k.h)), lo = Math.min(...d.map((k) => k.l));
+  const Zp = (v) => 160 + ((v - lo) / (hi - lo)) * 1250;
+  const X0 = -1150, X1 = 1150, step = (X1 - X0) / n, Xi = (i) => X0 + step * (i + 0.5);
+  const fadeZ = (Z) => Math.max(0, Math.min(1, 1.05 - Z / 1500));
+  const fadeX = (sx) => Math.max(0, Math.min(1, (sx - 820) / 280));
+  const poly = (pts) => pts.map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ');
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="position:absolute;inset:0">`;
+  // felt glow pool
+  const pool = P(250, 520);
+  s += `<ellipse cx="${pool[0]}" cy="${pool[1] + 40}" rx="560" ry="170" fill="#1A1530" opacity=".55" filter="url(#fb22)"/>`;
+  // grid
+  s += `<defs><linearGradient id="tfade" gradientUnits="userSpaceOnUse" x1="700" y1="0" x2="1080" y2="0"><stop offset="0" stop-color="#3A3458" stop-opacity="0"/><stop offset="1" stop-color="#3A3458"/></linearGradient></defs>`;
+  for (let Z = 0; Z <= 1600; Z += 110) {
+    const a = P(X0 - 300, Z), b = P(X1 + 300, Z);
+    s += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="url(#tfade)" stroke-width="1" opacity="${(0.6 * fadeZ(Z)).toFixed(2)}"/>`;
+  }
+  for (let X = X0 - 300; X <= X1 + 300; X += 115) {
+    const a = P(X, 0), b = P(X, 1600);
+    s += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#3A3458" stroke-width="1" opacity="${(0.35 * fadeX(a[0])).toFixed(2)}"/>`;
+  }
+  // candles (monochrome: colour is reserved for calls)
+  d.forEach((k, i) => {
+    const X = Xi(i), bw = step * 0.3;
+    const zo = Zp(k.o), zc = Zp(k.c), zh = Zp(k.h), zl = Zp(k.l);
+    const m = P(X, (zo + zc) / 2);
+    const op = Math.min(1, 1.05 * fadeZ((zo + zc) / 2) * fadeX(m[0])).toFixed(2);
+    if (op <= 0.02) return;
+    const w1 = P(X, zl), w2 = P(X, zh);
+    s += `<line x1="${w1[0]}" y1="${w1[1]}" x2="${w2[0]}" y2="${w2[1]}" stroke="#CFC8E6" stroke-width="1.3" opacity="${op}"/>`;
+    const pts = [P(X - bw, Math.min(zo, zc)), P(X + bw, Math.min(zo, zc)), P(X + bw, Math.max(zo, zc) + 4), P(X - bw, Math.max(zo, zc) + 4)];
+    s += k.c >= k.o
+      ? `<polygon points="${poly(pts)}" fill="#07060B" stroke="#E4DEF7" stroke-width="1.3" opacity="${op}"/>`
+      : `<polygon points="${poly(pts)}" fill="#6A628A" opacity="${op}"/>`;
+  });
+  // one spotlight from above (the same light as the launch film)
+  s += `<defs><linearGradient id="cone" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".10"/><stop offset=".75" stop-color="#fff" stop-opacity=".035"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>`;
+  s += `<polygon points="1060,-20 1170,-20 1560,760 690,760" fill="url(#cone)" filter="url(#fb22)"/>`;
+  s += `<ellipse cx="1120" cy="700" rx="470" ry="92" fill="#fff" opacity=".045" filter="url(#fb22)"/>`;
+  // foil light thrown onto the felt
+  [[985, 672, 170, '#FF7AD9'], [1170, 648, 200, '#7FE3FF'], [1370, 672, 160, '#FFC98A']].forEach(([x, y, r, c]) => {
+    s += `<ellipse cx="${x}" cy="${y}" rx="${r}" ry="${r * 0.2}" fill="${c}" opacity=".16" filter="url(#fb22)"/>`;
+  });
+  // card shadows on the felt
+  [[800, 660, 140], [955, 620, 160], [1108, 600, 180], [1262, 620, 160], [1414, 660, 140]].forEach(([x, y, r]) => {
+    s += `<ellipse cx="${x}" cy="${y}" rx="${r}" ry="${r * 0.2}" fill="#000" opacity=".7" filter="url(#fb22)"/>`;
+  });
+  // signal standee location
+  let si = 0, best = 1e9;
+  d.forEach((kk, i) => { const q = P(Xi(i), Zp(kk.l)); const dd = Math.hypot(q[0] - 1188, q[1] - 724); if (dd < best) { best = dd; si = i; } });
+  const k = d[si];
+  const foot = P(Xi(si), Zp(k.l) - 26);
+  const cndl = P(Xi(si), Zp(k.l));
+  s += `<ellipse cx="${foot[0]}" cy="${foot[1] + 2}" rx="46" ry="7" fill="#000" opacity=".8" filter="url(#fb4)"/>`;
+  s += `<ellipse cx="${cndl[0]}" cy="${cndl[1]}" rx="16" ry="4" fill="none" stroke="#4DF0FF" stroke-width="1.5" opacity=".9"/>`;
+  s += '</svg>';
+  $('#table').innerHTML = s;
+  // standee: an upright mini-card pinned on the candle
+  const st = document.createElement('div');
+  st.className = 'standee';
+  st.style.left = foot[0] - 70 + 'px';
+  st.style.top = foot[1] - 104 + 'px';
+  st.innerHTML = `<div style="position:relative;width:140px">
+     <div class="foil ed-silver" style="--fs:30px;border-radius:11px;padding:2px;box-shadow:0 14px 26px rgba(0,0,0,.6)"><div style="border-radius:9px;background:#14121C;padding:8px 9px;display:flex;gap:8px;align-items:center">
+       ${emblem(B.tideline, 34, 8)}
+       <div><div style="font:750 13px/1 'Mona Sans'">Tideline</div><div style="margin-top:5px;font:850 13px/1 'Mona Sans';color:#4DF0FF">▲ BUY</div><div style="margin-top:4px;font:500 11px/1 'Martian Mono';font-stretch:80%;color:#A9A2C4">2 bars left</div></div>
+     </div></div>
+     <div style="position:absolute;left:69px;top:70px;width:2px;height:32px;background:linear-gradient(#DCE1EC,rgba(220,225,236,.2))"></div>
+   </div>`;
+  $('#b1').appendChild(st);
+  // tiny honest label on the table
+  const lab = document.createElement('div');
+  lab.style.cssText = `position:absolute;z-index:11;left:${foot[0] - 70}px;top:${foot[1] + 12}px;font:600 11px/1 'Mona Sans';color:#746D96;white-space:nowrap`;
+  lab.textContent = 'Illustration · made-up chart';
+  $('#b1').appendChild(lab);
+})();
+
+(function fan() {
+  const picks = [
+    { b: B.breakline, x: 272, y: 396, r: -16, ry: 11, z: -150, sa: 96 },
+    { b: B.lumen, x: 424, y: 330, r: -8, ry: 5, z: -60, sa: 104 },
+    { b: B.meridian, x: 578, y: 296, r: 0, ry: 0, z: 70, sa: 116 },
+    { b: B.quorum, x: 732, y: 330, r: 8, ry: -5, z: -60, sa: 124 },
+    { b: B.tideline, x: 884, y: 396, r: 16, ry: -11, z: -150, sa: 132 },
+  ];
+  $('#fan').innerHTML = picks.map((p) => `<div class="fc" style="left:${p.x - 125}px;top:${p.y - 175}px;transform:translateZ(${p.z}px) rotateZ(${p.r}deg) rotateY(${p.ry}deg)">${card(p.b, { sa: p.sa, fb: 130 + p.r * 2, sha: 100 + p.r * 1.5 })}</div>`).join('');
+  // glints where the "light" catches the foil
+  const G = [[990, 150, 44], [1352, 238, 30], [826, 262, 24], [1548, 354, 30], [1232, 420, 22]];
+  $('#glints').innerHTML = G.map(([x, y, s]) => `<div class="glint" style="left:${x - s / 2}px;top:${y - s / 2}px">${glint(s)}</div>`).join('');
+})();
+
+$('#strip').innerHTML = BOTS.map((b, i) => mini(b, { sa: 100 + i * 6, style: `transform:rotate(${((i * 37) % 7) - 3}deg) translateY(${(i % 3) * 3}px)` })).join('');
+
+// ================================================================ BOARD 2
+$('#tblogo').innerHTML = logo(30);
+const TD = (function tradeChart() {
+  const W = 1112, H = 614, padL = 12, padR = 74, padT = 18, volH = 66, axisH = 24;
+  const n = 72, d = SOS.series(n, 46630);
+  const hi = Math.max(...d.map((k) => k.h)), lo = Math.min(...d.map((k) => k.l));
+  const PX = (v) => 2392 + ((v - lo) / (hi - lo)) * 108;
+  const pMin = 2384, pMax = 2506;
+  const plotB = H - axisH - volH - 6;
+  const y = (p) => padT + ((pMax - p) / (pMax - pMin)) * (plotB - padT);
+  const step = (W - padL - padR) / n, x = (i) => padL + i * step + step / 2;
+  const c = d.map((k) => ({ o: PX(k.o), h: PX(k.h), l: PX(k.l), c: PX(k.c), v: k.v }));
+  const ema = (p) => { const a = 2 / (p + 1); let e = c[0].c; return c.map((k) => (e = k.c * a + e * (1 - a))); };
+  const e9 = ema(9), e21 = ema(21);
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  // grid + price axis
+  for (let p = 2400; p <= 2500; p += 20) {
+    s += `<line x1="0" x2="${W - padR}" y1="${y(p)}" y2="${y(p)}" stroke="#16131F" stroke-width="1"/>`;
+    s += `<text x="${W - padR + 10}" y="${y(p) + 4}" font-family="Martian Mono" font-stretch="85%" font-size="11" fill="#746D96">${fmt(p)}</text>`;
+  }
+  const hrs = (i) => { const hh = (15 - (71 - i) + 72 * 24) % 24; return hh; };
+  const lab = { 8: 'Sep 26', 20: '12:00', 32: 'Sep 27', 44: '12:00', 56: 'Sep 28', 68: '12:00' };
+  Object.entries(lab).forEach(([i, t]) => {
+    s += `<line x1="${x(+i)}" x2="${x(+i)}" y1="0" y2="${H - axisH}" stroke="#131019" stroke-width="1"/>`;
+    s += `<text x="${x(+i)}" y="${H - 8}" text-anchor="middle" font-family="Martian Mono" font-stretch="85%" font-size="11" fill="#746D96">${t}</text>`;
+  });
+  s += `<line x1="${W - padR}" x2="${W - padR}" y1="0" y2="${H - axisH}" stroke="#1C1929"/>`;
+  // signal column highlight
+  const SI = 69;
+  s += `<rect x="${x(SI) - step / 2}" y="0" width="${step}" height="${H - axisH}" fill="#F4F1FF" opacity=".035"/>`;
+  // volume
+  c.forEach((k, i) => { const vh = k.v * volH; s += `<rect x="${x(i) - step * 0.32}" y="${H - axisH - vh}" width="${step * 0.64}" height="${vh}" rx="1" fill="${k.c >= k.o ? '#2A2640' : '#1D1A2B'}"/>`; });
+  // EMA overlays in Tideline's silver foil (identity, not direction)
+  const line = (arr) => arr.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  s += `<polyline points="${line(e21)}" fill="none" stroke="url(#gSilver)" stroke-width="1.6" opacity=".45"/>`;
+  s += `<polyline points="${line(e9)}" fill="none" stroke="url(#gSilver)" stroke-width="1.6" opacity=".8"/>`;
+  // candles: hollow = up, filled = down (neutral; cyan/pink are reserved for calls)
+  c.forEach((k, i) => {
+    const up = k.c >= k.o, top = y(Math.max(k.o, k.c)), bh = Math.max(1.5, Math.abs(y(k.o) - y(k.c))), bw = step * 0.62;
+    s += `<line x1="${x(i)}" x2="${x(i)}" y1="${y(k.h)}" y2="${y(k.l)}" stroke="${up ? '#D9D3EE' : '#7A7298'}" stroke-width="1.2"/>`;
+    s += up ? `<rect x="${x(i) - bw / 2 + 0.6}" y="${top + 0.6}" width="${bw - 1.2}" height="${Math.max(1, bh - 1.2)}" rx="1" fill="#0B0A11" stroke="#E8E3F8" stroke-width="1.2"/>`
+            : `<rect x="${x(i) - bw / 2}" y="${top}" width="${bw}" height="${bh}" rx="1" fill="#7A7298"/>`;
+  });
+  // forming candle outline + last price line
+  const last = c[n - 1].c, ref = c[SI].c;
+  s += `<line x1="0" x2="${W - padR}" y1="${y(last)}" y2="${y(last)}" stroke="#F4F1FF" stroke-width="1" stroke-dasharray="2 4" opacity=".55"/>`;
+  s += `<rect x="${W - padR + 2}" y="${y(last) - 11}" width="${padR - 4}" height="22" rx="5" fill="#F4F1FF"/><text x="${W - padR + 8}" y="${y(last) + 4}" font-family="Martian Mono" font-stretch="85%" font-size="11.5" font-weight="600" fill="#07060B">${fmt(last)}</text>`;
+  s += `<line x1="${x(SI)}" x2="${W - padR}" y1="${y(ref)}" y2="${y(ref)}" stroke="#A9A2C4" stroke-width="1" stroke-dasharray="1 3" opacity=".8"/>`;
+  s += `<rect x="${W - padR + 2}" y="${y(ref) - 30}" width="${padR - 4}" height="18" rx="4" fill="#0B0A11" stroke="#3A3556"/><text x="${W - padR + 8}" y="${y(ref) - 17}" font-family="Martian Mono" font-stretch="85%" font-size="11" fill="#CFC8E8">${fmt(ref)}</text>`;
+  s += '</svg>';
+  $('#plot').innerHTML = s;
+  return { c, x, y, step, last, ref, SI, W, H, padR, hrs };
+})();
+
+(function markers() {
+  const plot = $('#plot');
+  const { c, x, y, SI } = TD;
+  const add = (html, left, top, z = 3) => { const el = document.createElement('div'); el.className = 'mk2'; el.style.left = left + 'px'; el.style.top = top + 'px'; el.style.zIndex = z; el.innerHTML = html; plot.appendChild(el); };
+  const stem = (x0, y0, y1, col = '#F4F1FF', op = 0.55) => add(`<div style="width:1.5px;height:${Math.abs(y1 - y0)}px;background:${col};opacity:${op}"></div>`, x0 - 0.75, Math.min(y0, y1));
+  const dot = (x0, y0, col) => add(`<div style="width:9px;height:9px;border-radius:50%;background:#0B0A11;border:2px solid ${col}"></div>`, x0 - 4.5, y0 - 4.5, 4);
+  // expired, dimmed mini cards (no foil, greyed)
+  const expired = (b, dir, i, above, dx = -22) => {
+    const k = c[i], px = x(i), py = above ? y(k.h) - 8 : y(k.l) + 8;
+    const top = above ? py - 60 : py + 16;
+    stem(px, py, above ? py - 16 : py + 16, '#746D96', 0.6);
+    dot(px, py, '#746D96');
+    add(`<div style="display:flex;gap:7px;align-items:center;padding:6px 9px 6px 6px;border-radius:9px;background:#100E17;border:1px solid #2A2640;opacity:.78">
+      <span style="filter:grayscale(1) brightness(.8)">${emblem(b, 28, 7)}</span>
+      <div><div style="font:700 12px/1 'Mona Sans';color:#CFC8E8">${b.name}</div>
+      <div style="margin-top:4px;font:850 11.5px/1 'Mona Sans';color:${dir === 'BUY' ? 'var(--long)' : 'var(--short)'};opacity:.8;white-space:nowrap">${dir === 'BUY' ? '▲ BUY' : '▼ SELL'} <span style="font:500 11px/1 'Martian Mono';font-stretch:80%;color:#746D96">· expired</span></div></div></div>`, px + dx, top);
+  };
+  expired(B.lumen, 'SELL', 58, true, -118);
+  expired(B.recoil, 'BUY', 41, false);
+  // the live stack: Tideline on top, Breakline + Quorum dealt behind it on the same candle
+  const k = c[SI], px = x(SI), py = y(k.h) - 7;
+  dot(px, py, '#4DF0FF');
+  const cardW = 240, left = px - cardW + 34, top = py - 148;
+  stem(px, top + 76, py - 5, '#4DF0FF', 0.9);
+  add(`<div style="position:relative;width:${cardW}px;height:76px">
+      <div class="foil ed-gold" style="--fs:30px;position:absolute;left:14px;top:-13px;width:${cardW}px;height:74px;border-radius:12px;transform:rotate(3deg);box-shadow:0 8px 20px rgba(0,0,0,.6)"></div>
+      <div class="foil ed-silver" style="--fs:30px;--sa:150deg;position:absolute;left:7px;top:-7px;width:${cardW}px;height:74px;border-radius:12px;transform:rotate(1.5deg);box-shadow:0 8px 20px rgba(0,0,0,.6)"></div>
+      <div class="foil ed-silver" style="--fs:34px;position:absolute;left:0;top:0;width:${cardW}px;height:76px;border-radius:12px;padding:2px;box-shadow:0 14px 30px rgba(0,0,0,.7)">
+        <div style="height:100%;border-radius:10px;background:#14121C;display:flex;align-items:center;gap:11px;padding:0 12px 0 10px;white-space:nowrap">
+          ${emblem(B.tideline, 46, 11)}
+          <div style="flex:1"><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font:750 14px/1 'Mona Sans'">Tideline</span><span style="font:600 11px/1 'Mona Sans';color:#746D96">13:00 candle</span></div>
+            <div style="margin-top:7px;display:flex;align-items:baseline;justify-content:space-between"><span style="font:850 15px/1 'Mona Sans';color:#4DF0FF;letter-spacing:.01em">▲ BUY</span>
+            <span style="font:500 11.5px/1 'Martian Mono';font-stretch:80%;color:#F4F1FF">1h 38m left</span></div>
+            <div style="margin-top:7px;height:3px;border-radius:2px;background:#2A2640"><div style="width:54%;height:3px;border-radius:2px;background:#F4F1FF"></div></div></div>
+        </div></div></div>`, left, top, 5);
+  add(`<div style="display:flex;gap:6px;font:650 11px/1 'Mona Sans';color:#A9A2C4;align-items:center;white-space:nowrap">${emblem(B.breakline, 18, 5)}Breakline <span class="up" style="font-weight:850">▲ BUY</span>&nbsp;&nbsp;${emblem(B.quorum, 18, 5)}Quorum <span class="up" style="font-weight:850">▲ BUY</span></div>`, left, top - 44, 5);
+  // header data
+  const L = c[c.length - 1];
+  $('#ohlc').innerHTML = `<span><em>O</em>${fmt(L.o)}</span><span><em>H</em>${fmt(L.h)}</span><span><em>L</em>${fmt(L.l)}</span><span><em>C</em>${fmt(L.c)}</span>`;
+})();
+
+(function tradeCard() {
+  const q = TD.last + 0.85, amt = 0.2, usd = q * amt;
+  $('#tb-last').textContent = fmt(TD.last);
+  $('#p-ref').textContent = fmt(TD.ref);
+  $('#p-last').textContent = fmt(TD.last);
+  $('#p-q').textContent = fmt(q);
+  $('#p-usd').textContent = '≈ $' + fmt(usd);
+  $('#p-fee').textContent = '0.30% · $' + fmt(usd * 0.003);
+  $('#tc-em').innerHTML = emblem(B.tideline, 42, 10);
+  $('#tc-agree').innerHTML = [B.breakline, B.quorum].map((b) => `<span class="m">${emblem(b, 20, 5)}${b.name} <b class="up" style="font-weight:850">▲ BUY</b></span>`).join('');
+  $('#ontable').innerHTML = [B.tideline, B.breakline, B.quorum].map((b) => emblem(b, 22, 6)).join('');
+  const rows = [
+    [B.quorum, 'BUY', 'ETH · 1h', '13:00', '1h 38m left'],
+    [B.tideline, 'BUY', 'ETH · 1h', '13:00', '1h 38m left'],
+    [B.breakline, 'BUY', 'ETH · 1h', '13:00', '1h 38m left'],
+    [B.meridian, null, 'ETH · 1h', '13:00', 'abstained'],
+  ];
+  $('#feed').innerHTML = rows.map(([b, dir, m, t, st]) => `<div class="row">${emblem(b, 20, 5)}<span class="n">${b.name}</span>
+     <span class="d ${dir === 'BUY' ? 'up' : dir === 'SELL' ? 'dn' : ''}" style="${dir ? '' : 'color:#746D96;font-weight:650'}">${dir === 'BUY' ? '▲ BUY' : dir === 'SELL' ? '▼ SELL' : 'no call'}</span>
+     <span class="m">${m}</span><span class="m" style="width:44px">${t}</span><span class="s ${dir ? '' : 'x'}">${st}</span></div>`).join('');
+})();
+
+(function hand() {
+  const on = new Set(['tideline', 'breakline', 'quorum']);
+  const N = BOTS.length, span = 1110, cw = 92, gap = (span - cw) / (N - 1);
+  $('#handrow').innerHTML = BOTS.map((b, i) => {
+    const t = (i - (N - 1) / 2) / ((N - 1) / 2);
+    const rot = t * 5, lift = on.has(b.id) ? -14 : 0, arc = t * t * 10;
+    return `<div class="hcard ${on.has(b.id) ? 'on' : 'off'}" style="left:${i * gap}px;top:${26 + arc + lift}px;transform:rotate(${rot}deg)">${mini(b, { sa: 96 + i * 7 })}</div>`;
+  }).join('');
+})();
+
+// ================================================================ BOARD 3
+$('#biglogo').innerHTML = logo(190, { shadow: true });
+(function ctx() {
+  const cb = (x, y, r, ed) => `<div class="cback foil ed-${ed}" style="left:${x}px;top:${y}px;transform:rotate(${r}deg);--fs:40px"><div class="in"><svg class="ros" viewBox="0 0 120 170">${(() => {
+      let d = '';
+      for (let j = 0; j < 10; j++) { for (let t = 0; t <= 240; t++) { const th = (t / 240) * Math.PI * 2, rr = 44 + 7 * Math.sin(9 * th + (j * 2 * Math.PI) / 10); d += (t ? 'L' : 'M') + (60 + rr * Math.cos(th)).toFixed(1) + ' ' + (85 + rr * 1.35 * Math.sin(th)).toFixed(1); } d += 'Z'; }
+      return `<path d="${d}" fill="none" stroke="url(#gPrism)" stroke-width=".45" opacity=".6"/>`;
+    })()}</svg><div style="position:relative">${logo(66)}</div><div style="position:absolute;bottom:10px;left:0;right:0;text-align:center;font:800 11px/1 'Mona Sans';letter-spacing:.16em;color:#A9A2C4">BASE SET 01</div></div></div>`;
+  $('#lgctx').innerHTML = `
+    ${cb(22, 22, -7, 'prism')}
+    <div class="ctxcap" style="left:18px;top:212px;width:150px;display:none"></div>
+    <div class="appicon" style="left:186px;top:26px">${logo(58)}</div>
+    <div class="ctxcap" style="left:186px;top:110px;width:190px">Card back and app icon. The mark is the only foil on a closed card.</div>
+    <div style="position:absolute;left:186px;top:152px;display:flex;gap:10px;align-items:center">
+      <div style="width:40px;height:40px;border-radius:10px;background:#F4F1FF;display:grid;place-items:center">${logo(34, { mono: '#07060B' })}</div>
+      <div style="width:40px;height:40px;border-radius:10px;background:#14121C;border:1px solid #2A2640;display:grid;place-items:center">${logo(34, { mono: '#F4F1FF' })}</div>
+      <span class="ctxcap" style="position:static;width:110px">One-colour marks for small sizes.</span>
+    </div>`;
+})();
+
+(function palette() {
+  const P = [
+    ['Void', '#07060B', 'Page, the table', '#07060B'],
+    ['Card', '#14121C', 'Card stock, panels', '#14121C'],
+    ['Edge', '#2A2640', 'Borders, rules', '#2A2640'],
+    ['Text', '#F4F1FF', 'Type, primary CTA', '#F4F1FF'],
+    ['Foil', 'FF7AD9→7FE3FF→FFC98A', 'Identity only', 'foil-p'],
+    ['Silver', 'foil', 'Rules edition', 'foil-s'],
+    ['Gold', 'foil', 'Ensemble edition', 'foil-g'],
+    ['Long', '#4DF0FF', '▲ BUY only', '#4DF0FF'],
+    ['Short', '#FF4F9A', '▼ SELL only', '#FF4F9A'],
+  ];
+  $('#pal').innerHTML = P.map(([n, hx, job, c]) => {
+    const bg = c === 'foil-p' ? 'class="chip foil ed-prism" style="--fs:18px"' : c === 'foil-s' ? 'class="chip foil ed-silver" style="--fs:18px"' : c === 'foil-g' ? 'class="chip foil ed-gold" style="--fs:18px"' : `class="chip" style="background:${c}"`;
+    const code = hx === 'FF7AD9→7FE3FF→FFC98A' ? '<code style="font-size:11px;letter-spacing:-.02em">#FF7AD9 →</code><code>#7FE3FF →</code><code>#FFC98A</code>' : hx === 'foil' ? (n === 'Silver' ? '<code>#F6F8FD →</code><code>#8A93AB</code>' : '<code>#FFF0C6 →</code><code>#BA8633</code>') : `<code>${hx}</code>`;
+    return `<div class="sw"><div ${bg}></div><b>${n}</b>${code}<span>${job}</span></div>`;
+  }).join('');
+})();
+
+(function set() {
+  const grp = (label, ed, ids) => `<div class="grp"><div class="gl"><i class="foil ed-${ed}" style="--fs:8px"></i>${label}</div><div class="cards">${ids.map((id, i) => mini(B[id], { sa: 100 + i * 9 })).join('')}</div></div>`;
+  $('#setrow').innerHTML =
+    grp('Silver · Rules bots', 'silver', ['tideline', 'kinetic', 'recoil', 'breakline']) +
+    grp('Prism · AI analysts', 'prism', ['meridian', 'vector', 'lumen', 'halcyon', 'deep-current']) +
+    grp('Gold · Ensembles', 'gold', ['quorum', 'council']);
+})();
+
+(function motifs() {
+  // motif 1: the pinned mini-card
+  let s = `<svg width="420" height="92" viewBox="0 0 420 92" style="position:absolute;left:0;top:0">`;
+  const cs = [[20, 50, 64, 1], [36, 44, 58, 0], [52, 48, 70, 1], [68, 58, 76, 0], [84, 62, 80, 0], [100, 54, 74, 1], [116, 40, 66, 1], [132, 34, 50, 1]];
+  cs.forEach(([x, a, b, up]) => {
+    s += `<line x1="${x}" x2="${x}" y1="${a - 6}" y2="${b + 6}" stroke="${up ? '#D9D3EE' : '#7A7298'}" stroke-width="1.2"/>`;
+    s += up ? `<rect x="${x - 4}" y="${a}" width="8" height="${b - a}" rx="1" fill="#0B0A11" stroke="#E8E3F8" stroke-width="1.2"/>` : `<rect x="${x - 4}" y="${a}" width="8" height="${b - a}" rx="1" fill="#7A7298"/>`;
+  });
+  s += `<circle cx="132" cy="62" r="4" fill="#0B0A11" stroke="#4DF0FF" stroke-width="2"/><path d="M136 64 L170 64" stroke="#4DF0FF" stroke-width="1.5"/>`;
+  s += '</svg>';
+  $('#mo1').insertAdjacentHTML('beforeend', s + `<div style="position:absolute;left:170px;top:32px" class="foil ed-silver" data-x><div style="margin:2px;border-radius:9px;background:#14121C;display:flex;gap:9px;align-items:center;padding:7px 10px 7px 7px">${emblem(B.tideline, 34, 8)}<div><div style="font:750 13px/1 'Mona Sans'">Tideline</div><div style="margin-top:5px;font:850 13px/1 'Mona Sans';color:#4DF0FF">▲ BUY <span style="font:500 11px/1 'Martian Mono';font-stretch:80%;color:#F4F1FF;margin-left:4px">1h 38m left</span></div></div></div></div>`);
+  $('#mo1 [data-x]').style.cssText += ';border-radius:11px;--fs:30px;box-shadow:0 10px 20px rgba(0,0,0,.5)';
+  // motif 2: foil vs flat
+  $('#mo2').insertAdjacentHTML('beforeend', `<div style="position:absolute;left:12px;top:34px;display:flex;gap:10px;align-items:center">
+     <div style="display:flex;gap:4px">${emblem(B.tideline, 38, 9)}${emblem(B.meridian, 38, 9)}${emblem(B.quorum, 38, 9)}</div>
+     <div style="font:600 11px/1.3 'Mona Sans';color:#A9A2C4;width:66px">Foil = who is calling</div>
+     <div style="display:flex;flex-direction:column;gap:5px">
+       <span style="background:#4DF0FF;color:#041014;font:850 12px/1 'Mona Sans';padding:6px 9px;border-radius:6px">▲ BUY</span>
+       <span style="background:#FF4F9A;color:#1A0410;font:850 12px/1 'Mona Sans';padding:6px 9px;border-radius:6px">▼ SELL</span></div>
+     <div style="font:600 11px/1.3 'Mona Sans';color:#A9A2C4;width:84px">Flat colour = which way. Never decor.</div></div>`);
+})();
+
+// ---------------------------------------------------------------- film frames
+function feltSVG(o = {}) {
+  const W = 320, H = 180, cx = o.cx ?? 160, hy = o.hy ?? 40, f = 300, Hc = o.Hc ?? 92, z0 = 200;
+  const P = (X, Z) => [cx + (X * f) / (Z + z0), hy + (Hc * f) / (Z + z0)];
+  let s = `<rect width="${W}" height="${H}" fill="#040308"/>`;
+  s += `<ellipse cx="${o.sx ?? 160}" cy="${o.sy ?? 124}" rx="${o.sr ?? 175}" ry="${(o.sr ?? 175) * 0.42}" fill="url(#gSpot)"/>`;
+  const n = 34, d = SOS.series(n, o.seed ?? 911);
+  const hi = Math.max(...d.map((k) => k.h)), lo = Math.min(...d.map((k) => k.l));
+  const Zp = (v) => 40 + ((v - lo) / (hi - lo)) * 420;
+  const X0 = -330, X1 = 330, st = (X1 - X0) / n;
+  for (let Z = 0; Z <= 520; Z += 65) { const a = P(X0, Z), b = P(X1, Z); s += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#3A3458" stroke-width=".6" opacity="${(0.6 - Z / 1000).toFixed(2)}"/>`; }
+  d.forEach((k, i) => {
+    const X = X0 + st * (i + 0.5), w1 = P(X, Zp(k.l)), w2 = P(X, Zp(k.h));
+    const zo = Zp(Math.min(k.o, k.c)), zc = Zp(Math.max(k.o, k.c)) + 3, a = P(X - st * 0.28, zo), b = P(X + st * 0.28, zo), c2 = P(X + st * 0.28, zc), d2 = P(X - st * 0.28, zc);
+    const dx = (a[0] - (o.sx ?? 160)) / 170, dy = (a[1] - (o.sy ?? 124)) / 70, op = Math.max(0, 0.75 - Math.sqrt(dx * dx + dy * dy) * 0.6).toFixed(2);
+    s += `<line x1="${w1[0]}" y1="${w1[1]}" x2="${w2[0]}" y2="${w2[1]}" stroke="#CFC8E6" stroke-width=".7" opacity="${op}"/>`;
+    s += `<polygon points="${[a, b, c2, d2].map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ')}" ${k.c >= k.o ? 'fill="#07060B" stroke="#E4DEF7" stroke-width=".7"' : 'fill="#6A628A"'} opacity="${op}"/>`;
+  });
+  if (o.beam !== false) s += `<polygon points="${(o.sx ?? 160) - 18},0 ${(o.sx ?? 160) + 18},0 ${(o.sx ?? 160) + 150},${H} ${(o.sx ?? 160) - 150},${H}" fill="url(#gBeam)" opacity=".55"/>`;
+  return { s, P, Zp, X0, st, d };
+}
+const vign = `<rect width="320" height="180" fill="url(#vg)"/>`;
+function flatCard(x, y, w, h, rot, face, o = {}) {
+  // a card lying on the felt: foreshortened by scaleY
+  const sy = o.sy ?? 0.68, grad = face ? `url(#${GB[face.ed]})` : 'url(#gPrism)';
+  let s = `<g transform="translate(${x} ${y}) scale(1 ${sy}) rotate(${rot})">`;
+  s += `<rect x="${-w / 2 + 2}" y="${-h / 2 + 5}" width="${w}" height="${h}" rx="${w * 0.1}" fill="#000" opacity=".6" filter="url(#fb4)"/>`;
+  s += `<rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="${w * 0.1}" fill="${grad}"/>`;
+  s += `<rect x="${-w / 2 + 2.5}" y="${-h / 2 + 2.5}" width="${w - 5}" height="${h - 5}" rx="${w * 0.08}" fill="#0E0C15"/>`;
+  if (!face) {
+    s += `<rect x="${-w / 2 + 5}" y="${-h / 2 + 5}" width="${w - 10}" height="${h - 10}" rx="${w * 0.06}" fill="none" stroke="url(#gPrism)" stroke-width=".6" opacity=".7"/>`;
+    s += `<g transform="rotate(12) translate(${-w * 0.16} ${-h * 0.16})"><rect width="${w * 0.32}" height="${h * 0.32}" rx="2" fill="url(#gLogo)"/></g>`;
+  } else {
+    s += `<rect x="${-w / 2 + 5}" y="${-h / 2 + 8}" width="${w - 10}" height="${h * 0.42}" rx="2" fill="#07060B" stroke="${grad}" stroke-width=".8"/>`;
+    s += `<g transform="translate(${-w * 0.2} ${-h / 2 + 8 + h * 0.21 - w * 0.2}) scale(${(w * 0.4) / 16})" fill="none" stroke="url(#${GH[face.ed]})" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${glyph(face.glyph, `url(#${GH[face.ed]})`)}</g>`;
+    s += `<rect x="${-w / 2 + 5}" y="${h * 0.02}" width="${w - 10}" height="${h * 0.08}" rx="1" fill="${grad}"/>`;
+    s += `<rect x="${-w / 2 + 6}" y="${h * 0.16}" width="${w * 0.6}" height="2" rx="1" fill="#3A3556"/><rect x="${-w / 2 + 6}" y="${h * 0.24}" width="${w * 0.45}" height="2" rx="1" fill="#3A3556"/>`;
+  }
+  s += `<rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="${w * 0.1}" fill="url(#sheenF)" opacity=".7"/>`;
+  return s + '</g>';
+}
+function tag(x, y, dir, o = {}) {
+  const buy = dir === 'BUY', w = o.w ?? 58;
+  return `<g transform="translate(${x} ${y})"><rect x="${-w / 2}" y="-10" width="${w}" height="20" rx="5" fill="${buy ? '#4DF0FF' : '#FF4F9A'}"/><text x="0" y="4.2" text-anchor="middle" font-family="Mona Sans" font-weight="850" font-size="11.5" fill="${buy ? '#041014' : '#1A0410'}">${buy ? '▲ BUY' : '▼ SELL'}</text></g>`;
+}
+const hand = (x, y, w, rot, flip = false, sy = 1) => `<g transform="translate(${x} ${y}) rotate(${rot}) scale(${flip ? -1 : 1} ${sy})"><use href="#hand" x="${-w / 2}" y="${-w * 0.83}" width="${w}" height="${w * 1.67}"/></g>`;
+const star = (x, y, s, op = 1) => `<g transform="translate(${x} ${y}) scale(${s / 100})" opacity="${op}"><circle r="26" fill="url(#gGlow)"/><path d="M0 -48 C2.5 -7 7 -2.5 48 0 C7 2.5 2.5 7 0 48 C-2.5 7 -7 2.5 -48 0 C-7 -2.5 -2.5 -7 0 -48Z" fill="#fff"/></g>`;
+const FDEFS = `<defs><radialGradient id="vg" cx=".5" cy=".5" r=".75"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".75"/></radialGradient>
+  <linearGradient id="sheenF" x1="0" y1="0" x2="1" y2="1"><stop offset=".3" stop-color="#fff" stop-opacity="0"/><stop offset=".45" stop-color="#fff" stop-opacity=".45"/><stop offset=".58" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>`;
+
+const FRAMES = [
+  { t: '00:00', beat: '<b>Spotlight.</b> A chart printed into the felt. A sealed deck waits between two gloved hands.', svg() {
+      const F = feltSVG({ seed: 911 });
+      let s = F.s;
+      for (let i = 0; i < 7; i++) s += flatCard(160, 120 - i * 1.6, 46, 64, 4, null);
+      s += hand(96, 132, 42, 58, false, 0.72) + hand(224, 132, 42, -58, true, 0.72);
+      s += `<text x="160" y="36" text-anchor="middle" font-family="Tilt Warp" font-size="17" fill="url(#gPrism)" letter-spacing="1.5">THE DRAW</text>`;
+      return s;
+    } },
+  { t: '00:04', beat: '<b>The shuffle.</b> Eleven foil cards riffle between the hands and throw colour across the felt.', svg() {
+      const F = feltSVG({ seed: 377, sy: 128 });
+      let s = F.s;
+      for (let i = 0; i < 5; i++) s += `<path d="M${40 + i * 50} ${150 + (i % 2) * 8} q30 -10 60 2" stroke="url(#gPrism)" stroke-width="1.4" fill="none" opacity=".35" filter="url(#fb4)"/>`;
+      for (let i = 0; i < 11; i++) {
+        const t = i / 10, ang = Math.PI * (1 - t), x = 160 + Math.cos(ang) * 78, y = 112 - Math.sin(ang) * 58;
+        s += `<g transform="translate(${x} ${y}) rotate(${(t - 0.5) * 120})"><rect x="-11" y="-16" width="22" height="32" rx="2.5" fill="url(#${i % 3 === 0 ? 'gGold' : i % 3 === 1 ? 'gPrism' : 'gSilver'})"/><rect x="-9" y="-14" width="18" height="28" rx="2" fill="#0E0C15"/><rect x="-5" y="-6" width="10" height="12" rx="1.5" fill="url(#gLogo)" transform="rotate(12)"/></g>`;
+      }
+      s += hand(80, 128, 40, 62, false, 0.8) + hand(240, 128, 40, -62, true, 0.8);
+      s += star(213, 70, 22) + star(110, 64, 14, 0.8);
+      return s;
+    } },
+  { t: '00:09', beat: '<b>The deal.</b> Cards land face-down on candles. One flips: Tideline, ▲ BUY, pinned to its candle.', svg() {
+      const F = feltSVG({ seed: 46630, sx: 170 });
+      let s = F.s;
+      [[70, 128, -6], [120, 120, 3], [218, 118, -2]].forEach(([x, y, r]) => (s += flatCard(x, y, 34, 48, r, null)));
+      s += flatCard(170, 116, 40, 56, 4, B.tideline, { sy: 0.66 });
+      s += star(187, 98, 34);
+      s += `<line x1="170" y1="92" x2="170" y2="76" stroke="#4DF0FF" stroke-width="1.2"/>` + tag(170, 66, 'BUY');
+      s += hand(272, 92, 38, -40, true, 0.85);
+      return s;
+    } },
+  { t: '00:15', beat: '<b>A split.</b> Meridian and Lumen land on the same candle and disagree. Neither one decides.', svg() {
+      const F = feltSVG({ seed: 5150, sx: 160 });
+      let s = F.s;
+      s += `<rect x="156" y="84" width="8" height="46" rx="1" fill="none" stroke="#F4F1FF" stroke-width="1.2"/><line x1="160" y1="74" x2="160" y2="140" stroke="#F4F1FF" stroke-width="1"/>`;
+      s += flatCard(118, 118, 46, 64, -14, B.meridian, { sy: 0.7 }) + flatCard(202, 118, 46, 64, 14, B.lumen, { sy: 0.7 });
+      s += tag(106, 70, 'BUY') + tag(214, 70, 'SELL');
+      s += `<text x="160" y="164" text-anchor="middle" font-family="Mona Sans" font-weight="700" font-size="11" fill="#CFC8E8">same candle · two calls</text>`;
+      s += star(140, 94, 16, 0.9) + star(224, 96, 16, 0.9);
+      return s;
+    } },
+  { t: '00:21', beat: '<b>The last card</b> is blank, titled YOU. The dealer steps back; you write the call.', svg() {
+      let s = `<rect width="320" height="180" fill="#040308"/><ellipse cx="160" cy="100" rx="190" ry="110" fill="url(#gSpot)"/>`;
+      s += `<g transform="translate(160 92) rotate(-6)"><rect x="-54" y="-74" width="108" height="150" rx="10" fill="#000" opacity=".6" filter="url(#fb10)"/>
+        <rect x="-52" y="-76" width="104" height="146" rx="10" fill="url(#gPrism)"/><rect x="-48" y="-72" width="96" height="138" rx="7" fill="#14121C"/>
+        <text x="0" y="-45" text-anchor="middle" font-family="Tilt Warp" font-size="28" fill="#F4F1FF">YOU</text>
+        <rect x="-40" y="-34" width="80" height="46" rx="4" fill="#09080F" stroke="url(#gPrism)" stroke-width="1" stroke-dasharray="3 3"/>
+        <text x="-34" y="-20" font-family="Mona Sans" font-weight="700" font-size="11" fill="#746D96">your call</text>
+        <path d="M-32 -2 q6 -9 12 -3 t12 -2 t12 1 t14 -4" stroke="#F4F1FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <line x1="-40" y1="34" x2="40" y2="34" stroke="#3A3556" stroke-width="1"/>
+        <text x="-40" y="52" font-family="Mona Sans" font-weight="800" font-size="11" fill="#A9A2C4" letter-spacing=".6">SIGNED: YOU</text>
+        <rect x="-52" y="-76" width="104" height="146" rx="10" fill="url(#sheenF)" opacity=".5"/></g>`;
+      s += `<g transform="translate(187.2 86.4) rotate(-58)"><rect x="-4" y="-2" width="8" height="78" rx="3.5" fill="#000" opacity=".5" filter="url(#fb4)" transform="translate(6 6)"/><rect x="-3.5" y="-2" width="7" height="74" rx="3" fill="#F4F1FF"/><rect x="-3.5" y="16" width="7" height="12" fill="url(#gPrism)"/><path d="M-3.5 -2 L0 -12 L3.5 -2Z" fill="#CFC8E6"/></g>`;
+      s += star(115, 24, 26);
+      return s;
+    } },
+  { t: '00:27', beat: '<b>End card.</b> Pick your crew. Make the call. Start paper trading. Not investment advice.', svg() {
+      let s = `<rect width="320" height="180" fill="#07060B"/><ellipse cx="160" cy="60" rx="120" ry="60" fill="#1A1530" opacity=".7" filter="url(#fb10)"/>`;
+      s += `<g transform="translate(136 14)"><foreignObject width="48" height="48"><div xmlns="http://www.w3.org/1999/xhtml">${logo(48)}</div></foreignObject></g>`;
+      s += `<text x="160" y="92" text-anchor="middle" font-family="Tilt Warp" font-size="19" fill="#F4F1FF">Pick your crew.</text>`;
+      s += `<text x="160" y="114" text-anchor="middle" font-family="Tilt Warp" font-size="19" fill="url(#gPrism)">Make the call.</text>`;
+      s += `<rect x="102" y="124" width="116" height="22" rx="6" fill="#F4F1FF"/><text x="160" y="139" text-anchor="middle" font-family="Mona Sans" font-weight="800" font-size="11" fill="#07060B">Start paper trading</text>`;
+      s += `<text x="160" y="165" text-anchor="middle" font-family="Mona Sans" font-weight="600" font-size="11" fill="#746D96">SignalOS on Robinhood Chain · Not investment advice</text>`;
+      return s;
+    } },
+];
+$('#frames').innerHTML = FRAMES.map((F, i) => `<div class="fr"><div class="scr"><svg width="320" height="180" viewBox="0 0 320 180">${FDEFS.replace(/id="vg"/, `id="vg"`)}${F.svg()}${vign}</svg><span class="ts2">${F.t}</span><span class="no2">0${i + 1}</span></div><p>${F.beat}</p></div>`).join('');
+})();
+</script>
+</body>
+</html>

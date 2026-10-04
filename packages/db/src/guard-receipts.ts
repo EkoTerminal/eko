@@ -23,8 +23,21 @@ interface Anchor { receiptId: string; payloadHash: Hex; root: Hex; batchId: numb
  * submission runs implicitly. Registry address and chain must come from configuration. */
 export class GuardReceiptStore {
   readonly writer = 'receipts';
+  /**
+   * Retain the receipts-role database adapter. Host-only construction; no payload/anchor mutation,
+   * chain acquisition or authentication occurs here.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   constructor(readonly db: ChainDb) {}
-  /** Called in the verdict transaction after allocating its immutable identity. */
+  /** Called in the verdict transaction after allocating its immutable identity.
+   * @remarks
+   * Validate canonical Guard envelope/hashes and its already allocated revision binding, then
+   * persist immutable payload bytes idempotently. Authorized verdict transaction caller only;
+   * mismatch/reused identity or schema/SQL failure rejects.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async record(raw: GuardReceiptPayload) {
     const payload=GuardReceiptPayloadSchema.parse(raw),canonicalPayload=canonicalize(payload),payloadHash=codec.hash(payload);
     if(!codec.verifyPayload(payload,{id:payload.receiptId,kind:'verdict',hash:payloadHash})) throw new Error('Invalid Guard receipt envelope');
@@ -35,6 +48,14 @@ export class GuardReceiptStore {
     const stored=(await this.db.sql.query<{canonical_payload:string}>('SELECT canonical_payload FROM guard_receipt_payloads WHERE id=$1',[payload.receiptId])).rows[0];
     if(stored.canonical_payload!==canonicalPayload)throw new Error('Guard receipt identity reused for different bytes');
   }
+  /**
+   * Read and validate original Guard payload bytes and attach stored active anchor
+   * references/events. Public/internal read without wallet session; missing id returns null and
+   * integrity/SQL failure rejects. Live canonicality must be checked by ReceiptApiStore before
+   * public proof reliance.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async get(id: string): Promise<{ payload: GuardReceiptPayload; canonicalPayload: string; receipt: ReceiptRefV2; events: unknown[] } | null> {
     const row = (await this.db.sql.query<{ data: unknown; canonical_payload: string; payload_hash: Hex; revision_id: string }>(
       'SELECT * FROM guard_receipt_payloads WHERE id=$1', [id])).rows[0];
@@ -51,7 +72,14 @@ export class GuardReceiptStore {
     return { payload, canonicalPayload: row.canonical_payload, receipt, events };
   }
   /** Five-minute cadence, including unanchored backlog. This boundary is never
-   * a batch ID. No public root/transaction reference exists until recordAnchor. */
+   * a batch ID. No public root/transaction reference exists until recordAnchor.
+   * @remarks
+   * Build a sorted tree over eligible unanchored Guard receipts before a validated five-minute
+   * cutoff, including backlog. Receipts role only; invalid time or SQL failure rejects and empty
+   * input returns null. No on-chain batch id or public anchor is created.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async prepareBatch(now: string): Promise<PreparedGuardReceiptBatch | null> {
     const millis = Date.parse(now);
     if (!Number.isFinite(millis)) throw new Error('Invalid receipt batch time');
@@ -66,6 +94,14 @@ export class GuardReceiptStore {
     const tree = codec.buildReceiptTree(items);
     return { items, root: tree.root, proofs: tree.proofs, through };
   }
+  /**
+   * Rebuild the prepared tree, require unique items, matching reader chain, successful canonical
+   * transaction and exactly one matching registry event, then bind every persisted payload to its
+   * proof. Receipts role supplies configured chain/registry; validation/RPC/SQL failures reject.
+   * This checks supplied chain equality; callers choose the intended chain.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async recordAnchor(batch: PreparedGuardReceiptBatch, txHash: Hex, registry: Address, chainId: number, reader: GuardRegistryReader, recordedAt: string) {
     const tree = codec.buildReceiptTree(batch.items);
     if (tree.root !== batch.root || canonicalize(tree.proofs) !== canonicalize(batch.proofs)
@@ -100,7 +136,14 @@ export class GuardReceiptStore {
     });
   }
   /** Recheck committed block hashes without rewriting payloads or anchor facts.
-   * Orphaned batches return to the recorded queue and can be anchored again. */
+   * Orphaned batches return to the recorded queue and can be anchored again.
+   * @remarks
+   * Recheck unresolved anchor block hashes against the supplied chain and append orphan observations
+   * without rewriting immutable payloads. Receipts role only; chain mismatch, unavailable canonical
+   * header or RPC/SQL failure rejects; finalization is not recorded on this path.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async refreshAnchors(reader: GuardRegistryReader, chainId: number, recordedAt: string) {
     if (await reader.getChainId()!==chainId) throw new Error('Receipt registry chain mismatch');
     const rows=(await this.db.sql.query<{id:string;data:Anchor}>(`SELECT a.id,a.data FROM guard_receipt_anchors a WHERE a.chain_id=$1

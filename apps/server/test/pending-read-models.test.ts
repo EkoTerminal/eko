@@ -34,7 +34,7 @@ it('masks pending buyers/prices and refreshes distinct senders, bars and ranks a
   expect(pending.buyers).toBe(known);expect(pending.unavailable).toEqual(expect.arrayContaining(['buyers','volume','change','spark','marketCap']));expect(pending.priceUnavailable).toBe(true);expect((await services.store.rows(coin))[0].row.spark8h).toBeUndefined();
   expect((await db.sql.query('SELECT 1 FROM read_buyers WHERE trader IS NULL')).rows).toHaveLength(0);
   const client:ChainClient={chainId:async()=>4663,head:async()=>BigInt(n),block:async()=>block,header:async()=>block,receipts:async()=>receipts,
-   code:async()=> '0x',logs:async()=>[],v3Pool:async()=>({currency0:coin,currency1:quote,fee:3000,tickSpacing:60}),tokenMetadata:async()=>({name:'Quote token',symbol:'QUOTE',decimals:18,totalSupply:10n**27n}),ethUsdRate:async b=>({value:2000,block:b})};
+   code:async()=> '0x',logs:async()=>[],v3Pool:async()=>({currency0:coin,currency1:quote,fee:3000,tickSpacing:60}),tokenMetadata:async()=>({name:'Quote token',symbol:'QUOTE',decimals:18,totalSupply:10n**27n}),ethUsdRate:async b=>({value:2000,block:b,source:{address:sampleAddress(9000),venue:'uniswap_v3',fee:3000}})};
   expect((await enrichSenders(db,coin,client)).enriched).toBe(2);
   const enriched=(await services.pairs.row(coin))!;
   expect(enriched.buyers).toBe(known+1);expect(enriched.unavailable).not.toContain('buyers');expect(enriched.unavailable).not.toContain('volume');expect(enriched.unavailable).not.toContain('spark');expect(enriched.unavailable).not.toContain('change');

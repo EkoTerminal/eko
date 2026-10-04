@@ -11,7 +11,7 @@ import { BlockRows } from './rows.js';
 import { json, Metrics, type ChainClient, type RpcBlock, type RpcReceipt, type RpcLog, type RpcTransaction, type TokenMetadata, type PoolMetadata, type EthUsdRate, type Logger, log } from './types.js';
 interface Token extends TokenMetadata { address: Address; curve: Address | null; launchpad: string | null }
 interface Pool { id: Hex; venue: string; currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks?: Address; createdBlock?: bigint; creationVerified?:boolean }
-export interface Prepared { storedTokens: Set<string>; storedPools: Set<string>; launches: Map<string, Extract<LaunchpadEvent, { kind: 'launch' }>>; tokens: Map<string, Token>; curves: Map<string, Address>; pools: Map<string, Pool>; actors: Map<string, ProtocolActor>; protocolRows: BlockRows; rate: { value: number; block: bigint } | null; scope: SenderScope; forceSenders: boolean }
+export interface Prepared { storedTokens: Set<string>; storedPools: Set<string>; launches: Map<string, Extract<LaunchpadEvent, { kind: 'launch' }>>; tokens: Map<string, Token>; curves: Map<string, Address>; pools: Map<string, Pool>; actors: Map<string, ProtocolActor>; protocolRows: BlockRows; rate: EthUsdRate | null; scope: SenderScope; forceSenders: boolean }
 export interface TokenRow { address: Uint8Array; curve: Uint8Array | null; symbol: string | null; name: string | null; decimals: number | null; launchpad: string | null; total_supply?: string | null; supply_block?: string | null }
 export interface RemoteInputs { codes: Map<string, Hex>; codeBlocks?: Map<string, bigint>; metadata: Map<string, TokenMetadata>; pools: Map<string, PoolMetadata>; rate: EthUsdRate | null }
 const unindexedPonsTopics=new Set(ponsCurveAbi.filter((e):e is AbiEvent=>e.type==='event'&&['FeesSwept','Initialized'].includes(e.name)).map(toEventSelector));
@@ -34,7 +34,7 @@ export class BlockDecoder {
   private referenceRate: EthUsdRate | null = null;
   invalidate() { this.poolReads.clear(); this.codeReads.clear(); this.headCodeReads.clear(); this.headCodes.clear(); this.prices.clear(); this.metadataHints.clear(); this.referenceRate = null; }
   committed(state: Prepared) {
-    if (state.rate) this.referenceRate = state.rate;
+    this.referenceRate = state.rate;
     for (const token of state.tokens.values()) this.metadataHints.set(lower(token.address), token);
     while (this.metadataHints.size > 20000) this.metadataHints.delete(this.metadataHints.keys().next().value!);
   }
@@ -101,7 +101,7 @@ export class BlockDecoder {
     const codes = settle(targets.map(async address => inputs.codes.set(lower(address), await readCode(address))));
     // Task 025b: Keep the shared archive sample cache so live/backfill USD rows agree.
     const price = logs.length && this.client.ethUsdRate ? this.prices.get(sample, () => this.client.ethUsdRate!(sample)).then(rate => {
-      if (rate && (!Number.isFinite(rate.value) || rate.value <= 0 || rate.block > n)) throw new Error('Invalid historical ETH/USD sample');
+      if (rate && (!Number.isFinite(rate.value) || rate.value <= 0 || rate.block > n || rate.source.venue !== 'uniswap_v3' || ![100,500,3000,10000].includes(rate.source.fee) || !/^0x[0-9a-fA-F]{40}$/.test(rate.source.address) || lower(rate.source.address) === native)) throw new Error('Invalid historical ETH/USD sample');
       inputs.rate = rate;
     }) : Promise.resolve();
     const poolAddresses = options.ponsOnly || options.head || scope ? [] : [...new Set(logs.filter(l => v3PoolTopics.has(l.topics[0]) && lower(l.address) !== lower(this.registry.requireAddress('uniswapV4.poolManager'))).map(l => lower(l.address) as Address))];
@@ -172,8 +172,8 @@ export class BlockDecoder {
       state.tokens.set(lower(token.address), token); state.storedTokens.add(lower(token.address));
       if (token.curve) state.curves.set(lower(token.curve), token.address);
     }
-    const poolRows = options.poolRows ? {rows:options.poolRows} : options.scope ? {rows:scope.poolRows} : options.ponsOnly || !poolRefs.length ? { rows: [] } : await db.sql.query<{ id: Uint8Array; venue: string; currency0: Uint8Array; currency1: Uint8Array; fee: number; tick_spacing: number; hooks: Uint8Array | null }>(options.ponsOnly ? 'SELECT * FROM pools WHERE false' : `SELECT * FROM pools WHERE id IN (${placeholders(poolRefs)})`, options.ponsOnly ? [] : poolRefs.map(binary));
-    for (const row of poolRows.rows) { state.storedPools.add(hex(row.id)); state.pools.set(hex(row.id), { id: hex(row.id), venue: row.venue, currency0: hex(row.currency0) as Address, currency1: hex(row.currency1) as Address, fee: row.fee, tickSpacing: row.tick_spacing, ...(row.hooks ? { hooks: hex(row.hooks) as Address } : {}) }); }
+    const poolRows = options.poolRows ? {rows:options.poolRows} : options.scope ? {rows:scope.poolRows} : options.ponsOnly || !poolRefs.length ? { rows: [] } : await db.sql.query<PoolRow>(options.ponsOnly ? 'SELECT * FROM pools WHERE false' : `SELECT * FROM pools WHERE id IN (${placeholders(poolRefs)})`, options.ponsOnly ? [] : poolRefs.map(binary));
+    for (const row of poolRows.rows) { state.storedPools.add(hex(row.id)); state.pools.set(hex(row.id), { id: hex(row.id), venue: row.venue, currency0: hex(row.currency0) as Address, currency1: hex(row.currency1) as Address, fee: row.fee, tickSpacing: row.tick_spacing, creationVerified: row.creation_verified && BigInt(row.created_block) <= n, ...(row.hooks ? { hooks: hex(row.hooks) as Address } : {}) }); }
     if (options.pending) {
       for (const [id,pool] of options.pending.pools) {
         state.storedPools.add(id); state.pools.set(id,{ ...pool,createdBlock:undefined });
@@ -197,7 +197,7 @@ export class BlockDecoder {
       if (options.ponsOnly) continue;
       const decoded = decodePoolEvents(l, { registry: this.registry, isV3Pool: address => state.pools.has(lower(address)) });
       for (const e of decoded.events) {
-        if (e.source === 'uniswap_v3' && e.eventName === 'PoolCreated') state.pools.set(lower(e.args.pool), { id: lower(e.args.pool), venue: e.source, currency0: e.args.token0, currency1: e.args.token1, fee: e.args.fee, tickSpacing: e.args.tickSpacing, createdBlock: n,creationVerified:lower(l.address)===lower(this.registry.requireAddress('uniswapV3.factory')) });
+        if (e.source === 'uniswap_v3' && e.eventName === 'PoolCreated' && (lower(l.address) === lower(this.registry.requireAddress('uniswapV3.factory')) || !state.pools.get(lower(e.args.pool))?.creationVerified)) state.pools.set(lower(e.args.pool), { id: lower(e.args.pool), venue: e.source, currency0: e.args.token0, currency1: e.args.token1, fee: e.args.fee, tickSpacing: e.args.tickSpacing, createdBlock: n,creationVerified:lower(l.address)===lower(this.registry.requireAddress('uniswapV3.factory')) });
         if (e.source === 'uniswap_v4' && e.eventName === 'Initialize') state.pools.set(lower(e.args.id), { id: lower(e.args.id), venue: e.source, currency0: e.args.currency0, currency1: e.args.currency1, fee: e.args.fee, tickSpacing: e.args.tickSpacing, hooks: e.args.hooks, createdBlock: n });
       }
     }
@@ -227,22 +227,32 @@ export class BlockDecoder {
     }
     const weth = this.registry.requireAddress('tokens.WETH'); const usdg = this.registry.requireAddress('tokens.USDG');
     state.rate = remote.rate;
-    if (!options.ponsOnly) {
-      if (this.referenceRate == null || this.referenceRate.block > n) {
-        const last = await db.sql.query<{ price_quote: number; block: string }>('SELECT price_quote,block FROM swaps WHERE venue=$1 AND coin=$2 AND quote_asset=$3 AND block <= $4 ORDER BY block DESC,log_index DESC LIMIT 1', ['uniswap_v3', binary(weth), binary(usdg), n.toString()]);
-        if (last.rows[0]) this.referenceRate = { value: last.rows[0].price_quote, block: BigInt(last.rows[0].block) };
+    const selected = remote.rate?.source;
+    const sameSource = (rate: EthUsdRate) => selected != null && lower(rate.source.address) === lower(selected.address) && rate.source.venue === selected.venue && rate.source.fee === selected.fee;
+    if (!options.ponsOnly && selected) {
+      if (this.referenceRate == null || !sameSource(this.referenceRate) || this.referenceRate.block > n) {
+        // For v3, creation_verified records a PoolCreated from the registry's canonical factory.
+        this.referenceRate = null;
+        const last = await db.sql.query<{ price_quote: number; block: string }>(`SELECT s.price_quote,s.block FROM swaps s JOIN pools p ON p.id=s.pool_id
+          WHERE s.venue=$1 AND p.venue=$1 AND p.creation_verified AND p.created_block<=s.block
+            AND s.coin=$2 AND s.quote_asset=$3 AND ((p.currency0=$2 AND p.currency1=$3) OR (p.currency0=$3 AND p.currency1=$2))
+            AND s.block <= $4 AND p.id=$5 AND p.fee=$6 AND s.price_quote>0 AND s.price_quote<'Infinity'::double precision
+          ORDER BY s.block DESC,s.log_index DESC LIMIT 1`, ['uniswap_v3', binary(weth), binary(usdg), n.toString(), binary(selected.address), selected.fee]);
+        if (last.rows[0]) this.referenceRate = { value: last.rows[0].price_quote, block: BigInt(last.rows[0].block), source: selected };
       }
-      if (this.referenceRate && this.referenceRate.block <= n && (!state.rate || this.referenceRate.block >= state.rate.block)) state.rate = this.referenceRate;
+      if (this.referenceRate && sameSource(this.referenceRate) && this.referenceRate.block <= n && (!state.rate || this.referenceRate.block >= state.rate.block)) state.rate = this.referenceRate;
     }
+    // TODO(spec): §2.1/§4.2a/§4.4 define the canonical v3 source but no expiry; retain the last trusted rate and its block, or null if none exists.
     // The latest reference swap at or before this block also prices earlier trades within the block.
     if (!options.ponsOnly) for (const l of logs) {
       const pool = state.pools.get(lower(l.address));
-      if (!pool || pool.venue !== 'uniswap_v3' || ![pool.currency0, pool.currency1].some(a => lower(a) === lower(weth)) || ![pool.currency0, pool.currency1].some(a => lower(a) === lower(usdg))) continue;
+      if (!selected || !pool || lower(pool.id) !== lower(selected.address) || pool.fee !== selected.fee || pool.venue !== selected.venue || !pool.creationVerified || pool.venue !== 'uniswap_v3' || ![pool.currency0, pool.currency1].some(a => lower(a) === lower(weth)) || ![pool.currency0, pool.currency1].some(a => lower(a) === lower(usdg))) continue;
       for (const e of decodePoolEvents(l, { registry: this.registry, isV3Pool: () => true }).events) if (e.source === 'uniswap_v3' && e.eventName === 'Swap') {
         const weth0 = lower(pool.currency0) === lower(weth);
         const ethAmount = scaled(abs(weth0 ? e.args.amount0 : e.args.amount1), this.registry.data.tokens.WETH.decimals!);
         const usdAmount = scaled(abs(weth0 ? e.args.amount1 : e.args.amount0), this.registry.data.tokens.USDG.decimals!);
-        if (ethAmount > 0) state.rate = { value: usdAmount / ethAmount, block: n };
+        const value = usdAmount / ethAmount;
+        if (ethAmount > 0 && Number.isFinite(value) && value > 0) state.rate = { value, block: n, source: selected };
       }
     }
     return state;
@@ -251,6 +261,8 @@ export class BlockDecoder {
     const rows = new BlockRows();
     rows.merge(state.protocolRows);
     const n = BigInt(block.number); const ts = dateOf(block);
+    // Persist the chosen identity with canonical pricing evidence for the worker's freshness query.
+    if (state.rate) rows.add('eth_usd_reference_sources', { block: state.rate.block.toString(), pool_id: binary(state.rate.source.address), venue: state.rate.source.venue, fee: state.rate.source.fee });
     for (const token of state.tokens.values()) {
       const launch = state.launches.get(lower(token.address));
       const selectedLaunch = launch && receipts.some(r => r.logs.some(l => lower(l.address) === lower(this.registry.requireAddress('pons.factory')) && lower(l.topics[1]?.slice(-40) ?? '') === lower(token.address).slice(2)));

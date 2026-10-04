@@ -9,7 +9,7 @@ import type { LoadedSources } from './sources.js';
 export function verdictReceipt(s:LoadedSources, verdict:Verdict, blockHash:Hex|null, supersedes:string|null, recordedAt:string):PublicReceiptPayload {
   const keys = ['coin','deployer','asOfBlock','asOfSec','createdAtSec','createdAtBlock','launchpad','name','symbol',
     'antiSnipeActive','simulations','taxes','liquidity','pools','curve','wash','trending','dominantPair','pons',
-    'earlyBuyers','graduation','hook','tokenText','history','supply','profile','sectionBlocks'] as const;
+    'earlyBuyers','graduation','hook','tokenText','history','supply','profile','sectionBlocks','attributionCoverage'] as const;
   const deterministicInput=JSON.parse(JSON.stringify(Object.fromEntries(keys.map(k=>[k,s[k] ?? null])),
     (_key,value:unknown)=>{
       if(typeof value==='number' && !Number.isFinite(value)) throw new Error('Nonfinite raw receipt input');

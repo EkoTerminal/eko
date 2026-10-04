@@ -1,12 +1,21 @@
+import { agentRegistryReadAbi } from './agent-registry.js';
 import { createPublicClient, toHex, parseAbi, type Address, type Hex } from 'viem';
 import { createMeteredClients, rpcStopReason, isRpcUnavailable, type AddressRegistry, type RpcEnv, type RpcMeter } from '@eko/chain';
-import type { ChainClient, RpcBlock, RpcLog, RpcReceipt, TokenMetadata, EthUsdRate } from './types.js';
+import type { ChainClient, RpcBlock, RpcLog, RpcReceipt, TokenMetadata, EthUsdRate, EthUsdSource } from './types.js';
 import { budgetedQueries } from './log-budget.js';
 import { ethUsdFromSlot0 } from './price.js';
 const metadataAbi = parseAbi(['function decimals() view returns (uint8)', 'function symbol() view returns (string)', 'function name() view returns (string)', 'function totalSupply() view returns (uint256)']);
 const factoryAbi = parseAbi(['function getPool(address tokenA, address tokenB, uint24 fee) view returns (address)']);
 const priceAbi = parseAbi(['function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)', 'function liquidity() view returns (uint128)', 'function token0() view returns (address)']);
 const poolAbi = parseAbi(['function factory() view returns (address)', 'function token0() view returns (address)', 'function token1() view returns (address)', 'function fee() view returns (uint24)', 'function tickSpacing() view returns (int24)']);
+/**
+ * Wire metered role-routed RPC adapters and pinned Multicall reads from host
+ * configuration/registry. Indexer host only; no wallet auth or keys. Missing manifest
+ * targets/configuration throws; returned reads propagate provider/budget failures except their
+ * documented nullable outcomes.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+ */
 export function createClients(env: RpcEnv, registry: AddressRegistry, meter: RpcMeter, options: { head?: boolean; enrich?: boolean } = {}): ChainClient {
   const { paid: client, reads, archive, public: backfill, head: live, headTimestamp, headWs } = createMeteredClients(env, { meter });
   const enrichment=createPublicClient({transport:meter.transport('enrich')});
@@ -17,8 +26,15 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
     for (const result of results) if (result.status === 'failure' && (rpcStopReason(result.error) || isRpcUnavailable(result.error))) throw result.error;
   };
   let referenceRead:Promise<EthUsdRate|null>|undefined;
-  let referencePool: { address: Address; weth0: boolean } | undefined;
+  let referencePool: EthUsdSource & { weth0: boolean } | undefined;
   const multicallAddress = registry.requireAddress('multicall3');
+  /**
+   * Read decimals/symbol/name/supply in pinned bounded Multicalls and preserve null for individually
+   * failed fields. Indexer host call without wallet auth; all-field failure or provider/budget
+   * closure rejects, empty input returns empty output. Unknown decimals are not fabricated.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   const tokenMetadataBatch = async (addresses: Address[], blockNumber: bigint): Promise<TokenMetadata[]> => {
     if (!addresses.length) return [];
     const fields = ['decimals', 'symbol', 'name', 'totalSupply'] as const;
@@ -33,41 +49,156 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
   // Raw RPC keeps receipt/log quantities identical to captured fixtures, including system transactions.
   const request = async <T>(method: string, params: unknown[]): Promise<T> => client.request({ method, params } as never) as Promise<T>;
   return {
+    /**
+     * Expose the meter's current stop latch without I/O or authentication. Public worker diagnostic
+     * read; this is not a chain health assertion.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     rpcStopped: () => meter.isStopped,
+    /**
+     * Return a copy of cumulative meter timing without I/O or authentication. Public worker diagnostic
+     * read; timing does not authenticate provider data.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     rpcTiming: () => ({ ...meter.timing }),
-    chainId: () => client.getChainId(), head: () => (options.head ? live : client).getBlockNumber({ cacheTime: 0 }),
+    /**
+     * Read chain id through the configured metered client. Indexer operator selects endpoint; no
+     * wallet auth; RPC/budget failures reject.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
+    chainId: () => client.getChainId(), /**
+   * Read uncached block height through head or ordinary metered routing. Indexer host call without
+   * wallet auth; RPC/budget failures reject and caller validates chain.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
+  head: () => (options.head ? live : client).getBlockNumber({ cacheTime: 0 }),
+    /**
+     * Read a full raw block with transactions at the specified number through metered RPC. Indexer
+     * host call without wallet auth; RPC/budget failures reject; consumer checks canonical
+     * consistency.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     block: n => request<RpcBlock>('eth_getBlockByNumber', [toHex(n), true]),
+    /**
+     * Read a raw header at the specified number through enrichment or ordinary metered routing.
+     * Indexer host call without wallet auth; RPC/budget failures reject; consumer checks number/hash.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     header: n => options.enrich ? enrichment.request({method:'eth_getBlockByNumber',params:[toHex(n),false]} as never) as Promise<RpcBlock> : request<RpcBlock>('eth_getBlockByNumber', [toHex(n), false]),
+    /**
+     * Read a raw parent header through the public metered route. Indexer host call without wallet
+     * auth; RPC/budget failures reject; parent-chain authentication belongs to ingest.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     parentHeader: n => publicHeaders.request({method:'eth_getBlockByNumber',params:[toHex(n),false]} as never) as Promise<RpcBlock>,
+    /**
+     * Read a raw header through the timestamp/head metered route. Indexer host call without wallet
+     * auth; RPC/budget failures reject; ingest verifies timestamp/header binding.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     timestampHeader: n => headTimestamp.request({method:'eth_getBlockByNumber',params:[toHex(n),false]} as never) as Promise<RpcBlock>,
+    /**
+     * Read raw block receipts through enrichment/head/ordinary metered routing as configured. Indexer
+     * host call without wallet auth; RPC/budget failures reject and ingest validates receipt/log
+     * bindings.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     receipts: n => (options.enrich ? enrichment : options.head ? live : client).request({method:'eth_getBlockReceipts',params:[toHex(n)]} as never) as Promise<RpcReceipt[]>,
+    /**
+     * Split filters to provider address/block budgets and collect logs from head/public backfill
+     * routes. Indexer host call without wallet auth; RPC/budget failures reject and caller checks
+     * emitters/canonical blocks.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     async logs(input) {
       const logs: RpcLog[] = [];
       for (const { from, to, address, addresses, topics, topicFilters } of budgetedQueries(input)) logs.push(...await (options.head ? live : backfill).request({ method: 'eth_getLogs', params: [{ fromBlock: toHex(from), toBlock: toHex(to), ...(addresses ? { address: addresses } : address ? { address } : {}), topics: topicFilters ?? [topics] }] } as never) as RpcLog[]);
       return logs;
     },
+    /**
+     * Read raw timestamp-probe logs for the supplied topic/range through metered RPC. Indexer host
+     * call without wallet auth; RPC/budget failures reject; this does not itself authenticate log
+     * timestamps.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     timestampLogs: input => request<RpcLog[]>('eth_getLogs',[{fromBlock:toHex(input.from),toBlock:toHex(input.to),topics:[input.topics]}]),
+    /**
+     * Read code at a pinned block through the configured state route, mapping undefined to 0x. Indexer
+     * host call without wallet auth; RPC/budget failures reject and caller checks expected code hash.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     code: async (address, blockNumber) => (await stateReads.getCode({ address, blockNumber })) ?? '0x',
+    /**
+     * Read one token through pinned batch metadata acquisition, retaining null for unavailable
+     * optional fields. Indexer host call without wallet auth; full batch failure or transport/budget
+     * failure rejects; untrusted identity text is not instructions.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     tokenMetadata: async (address, n) => (await tokenMetadataBatch([address], n))[0],
     tokenMetadataBatch,
+    /**
+     * Read owner/wallet/tokenURI at the supplied block in batches of 200 ids. Indexer host call
+     * without wallet auth; missing owner/wallet, incomplete results or provider/budget failures
+     * reject; tokenURI alone may be null.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
+    async agentWallets(ids, blockNumber) {
+      const result: { owner: Address; wallet: Address; tokenUri: string | null }[] = [];
+      for (let offset=0;offset<ids.length;offset+=200) {
+        const results=await archive.multicall({multicallAddress,blockNumber,allowFailure:true,batchSize:8192,
+          contracts:ids.slice(offset,offset+200).flatMap(id=>(['ownerOf','getAgentWallet','tokenURI'] as const).map(functionName=>({
+            address:registry.requireAddress('erc8004.identityRegistry'),abi:agentRegistryReadAbi,functionName,args:[id] as const}))) });
+        checkGuard(results);
+        if(results.length!==Math.min(200,ids.length-offset)*3)throw new Error('Incomplete registry batch');
+        for(let i=0;i<results.length;i+=3) {
+          const owner=results[i],wallet=results[i+1],uri=results[i+2];
+          if(owner.status!=='success'||wallet.status!=='success')throw new Error('Registry wallet/owner read unavailable');
+          result.push({owner:owner.result as Address,wallet:wallet.result as Address,tokenUri:uri.status==='success'?uri.result as string:null});
+        }
+      }
+      return result;
+    },
+    /**
+     * Discover the deepest initialized standard-fee WETH/USDG pool from the configured factory at a
+     * pin, retain its address, then read pinned slot0 on later calls. Indexer host call without wallet
+     * auth. No initialized pool returns null; invalid currencies, missing reads or provider/budget
+     * failures reject. This is a spot conversion, not an independent USD oracle.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     async ethUsdRate(blockNumber) {
       // Adjacent sample periods can prefetch together; discover the reference once.
       if(!referencePool&&referenceRead)await referenceRead;
       if (referencePool) {
         const slot = await archive.readContract({ address: referencePool.address,blockNumber,abi:priceAbi,functionName:'slot0' });
-        return { value:ethUsdFromSlot0(slot[0],referencePool.weth0,registry.data.tokens.WETH.decimals!,registry.data.tokens.USDG.decimals!),block:blockNumber };
+        return { value:ethUsdFromSlot0(slot[0],referencePool.weth0,registry.data.tokens.WETH.decimals!,registry.data.tokens.USDG.decimals!),block:blockNumber, source: { address: referencePool.address, venue: referencePool.venue, fee: referencePool.fee } };
       }
       const discover=async():Promise<EthUsdRate|null>=>{
         const weth = registry.requireAddress('tokens.WETH'), usdg = registry.requireAddress('tokens.USDG');
         // TODO(spec): No preferred WETH/USDG fee tier is specified; use the deepest initialized standard-fee pool at the sample block.
-        const candidates = await archive.multicall({ multicallAddress, blockNumber, allowFailure: true, contracts: [100, 500, 3000, 10000].map(fee => ({ address: registry.requireAddress('uniswapV3.factory'), abi: factoryAbi, functionName: 'getPool', args: [weth, usdg, fee] as const })) });
+        const fees = [100, 500, 3000, 10000];
+        const candidates = await archive.multicall({ multicallAddress, blockNumber, allowFailure: true, contracts: fees.map(fee => ({ address: registry.requireAddress('uniswapV3.factory'), abi: factoryAbi, functionName: 'getPool', args: [weth, usdg, fee] as const })) });
         checkGuard(candidates);
         if (candidates.every(r => r.status === 'failure')) throw new Error('ETH/USD archive discovery failed');
         const addresses = [...new Set(candidates.flatMap(r => r.status === 'success' && lower(r.result) !== native ? [r.result] : []))];
         if (!addresses.length) return null; // Before the reference market existed.
         const reads = await archive.multicall({ multicallAddress, blockNumber, allowFailure: true, contracts: addresses.flatMap(address => (['slot0', 'liquidity', 'token0'] as const).map(functionName => ({ address, abi: priceAbi, functionName }))) });
         checkGuard(reads);
-        let best: { liquidity: bigint; value: number; address: Address; weth0: boolean } | null = null;
+        let best: { liquidity: bigint; value: number; address: Address; weth0: boolean; fee: number } | null = null;
         for (let i = 0; i < addresses.length; i++) {
           const slot = reads[i * 3], liq = reads[i * 3 + 1], token = reads[i * 3 + 2];
           if (slot.status !== 'success' || liq.status !== 'success' || token.status !== 'success') continue;
@@ -76,16 +207,23 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
           const token0 = token.result as Address;
           if (![weth, usdg].some(a => lower(a) === lower(token0))) throw new Error('Unexpected ETH/USD pool currencies');
           const value = ethUsdFromSlot0(sqrtPriceX96, lower(token0) === lower(weth), registry.data.tokens.WETH.decimals!, registry.data.tokens.USDG.decimals!);
-          if (!best || liquidity > best.liquidity) best = { liquidity, value, address: addresses[i], weth0: lower(token0) === lower(weth) };
+          if (!best || liquidity > best.liquidity) best = { liquidity, value, address: addresses[i], weth0: lower(token0) === lower(weth), fee: fees[candidates.findIndex(r => r.status === 'success' && lower(r.result) === lower(addresses[i]))] };
         }
         if (!best && reads.some(r => r.status === 'failure')) throw new Error('ETH/USD archive slot0 read failed');
-        if (best) referencePool = { address:best.address,weth0:best.weth0 };
-        return best ? { value: best.value, block: blockNumber } : null;
+        if (best) referencePool = { address:best.address,weth0:best.weth0,venue:'uniswap_v3',fee:best.fee };
+        return best ? { value: best.value, block: blockNumber, source: { address: best.address, venue: 'uniswap_v3', fee: best.fee } } : null;
       };
       const read=referenceRead=discover();
       try {return await read;} finally {if(referenceRead===read)referenceRead=undefined;}
 
     },
+    /**
+     * Read pinned factory/token/fee/tick-spacing fields with Multicall. Indexer host call without
+     * wallet auth; contract revert/no-data or zero factory returns null while transport/budget
+     * failures reject. Nonzero factory alone is not canonical-factory authentication.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
     async v3Pool(address, blockNumber) {
       try {
         // One pinned Multicall instead of a serial factory read and four independent calls.
@@ -105,7 +243,15 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
         throw error;
       }
     },
-    ...(headWs ? { watch: (onHead: (n: bigint) => void, onError: (error: unknown) => void) => headWs.watchBlockNumber({ emitMissed: true, onBlockNumber: onHead, onError }) } : {}),
+    ...(headWs ? { /**
+   * Subscribe to metered WebSocket block-number notifications with missed-head emission and caller
+   * error callback. Indexer host call without wallet auth; returned unwatch releases the
+   * subscription. Callback/provider failures use the client's subscription error path and
+   * notifications are not canonical block proofs.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
+  watch: (onHead: (n: bigint) => void, onError: (error: unknown) => void) => headWs.watchBlockNumber({ emitMissed: true, onBlockNumber: onHead, onError }) } : {}),
   };
 }
 export const native: Address = `0x${'0'.repeat(40)}`;

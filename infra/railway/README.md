@@ -13,7 +13,8 @@ If application integrations change, update the pin and role availability togethe
 review the diff, and repeat the relevant gates. Never deploy floating `main`.
 Retain the previous accepted image **digest**, source revision, config export
 (secret names/redacted values only), schema compatibility result and migration
-ledger checksums before replacement. There is no previous Railway deployment yet.
+ledger checksums before replacement. The historical first rollout is recorded in
+`docs/operations/staging-railway-evidence.md`; it is not current identity evidence.
 
 `staging.json` is the operator inventory, not a Railway config file. Each role's
 `*.json` is the small Railway config-as-code subset (Dockerfile build, launch
@@ -32,7 +33,7 @@ rejects it rather than starting a substitute process.
 | engines | available; no paid budget by default | private; `engines_started`, queue progress and receipt outbox | 1 CPU, 2 GiB |
 | worker (reconciler) | available, exactly one | no listener; `EKO worker ready`, exclusive Postgres lease | 1 CPU, 2 GiB |
 | mcp | transport compiled; handlers require 094/095; keep unprovisioned pending integration | private only; `/health` and authenticated `/mcp` initialize; future real tool checks | 1 CPU, 2 GiB |
-| receipts | unavailable, requires 080 + role/image integration | private; actual registry event/root/proof, not startup alone | 1 CPU, 2 GiB |
+| receipts | compiled role; keep unprovisioned pending registry/committer acceptance | private; actual registry event/root/proof, not startup alone | 1 CPU, 2 GiB |
 | bots | unavailable, requires 116 + role/image integration | approved Telegram path only; X/Farcaster remain off | 1 CPU, 2 GiB |
 | og | unavailable, requires 111 + role/image integration | future TLS deterministic PNG route | 1 CPU, 2 GiB |
 | sim | separate compatible host; never Railway public ingress | private fork + ArbSys + supported simulation suite | 2 CPU, 4 GiB |
@@ -51,6 +52,16 @@ reassess before adding replicas. Alert on OOM, restart loops and disk utilizatio
 Backups/WAL/restore proof belong to 084, alerting/status/paging to 085.
 
 ## Variables and authority
+
+`commonEnvironment` sets `TRUST_PROXY_HOPS=1`: Railway's edge appends one hop.
+API and MCP use the rightmost forwarded client address for every IP-based limit,
+ignoring caller-supplied earlier entries. Restrict the origin to this fixed edge
+path; block direct access and alternate paths with fewer hops. The hop count
+does not authenticate a proxy's IP address. For an MCP listener reached directly
+over the private network without the edge, override it to `0` in the actual
+deployment so limits use the socket peer. Both runtimes default to `0` when unset
+and reject values other than non-negative integers. Verify the ingress path and
+header append/overwrite behavior before deployment or adding another proxy.
 
 Apply `commonEnvironment` then each available service's `environment`. Supply only
 its listed `secretNames` through environment-specific secret storage (SOPS/age
@@ -189,16 +200,114 @@ railway variables --service api --set 'APP_ROLE=api' --set 'RUN_WORKER=false'
    075 supplies trade lifecycle; 080 receipts; 093 MCP; 116 Telegram. Never add a
    keeper, swarm/research job, burn job or unaccepted tool during this rollout.
 8. For an authorized source deployment from the exact pinned clean checkout:
+   set `EKO_SOURCE_REVISION` on **both API and worker services** to the full lowercase
+   40-character SHA of that checkout before building. Railway supplies service
+   variables to declared Docker ARGs; `.git` never reaches the build. Missing or
+   malformed values stop the Docker build. This is a build argument, not a runtime
+   source override. Then run
    `railway up --service api --detach`, then worker/indexer/engines sequentially
    after the preceding readiness checks. For image-source services, deploy the
    retained digest through that service's source setting instead. Capture actual
    Railway deployment IDs/revisions/digests from the service deployment details.
 9. Run the read-only deployed smoke only after authorization:
    `node scripts/smoke-staging-railway.mjs --authorized-run "$STAGING_ORIGIN"`.
-   It checks TLS origin, HTTP health, paused config/flags, SPA and WS radar ack;
+   It checks TLS origin, HTTP health, identity shape, paused config/flags, SPA and WS radar ack;
    it does not exercise paid acquisition, signing, MCP, migrations or team trades.
    GO PLAN §9's authenticated/tool/receipt/scan/trade smoke is a separate acceptance
    run on the integrated candidate, not satisfied by this boot smoke.
+
+## How to verify
+
+Use an independently obtained clean checkout of the candidate and its frozen
+lockfile/tooling (`pnpm install --offline --frozen-lockfile` when dependencies are
+not already installed). The verifier uses the existing pinned esbuild dependency;
+it does not install anything or load `.env`. All live requests are GETs and reject
+redirects. No deployment, provider RPC, database mutation or signing occurs.
+
+```sh
+node scripts/verify-staging-identity.mjs "$STAGING_ORIGIN" --revision "$REVISION"
+node scripts/verify-staging-identity.mjs "$STAGING_ORIGIN" --revision "$REVISION" \
+  --expected-config /private/tmp/staging-reviewed.json \
+  --worker-identity /private/tmp/staging-worker-ready.json
+```
+
+`--expected-config` defaults to `infra/railway/staging.json`. The file has the
+catalog's `commonEnvironment` and `services.api/worker.environment` shape, with
+secret **names only**. Prepare a separately reviewed non-secret copy outside the
+checkout for actual overrides, including the accepted `BURN_WALLET_ADDRESS` and
+any public registry address. The template leaves the burn address unset; its zero
+default intentionally cannot match a production boot. Never copy a raw Railway
+variable export. The historical catalog `candidateRevision` is not used as the
+source identity: the current clean HEAD must equal the explicit `--revision`.
+The verifier rebuilds all server bundles, recomputes their SHA-256 hashes and
+compares the entire baked manifest and API role/config digest. Any mismatch or
+missing identity exits 1. Successful output contains only the compared identity
+and role verdicts; without `--worker-identity`, worker is explicitly `not-checked`.
+
+The baked `dist/build-info.json` has format version, source SHA, per-file hashes
+and an aggregate SHA-256 of the sorted canonical hash map. It covers API/worker
+`index.js`, dispatcher `launch.js`, all compiled role bundles (indexer, engines,
+receipts, MCP), migration/evaluation entry points and the verifier's identity
+bundle. esbuild has a fixed working root, ordered entries, Node 22 target, ESM
+format and no splitting, timestamps or environment replacement. Source maps are
+separate; changing a runtime variable cannot change these executable bundle
+bytes. Tests rebuild in two different checkout paths without git metadata.
+Runtime startup also checks every manifest hash against its image file.
+
+`GET /v1/build` returns `{build, role, configVersion, configDigest}` with
+`Cache-Control: no-store`; `/v1/health` retains its minimal health contract.
+Both ready lines contain the same `identity` object schema. Each role has its
+own config digest because `APP_ROLE`, `RUN_WORKER` and `SERVE_WEB` differ.
+To check the worker, a reviewer with read-only Railway access retrieves the
+**current deployment's** `EKO worker ready` JSON line, keeping only `msg` and
+`identity` in the file passed to `--worker-identity`. Match deployment ID, image
+digest and readiness timestamp in Railway directly; an operator-supplied old
+log is insufficient. No worker listener is added.
+
+Config version 1 hashes canonical sorted JSON of an explicit allowlist in
+`apps/server/src/config.ts` (`identityConfigKeys`), using the runtime parser's
+defaults: role/mode/port/proxy/WS budgets, launch quota/points rates and dates,
+product env overrides, legacy/dev/web/worker switches, trading/fee/cap settings,
+public burn/registry addresses, market/demo mode, AI budgets/timeouts, effective
+RPC budgets/rates/weights, collector settings and parsed trade-cap file contents.
+Optional values become null; an unlimited RPC session budget is `"unlimited"`.
+Flags expand to sorted validated names and addresses normalize to lowercase.
+Secret/key fields, all URLs (including credential/query-bearing URLs), cookies
+and cookie-domain settings, paths, admin identities, vendor models/handles and
+unknown variables never enter the projection or response. Do not put secrets in
+allowlisted settings. `SWARM_ENABLED` and `MCP_OAUTH_ENABLED` are inventory
+ceilings, not parsed API/worker settings. Mutable DB flags, ops switches,
+monitoring thresholds and migration state require separate read-only checks;
+this host-config digest does not attest database state.
+
+For audit item 1, retain independent Railway deployment/image evidence **for both
+services**, in addition to the script verdict. A HTTP response alone is a claim
+by the running app; it cannot prove the operator has not replaced that app or
+fabricated a log. Obtain each immutable image reference/digest from Railway with
+read-only reviewer access. Where the image is retrievable, inspect its baked
+manifest and actual files using that exact digest, and compare them with the
+local verifier output (no app boot or network inside the container):
+
+```sh
+docker run --rm --network none --read-only --entrypoint node "$IMAGE_REF" -e '
+const fs = require("node:fs"), crypto = require("node:crypto");
+const b = JSON.parse(fs.readFileSync("/app/dist/build-info.json", "utf8"));
+for (const [file, want] of Object.entries(b.bundles)) {
+  const got = crypto.createHash("sha256").update(fs.readFileSync("/app/dist/" + file)).digest("hex");
+  if (got !== want) process.exit(1);
+}
+console.log(JSON.stringify(b));'
+```
+
+`IMAGE_REF` must include `@sha256:…`, not a mutable tag. If Railway does not expose
+a retrievable image, retain that limitation and obtain equivalent independent
+read-only running-image inspection before claiming image verification. Bundle
+reproducibility does not imply whole Docker/OCI image reproducibility or replace
+the existing requirement to use one accepted immutable image for all roles.
+Also check actual role settings, one worker replica/exclusive lease, the three
+migration ledgers and paused `/v1/config`/DB ops state. Record missing checks as
+pending in the evidence document. This implementation does not deploy or close
+the live audit cap by itself.
 
 ## Rollback ordering and ten-minute target
 

@@ -1,3 +1,4 @@
+import { phaseAt } from './harness/entitlements.js';
 import { FileJournalDestructionLedger, migrate, migrateEngines, PostgresBus, ReceiptApiStore } from '@eko/db';
 import { ReadStore } from './read/store.js';
 import { readServices } from './http/v1/reads.js';
@@ -14,12 +15,14 @@ import { MARKETS, type ServerMessage, type SystemHealth } from '@eko/shared';
 import { InferenceBudget } from './ai/budget.js';
 import { ProviderRegistry } from './ai/registry.js';
 import type { Config } from './config.js';
+import { proxyTrust } from './proxy-trust.js';
 import { openDb, runMigrations, type DbHandle } from './db/client.js';
-import { latencySamples } from './db/schema.js';
+import { LatencyStore } from './obs/telemetry.js';
 import { ChainClients, UniswapV3Adapter } from './exec/chain.js';
 import { PortfolioService } from './exec/portfolio.js';
 import { SanctionsService, SanctionsWorker } from './sanctions/service.js';
 import { QuoteStore } from './exec/quotes.js';
+import { TradeService, type TradeBackend } from './exec/trades.js';
 import { ExecutionService } from './exec/service.js';
 import { JournalService } from './harness/journal.js';
 import { PointsService } from './points/service.js';
@@ -28,7 +31,11 @@ import { auditTradeConfig, TradeAccessService } from './exec/trade-access.js';
 import { AuthService } from './http/auth.js';
 import { registerRoutes } from './http/routes.js';
 import { FlagService } from './flags/service.js';
+import { ghostReportRoutes } from './http/ghost-reports.js';
+import { GhostReportStore } from '@eko/db';
 import { guardReadRoutes } from './http/v2-guard.js';
+import { reviewApiRoutes } from './http/review-api.js';
+import { ReviewStore } from '@eko/db';
 import { registerV1 } from './http/v1/index.js';
 import { fixtureRoutes } from './http/v1/fixtures.js';
 import { journalFixtureProducer } from './fixtures/producers.js';
@@ -46,6 +53,11 @@ import { IncidentService, sentryIncidentSink, type AlertSink } from './obs/incid
 import { launchMonitoringRoutes } from './http/launch-monitoring.js';
 import { QuantService } from './quant/service.js';
 import { Hub } from './ws/hub.js';
+import { WatchAlertsService } from './alerts/service.js';
+import { TelegramLinkService } from './telegram/link.js';
+import { createOgRenderer, type OgRenderer } from '@eko/og-renderer';
+import { BagsService } from './read/bags.js';
+import { registerShareRoutes, ShareService, spaDocument } from './http/share.js';
 
 export const VERSION = '0.1.0';
 
@@ -70,20 +82,31 @@ export interface Ctx {
   journal: JournalService;
   points: PointsService;
   receipts: ReceiptApiStore;
+  alerts: WatchAlertsService;
+  telegram: TelegramLinkService;
   demoFeed: DemoFeed | null;
   monitoring: LaunchMonitor;
   incidents: IncidentService;
   health(): SystemHealth;
 }
 
-export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground?: boolean; alertSinks?: { page?: AlertSink; sentry?: AlertSink } } = {}): Promise<{ app: FastifyInstance; ctx: Ctx; close(): Promise<void> }> {
+/**
+ * Build Fastify, open/migrate storage, wire auth/market/execution/public-share routes (including
+ * optional trusted trade acquisition and OG rendering) and optionally start
+ * background services. Host configuration/dependency injection only; individual routes enforce
+ * caller auth. Startup/plugin/database failures reject; app close handles resources through the
+ * returned lifecycle API.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
+export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground?: boolean; ogRenderer?: OgRenderer; alertSinks?: { page?: AlertSink; sentry?: AlertSink }; tradeBackend?: TradeBackend } = {}): Promise<{ app: FastifyInstance; ctx: Ctx; close(): Promise<void> }> {
   initErrorReporting(cfg.SENTRY_DSN, cfg.NODE_ENV);
   const dbh = await openDb({ databaseUrl: cfg.DATABASE_URL, pgliteDir: cfg.PGLITE_DIR });
   await runMigrations(dbh);
   await migrate(dbh.chain);
   await migrateEngines(dbh.chain);
   const points = new PointsService(dbh.chain,cfg.POINTS_RATES,cfg.POINTS_ACTIVE_FROM);
-  const reads = readServices(new ReadStore(dbh.chain),points);
+  const reads = readServices(new ReadStore(dbh.chain),points,()=>phaseAt(cfg,Date.now()));
   await reads.store.refreshModels();
   const db = dbh.db;
   const flags = FlagService.fromDb(db, cfg.FLAGS);
@@ -103,21 +126,27 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   };
 
   // Persist latency samples in small batches so measurements survive restarts.
-  const sampleBuf: (typeof latencySamples.$inferInsert)[] = [];
+  const latencyStore = new LatencyStore(db);
   metrics.setSink((metric, valueMs, labels, at) => {
-    sampleBuf.push({ metric, valueMs, labels, at });
+    latencyStore.record(metric, valueMs, labels, at);
     const launchMetric = launchMetricMap[metric];
     // Paper quotes are fixtures, never launch latency evidence.
     if (launchMetric && (!labels.mode || labels.mode === 'live')) void monitoring.record({ metric: launchMetric, value: valueMs }).catch(() => reportError(new Error('launch_measurement_write_failed')));
-    if (sampleBuf.length > 5000) sampleBuf.splice(0, sampleBuf.length - 5000);
   });
   const flushSamples = setInterval(() => {
-    if (!sampleBuf.length) return;
-    const batch = sampleBuf.splice(0, sampleBuf.length);
-    db.insert(latencySamples).values(batch).catch((err) => reportError(err, { where: 'latency flush' }));
+    void latencyStore.flush().catch(() => reportError(new Error('latency_flush_failed')));
   }, 10_000);
 
-  const hub = new Hub();
+  const hub = new Hub({
+    windowMs: cfg.WS_WINDOW_MS,
+    messagesPerWindow: cfg.WS_MESSAGES_PER_WINDOW,
+    hardMessagesPerWindow: cfg.WS_HARD_MESSAGES_PER_WINDOW,
+    snapshotsPerConnection: cfg.WS_SNAPSHOTS_PER_CONNECTION,
+    snapshotsGlobal: cfg.WS_SNAPSHOTS_GLOBAL,
+    snapshotQueue: cfg.WS_SNAPSHOT_QUEUE,
+  });
+  const alerts = new WatchAlertsService(dbh.chain, hub);
+  const telegram = new TelegramLinkService(dbh.chain, cfg.TELEGRAM_BOT_HANDLE);
   const demoFeed = opts.feed instanceof DemoFeed ? opts.feed : cfg.MARKET_DATA_SOURCE === 'demo' && !opts.feed ? new DemoFeed(cfg.DEMO_SEED) : null;
   const feed: Feed = opts.feed ?? demoFeed ?? storedFeed;
   const market = new MarketDataService(feed, db, MARKETS);
@@ -160,14 +189,16 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       testnet: new UniswapV3Adapter(chains, 'robinhood-testnet', ethUsd),
       live: new UniswapV3Adapter(chains, 'robinhood-mainnet', ethUsd),
     },
-    { liveEnabled: cfg.LIVE_TRADING_ENABLED, paperFeeBps: 10, tradeAccess, sanctions },
+    { liveEnabled: cfg.LIVE_TRADING_ENABLED, paperFeeBps: 10, tradeAccess, sanctions,
+      // TODO(spec): install the authenticated accepted acquisition registry from 052/072/071.
+      trades: new TradeService(db, tradeAccess, sanctions, opts.tradeBackend, Date.now, { incidents, onOrder: (acc, order) => hub.publishOrder(acc, order) }) },
     {
       onOrder: (acc, o) => hub.toAccount(acc, { type: 'order', order: o }),
       onPortfolio: (acc, mode) => hub.toAccount(acc, { type: 'portfolio', mode }),
     },
   );
   const quant = new QuantService(market);
-  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, demoFeed, health, monitoring, incidents };
+  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
 
   // Market data → WebSocket, throttled to ~4 Hz per stream (closed bars always go out immediately).
   const pendingCandles = new Map<string, Extract<ServerMessage, { type: 'candle' }>>();
@@ -197,7 +228,12 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   const heartbeat = setInterval(() => hub.broadcast({ type: 'health', health: health() }), 5_000);
 
   // ─────────────── HTTP ───────────────
-  const app = Fastify({ logger: false, trustProxy: true, bodyLimit: 256 * 1024, routerOptions: { maxParamLength: 4096 } });
+  const app = Fastify({ logger: false, trustProxy: proxyTrust(cfg.TRUST_PROXY_HOPS), bodyLimit: 256 * 1024, routerOptions: { maxParamLength: 4096 } });
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.url.split('?')[0]!.split('/').filter(Boolean).join('/') === 'oauth/consent') {
+      reply.header('Content-Security-Policy', "frame-ancestors 'none'").header('Cache-Control', 'private, no-store').header('Referrer-Policy', 'strict-origin');
+    }
+  });
   await app.register(cookie, { secret: cfg.sessionSecret });
   await app.register(cors, { origin: cfg.origins, credentials: true });
   await app.register(rateLimit, {
@@ -216,28 +252,47 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     reply.status(status).send({ error: e.code && typeof e.code === 'string' && !e.code.startsWith('FST_') ? e.code : status >= 500 ? 'internal_error' : 'bad_request', message: status >= 500 ? 'Internal error' : e.message });
   });
   installDemoGuard(app, cfg);
-  await registerV1(app, cfg, flags, () => chains.meter.usage(), reads, { auth, db, client: chains.get('robinhood-mainnet') }, chains.get('robinhood-mainnet'), { auth, harness }, { auth, journal }, receipts);
+  // OAuth consent is prepared but omitted until 099 and the connector acceptance gate.
+  await registerV1(app, cfg, flags, () => chains.meter.usage(), reads, { auth, db, client: chains.get('robinhood-mainnet') }, chains.get('robinhood-mainnet'), { auth, harness }, { auth, journal }, receipts, { auth, alerts }, latencyStore, exec, undefined, { auth, telegram });
   await fixtureRoutes(app, cfg, flags, cfg.JOURNAL_KEK && cfg.JOURNAL_KEK_ID && cfg.JOURNAL_TOMBSTONE_PATH
     ? { journal: journalFixtureProducer(journal) } : {}, auth);
   const live = new ReadLive(reads, hub);
   await live.start(cfg.DATABASE_URL ? new PostgresBus(cfg.DATABASE_URL) : dbh.chain.bus);
+  await alerts.start(cfg.DATABASE_URL ? new PostgresBus(cfg.DATABASE_URL) : dbh.chain.bus, opts.startBackground !== false);
   await guardReadRoutes(app,reads.guard,reads);
+  await reviewApiRoutes(app, new ReviewStore(dbh.chain), auth);
+  await ghostReportRoutes(app, new GhostReportStore(dbh.chain), receipts);
   app.get('/v2/ws', { websocket: true }, (socket) => { hub.addV2(socket,async coin=>reads.guard.card(coin)); });
-  app.get('/v1/ws', { websocket: true, preValidation: async (req) => { req.account = await auth.fromToken(auth.readCookie(req)); } }, (socket, req) => { hub.addV1(socket, req.account?.kind === 'wallet' ? req.account.id : undefined); });
+  app.get('/v1/ws', { websocket: true, preValidation: async (req) => {
+    // Private subscriptions require an allowed Origin at the authenticated handshake.
+    if (req.headers.origin) auth.originFor(req, true);
+    req.account = req.headers.origin ? await auth.fromToken(auth.readCookie(req)) : null;
+  } }, (socket, req) => {
+    const account = req.account?.kind === 'wallet' ? req.account.id : undefined;
+    hub.addV1(socket, account, account ? () => alerts.latestSeq(account) : undefined);
+  });
   await registerRoutes(app, ctx);
   await launchMonitoringRoutes(app, ctx);
 
-  let serveSpa = false;
+  // Missing runtime assets remain explicit; never substitute another image or font.
+  const ogRenderer = opts.ogRenderer ?? await createOgRenderer().catch(() => undefined);
+  const shares = new ShareService(cfg.origins[0], { scan: reads.scan, coins: reads.coins,
+    bags: new BagsService(reads.store, db, chains.get('robinhood-mainnet')), receipts }, ogRenderer);
+  app.addHook('onClose', async () => { if (!opts.ogRenderer) await ogRenderer?.close(); });
+  await registerShareRoutes(app, shares);
+  let serveSpa: Awaited<ReturnType<typeof spaDocument>> | null = null;
   if (cfg.SERVE_WEB) {
     const dist = resolve(process.cwd(), cfg.WEB_DIST_DIR);
     if (existsSync(dist)) {
-      await app.register(fastifyStatic, { root: dist, prefix: '/', wildcard: false, maxAge: '1h', immutable: false });
-      serveSpa = true;
+      serveSpa = await spaDocument(resolve(dist, 'index.html'));
+      await app.register(fastifyStatic, { root: dist, prefix: '/', wildcard: false, index: false, globIgnore: ['**/index.html'], maxAge: '1h', immutable: false });
+      app.get('/', (req, reply) => serveSpa!(req.url, reply, cfg, shares));
+      app.get('/index.html', (req, reply) => serveSpa!(req.url, reply, cfg, shares));
     } else logger.warn({ dist }, 'SERVE_WEB set but web build not found');
   }
   app.setNotFoundHandler((req, reply) => {
-    if (!serveSpa || req.url.startsWith('/v1') || req.url.startsWith('/api') || req.url.startsWith('/ws') || req.url.startsWith('/dev')) return notFound(reply);
-    return reply.sendFile('index.html');
+    if (!serveSpa || ['/v1', '/v2', '/og', '/api', '/ws', '/dev'].some(prefix => req.url.startsWith(prefix))) return notFound(reply);
+    return serveSpa(req.url, reply, cfg, shares);
   });
 
   if (opts.startBackground !== false) {
@@ -253,19 +308,31 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   return {
     app,
     ctx,
+    /**
+     * Clear app timers, close live/alert/read services, stop execution/sanctions/market work, close
+     * sockets/Fastify and flush telemetry/meter before database release. Host lifecycle call; shutdown
+     * errors reject and an early failure may prevent later cleanup. This does not cancel externally
+     * signed transactions.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+     */
     async close() {
       clearInterval(flush);
       clearInterval(healthTimer);
       clearInterval(heartbeat);
       clearInterval(flushSamples);
       await live.close();
+      await alerts.close();
       await reads.store.close();
       exec.stop();
       await sanctionsWorker.stop();
       market.stop();
       hub.closeAll();
       await app.close();
-      try { await chains.meter.close(); } finally { await dbh.close(); }
+      try {
+        await latencyStore.flush();
+        await chains.meter.close();
+      } finally { await dbh.close(); }
     },
   };
 }

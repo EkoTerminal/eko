@@ -24,13 +24,13 @@ import { buildApp, type Ctx } from '../../src/app.js';
 import { loadConfig } from '../../src/config.js';
 import { featureFlags } from '../../src/db/schema.js';
 
-const ANVIL = process.env.ANVIL_BIN ?? join(homedir(), '.foundry/bin/anvil');
+const foundryAnvil = join(homedir(), '.foundry/bin/anvil');
+const ANVIL = process.env.ANVIL_BIN ?? (existsSync(foundryAnvil) ? foundryAnvil : 'anvil');
 const PORT = 8547;
 const RPC = `http://127.0.0.1:${PORT}`;
 const FORK_URL = process.env.FORK_URL ?? NETWORKS['robinhood-mainnet'].publicRpcUrl;
-const FORK_BLOCK_NUMBER = process.env.FORK_BLOCK_NUMBER;
-if (FORK_BLOCK_NUMBER && !/^[1-9][0-9]*$/.test(FORK_BLOCK_NUMBER)) throw new Error('FORK_BLOCK_NUMBER must be a positive block number');
-const run = existsSync(ANVIL) ? describe : describe.skip;
+const FORK_BLOCK_NUMBER = process.env.FORK_BLOCK_NUMBER ?? '77469811';
+if (!/^[1-9][0-9]*$/.test(FORK_BLOCK_NUMBER)) throw new Error('FORK_BLOCK_NUMBER must be a positive block number');
 
 const key = generatePrivateKey();
 const wallet = privateKeyToAccount(key);
@@ -65,16 +65,21 @@ async function orderById(id: string) {
   return r.body.orders.find((o) => o.id === id) ?? null;
 }
 
-run('live route on a Robinhood Chain mainnet fork (Uniswap v3)', () => {
+describe('live route on a Robinhood Chain mainnet fork (Uniswap v3)', () => {
   beforeAll(async () => {
-    anvil = spawn(ANVIL, ['--fork-url', FORK_URL, ...(FORK_BLOCK_NUMBER ? ['--fork-block-number', FORK_BLOCK_NUMBER] : []), '--port', String(PORT), '--silent', '--no-rate-limit'], { stdio: 'ignore' });
+    anvil = spawn(ANVIL, ['--host', '127.0.0.1', '--fork-url', FORK_URL, '--fork-block-number', FORK_BLOCK_NUMBER, '--port', String(PORT), '--silent', '--retries', '3', '--fork-retry-backoff', '1000', '--compute-units-per-second', '50'], { stdio: 'ignore' });
+    let startupError: Error | undefined;
+    anvil.on('error', error => { startupError = error; });
     await waitFor(async () => {
+      if (startupError) throw startupError;
+      if (anvil.exitCode !== null) throw new Error(`Anvil exited with code ${anvil.exitCode}`);
       try {
         return (await pub.getChainId()) === 4663 ? true : null;
       } catch {
         return null;
       }
     }, 30_000);
+    expect(await pub.getBlockNumber({ cacheTime: 0 })).toBe(BigInt(FORK_BLOCK_NUMBER));
     await pub.request({ method: 'anvil_setBalance' as never, params: [wallet.address, `0x${parseEther('5').toString(16)}`] as never });
 
     const cfg = loadConfig({
@@ -193,16 +198,25 @@ run('live route on a Robinhood Chain mainnet fork (Uniswap v3)', () => {
   it('a transaction that reverts on-chain is reconciled as FAILED, never as a trade', async () => {
     const q = await call<{ quote: Quote }>('POST', '/api/quotes', { market: 'ETH-USD', side: 'sell', mode: 'live', amountIn: '0.02', slippageBps: 50, account: wallet.address });
     const o = await call<{ order: Order; tx: NonNullable<Quote['tx']> }>('POST', '/api/orders', { quoteId: q.body.quote.id, idempotencyKey: 'fork-fail-0001' });
-    // Send the swap WITHOUT the ETH it needs (value 0) and a fixed gas limit so it is mined and reverts.
-    const hash = await wc.sendTransaction({ to: o.body.tx.swap.to as Address, data: o.body.tx.swap.data as Hex, value: 0n, gas: 400_000n });
-    await call('POST', `/api/orders/${o.body.order.id}/submitted`, { txHash: hash });
-    const done = await waitFor(async () => {
-      const x = await orderById(o.body.order.id);
-      return x && x.status !== 'submitted' ? x : null;
-    });
-    expect(done.status).toBe('failed');
-    expect(done.errorCode).toBe('reverted');
-    expect(done.fillPrice).toBeNull();
+    // Send the exact order transaction (same calldata and value, so it is not a tx_mismatch) after moving the fork's
+    // clock past the router multicall deadline (120 s), with a fixed gas limit so it is mined and reverts.
+    // The time warp is undone afterwards (snapshot/revert) so later tests see the original chain clock.
+    const snapshot = await pub.request({ method: 'evm_snapshot' as never, params: [] as never });
+    try {
+      await pub.request({ method: 'evm_increaseTime' as never, params: [600] as never });
+      await pub.request({ method: 'evm_mine' as never, params: [] as never });
+      const hash = await wc.sendTransaction({ to: o.body.tx.swap.to as Address, data: o.body.tx.swap.data as Hex, value: BigInt(o.body.tx.swap.value), gas: 400_000n });
+      await call('POST', `/api/orders/${o.body.order.id}/submitted`, { txHash: hash });
+      const done = await waitFor(async () => {
+        const x = await orderById(o.body.order.id);
+        return x && x.status !== 'submitted' ? x : null;
+      });
+      expect(done.status).toBe('failed');
+      expect(done.errorCode).toBe('reverted');
+      expect(done.fillPrice).toBeNull();
+    } finally {
+      await pub.request({ method: 'evm_revert' as never, params: [snapshot] as never });
+    }
   }, 60_000);
 
   it('a hash from a different sender is not accepted as this order’s fill', async () => {

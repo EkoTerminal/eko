@@ -9,10 +9,16 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import guardCodeFiles from '../apps/engines/src/guard-code-files.json' with { type: 'json' };
 import signalCodeFiles from '../apps/engines/src/signal-code-files.json' with { type: 'json' };
+import { bundleBuildInfo } from './lib/staging-identity.mjs';
+import { pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = join(root, 'apps/server/dist');
 const web = join(root, 'apps/web/dist');
+const bakedBuild = JSON.parse(readFileSync(join(dist, 'build-info.json'), 'utf8'));
+assert.deepEqual(bakedBuild, bundleBuildInfo(dist, bakedBuild.sourceRevision));
+const { expectedConfigDigest } = await import(pathToFileURL(join(dist, 'build-identity.js')).href);
+const tradeCapsText = readFileSync(join(root, 'apps/server/config/trading-caps.yaml'), 'utf8');
 assert.ok(existsSync(join(web, 'index.html')), 'Build @eko/web before running this check');
 for (const entry of ['index.js', 'indexer.js', 'engines.js', 'receipts.js', 'launch.js', 'mcp.js']) assert.ok(existsSync(join(dist, entry)), entry);
 function sameTree(source, target) {
@@ -24,6 +30,7 @@ function sameTree(source, target) {
 }
 sameTree(join(root, 'packages/db/drizzle'), join(dist, 'chain-drizzle'));
 sameTree(join(root, 'packages/chain/abi'), join(dist, 'abi'));
+sameTree(join(root, 'apps/og-renderer/src/og-assets'), join(dist, 'og-assets'));
 for (const file of [...guardCodeFiles, ...signalCodeFiles]) assert.deepEqual(readFileSync(join(dist, 'guard-code', file)), readFileSync(join(root, file)), file);
 assert.deepEqual(readFileSync(join(dist, 'addresses.4663.yaml')), readFileSync(join(root, 'packages/chain/addresses.4663.yaml')));
 // The Dockerfile copies the heritage migration tree separately, retaining Drizzle metadata.
@@ -43,17 +50,19 @@ async function launch(role, signal, ready, extra = {}, direct = false, expectedE
     try { await migrate(drizzle(db), { migrationsFolder: join(root, 'apps/server/drizzle') }); }
     finally { await db.close(); }
   }
-  const child = spawn(process.execPath, [join(dist, direct ? entries[role] : 'launch.js')], {
-    cwd: join(root, 'apps/server'),
-    env: {
+  const env = {
       PATH: process.env.PATH, NODE_ENV: 'development', APP_ROLE: role, PGLITE_DIR: ':memory:',
       ADDRESSES_FILE: join(dist, 'addresses.4663.yaml'),
       SESSION_SECRET: 'image-fixture-placeholder'.repeat(3), LEGACY_API: 'false',
       RUN_WORKER: role === 'worker' ? 'true' : 'false', SERVE_WEB: 'true', WEB_DIST_DIR: web,
       NODE_OPTIONS: `--import=${new URL('./fixtures/role-image-preload.mjs', import.meta.url).href}`,
       MARKET_DATA_SOURCE: 'onchain', LIVE_TRADING_ENABLED: 'false', ...extra,
+      // A runtime source variable is NOT the baked build identity.
+      EKO_SOURCE_REVISION: 'f'.repeat(40),
       ...(fixtureDb ? { PGLITE_DIR: fixtureDb } : {}),
-    },
+    };
+  const child = spawn(process.execPath, [join(dist, direct ? entries[role] : 'launch.js')], {
+    cwd: join(root, 'apps/server'), env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '', stderr = '', sent = false;
@@ -80,6 +89,13 @@ async function launch(role, signal, ready, extra = {}, direct = false, expectedE
     }
     else assert.ok(stdout.includes('shutting down'));
     if (role === 'api') assert.ok(stdout.includes('built_api_routes_ready'));
+    if (role === 'api' || role === 'worker') {
+      const message = role === 'worker' ? 'EKO worker ready' : 'EKO server ready';
+      const readyLine = stdout.trim().split('\n').map(line => JSON.parse(line)).find(line => line.msg === message);
+      assert.deepEqual(readyLine.identity, {
+        build: bakedBuild, role, configVersion: 1, configDigest: expectedConfigDigest(env, tradeCapsText),
+      });
+    }
   } else {
     assert.equal(result.code, 1, `${role} must fail startup`);
     if (role === 'indexer') {
@@ -106,8 +122,10 @@ for (const role of ['api', 'worker', 'indexer', 'engines']) {
 const receiptFixture = mkdtempSync(join(tmpdir(), 'eko-receipts-image-'));
 try {
   const addressFile = join(receiptFixture, 'addresses.yaml');
-  writeFileSync(addressFile, readFileSync(join(dist, 'addresses.4663.yaml'), 'utf8')
-    .replace('receiptsRegistry: TODO', `receiptsRegistry: { address: "0x${'1'.repeat(40)}" }`));
+  const { parse, stringify } = createRequire(join(root, 'packages/chain/package.json'))('yaml');
+  const registry = parse(readFileSync(join(dist, 'addresses.4663.yaml'), 'utf8'));
+  registry.ours.receiptsRegistry.address = `0x${'1'.repeat(40)}`;
+  writeFileSync(addressFile, stringify(registry));
   for (const direct of [true, false]) await launch('receipts', 'SIGTERM', 'receipts_started', {
     RPC_HTTP_URL: 'https://fixture.invalid', RPC_PUBLIC_HTTP_URL: 'https://fixture.invalid',
     ADDRESSES_FILE: addressFile, RECEIPTS_COMMITTER_KEY: `0x${randomBytes(32).toString('hex')}`,

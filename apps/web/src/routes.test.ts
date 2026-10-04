@@ -3,14 +3,14 @@ import { FLAG_NAMES } from '@eko/shared';
 import { enabledRoutes, isCurrent, resolveRoute, ROUTES } from './routes';
 import { match } from './lib/router';
 const allFlags = Object.fromEntries(FLAG_NAMES.map((flag) => [flag, true]));
-const T = ['/', '/radar', '/feed', '/pairs', '/coin/:address', '/scan/:id', '/bags', '/bags/r/:id', '/watch', '/scoreboard', '/receipt/:id', '/census', '/drops', '/mission', '/mission/agents/:id', '/mission/connect', '/settings', '/settings/plan', '/legal/:doc'];
+const T = ['/', '/radar', '/feed', '/pairs', '/coin/:address', '/scan', '/scan/:id', '/bags', '/bags/r/:id', '/watch', '/official', '/transparency', '/scoreboard', '/receipt/:id', '/census', '/drops', '/mission', '/mission/agents/:id', '/mission/connect', '/oauth/consent', '/settings', '/settings/plan', '/legal/:doc'];
 describe('§2.2 route table', () => {
   it('keeps every T URL, including dormant settings/plan, with all flags off', () => {
     expect(enabledRoutes().map((r) => r.path)).toEqual(T);
     expect(ROUTES.filter((r) => r.stage === 'T').map((r) => r.path)).toEqual(T);
   });
   it('registers D0 and Drop routes only under their exact shared flag', () => {
-    expect(new Set(ROUTES.map((r) => r.path)).size).toBe(39);
+    expect(new Set(ROUTES.map((r) => r.path)).size).toBe(43);
     for (const r of ROUTES.filter((r) => r.stage !== 'T')) {
       expect(r.flag).toBeDefined(); expect(FLAG_NAMES).toContain(r.flag);
       expect(enabledRoutes()).not.toContain(r);

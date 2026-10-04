@@ -26,7 +26,7 @@ function ConnectionStatus() {
   useEffect(() => {
     if (!open) return;
     const load = () =>
-      api<{ metrics: ServerMetric[] }>('/api/metrics')
+      api<{ metrics: ServerMetric[] }>('/metrics')
         .then((r) => setM(Object.fromEntries(r.metrics.map((x) => [x.metric, x]))))
         .catch(() => undefined);
     void load();

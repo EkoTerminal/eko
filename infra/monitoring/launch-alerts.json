@@ -43,30 +43,30 @@
             "severity": "1"
           },
           "annotations": {
-            "summary": "Published wallet anomaly requires incident review",
-            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+            "summary": "Large or unexpected published-wallet outflow; review indexed transfers",
+            "runbook_url": "SECURITY.md#incident-runbook"
           }
         },
         {
           "alert": "BurnUnexpectedOutflow",
-          "expr": "eko_launch_value{metric=\"burn_unexpected_outflow\"} > 0 and on(instance,job) (eko_check_active{check=\"daily_burn\"} == 1)",
+          "expr": "eko_launch_value{metric=\"burn_unexpected_outflow\"} > 0",
           "labels": {
             "severity": "1"
           },
           "annotations": {
             "summary": "Published wallet anomaly requires incident review",
-            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+            "runbook_url": "SECURITY.md#incident-runbook"
           }
         },
         {
           "alert": "BurnWrongToken",
-          "expr": "eko_launch_value{metric=\"burn_wrong_token\"} > 0 and on(instance,job) (eko_check_active{check=\"daily_burn\"} == 1)",
+          "expr": "eko_launch_value{metric=\"burn_wrong_token\"} > 0",
           "labels": {
             "severity": "1"
           },
           "annotations": {
             "summary": "Published wallet anomaly requires incident review",
-            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+            "runbook_url": "SECURITY.md#incident-runbook"
           }
         },
         {
@@ -219,6 +219,105 @@
           },
           "annotations": {
             "summary": "Active X budget measurement unavailable"
+          }
+        },
+        {
+          "alert": "RegistryOwnershipTransferStarted",
+          "expr": "(time() - eko_launch_value{metric=\"registry_ownership_started_timestamp_s\"} >= 0) and (time() - eko_launch_value{metric=\"registry_ownership_started_timestamp_s\"} < 300)",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Registry OwnershipTransferStarted observed; reconcile with approved owner action",
+            "runbook_url": "SECURITY.md#incident-runbook"
+          }
+        },
+        {
+          "alert": "RegistryOwnershipTransferred",
+          "expr": "(time() - eko_launch_value{metric=\"registry_ownership_transferred_timestamp_s\"} >= 0) and (time() - eko_launch_value{metric=\"registry_ownership_transferred_timestamp_s\"} < 300)",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Registry OwnershipTransferred observed; reconcile with approved owner action",
+            "runbook_url": "SECURITY.md#incident-runbook"
+          }
+        },
+        {
+          "alert": "RegistryCommitterChanged",
+          "expr": "(time() - eko_launch_value{metric=\"registry_committer_changed_timestamp_s\"} >= 0) and (time() - eko_launch_value{metric=\"registry_committer_changed_timestamp_s\"} < 300)",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Registry CommitterChanged observed; reconcile with approved owner action",
+            "runbook_url": "SECURITY.md#incident-runbook"
+          }
+        },
+        {
+          "alert": "TradingLiveChanged",
+          "expr": "increase(eko_trading_live_changes_total[5m]) > 0",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Trading runtime switch changed; verify operator and intended state",
+            "runbook_url": "SECURITY.md#incident-runbook"
+          }
+        },
+        {
+          "alert": "TradingPaused",
+          "expr": "eko_trading_live == 0",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Trading runtime switch is off; verify pause and incident record",
+            "runbook_url": "SECURITY.md#incident-runbook"
+          }
+        },
+        {
+          "alert": "IncidentRecorded",
+          "expr": "increase(eko_incidents_total[5m]) > 0",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Incident recorded; verify durable stop and delivery",
+            "runbook_url": "SECURITY.md#incident-runbook"
+          }
+        },
+        {
+          "alert": "ReferencePriceStale",
+          "expr": "time() - eko_launch_value{metric=\"reference_price_timestamp_s\"} > 300",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Reference-price observation is older than five minutes",
+            "runbook_url": "SECURITY.md#incident-runbook"
+          }
+        },
+        {
+          "alert": "ReceiptCommitterGasLow",
+          "expr": "eko_launch_value{metric=\"receipt_committer_balance_eth\"} < 0.01",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Receipt committer gas balance below 0.01 ETH",
+            "runbook_url": "SECURITY.md#incident-runbook"
+          }
+        },
+        {
+          "alert": "SecurityCollectorUnavailable",
+          "expr": "eko_measurement_available{metric=~\"registry_ownership_started_timestamp_s|registry_ownership_transferred_timestamp_s|registry_committer_changed_timestamp_s|reference_price_timestamp_s|receipt_committer_balance_eth|published_wallet_unexpected_outflow|burn_unexpected_outflow|burn_wrong_token\"} == 0",
+          "labels": {
+            "severity": "2"
+          },
+          "annotations": {
+            "summary": "Security observation missing or stale; coverage requires its collector",
+            "runbook_url": "SECURITY.md#incident-runbook"
           }
         }
       ]

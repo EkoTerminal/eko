@@ -1,10 +1,10 @@
+import { GhostReports } from '../../components/GhostReports';
 import { AnalysisPolicyNotice } from '../../components/PolicyLinks';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { CoinCard, RadarRow } from '@eko/shared';
 import { CHECK_LEGEND } from '../../copy/availability';
 import { Seg, UntrustedText } from '../../components/ui';
 import { MiniBars } from '../../components/ui/charts';
-import { IconAlert } from '../../components/icons';
 import { fetchParsed, MOCKS } from '../../lib/api';
 import { useRealtime } from '../../lib/RealtimeContext';
 import { useMedia } from '../../lib/useMedia';
@@ -15,7 +15,8 @@ import { useUi } from '../../store/ui';
 import { useShell } from '../../store/shell';
 import { Link } from '../../lib/Link';
 import { retainCompactGuard, sortAvailable, ascending, applyRadarEvents, filterRows, heatScore, RadarResponseSchema, SORTS, sortRows, type Sort } from './radarModel';
-import { CoinInspector, DisabledTradePanel, HeatLegend, HotStrip, RadarRowView } from './RadarParts';
+import { TradePanel } from '../../components/trade/TradePanel';
+import { CoinInspector, HeatLegend, HotStrip, RadarRowView } from './RadarParts';
 import { useRadarWindow } from './radarWindow';
 import './radar.css';
 
@@ -84,7 +85,7 @@ export default function Radar() {
   const rowHeight = density === 'compact' ? 44 : 62;
   const windowed = useRadarWindow(listEl, list.length, rowHeight);
   const hot = useMemo(() => sortRows(rows.filter((c) => heatOf(c) === 'hot'), 'Hottest').slice(0, 3), [rows]);
-  const coin = rows.find((c) => c.address === selected), ghost = MOCKS && rows.find((c) => c.symbol.text === 'EKOX' && c.verdict === 'danger');
+  const coin = rows.find((c) => c.address === selected);
   useEffect(() => { if (selected && !loading && !coin) close(); }, [selected, loading, coin, close]);
   const onCard = useCallback((card: CoinCard) => setCards((old) => ({ ...old, [card.identity.address]: card })), []);
   const trade = useCallback((c: RadarRow, el: HTMLElement) => { returnTo.current = el; setTradeRow(c); }, []);
@@ -99,10 +100,10 @@ export default function Radar() {
     requestAnimationFrame(() => { const button = listEl.current?.querySelector<HTMLButtonElement>(`tr[data-address="${list[next].address}"] [data-pick]`); if (button) { button.scrollIntoView({ block: 'nearest' }); button.focus(); button.click(); } });
   };
   const seen = Math.max(0, Math.floor((now - lastSeen) / 1000)), isDelayed = delayed > 0 || realtimeAllowed === false, stale = seen > (isDelayed ? 150 : 90) || wsState !== 'open';
-  // TODO(spec): CA-3 has no scan/refusal totals, hourly counts, or Ghost Report resource. Show seeded totals only in demo; identify the demo report from EKOX.
+  // TODO(spec): CA-3 has no refusal totals or hourly counts. Show seeded totals only in demo.
   return <div className={`with-insp radar-layout${coin ? ' open' : ''}`}><div className="page radar" ref={page} onTouchStart={(e) => { pullStart.current = window.scrollY <= 0 ? e.touches[0]?.clientY ?? null : null; }} onTouchEnd={(e) => { if (pullStart.current !== null && (e.changedTouches[0]?.clientY ?? 0) - pullStart.current > 80) void snapshot(); pullStart.current = null; }} inert={!wide && !!coin}>
     <div className="page-head"><div><h1>Radar</h1><p>Every live play on Robinhood Chain, scanned and ranked by the guard.</p></div><dl className="head-stats"><div><dt>Scanned today</dt><dd><span className="num">{MOCKS ? '1,204' : totals?.evaluatedToday.toLocaleString() ?? '—'}</span>{MOCKS && <MiniBars series={SCANS} height={22} label="Pairs scanned per hour, last 24 hours" />}</dd></div><div><dt>Honeypots refused</dt><dd><span className="num">{MOCKS ? '37' : '—'}</span>{!MOCKS && <small className="muted">not checked yet</small>}{MOCKS && <MiniBars series={REFUSED} height={22} tone="warm" label="Honeypots refused per hour, last 24 hours" />}</dd></div><div><dt>Danger now</dt><dd><span className="num">{MOCKS ? rows.filter((c) => c.verdict === 'danger').length : totals?.danger.toLocaleString() ?? '—'}</span>{MOCKS && <MiniBars series={DANGER} height={22} tone="warm" label="Coins marked Danger per hour, last 24 hours" />}</dd></div></dl></div>
-    {ghost && <div className="ghost-report mk-ember-2"><IconAlert /><span><b>Ghost Report</b> · $EKOX copies $EKO and routes through a 79% fee-trap pool.<span className="gr-more"> The CA is posted only by EKO’s own accounts.</span></span><Link to={`/coin/${ghost.address}`} className="btn btn-sm">See the evidence</Link></div>}
+    <GhostReports limit={1} />
     <HotStrip coins={hot} selected={selected} select={select} />
     <div className="sec-head"><h2>All coins</h2><span className="sub num">{list.length} of {rows.length}</span><div className="end"><span className="toolbar-live" role="status"><span className={`sb-dot${stale ? ' stale' : ''}`} />{isDelayed ? `Delayed ~${delayed || 60} s` : stale ? 'Stale' : 'Live'} · updated {seen}s ago</span><Seg options={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]} value={density} onChange={(value) => setUi({ density: value === 'compact' ? 'compact' : 'comfortable' })} label="Row density" /></div></div>
     <div className="toolbar"><Seg options={['All', 'Hot', 'Clear', 'Monitor', 'Danger']} value={show} onChange={setShow} label="Show" /><Seg options={['All', 'Curve', 'Migrated']} value={stage} onChange={setStage} label="Stage" /><label className="toolbar-sort"><span className="muted">Sort</span><select className="select" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>{SORTS.filter((s) => sortAvailable(rows,s)).map((s) => <option key={s}>{s}</option>)}</select></label><div className="toolbar-end"><HeatLegend /></div></div>
@@ -111,8 +112,8 @@ export default function Radar() {
     <p className="availability-legend">{CHECK_LEGEND}</p>{loading ? <div className="skel" style={{ height: 280 }} aria-label="Loading Radar" /> : list.length ? <div ref={listEl} className="rt-wrap" onKeyDown={move} onPointerOver={(e) => { pointed.current = (e.target as Element).closest<HTMLElement>('tr[data-address]')?.dataset.address ?? null; }} onPointerLeave={() => { pointed.current = null; }}><table className={`rt ${density}${rows.some((c) => c.signal || c.unavailable?.includes('signal')) ? '' : ' no-signal'}${rows.some((c) => c.spark8h || c.unavailable?.includes('spark')) ? '' : ' no-spark'}${rows.some((c) => c.beta) ? '' : ' no-beta'}`}><caption className="sr">All coins on Radar, {sort === 'Rank' ? 'ranked by the guard' : `sorted by ${sort}`}. Select a coin to see its details.</caption><thead><tr><th className="c-coin">Coin</th><th className="c-guard">Guard</th><th className="c-watch">Watch for</th><th className="c-sig r">Signal <span className="tag signal-beta">Beta</span></th><th className="c-beta r">Beta Ape Score</th><SortTh disabled={!sortAvailable(rows,'1h move')} value="1h move" {...{ sort, setSort }} className="c-1h r">1h</SortTh><th className="c-spark">Last 8h</th><SortTh disabled={!sortAvailable(rows,'Agent flow')} value="Agent flow" {...{ sort, setSort }} className="c-flow">Who’s buying</SortTh><th className="c-liq r">Liquidity</th><SortTh disabled={!sortAvailable(rows,'Exit cost')} value="Exit cost" {...{ sort, setSort }} className="c-exit r">Exit at $1K</SortTh><th className="c-act"><span className="sr">Trade</span></th></tr></thead><tbody>{windowed.start > 0 && <tr aria-hidden="true" className="rt-spacer"><td colSpan={11} style={{ height: windowed.start * rowHeight }} /></tr>}{list.slice(windowed.start, windowed.end).map((c) => <RadarRowView key={c.address} c={c} selected={selected === c.address} select={select} trade={trade} pulse={pulses[c.address] ?? 0} confidence={cards[c.address]?.playbooks.find((p) => p.id === c.topPlaybook)?.confidence} />)}{windowed.end < list.length && <tr aria-hidden="true" className="rt-spacer"><td colSpan={11} style={{ height: (list.length - windowed.end) * rowHeight }} /></tr>}</tbody></table></div> : !error && <div className="empty panel">Nothing matches this filter right now.</div>}
     {cursor && <button className="btn radar-more" onClick={() => void snapshot(undefined, true, cursor)}>Load more</button>}
     <AnalysisPolicyNotice />
-  </div>{coin && <CoinInspector key={coin.address} row={coin} close={close} onCard={onCard} />}
-    <dialog className="radar-trade-drawer" ref={drawer} onCancel={(e) => { e.preventDefault(); closeTrade(); }} onClick={(e) => { if (e.target === e.currentTarget) closeTrade(); }}><div className="insp-bar"><span>Trade {tradeRow && <>$<UntrustedText value={tradeRow.symbol} /></>}</span><button className="iconbtn" aria-label="Close trade" onClick={closeTrade}>×</button></div>{tradeRow && <DisabledTradePanel row={tradeRow} />}</dialog>
+  </div>{coin && <CoinInspector key={coin.address} row={coin} close={close} onCard={onCard} stale={stale} tradeVisible={!tradeRow} />}
+    <dialog className="radar-trade-drawer" ref={drawer} onCancel={(e) => { e.preventDefault(); closeTrade(); }} onClick={(e) => { if (e.target === e.currentTarget) closeTrade(); }}><div className="insp-bar"><span>Trade {tradeRow && <>$<UntrustedText value={tradeRow.symbol} /></>}</span><button className="iconbtn" aria-label="Close trade" onClick={closeTrade}>×</button></div>{tradeRow && <TradePanel key={tradeRow.address} coin={tradeRow.address} priceUsd={tradeRow.priceUsd} priceUnavailable={tradeRow.priceUnavailable} guard={tradeRow.guardV2} stale={stale} />}</dialog>
   </div>;
 }
 function hotFirst(rows: RadarRow[]) { return [...rows].filter((c) => heatOf(c) === 'hot').sort((a, b) => heatScore(b) - heatScore(a))[0]?.address ?? rows[0]?.address ?? null; }

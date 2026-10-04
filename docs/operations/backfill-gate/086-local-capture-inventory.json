@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "origin": "existing-local-captures",
+  "checkpoint": "086-local-capture-inventory-v1",
+  "status": "unresolved",
+  "liveApproved": false,
+  "paidUnitsThisRun": 0,
+  "costUsdThisRun": 0,
+  "originalAcquisitionCostUsd": null,
+  "limitations": "Selected captured blocks only; no lease, genesis, calendar-window, holder-baseline, Guard-review or live-head completeness evidence.",
+  "captures": [
+    {
+      "file": "apps/indexer/test/fixtures/4663/blocks.json",
+      "sha256": "422e40dcecef0f6df5c3c4916a96067f21b0029a8647283fd83053b15f03bfa6",
+      "bytes": 465080,
+      "blockCount": 4,
+      "from": "77409714",
+      "to": "77438533",
+      "missingBlockIntervals": [
+        {
+          "from": "77409715",
+          "to": "77434160"
+        },
+        {
+          "from": "77434162",
+          "to": "77438502"
+        },
+        {
+          "from": "77438504",
+          "to": "77438532"
+        }
+      ],
+      "receiptCount": 67,
+      "logCount": 348,
+      "duplicateEventKeys": 99,
+      "removedLogs": 0,
+      "blockHashMismatches": 0
+    },
+    {
+      "file": "apps/indexer/test/fixtures/4663/live-compare/blocks.json",
+      "sha256": "a026774158979f1da42a67930a26093619e796c01d82b759ffe1e351eb2c3aec",
+      "bytes": 3607052,
+      "blockCount": 41,
+      "from": "77844756",
+      "to": "77844946",
+      "missingBlockIntervals": [
+        {
+          "from": "77844758",
+          "to": "77844758"
+        },
+        {
+          "from": "77844760",
+          "to": "77844766"
+        },
+        {
+          "from": "77844768",
+          "to": "77844770"
+        },
+        {
+          "from": "77844772",
+          "to": "77844773"
+        },
+        {
+          "from": "77844775",
+          "to": "77844777"
+        },
+        {
+          "from": "77844779",
+          "to": "77844779"
+        },
+        {
+          "from": "77844781",
+          "to": "77844783"
+        },
+        {
+          "from": "77844785",
+          "to": "77844795"
+        },
+        {
+          "from": "77844798",
+          "to": "77844800"
+        },
+        {
+          "from": "77844802",
+          "to": "77844806"
+        },
+        {
+          "from": "77844808",
+          "to": "77844810"
+        },
+        {
+          "from": "77844812",
+          "to": "77844819"
+        },
+        {
+          "from": "77844824",
+          "to": "77844825"
+        },
+        {
+          "from": "77844828",
+          "to": "77844835"
+        },
+        {
+          "from": "77844837",
+          "to": "77844838"
+        },
+        {
+          "from": "77844840",
+          "to": "77844843"
+        },
+        {
+          "from": "77844845",
+          "to": "77844845"
+        },
+        {
+          "from": "77844847",
+          "to": "77844849"
+        },
+        {
+          "from": "77844851",
+          "to": "77844855"
+        },
+        {
+          "from": "77844857",
+          "to": "77844861"
+        },
+        {
+          "from": "77844863",
+          "to": "77844866"
+        },
+        {
+          "from": "77844868",
+          "to": "77844875"
+        },
+        {
+          "from": "77844877",
+          "to": "77844878"
+        },
+        {
+          "from": "77844880",
+          "to": "77844882"
+        },
+        {
+          "from": "77844884",
+          "to": "77844884"
+        },
+        {
+          "from": "77844887",
+          "to": "77844888"
+        },
+        {
+          "from": "77844890",
+          "to": "77844890"
+        },
+        {
+          "from": "77844892",
+          "to": "77844899"
+        },
+        {
+          "from": "77844901",
+          "to": "77844914"
+        },
+        {
+          "from": "77844916",
+          "to": "77844927"
+        },
+        {
+          "from": "77844929",
+          "to": "77844943"
+        }
+      ],
+      "receiptCount": 344,
+      "logCount": 1497,
+      "duplicateEventKeys": 0,
+      "removedLogs": 0,
+      "blockHashMismatches": 0
+    }
+  ]
+}

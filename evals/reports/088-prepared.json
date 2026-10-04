@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "candidate": null,
+  "bound": false,
+  "checkedAt": "2026-10-03T17:20:03.922Z",
+  "checks": {
+    "evalB": {
+      "status": "pending",
+      "reason": "Integrate 087 and bind the current candidate"
+    },
+    "evalT": {
+      "status": "pending",
+      "reason": "Integrate 087 and bind the current candidate"
+    },
+    "decisionB": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "decisionT": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "guardVetoClear": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "siwe-entitlements-ws": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "scan-share": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "guarded-quotes": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "mcp-code": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "mcp-hosted-or-d0": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "receipt-proof": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "pons-fallback-fee": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "delete-harness-data": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "telegram": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "phone-alert": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "final-team-trade": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "rollback": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "incidents": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "betaDaily": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "stopVerification": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "publicLaunch": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "onCall": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "decisionProduct": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    },
+    "decisionCapIncrease": {
+      "status": "pending",
+      "reason": "Missing producer evidence"
+    }
+  },
+  "summary": null,
+  "gates": {
+    "B": "pending",
+    "T": "pending",
+    "product": "pending",
+    "capIncrease": "pending",
+    "D0": "pending"
+  },
+  "goNoGo": "no-go",
+  "elapsed72h": false,
+  "ownerCapSignOff": "pending",
+  "tradingMustBeOff": false,
+  "stop": null,
+  "nextExternalStep": "Integrate 087 and acquire missing owning-packet evidence; keep rollout unavailable",
+  "providerRequests": 0,
+  "actualCostUsd": 0,
+  "state": "prepared locally; no deployment or approval issued",
+  "exitCode": 1
+}

@@ -33,6 +33,10 @@ function clientFor(blocks: { block: RpcBlock; receipts: RpcReceipt[] }[]): Chain
     code: async () => '0x',
     tokenMetadata: async a => ({ symbol: '<raw-symbol>', name: '<raw-name>', decimals: lower(a) === lower(registry.requireAddress('tokens.USDG')) ? 6 : 18 }),
     v3Pool: async a => pools.get(lower(a)) ?? null,
+    ethUsdRate: async n => {
+      const reference = [...pools].find(([, p]) => [p.currency0, p.currency1].every(a => [registry.requireAddress('tokens.WETH'), registry.requireAddress('tokens.USDG')].some(token => lower(token) === lower(a))));
+      return reference ? { value: 2000, block: 0n, source: { address: reference[0] as Address, venue: 'uniswap_v3', fee: reference[1].fee } } : null;
+    },
     logs: async ({ from, to, address, topics }) => [...byNumber].filter(([n]) => n >= from && n <= to).flatMap(([,b]) => b.receipts.flatMap(r => r.logs)).filter(l => (!address || lower(address) === lower(l.address)) && topics.includes(l.topics[0])),
   };
 }
@@ -101,8 +105,9 @@ describe('chain ingestion on PGlite', () => {
     const notifications = vi.spyOn(ChainDb.prototype, 'notifyMany');
     const client = clientFor(all);
     // These historical pool emitters are already indexed before sender-scoped ingest starts.
+    // Model prior canonical PoolCreated verification for the WETH/USDG reference pair.
     const emitters=new Set(all.flatMap(b=>b.receipts.flatMap(r=>r.logs)).flatMap(l=>decodeResult(l,{registry,isV3Pool:()=>true}).events.some(e=>e.source==='uniswap_v3'&&e.eventName==='Swap')?[lower(l.address)]:[]));
-    for(const id of emitters){const p=await client.v3Pool(id,0n);if(!p)continue;for(const a of [p.currency0,p.currency1])await db.insert('tokens',{address:binary(a),...await client.tokenMetadata(a,0n),first_block:'0',block:'0'});await db.insert('pools',{id:binary(id),venue:'uniswap_v3',currency0:binary(p.currency0),currency1:binary(p.currency1),fee:p.fee,tick_spacing:p.tickSpacing,created_block:'0',block:'0'});}
+    for(const id of emitters){const p=await client.v3Pool(id,0n);if(!p)continue;for(const a of [p.currency0,p.currency1])await db.insert('tokens',{address:binary(a),...await client.tokenMetadata(a,0n),first_block:'0',block:'0'});await db.insert('pools',{id:binary(id),venue:'uniswap_v3',currency0:binary(p.currency0),currency1:binary(p.currency1),fee:p.fee,tick_spacing:p.tickSpacing,created_block:'0',block:'0',creation_verified:[p.currency0,p.currency1].every(a=>[lower(registry.requireAddress('tokens.WETH')),lower(registry.requireAddress('tokens.USDG'))].includes(lower(a)))});}
     const head = follower(db, client);
     for (const b of all) expect(await head.ingest(b.block,b.receipts)).toBe(true);
     const before = await counts(db);
@@ -129,7 +134,11 @@ describe('chain ingestion on PGlite', () => {
     expect(trades[0].amount_coin).toBe('16681299385425812115891132'); expect(trades[0].amount_quote).toBe('30000000000000000');
     expect(trades[5].amount_coin).toBe('15202986877773458328820222'); expect(trades[5].amount_quote).toBe('32552326154212591');
     expect(trades[0].price_quote).toBeCloseTo(0.03 / 16681299.385425812, 18);
-    expect(trades[5].usd).toBeGreaterThan(0); expect(BigInt(trades[5].priced_block!)).toBe(BigInt(fixture.ponsLaunch.number));
+    const selected = (await client.ethUsdRate!(0n))!.source;
+    // A later captured reference tier cannot supersede this fixture's selected archive source.
+    const selectedSwapBlocks = all.flatMap(b => b.receipts.flatMap(r => r.logs)).filter(l => lower(l.address) === lower(selected.address) && decodeResult(l, { registry, isV3Pool: () => true }).events.some(e => e.source === 'uniswap_v3' && e.eventName === 'Swap')).map(l => BigInt(l.blockNumber));
+    const latestSelectedBlock = selectedSwapBlocks.reduce((a, b) => a > b ? a : b);
+    expect(trades[5].usd).toBeGreaterThan(0); expect(BigInt(trades[5].priced_block!)).toBe(latestSelectedBlock);
     expect(trades[0].usd).toBeGreaterThan(0); expect(BigInt(trades[0].priced_block!)).toBeLessThanOrEqual(BigInt(fixture.ponsLaunch.number));
     const pools = (await db.sql.query<{ id: Uint8Array; venue: string; fee: number; tick_spacing: number }>('SELECT * FROM pools')).rows;
     expect(pools.find(p => hex(p.id) === '0xcf10fe91aeef392aad841a359e51b4a56fc737ff')).toMatchObject({ venue: 'uniswap_v3', fee: 10000, tick_spacing: 200 });
@@ -169,7 +178,7 @@ describe('chain ingestion on PGlite', () => {
     const db = await database(); await migrate(db); await db.ensurePartitions(new Date('2026-12-31T23:59:00Z'));
     const names = (await db.sql.query<{ relname: string }>("SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid")).rows.map(r => r.relname);
     for (const table of ['swaps','token_transfers']) for (const suffix of ['2026_12','2027_01','2027_02']) expect(names).toContain(`${table}_${suffix}`);
-    expect((await db.sql.query<{ id: string }>('SELECT id FROM eko_indexer_migrations ORDER BY id')).rows.map(row => row.id)).toEqual(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol']);
+    expect((await db.sql.query<{ id: string }>('SELECT id FROM eko_indexer_migrations ORDER BY id')).rows.map(row => row.id)).toEqual(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources']);
     expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename='guard_chain_evidence'")).rows).toHaveLength(1);
     expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename IN ('guard_measurement_evidence','guard_verdict_revisions')")).rows).toHaveLength(0);
     expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename='rpc_usage'")).rows).toHaveLength(1);
@@ -258,6 +267,17 @@ describe('backfill and ordered queue', () => {
     await leases.seed('logs:pons_factory',0n,60000n);
     const ranges = (await db.sql.query<{ from_block:string; to_block:string }>('SELECT * FROM ingest_ranges ORDER BY from_block')).rows;
     expect(ranges.map(r=>[String(r.from_block),String(r.to_block)])).toEqual([['0','19999'],['20000','39999'],['40000','40000'],['40001','60000']]);
+  });
+  it('treats a zero log blockTimestamp (as the public RPC returns) as missing and stores the real block time', async () => {
+    const db=await database(); const all=[fixture.ponsLaunch,fixture.ponsSell]; const client=clientFor(all);
+    const from=BigInt(fixture.ponsLaunch.number); const to=BigInt(fixture.ponsSell.number);
+    const logs=client.logs; client.logs=async args=>(await logs(args)).map(l=>({...l,blockTimestamp:'0x0' as const}));
+    const fill=new PonsBackfill(client,db,new BlockDecoder(client,registry,new Metrics(quiet),quiet),{workers:1,logRange:20,logger:quiet});
+    await fill.run('logs:pons_factory',from,to);await fill.run('logs:pons_curves',from,to);
+    const rows=(await db.sql.query<{block:string;ts:Date}>("SELECT block,ts FROM swaps WHERE venue='pons_curve' ORDER BY block")).rows;
+    expect(rows.length).toBeGreaterThan(0);
+    const expected=new Map(all.map(b=>[String(BigInt(b.block.number)),Number(BigInt(b.block.timestamp))]));
+    for(const row of rows)expect(row.ts.getTime()/1000).toBe(expected.get(String(row.block)));
   });
   it('runs factory before curves with parallel leases, filters unknown emitters, and replays without duplicates', async () => {
     const db=await database(); const all=[fixture.ponsLaunch,fixture.ponsSell]; const client=clientFor(all);

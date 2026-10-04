@@ -11,7 +11,7 @@ export const MISSION_COPY = {
   performanceNote: 'Positions and fills are self-reported by the agent from its own venue connection. Past results don’t predict future ones. Not financial advice.',
   robinhoodConnection: `Your agent connects to Robinhood’s MCP on its own. ${APP_NAME} never receives your Robinhood credentials and can’t place, block or cancel orders there. Check that Robinhood’s own trade approvals are on.`,
   pendingVerify: 'Waiting for your agent’s first call…',
-  connected: 'First preflight received',
+  connected: 'First journal event received',
 };
 export const PLATFORM_COPY = {
   claude_connector: ['Claude Desktop and claude.ai', 'Custom connector. You sign in with OAuth; there’s no key to copy.'],
@@ -329,5 +329,5 @@ export const CONNECT_STEPS = {
   approvals: 'Check trade approvals are on in Robinhood',
   connectorReturn: 'Your browser returns to the client’s registered callback. Add the harness instructions there, then return here to Verify.',
   keyConfig: 'The key goes in the Authorization header. Copy the config with your key filled in.',
-  keyCheck: `Ask your agent to check in with ${APP_NAME}. Its first preflight will appear below.`,
+  keyCheck: `Ask your agent to check in with ${APP_NAME}. Its first journal event will appear below.`,
 };

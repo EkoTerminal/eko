@@ -1,22 +1,40 @@
 import { loadRegistry } from './registry.js';
-import { verifyChain } from './verify.js';
+import { loadBuildRecords } from './build-records.js';
+import { runVerifyCommand, verificationMode } from './verify-command.js';
 import { createMeteredClients } from './rpc/clients.js';
 import { safeError } from './rpc/safe-error.js';
-import { RpcGuardError } from './rpc/metered.js';
-let interrupted = false;
-const { public: client, meter } = createMeteredClients(process.env, { standalone: true, onSessionBudget: () => stop() });
-const stop = () => { interrupted = true; meter.stop(); process.exitCode = 0; };
+
+const controller = new AbortController();
+let meter: ReturnType<typeof createMeteredClients>['meter'] | undefined;
+const stop = () => { controller.abort(); meter?.stop(); process.exitCode = 1; };
 process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
 try {
+  const prelaunch = verificationMode(process.argv.slice(2));
   if (process.env.CHAIN_ID && process.env.CHAIN_ID !== '4663') throw new Error('CHAIN_ID must be 4663');
-  const report = await verifyChain(loadRegistry(), client);
-  console.table(report.rows.map(row => ({ entry: row.entry, check: row.check, result: row.ok ? 'PASS' : 'FAIL', detail: row.detail })));
-  console.log(`verify:chain ${report.ok ? 'passed' : 'failed'}${report.block ? ` at block ${report.block}` : ''}`);
-  process.exitCode = interrupted || report.ok ? 0 : 1;
+  const registry = loadRegistry();
+  const buildRecords = loadBuildRecords(registry);
+  const clients = createMeteredClients(process.env, {
+    standalone: true, onSessionBudget: stop,
+    alert: (reason, fields) => {
+      console.log(JSON.stringify({ event: 'alert', reason, ...fields }));
+      if (reason === 'rpc_budget_exhausted') stop();
+    },
+  });
+  meter = clients.meter;
+  process.exitCode = await runVerifyCommand(registry, clients.public, {
+    prelaunch, buildRecords, signal: controller.signal,
+    output: (report, summary) => {
+      console.table(report.rows.map(row => ({ entry: row.entry, check: row.check, result: row.detail.startsWith('not deployed') ? 'NOT DEPLOYED' : row.ok ? 'PASS' : 'FAIL', detail: row.detail })));
+      console.log(summary);
+    },
+  });
 } catch (error) {
-  console.error(safeError(error)); process.exitCode = error instanceof RpcGuardError && error.code === 'rpc_session_budget_reached' ? 0 : 1;
+  console.error(safeError(error)); process.exitCode = 1;
 } finally {
-  process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
-  await meter.close();
+  try { await meter?.close(); }
+  catch (error) { console.error(safeError(error)); process.exitCode = 1; }
+  process.removeListener('SIGINT', stop);
+  process.removeListener('SIGTERM', stop);
+  if (controller.signal.aborted) process.exitCode = 1;
 }

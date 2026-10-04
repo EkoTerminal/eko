@@ -14,6 +14,13 @@ export class TradeAccessError extends Error {
 
 /** Access only. Route, sanctions and mandatory Guard checks keep their own ownership. */
 export class TradeAccessService {
+  /**
+   * Retain host ceilings/flags, wallet lookup, clock and accepted-target manifest (loading default
+   * registry if omitted). Host-only construction; manifest errors can throw; no wallet
+   * authentication or admission occurs yet.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   constructor(
     private readonly cfg: Config,
     private readonly flags: FlagService,
@@ -22,14 +29,32 @@ export class TradeAccessService {
     private readonly registry: AddressRegistry = loadRegistry(),
   ) {}
 
+  /**
+   * Wire lowercased wallet allowlist lookup to the supplied database. Host construction only;
+   * address-manifest loading can throw before any admission check.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   static fromDb(cfg: Config, flags: FlagService, db: Db): TradeAccessService {
     return new TradeAccessService(cfg, flags, async wallet => (await db.select().from(tradingAllowlist).where(eq(tradingAllowlist.wallet, wallet)))[0]);
   }
 
+  /**
+   * AND the host live ceiling with the uncached durable trading switch. No wallet authentication;
+   * durable flag read failures return false.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async liveEnabled(): Promise<boolean> {
     return this.cfg.LIVE_TRADING_ENABLED && await this.flags.isOpsOn('trading_live');
   }
 
+  /**
+   * Project the current beta/public per-trade cap and absolute ceiling. This is informational, not
+   * allowlist admission; caller supplies wallet identity. Allowlist read failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async cap(wallet?: string | null): Promise<number> {
     const row = this.cfg.TRADING_ALLOWLIST_ONLY && wallet ? await this.lookup(wallet.toLowerCase()) : undefined;
     return this.capFor(row);
@@ -46,6 +71,13 @@ export class TradeAccessService {
     return Number.isFinite(cap) && cap >= 0 ? Math.min(cap, this.cfg.TRADE_MAX_USD ?? Infinity) : 0;
   }
 
+  /**
+   * Return only a verified, non-TODO v3 router with accepted router02 wiring as both router and
+   * spender. Public configuration read; it neither checks deployed code nor authorizes a wallet.
+   * Ineligible manifests return empty lists.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   verifiedTargets() {
     // Only the accepted v3 wiring is exposed. Code-only Pons and unaccepted v4 stay unavailable.
     const entry = this.registry.data.uniswapV3.swapRouter02;
@@ -53,6 +85,13 @@ export class TradeAccessService {
     return { routers, spenders: [...routers] };
   }
 
+  /**
+   * Return a named refusal for demo, paused, unlisted, nonpositive/nonfinite or over-cap requests,
+   * otherwise null. Caller must bind wallet to authenticated identity; this does not check routes,
+   * sanctions or Guard. Allowlist failures reject; runtime flag failures close trading.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async refusal(wallet: string | null | undefined, amountUsd: number, demo = false): Promise<TradeAccessError | null> {
     if (demo) return new TradeAccessError('forbidden', 'Demo sessions cannot trade');
     if (!await this.liveEnabled()) return new TradeAccessError('trading_paused', 'Live trading paused');
@@ -65,12 +104,26 @@ export class TradeAccessService {
     return null;
   }
 
+  /**
+   * Throw the current admission refusal, checking demo, runtime ceiling/switch, membership and
+   * amount cap. Caller supplies authenticated wallet identity; storage failures reject and no
+   * transaction is signed.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async assertOrder(wallet: string | null | undefined, amountUsd: number, demo = false): Promise<void> {
     const refusal = await this.refusal(wallet, amountUsd, demo);
     if (refusal) throw refusal;
   }
 
-  /** Packet 075 can preserve quote/verdict/fee data while removing binding on access refusal. */
+  /** Packet 075 can preserve quote/verdict/fee data while removing binding on access refusal.
+   * @remarks
+   * Recheck admission and strip binding while appending a refusal check when access fails; preserve
+   * other quote data. Caller binds identity; database failure rejects. Passing access alone does not
+   * supply Guard/probe checks.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async informationalQuote(quote: TradeQuote, demo = false): Promise<TradeQuote> {
     const refusal = await this.refusal(quote.account, quote.amountUsd, demo);
     if (!refusal) return quote;
@@ -79,7 +132,13 @@ export class TradeAccessService {
   }
 }
 
-/** Snapshot every process load/config release in existing append-only audit storage. No secrets or paths. */
+/** Snapshot every process load/config release in existing append-only audit storage. No secrets or paths.
+ * @remarks
+ * Append a hash and nonsecret cap/ceiling snapshot on process configuration load. Host-only call,
+ * no wallet authorization; database failures reject.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export async function auditTradeConfig(db: Db, cfg: Config) {
   const data = { caps: cfg.tradeCaps, from: cfg.TRADE_CAPS_FROM ?? null, ceiling: cfg.TRADE_MAX_USD ?? null,
     allowlistOnly: cfg.TRADING_ALLOWLIST_ONLY, liveCeiling: cfg.LIVE_TRADING_ENABLED };

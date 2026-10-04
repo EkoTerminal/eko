@@ -3,8 +3,25 @@
 This is scaffolding for BACKEND §14.0, not a completed review. D0 covers only
 `src/ReceiptsRegistry.sol`, which holds no funds. Freeze the candidate commit and
 record its hash, tool versions, reports and anonymous reviewer roles here before
-the public window. Steps 1–3 finish before the Oct 5 freeze; the planned window is
-Oct 5–8. Changes to the candidate require fresh evidence for affected checks.
+the public window. The planned public window is **October 13, 2026, 13:00 UTC
+to October 16, 2026, 13:00 UTC**. Rechecks and the final hash are due October 17;
+owner D0 sign-off is October 18, reconfirmed October 19. Changes to the candidate
+require fresh evidence for affected checks.
+
+The [launch handoff](../../docs/public-launch/CHECKLIST.md) supersedes inherited
+Oct 5–8 window and D0-only bounty deadlines under GO-PLAN §§6.2–6.3, 9, 16.
+The read-only BACKEND §14.0 retains older dates; its stricter no-open-High/Medium
+bar and full-window restart requirement still apply. Registry deployment can
+precede acceptance because it holds no funds; neither deployment nor this
+scaffolding proves D0 acceptance.
+
+The completed repository review record is [.audit-grade/REPORT.md](../../.audit-grade/REPORT.md),
+with its exact candidate, planned tag, path inclusions/exclusions and unavailable
+tools frozen in [SCOPE.md](../../.audit-grade/SCOPE.md). Its findings and history
+are retained beside the report. That broader review of candidate
+`94495af646eb03a35eabb0e22e5892f6e82427df` is separate from the D0 contract gate
+below: it does not establish a completed public window, a passing fork or a
+professional audit. Raw run artifacts are intentionally ignored.
 
 | Step | Work and evidence | Pass bar |
 | --- | --- | --- |
@@ -12,7 +29,7 @@ Oct 5–8. Changes to the candidate require fresh evidence for affected checks.
 | 2. Static analysis | Run Slither and Aderyn on every PR touching `contracts/`; archive output and triage it in the findings log. | No untriaged finding and no open High/Medium. |
 | 3. Foundry tests | Unit, 1,000-run fuzz, handler invariants and pinned chain-4663 fork tests, plus coverage and gas reports from the same candidate. | 100% of the ReceiptsRegistry §14.6 row; attach coverage. A skipped fork is still pending. |
 | 4. Public code-review window | Publish the frozen commit hash, findings and test reports in a GitHub release and announcement; accept public issues for 72 hours. | No open High/Medium at close; a High/Medium fix restarts the full 72-hour window. |
-| 5. Bug bounty | Finalize the root `SECURITY.md` draft, enable GitHub private advisories and provision the placeholder reporting mailbox. Up to $500, paid from creator fees; disclose payouts. | Live by D0. |
+| 5. Bug bounty | Finalize the root `SECURITY.md` draft, enable GitHub private advisories and confirm forwarding for `security@ekoterminal.com`. Up to $500, paid from creator fees; disclose payouts. | Planned live at T, October 13, 13:00 UTC; channels, terms and funding must be evidenced first. |
 
 Run from `contracts/` with the installed tools (no dependency installation):
 

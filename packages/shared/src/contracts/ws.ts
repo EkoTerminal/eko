@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FlowSchema } from './labels.js';
 import { AddressSchema } from './common.js';
 import type { Address } from './common.js';
 import { CoinCardSchema, VerdictSchema, ChartMarkerSchema } from './coin.js';
@@ -14,7 +15,7 @@ export const WsEventMapSchema = z.object({
   pairs: z.object({ pair_upsert: PairRowSchema, pair_remove: z.object({ address: AddressSchema, column: PairRowSchema.shape.column }) }),
   feed: z.object({ item: FeedItemSchema }),
   coin: z.object({ card: CoinCardSchema, verdict: VerdictSchema, tick: TickSchema }),
-  flow: z.object({ marker: ChartMarkerSchema, flow: CoinCardSchema.shape.flow }),
+  flow: z.object({ marker: ChartMarkerSchema, flow: FlowSchema }),
   burns: z.object({ burn: BurnEventSchema, stats: BurnStatsWithExtrasSchema }),
   alerts: z.object({ alert: AlertSchema, entitlements: EntitlementsSchema }),
   agents: z.object({ agent: AgentSchema, journal: JournalEntrySchema, preflight: PreflightResultSchema.extend({ agentId: z.string(), clientOrderRef: z.string() }) }),

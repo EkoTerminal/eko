@@ -1,0 +1,18 @@
+{
+  "definition": {
+    "version": "monthly-evaluation-064.1",
+    "origin": "fixture",
+    "month": "2026-10",
+    "sourceRevision": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "manifest": null,
+    "inventory": { "accepted": [], "revoked": [], "authorizations": [] },
+    "requiredHorizonsSec": [3600, 86400, 604800],
+    "entryDelaySec": 60,
+    "confirmationSec": 30,
+    "frame": null,
+    "challenges": [],
+    "sources": [],
+    "changes": []
+  },
+  "ticks": []
+}

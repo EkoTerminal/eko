@@ -1,4 +1,4 @@
-import { binary, candles, type Timeframe } from '@eko/db';
+import { binary, candles, readFlows, readMarkers, unavailableFlow, type Timeframe } from '@eko/db';
 import type { Address } from '@eko/shared';
 import type { ReadStore } from './store.js';
 export class CoinsService {
@@ -10,8 +10,9 @@ export class CoinsService {
     const [result,history]=await Promise.all([candles(this.store.db,address,tf,from,to,this.store.now()/1000),this.store.db.sql.query<{first:Date|null;last:Date|null}>('SELECT min(ts) AS first,max(ts) AS last FROM swaps WHERE coin=$1',[binary(address)])]);
     const h=history.rows[0];return {...result,firstTradeTs:h.first ? new Date(h.first).getTime()/1000 : null,lastTradeTs:h.last ? new Date(h.last).getTime()/1000 : null,delayedSec:0};
   }
+  markers(address:Address,from:number,to:number) {return readMarkers(this.store.db,address,from,to);}
   async flow(address:Address,window:'5m'|'1h'|'24h') {
     const card=await this.card(address);
-    return card ? {...card.flow,window,meta:card.meta?.flow,delayedSec:0} : null;
+    return card ? {...((await readFlows(this.store.db,[address],window)).get(address)??unavailableFlow(window,card.freshness.block)),delayedSec:0} : null;
   }
 }

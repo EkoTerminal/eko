@@ -31,7 +31,7 @@ import { accounts, inferenceRuns, journalEntries, preferences, workspaceLayouts 
 import { ERC20_ABI } from '../exec/chain.js';
 import { ExecError } from '../exec/service.js';
 import { reportError } from '../obs/errors.js';
-import { metrics } from '../obs/metrics.js';
+import { telemetryIngress } from './v1/telemetry.js';
 import { BACKTEST_METHODOLOGY } from '../quant/service.js';
 import type { Account } from './auth.js';
 import { SESSION_COOKIE } from './auth.js';
@@ -55,6 +55,15 @@ function parse<T>(schema: z.ZodType<T>, data: unknown): T {
   return r.data;
 }
 
+/**
+ * Register legacy core system/auth/market/order/paper/private-note endpoints. Read routes may be
+ * public; private routes resolve sessions and execution services own wallet checks. Mutation
+ * handlers check Origin; dev mutations require nonproduction configuration.
+ * Validation/auth/execution failures become bounded HTTP responses; unexpected failures propagate
+ * to the app handler.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
   const { db } = ctx.dbh;
 
@@ -96,17 +105,8 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
 
   app.get('/api/metrics', async () => ({ metrics: (await import('../obs/metrics.js')).metrics.summary(), at: Date.now() }));
 
-  const TelemetrySchema = z.object({
-    samples: z.array(z.object({ metric: z.string().regex(/^ui\.|^ws\./).max(60), value: z.number().nonnegative().max(600_000) })).max(50).default([]),
-    error: z.object({ message: z.string().max(500), stack: z.string().max(4000).optional(), url: z.string().max(300).optional() }).optional(),
-  });
-  app.post('/api/telemetry', tight(120), async (req) => {
-    const a = await optionalAccount(req);
-    const body = parse(TelemetrySchema, req.body);
-    for (const s of body.samples) metrics.observe(s.metric, s.value, {});
-    if (body.error) reportError(new Error(`[client] ${body.error.message}`), { stack: body.error.stack, url: body.error.url, account: a?.id });
-    return { ok: true };
-  });
+  // Retained operational ingress uses the same privacy boundary as CA-24.
+  await app.register(async area => telemetryIngress(area, '/api/telemetry'));
 
   if (ctx.cfg.LEGACY_API) {
   app.get('/api/config', async () => ({

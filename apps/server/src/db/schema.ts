@@ -22,6 +22,60 @@ import {
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 const now = () => sql`now()`;
 
+// Farcaster stores cast hashes and scoped rate keys, never cast text or profile fields.
+export const farcasterInteractions = pgTable('farcaster_interactions', {
+  botFid: integer('bot_fid').notNull(), castHash: text('cast_hash').notNull(),
+  authorKey: text('author_key').notNull(), state: text('state').notNull(),
+  createdAt: ts('created_at').notNull().default(now()),
+}, t => [primaryKey({ columns: [t.botFid, t.castHash] }),
+  index('farcaster_interactions_rate_idx').on(t.botFid, t.authorKey, t.createdAt)]);
+export const farcasterSummonLocks = pgTable('farcaster_summon_locks', {
+  botFid: integer('bot_fid').notNull(), authorKey: text('author_key').notNull(),
+}, t => [primaryKey({ columns: [t.botFid, t.authorKey] })]);
+
+// Telegram stores extracted targets and scoped hashes only, never group message bodies.
+export const botInteractions = pgTable('bot_interactions', {
+  platform: text('platform').notNull(),
+  updateId: bigint('update_id', { mode: 'number' }).notNull(),
+  state: text('state').notNull(),
+  createdAt: ts('created_at').notNull().default(now()),
+}, t => [primaryKey({ columns: [t.platform, t.updateId] })]);
+// X state/quotas are shared across replicas; platform transport remains disabled.
+export const xBotState = pgTable('x_bot_state', {
+  id: integer('id').primaryKey(),
+  data: jsonb('data').notNull(),
+});
+export const xBotUsage = pgTable('x_bot_usage', {
+  bucket: text('bucket').primaryKey(),
+  spend: integer('spend').notNull(),
+  reads: integer('reads').notNull(),
+  replies: integer('replies').notNull(),
+});
+export const xSummons = pgTable('x_summons', {
+  tweetId: bigint('tweet_id', { mode: 'bigint' }).primaryKey(),
+  userKey: text('user_key').notNull(),
+  reservedAt: bigint('reserved_at', { mode: 'number' }).notNull(),
+}, t => [index('x_summons_user_time').on(t.userKey, t.reservedAt)]);
+export const burnPosts = pgTable('burn_posts', {
+  platform: text('platform').notNull(),
+  burnTx: text('burn_tx').notNull(),
+  state: text('state').notNull(),
+}, t => [primaryKey({ columns: [t.platform, t.burnTx] })]);
+export const callerCalls = pgTable('caller_calls', {
+  id: uuid('id').primaryKey(),
+  groupKey: text('group_key').notNull(),
+  callerKey: text('caller_key').notNull(),
+  coin: text('coin').notNull(),
+  data: jsonb('data').$type<{
+    id: string; groupKey: string; callerKey: string; coin: string; scanId: string; calledAt: number;
+  }>().notNull(),
+}, t => [uniqueIndex('caller_calls_group_coin').on(t.groupKey, t.coin)]);
+export const callerGrades = pgTable('caller_grades', {
+  callId: uuid('call_id').primaryKey().references(() => callerCalls.id),
+  data: jsonb('data').notNull(),
+  createdAt: ts('created_at').notNull().default(now()),
+});
+
 // MCP-owned discovery/authorize state (BACKEND §9.1); consent/grants remain API-owned.
 export const oauthClients = pgTable('oauth_clients', {
   id: text('id').primaryKey(),
@@ -43,7 +97,10 @@ export const oauthRequests = pgTable('oauth_requests', {
   resource: text('resource').notNull(),
   createdAt: ts('created_at').notNull().default(now()),
   expiresAt: ts('expires_at').notNull(),
-}, t => [index('oauth_requests_expiry_idx').on(t.expiresAt)]);
+  accountId: uuid('account_id').references(() => accounts.id, { onDelete: 'cascade' }),
+  decidedAt: ts('decided_at'),
+  decision: text('decision', { enum: ['approve', 'deny'] }),
+}, t => [index('oauth_requests_expiry_idx').on(t.expiresAt), check('oauth_requests_decision_check', sql`${t.decision} IN ('approve', 'deny')`)]);
 
 export const oauthRegistrationLimits = pgTable('oauth_registration_limits', {
   subjectHash: text('subject_hash').primaryKey(),
@@ -83,13 +140,59 @@ export const agentKeys = pgTable('agent_keys', {
   /** HMAC-SHA256 of the secret component; clear bearer keys are never stored. */
   hash: text('hash').notNull(),
   kind: text('kind', { enum: ['api', 'oauth'] }).notNull().default('api'),
-  oauthGrantId: uuid('oauth_grant_id'),
+  oauthGrantId: uuid('oauth_grant_id').references(() => oauthGrants.id, { onDelete: 'cascade' }),
   clientName: jsonb('client_name').$type<import('@eko/shared').ApiKeyInfo['clientName']>(),
   scopes: jsonb('scopes').$type<string[]>(),
   createdAt: ts('created_at').notNull().default(now()),
   lastUsedAt: ts('last_used_at'),
   revokedAt: ts('revoked_at'),
-}, t => [index('agent_keys_agent_idx').on(t.agentId)]);
+}, t => [index('agent_keys_agent_idx').on(t.agentId), uniqueIndex('agent_keys_oauth_grant_uq').on(t.oauthGrantId)]);
+
+// API-owned consent state; request/code bindings are immutable snapshots for token redemption.
+export const oauthGrants = pgTable('oauth_grants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientId: text('client_id').notNull(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  agentId: uuid('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  wallet: text('wallet').notNull(),
+  scopes: jsonb('scopes').$type<import('@eko/shared').OAuthScope[]>().notNull(),
+  resource: text('resource').notNull(),
+  createdAt: ts('created_at').notNull().default(now()),
+  lastUsedAt: ts('last_used_at'),
+  revokedAt: ts('revoked_at'),
+});
+export const oauthCodes = pgTable('oauth_codes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  requestId: uuid('request_id').notNull().unique(),
+  grantId: uuid('grant_id').notNull().references(() => oauthGrants.id, { onDelete: 'cascade' }),
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  hash: text('hash').notNull().unique(),
+  clientId: text('client_id').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  codeChallenge: text('code_challenge').notNull(),
+  codeChallengeMethod: text('code_challenge_method').notNull(),
+  resource: text('resource').notNull(),
+  scopes: jsonb('scopes').$type<import('@eko/shared').OAuthScope[]>().notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  createdAt: ts('created_at').notNull().default(now()),
+  consumedAt: ts('consumed_at'),
+}, t => [check('oauth_codes_code_challenge_method_check', sql`${t.codeChallengeMethod} = 'S256'`)]);
+
+// One row per issued pair; spent refresh hashes remain for grant-wide reuse detection.
+export const oauthTokens = pgTable('oauth_tokens', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  grantId: uuid('grant_id').notNull().references(() => oauthGrants.id, { onDelete: 'cascade' }),
+  codeId: uuid('code_id').unique().references(() => oauthCodes.id, { onDelete: 'cascade' }),
+  accessPrefix: text('access_prefix').notNull().unique(),
+  accessHash: text('access_hash').notNull(),
+  refreshPrefix: text('refresh_prefix').notNull().unique(),
+  refreshHash: text('refresh_hash').notNull(),
+  accessExpiresAt: ts('access_expires_at').notNull(),
+  refreshExpiresAt: ts('refresh_expires_at').notNull(),
+  refreshConsumedAt: ts('refresh_consumed_at'),
+  revokedAt: ts('revoked_at'),
+  createdAt: ts('created_at').notNull().default(now()),
+});
 
 // ───────────────────────────── Accounts & sessions ─────────────────────────────
 
@@ -116,6 +219,7 @@ export const sessions = pgTable(
     createdAt: ts('created_at').notNull().default(now()),
     expiresAt: ts('expires_at').notNull(),
     userAgent: text('user_agent'),
+    authenticatedAt: ts('authenticated_at'),
   },
   (t) => [index('sessions_account_idx').on(t.accountId)],
 );
@@ -343,8 +447,13 @@ export const inferenceRuns = pgTable(
     error: text('error'),
     inputHash: text('input_hash'),
     signalId: text('signal_id'),
+    purpose: text('purpose'),
+    coin: text('coin'),
+    personaSetVersion: text('persona_set_version'),
+    reservationId: text('reservation_id'),
   },
-  (t) => [index('inference_runs_bot_idx').on(t.botId, t.startedAt), index('inference_runs_started_idx').on(t.startedAt)],
+  (t) => [index('inference_runs_bot_idx').on(t.botId, t.startedAt), index('inference_runs_started_idx').on(t.startedAt),
+    index('inference_runs_swarm').on(t.purpose,t.coin,t.startedAt), index('inference_runs_reservation').on(t.reservationId)],
 );
 
 // ───────────────────────────── Market data ─────────────────────────────
@@ -573,6 +682,23 @@ export const ofacRefresh = pgTable('ofac_refresh', {
   failed: boolean('failed').notNull(),
 });
 
+// MCP-owned preflight replay state (BACKEND §§3.2, 9.6).
+export const preflights = pgTable('preflights', {
+  id: uuid('id').primaryKey(),
+  agentId: uuid('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  clientOrderRef: text('client_order_ref').notNull(), orderHash: text('order_hash').notNull(),
+  instrument: text('instrument').notNull(), side: text('side', { enum: ['buy', 'sell'] }).notNull(),
+  notionalUsd: doublePrecision('notional_usd'), qty: doublePrecision('qty'),
+  decision: text('decision', { enum: ['allow', 'deny', 'needs_approval'] }).notNull(),
+  reasons: jsonb('reasons').$type<string[]>().notNull(), policyVersion: integer('policy_version').notNull(),
+  approvalId: uuid('approval_id'), journalId: uuid('journal_id').notNull(),
+  result: jsonb('result').$type<import('@eko/shared').PreflightResult>().notNull(),
+  latencyMs: doublePrecision('latency_ms').notNull(),
+  createdAt: ts('created_at').notNull().default(now()), updatedAt: ts('updated_at').notNull().default(now()),
+}, t => [uniqueIndex('preflights_agent_ref').on(t.agentId, t.clientOrderRef),
+  check('preflights_side_check', sql`${t.side} IN ('buy','sell')`),
+  check('preflights_decision_check', sql`${t.decision} IN ('allow','deny','needs_approval')`)]);
+
 // Private journal envelope state (BACKEND §§3.5–3.6). Never stores clear payloads.
 const journalBinary = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea',
   toDriver: value => value, fromDriver: value => Buffer.from(value) });
@@ -596,3 +722,116 @@ export const harnessJournal = pgTable('harness_journal', {
 export const groundTruthShared = pgTable('ground_truth_shared', {
   id: uuid('id').primaryKey().defaultRandom(), data: jsonb('data').notNull(),
 });
+
+// CA-6: only an explicitly redacted, immutable public snapshot is persisted here.
+export const bagShares = pgTable('bag_shares', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  snapshot: jsonb('snapshot').$type<import('@eko/shared').PublicBagReport>().notNull(),
+  createdAt: ts('created_at').notNull().default(now()),
+});
+// API-owned watch/alert state (BACKEND §23 CA-28).
+export const watches = pgTable('watches', {
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['coin', 'wallet'] }).notNull(), target: text('target').notNull(),
+  afterSource: bigint('after_source', { mode: 'number' }).notNull(), createdAt: ts('created_at').notNull().default(now()),
+}, t => [primaryKey({ columns: [t.accountId, t.kind, t.target] }), index('watches_target').on(t.kind, t.target),
+  check('watches_kind', sql`${t.kind} IN ('coin','wallet')`), check('watches_target_address', sql`${t.target} ~ '^0x[0-9a-f]{40}$'`)]);
+export const alertSettings = pgTable('alert_settings', {
+  accountId: uuid('account_id').primaryKey().references(() => accounts.id, { onDelete: 'cascade' }),
+  data: jsonb('data').$type<import('@eko/shared').AlertSettings>().notNull(), updatedAt: ts('updated_at').notNull().default(now()),
+});
+export const alertSources = pgTable('alert_sources', {
+  seq: bigserial('seq', { mode: 'number' }).primaryKey(), sourceKey: text('source_key').notNull().unique(),
+  sourceKind: text('source_kind', { enum: ['feed', 'correction'] }).notNull(), sourceId: text('source_id').notNull(),
+  receivedAt: ts('received_at').notNull().default(now()), processedAt: ts('processed_at'), attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: ts('next_attempt_at').notNull().default(now()),
+}, t => [index('alert_sources_pending').on(t.nextAttemptAt, t.seq).where(sql`${t.processedAt} IS NULL`),
+  check('alert_sources_kind', sql`${t.sourceKind} IN ('feed','correction')`)]);
+export const alertDeliveries = pgTable('alert_deliveries', {
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }), seq: bigint('seq', { mode: 'number' }).notNull(),
+  sourceKey: text('source_key').notNull().references(() => alertSources.sourceKey), data: jsonb('data').$type<import('@eko/shared').Alert>().notNull(),
+  watchKind: text('watch_kind').notNull(), watchTarget: text('watch_target').notNull(),
+  telegramStatus: text('telegram_status', { enum: ['pending', 'sent', 'disabled'] }).notNull(),
+  telegramAttempts: integer('telegram_attempts').notNull().default(0), telegramNextAt: ts('telegram_next_at').notNull().default(now()),
+  telegramLeaseUntil: ts('telegram_lease_until'), telegramError: text('telegram_error'), createdAt: ts('created_at').notNull().default(now()),
+}, t => [primaryKey({ columns: [t.accountId, t.seq] }), uniqueIndex('alert_deliveries_account_source').on(t.accountId, t.sourceKey),
+  index('alert_deliveries_telegram').on(t.telegramNextAt).where(sql`${t.telegramStatus}='pending'`),
+  check('alert_deliveries_telegram_status', sql`${t.telegramStatus} IN ('pending','sent','disabled')`)]);
+export const linkedIdentities = pgTable('linked_identities', {
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  provider: text('provider', { enum: ['telegram', 'x', 'farcaster'] }).notNull(),
+  externalId: text('external_id').notNull(), createdAt: ts('created_at').notNull().default(now()),
+}, t => [primaryKey({ columns: [t.accountId, t.provider] }), uniqueIndex('linked_identities_external_uq').on(t.provider, t.externalId),
+  check('linked_identities_provider', sql`${t.provider} IN ('telegram','x','farcaster')`)]);
+export const telegramLinkCodes = pgTable('telegram_link_codes', {
+  codeHash: text('code_hash').primaryKey(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  expiresAt: ts('expires_at').notNull(), usedAt: ts('used_at'),
+}, t => [uniqueIndex('telegram_link_codes_account_uq').on(t.accountId)]);
+
+export const alertConsumerCursors = pgTable('alert_consumer_cursors', {
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }), consumer: text('consumer').notNull(),
+  seq: bigint('seq', { mode: 'number' }).notNull().default(0), updatedAt: ts('updated_at').notNull().default(now()),
+}, t => [primaryKey({ columns: [t.accountId, t.consumer] }), check('alert_consumer_cursors_consumer', sql`${t.consumer}='telegram'`)]);
+// API-owned durable trade quotes and unsigned-order intents (BACKEND §12 / CA-7).
+export const tradeQuotes = pgTable('trade_quotes', {
+  id: uuid('id').primaryKey(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  wallet: text('wallet'),
+  input: jsonb('input').$type<import('@eko/shared').TradeQuoteRequest>().notNull(),
+  quote: jsonb('quote').$type<import('@eko/shared').TradeQuote>().notNull(),
+  checked: jsonb('checked').$type<import('@eko/shared').PreflightRequest>(),
+  quotedAt: ts('quoted_at').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  createdAt: ts('created_at').notNull().default(now()),
+}, t => [index('trade_quotes_owner_expiry').on(t.accountId, t.expiresAt)]);
+
+export const tradeOrders = pgTable('trade_orders', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  accountId: uuid('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  quoteId: uuid('quote_id').notNull().references(() => tradeQuotes.id),
+  idempotencyKey: text('idempotency_key').notNull(),
+  requestBody: text('request_body').notNull(),
+  orderHash: text('order_hash').notNull(),
+  coin: text('coin').notNull(),
+  side: text('side', { enum: ['buy', 'sell'] }).notNull(),
+  feeBps: integer('fee_bps').notNull(),
+  status: text('status', { enum: ['awaiting_signature', 'submitted', 'confirmed', 'failed', 'rejected', 'expired'] }).notNull().default('awaiting_signature'),
+  txHash: text('tx_hash'),
+  filledIn: text('filled_in'),
+  filledOut: text('filled_out'),
+  errorCode: text('error_code'),
+  submittedAt: ts('submitted_at'),
+  settledAt: ts('settled_at'),
+  postFillEvidence: jsonb('post_fill_evidence').$type<import('../exec/trade-evidence.js').PostFillEvidence>(),
+  createdAt: ts('created_at').notNull().default(now()),
+}, t => [uniqueIndex('trade_orders_tx_hash').on(t.txHash), uniqueIndex('trade_orders_idem').on(t.accountId, t.idempotencyKey), uniqueIndex('trade_orders_quote').on(t.quoteId)]);
+
+// Durable pending handoff to packet 112; public publication remains owned by 080/112.
+export const tradeGuardMisses = pgTable('trade_guard_misses', {
+  orderId: uuid('order_id').primaryKey().references(() => tradeOrders.id),
+  incidentId: integer('incident_id').notNull().references(() => auditLog.id),
+  payload: jsonb('payload').notNull(),
+  status: text('status', { enum: ['pending', 'published'] }).notNull().default('pending'),
+  createdAt: ts('created_at').notNull().default(now()),
+});
+
+// Private operational evidence; no addresses or payloads are exported as metrics.
+export const securityCollectorCheckpoints = pgTable('security_collector_checkpoints', {
+  stream: text('stream').notNull(), block: bigint('block', { mode: 'bigint' }).notNull(),
+  hash: journalBinary('hash').notNull(), logIndex: integer('log_index').notNull().default(-1),
+}, t => [primaryKey({ columns: [t.stream, t.block] })]);
+export const securityCollectorEvents = pgTable('security_collector_events', {
+  stream: text('stream').notNull(), block: bigint('block', { mode: 'bigint' }).notNull(),
+  logIndex: integer('log_index').notNull(), hash: journalBinary('hash').notNull(),
+  timestampS: doublePrecision('timestamp_s').notNull(), evidence: jsonb('evidence').notNull(),
+}, t => [primaryKey({ columns: [t.stream, t.block, t.logIndex] }),
+  check('security_collector_timestamp', sql`${t.timestampS} >= 0 AND ${t.timestampS} < 'Infinity'::double precision`)]);
+
+// CA-15: redacted public rows and accepted measurement manifests; never user payloads.
+export const scoreboardRecords = pgTable('scoreboard_records', {
+  seq: bigserial('seq', { mode: 'number' }).primaryKey(), sourceKey: text('source_key').notNull().unique(),
+  category: text('category', { enum: ['row', 'coverage', 'outcome'] }).notNull(), data: jsonb('data').notNull(),
+  recordedAt: ts('recorded_at').notNull().default(now()),
+}, t => [index('scoreboard_records_category_seq').on(t.category, t.seq),
+  check('scoreboard_records_category_check', sql`${t.category} IN ('row','coverage','outcome')`)]);

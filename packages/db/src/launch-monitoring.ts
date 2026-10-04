@@ -5,7 +5,9 @@ export const launchMetricNames = ['head_lag_ms', 'queue_completion_ms', 'pair_to
     'simulation_failure', 'receipt_commit_timestamp_s', 'receipt_commit_lag_s', 'ai_budget_ratio', 'x_budget_ratio',
     'backup_success', 'role_api', 'role_indexer', 'role_engines', 'role_mcp', 'role_oauth', 'role_guard',
     'role_scan', 'role_telegram', 'role_x', 'role_farcaster', 'role_receipts', 'burn_due_timestamp_s',
-    'burn_confirmed_timestamp_s', 'post_fill_sell_failure', 'published_wallet_unexpected_outflow', 'burn_wrong_token', 'burn_unexpected_outflow'] as const;
+    'burn_confirmed_timestamp_s', 'post_fill_sell_failure', 'published_wallet_unexpected_outflow', 'burn_wrong_token', 'burn_unexpected_outflow',
+    'registry_ownership_started_timestamp_s', 'registry_ownership_transferred_timestamp_s', 'registry_committer_changed_timestamp_s',
+    'reference_price_timestamp_s', 'receipt_committer_balance_eth'] as const;
 export type LaunchMetric = typeof launchMetricNames[number];
 export async function writeLaunchMeasurement(sql: SqlClient, metric: LaunchMetric, value: number, at = Date.now()) {
   if (!launchMetricNames.includes(metric) || !Number.isFinite(value) || value < 0 || !Number.isSafeInteger(at) || at < 0)

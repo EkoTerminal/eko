@@ -10,6 +10,13 @@ import type { AccountServices } from './account.js';
 import { phaseAt } from '../../harness/entitlements.js';
 export { phaseAt } from '../../harness/entitlements.js';
 
+/**
+ * Register public configuration projection with runtime live switch/cap and accepted targets.
+ * Optional session wallet and demo overrides force private no-store caching and Vary: Cookie;
+ * public config does not authorize execution. Schema/database/flag failures reject.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function configRoutes(app: FastifyInstance, cfg: Config, service: FlagService, access = new TradeAccessService(cfg, service, async () => undefined), accounts?: AccountServices) {
   app.get('/config', async (req, reply): Promise<PublicConfig> => {
     const flags = await service.all();

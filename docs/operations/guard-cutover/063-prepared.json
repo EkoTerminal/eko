@@ -1,0 +1,298 @@
+{
+  "version": "guard-cutover-063.1",
+  "prepared": true,
+  "released": false,
+  "status": "blocked_no_accepted_release_manifest",
+  "acceptedCandidateRevision": null,
+  "acceptedReleaseManifest": null,
+  "switch": {
+    "version": "guard-cutover-063.1",
+    "generation": 0,
+    "mode": "inactive",
+    "guardManifestHash": null,
+    "signalManifestHash": null,
+    "guardPolicyVersion": 1
+  },
+  "inventory": {
+    "accepted": [],
+    "revoked": [],
+    "authorizations": []
+  },
+  "lowerEnabled": false,
+  "historyEnabled": false,
+  "bucketsEnabled": false,
+  "releasedFactors": [],
+  "releasedChecks": [],
+  "releasedProfiles": [],
+  "signalAdapterVersion": 1,
+  "coverage": [
+    {
+      "venue": "pons_curve",
+      "sizeUsd": 100,
+      "accountClass": "eoa",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "pons_curve",
+      "sizeUsd": 100,
+      "accountClass": "smart_account",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "pons_curve",
+      "sizeUsd": 1000,
+      "accountClass": "eoa",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "pons_curve",
+      "sizeUsd": 1000,
+      "accountClass": "smart_account",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "uniswap_v3",
+      "sizeUsd": 100,
+      "accountClass": "eoa",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "uniswap_v3",
+      "sizeUsd": 100,
+      "accountClass": "smart_account",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "uniswap_v3",
+      "sizeUsd": 1000,
+      "accountClass": "eoa",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "uniswap_v3",
+      "sizeUsd": 1000,
+      "accountClass": "smart_account",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "uniswap_v4",
+      "sizeUsd": 100,
+      "accountClass": "eoa",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "uniswap_v4",
+      "sizeUsd": 100,
+      "accountClass": "smart_account",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "uniswap_v4",
+      "sizeUsd": 1000,
+      "accountClass": "eoa",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "uniswap_v4",
+      "sizeUsd": 1000,
+      "accountClass": "smart_account",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "other",
+      "sizeUsd": 100,
+      "accountClass": "eoa",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "other",
+      "sizeUsd": 100,
+      "accountClass": "smart_account",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "other",
+      "sizeUsd": 1000,
+      "accountClass": "eoa",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    },
+    {
+      "venue": "other",
+      "sizeUsd": 1000,
+      "accountClass": "smart_account",
+      "status": "incomplete",
+      "gaps": [
+        "reference_exit",
+        "effective_fees",
+        "controls_hooks",
+        "supply_float",
+        "recent_funding",
+        "coordination_coverage",
+        "launcher_service",
+        "operator_history"
+      ]
+    }
+  ],
+  "measured": {
+    "coveredDurationSec": 0,
+    "launches": 0,
+    "requests": 0,
+    "requestUnits": 0,
+    "paidUsd": "0"
+  },
+  "process": {
+    "running": false,
+    "continuationInstalled": false,
+    "nextAction": "lead_review_then_external_acceptance_before_authorized_publication"
+  }
+}

@@ -1,0 +1,73 @@
+# Task 095 implementation report
+
+Implemented in this worktree and left uncommitted. Source revision: `4601c4d53b7bf2edd2d7f8c6d0fdb0c0a0afeaf8`. Candidate manifest SHA-256: `39d68d016c228b47b1bd768f305f337f0f377be97d26c82c11f453ffc6133c02`; file hashes are in `/private/tmp/eko-095-candidate.json`. This report is excluded from that manifest.
+
+Follows BACKEND §§9.3, 9.6, 9.9, 20, with existing §§3.2/3.5 encryption and writer boundaries; Guard 2.0 §§1, 7.2; FACTS §7. Read AGENTS.md, including rule 9, the packet and dependency packets 028/052/092/093. No spec or Guard design files were edited. No dependencies were added, so no lockfile update was needed. No identifiers or secrets were ported. No commit, deployment, signing, listening port or paid acquisition was performed.
+
+Changed files:
+
+- `apps/server/src/harness/preflight.ts`: imports pure `evaluate`, `orderHash` and `resolveRepeat`; forces authenticated identity, reads current locked policy/agent state and accepts only trusted cached Senses/actual-order dependencies. One owner-before-agent transaction stores the order hash, version, decision/replay envelope, encrypted decision journal and private receipt publication. Unique agent/reference storage and database locks serialize duplicates across service instances. Final results and journal IDs replay unchanged; a conflicting order is refused without replacement or a new journal. Pending approvals run all checks again and update through compare-and-set, retaining preflight/approval IDs and writing a new journal entry. Missing/corrupt approval state refuses without creating a replacement approval. Scalar `harness.preflight_ms` measurements include persistence; private context never becomes a metric label.
+- `apps/server/src/harness/journal.ts`: extracts transaction-aware append/admission methods so preflight, encryption, sharing and commitment publication share one transaction. Reuses existing consent, destruction ledger, DEK wrapping, AAD encryption, payload-size limit and foreign-preflight ownership checks.
+- `apps/server/src/db/schema.ts`, `apps/server/drizzle/0029_mcp_preflights.sql`, `apps/server/drizzle/meta/0029_snapshot.json`, `apps/server/drizzle/meta/_journal.json`: additive preflights table, agent foreign key, side/decision checks and unique agent/client reference index. Generated snapshot diff was checked to contain only that table, foreign key and index. No other migration numbers used; packages/db 0157 is unused.
+- `apps/mcp/src/harness.ts`, `apps/mcp/src/index.ts`, `apps/mcp/src/runtime.ts`: real preflight/journal registration and exports, journal key configuration validation, migration readiness check and conditional startup registration. Account and agent come from the resolved bearer. Write tools stay absent without encryption/destruction configuration. The runtime has no approvals adapter at T, so approval-threshold requests return `approval_unavailable`. D0 tools remain absent.
+- `apps/server/test/harness-migrations.test.ts`: extends the exact migration chain/count assertions to 0029 while preserving all predecessor/history checks; adds snapshot preservation and a points-to-preflight upgrade/replay preservation/unique-ref regression.
+- `apps/mcp/test/harness.test.ts`, `apps/server/test/preflight-fixture.ts`, `apps/server/test/preflight-benchmark.ts`: offline synthetic PGlite/encryption fixtures and focused regression/latency checks. Covers concurrent duplicates, new and pending transaction rollback after receipt publication, unchanged replay IDs, order/calldata/execution conflicts, foreign ownership, consent, kills, missing/stale inputs, all buyer modes with explicit null, mandatory High/Incomplete/honeypot refusals, approval decisions/expiry and complete re-evaluation, named 052 queue/unavailable results, sharing and bearer-bound MCP discovery/calls.
+
+Verification (repository root):
+
+| Exact command | Exit | Evidence |
+|---|---:|---|
+| `pnpm --filter @eko/mcp test test/harness.test.ts test/transport.test.ts` | 0 | 35 tests; `/private/tmp/eko-095-focused.log` |
+| `pnpm --filter @eko/server test test/private-journal.test.ts` | 0 | 7 existing journal regressions; `/private/tmp/eko-095-journal-focused.log` |
+| `pnpm --filter @eko/server exec node --import tsx test/preflight-benchmark.ts` | 0 | Final candidate, 100 samples after 10 warmups; `/private/tmp/eko-095-benchmark.log` |
+| `pnpm typecheck` | 0 | Final implementation; `/private/tmp/eko-095-typecheck.log` |
+| `VITEST_MAX_WORKERS=2 pnpm test` | 1 | Two existing dense-load indexer tests timed out; `/private/tmp/eko-095-test.log` |
+| `VITEST_MAX_WORKERS=2 pnpm --filter @eko/indexer test test/log-head.test.ts` | 0 | All 41 tests passed alone, 602.52 s; `/private/tmp/eko-095-indexer-isolated.log` |
+| `npm_config_workspace_concurrency=1 VITEST_MAX_WORKERS=2 pnpm test` | interrupted | No final exit record; scheduling setting not honored; `/private/tmp/eko-095-test-serial.log` |
+| `VITEST_MAX_WORKERS=2 pnpm --filter @eko/indexer test test/performance.test.ts` | 0 | 13 tests passed alone, 21.53 s; `/private/tmp/eko-095-performance-isolated.log` |
+| `pnpm_config_workspace_concurrency=1 VITEST_MAX_WORKERS=2 pnpm test` (before migration-test extension) | 1 | Indexer 152 tests passed; six stale migration-count assertions failed; `/private/tmp/eko-095-test-final.log` |
+| `VITEST_MAX_WORKERS=2 pnpm --filter @eko/server test test/harness-migrations.test.ts` | 0 | 8 migration/upgrade/preservation tests; `/private/tmp/eko-095-migration-focused.log` |
+| `pnpm_config_workspace_concurrency=1 VITEST_MAX_WORKERS=2 pnpm test` (final candidate) | 0 | All workspace suites, builds and role checks; `/private/tmp/eko-095-test-complete.log` |
+| `pnpm brand:check` | 0 | `/private/tmp/eko-095-brand.log` |
+| `pnpm check:addresses` | 0 | `/private/tmp/eko-095-addresses.log` |
+| `git diff --check` | 0 | Whitespace check |
+
+The focused commands ran before the final equivalent SQL regeneration; the final benchmark applies the generated migration, and the full gate validates the final manifest. Early focused attempts caught fixture mistakes: an invalid Guard check ID, incorrect expected V2 denial names and runtime entitlement/setup assumptions. Those were corrected without changing policy behavior, weakening assertions or raising timeouts. The first sequential gate reached the server suite and exposed six assertions that still expected eleven migrations. Those assertions now require twelve migrations and the new snapshot/table; all previous preservation checks remain, and a new 0029 upgrade/replay/unique-ref check was added. The focused migration file passed before the final comprehensive gate. The final full gate is authoritative for all source files; runtime files were unchanged since the focused handler/benchmark evidence.
+
+Cached server p95: **10.923 ms**, below 150 ms, on Node v26.0.0. This measures new persisted preflights, including hash, SQL reads/locks, pure evaluation, encryption, commitment publication and commit. Queue wait/RPC acquisition time is **0 ms** in this cached fixture; asynchronous misses are returned immediately as named 052 denials and are not awaited or counted as measured acquisition latency. No production or PostgreSQL concurrency/latency claim is made. Rollback evidence is injected failure after transactional publication, not a live process-kill experiment. No coverage percentage was collected.
+
+TODO(spec):
+
+- New, `apps/server/src/harness/preflight.ts`: the decision journal payload is unspecified. Store order hash, asset/size summary, decision/reasons and policy versions; exclude calldata, positions/cash and the full card. This keeps valid maximum-calldata requests within the existing 16 KB journal limit.
+- Existing, preserved in `apps/server/src/harness/journal.ts`: shared ground-truth fields/buckets are unspecified; retain enum facts and magnitude buckets only. CA-30 does not specify deletion of login/session or financial records; retain those while cleaning implemented private data. Re-enrollment after deletion is undefined; keep old journal and harness credentials disabled.
+
+Remaining integration and reproduction:
+
+1. Apply server migration 0029 through the existing API migration process, alongside the already implemented journal/receipt migrations. When merging parallel migration metadata, retain reserved numbering and monotonic journal timestamps. This packet does not apply migrations to an external database.
+2. Configure existing `JOURNAL_KEK`, `JOURNAL_KEK_ID` and restore-independent `JOURNAL_TOMBSTONE_PATH`, and persist explicit owner consent through the existing API. Runtime configuration enables registration; each call still checks consent and current destruction state.
+3. The host can supply the fourth `createMcpRuntime` argument (`CachedPreflightInputs`) for authenticated cached card/verdict, captured actual-account state and 052 acquisition lookup. The default supplies no invented Senses/actual-order evidence, so unavailable on-chain inputs deny. 094/075 and production acquisition integration remain owned by their packets. A final queue/missing-input denial replays unchanged; a later attempt uses a fresh reference. Execution preparation must still use 052 fresh revalidation independently of a final preflight replay.
+4. `PreflightApprovals` is an injectable transaction-aware D0 boundary, exercised only with a synthetic fixture adapter. No production approval writer, approval feature flag, OAuth connector acceptance or optional executor was enabled. Accepted D0 integration must supply bound approval lookup/creation using the provided transaction; T runtime does not supply it.
+5. Reproduce with the exact focused/benchmark/full commands above. All fixtures are synthetic; measured-origin tags in inherited actual-order fixtures exercise the trusted contract and are not new measured chain evidence.
+
+Actual external acquisition: **0 requests, 0 request units, $0 cost, 0 fork executions**. Prepared and locally tested work is not deployed, approved or live-verified. Checkpoint: `/private/tmp/eko-095-checkpoint.json`; The first full gate exited 1 on two existing indexer dense-load timeouts. The required isolated rerun passed all 41 tests. An attempted scheduling setting was not honored; that retry was interrupted without a final exit record, after reporting an existing performance-file timeout. The performance file passed all 13 tests alone. The first verified sequential full gate exited 1 on the migration-chain assertions described above. After extending them, the final full gate completed with exit 0 using `pnpm_config_workspace_concurrency=1 VITEST_MAX_WORKERS=2 pnpm test`. The final brand/address scans also completed with exit 0 after the builds. All validation processes have ended. Next action: lead review/commit and separately owned production integration.
+
+
+Final coverage: 300 shared, 511 web, 327 policy, 53 Signal, 275 untrusted, 27 database, 387 playbooks, 316 chain, 249 engines, 152 indexer, 347 server and 45 MCP tests passed. Foundry: 34 passed, with the existing unset-RPC fork test skipped under its original condition. No test was deleted, skipped or weakened by this packet; no timeout was raised. Web/server builds and built role-image checks passed. Final source hashes match the candidate manifest. Brand scan: final served/configured artifacts passed. Address scan: source files passed. The initial requested two-worker full command's exit 1 and interrupted retry remain recorded above; the successful final run uses the same test command and two-worker limit with verified sequential workspace scheduling.
+
+Integration note (task 095): reserved migration 0029 was retained; no SQL or snapshot files were renamed or removed. It now follows 0027_trade_api at journal idx 15, with when 1790970577344 (the previous entry + 1), and a fresh snapshot UUID chained from 0027 that preserves all predecessor tables and metadata. Migration assertions include the full integration chain and a 0027-to-0029 upgrade. Runtime registration combines task 094 read tools with task 095 preflight/journal tools. The fourth createMcpRuntime argument remains ReceiptRegistryReader; CachedPreflightInputs is now the fifth argument. Earlier verification evidence above describes the incoming branch, not this integration candidate.
+
+Integration verification (final source files unchanged throughout the completed gates):
+
+| Command/check | Exit | Evidence |
+|---|---:|---|
+| `pnpm typecheck` | 0 | `/private/tmp/eko-int-c-095-typecheck-complete.log` |
+| `VITEST_MAX_WORKERS=2 pnpm --filter @eko/server test test/harness-migrations.test.ts` | 0 | 12 tests; `/private/tmp/eko-int-c-095-migrations-final.log` |
+| `VITEST_MAX_WORKERS=2 pnpm --filter @eko/mcp test test/harness.test.ts` | 0 | 21 tests; `/private/tmp/eko-int-c-095-harness-final.log` |
+| `VITEST_MAX_WORKERS=2 pnpm --filter @eko/server test` | 0 | 45 files, 418 tests; `/private/tmp/eko-int-c-095-server.log` |
+| `pnpm_config_workspace_concurrency=1 VITEST_MAX_WORKERS=2 pnpm test` | 0 | All workspace suites, builds and role-image checks; MCP 57, web 644, server 418 tests; `/private/tmp/eko-int-c-095-full.log` |
+| Migration metadata validation | 0 | Existing entries unchanged, timestamp previous + 1 and not future, snapshot preserves predecessor metadata/tables and adds exactly preflights |
+| `git diff --check` and text conflict-marker scan | 0 | No whitespace errors or unresolved text markers |
+
+Earlier integration checks: the first typecheck exited 2 and migration test exited 1 because the incoming randomUUID import was missing in the combined migration test. The second typecheck exited 2 and full MCP suite exited 1 because incoming journal-key configuration validation had been omitted in the runtime combination. Both omissions were restored; focused reruns and the final full gate passed. An initial byte-level marker scan exited 1 on existing binary PNG data; the corrected text scan exited 0. No assertion was weakened and no timeout was raised. The runtime discovery regression now asserts both task 094 read tools and configured task 095 write tools.
+
+All eight incoming added files were retained: MCP harness source/test, server preflight source/fixture/benchmark, migration SQL/snapshot, and this report. No files were removed, no dependencies changed, and docs/eko was untouched. File conflict resolution is complete; git index conflict stages remain for the lead to stage and commit. Live PostgreSQL behavior, external migration application, and deployment were not verified in this offline integration. No new TODO(spec) was introduced; the existing packet TODOs above remain.

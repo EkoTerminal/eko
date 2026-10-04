@@ -16,7 +16,21 @@ export class ScreeningError extends Error {
 // without any usable complete snapshot, refuse quotes/orders with stale_data (never treat a missing list as empty).
 /** One service for quote and order callers. Reads current committed data on every check. */
 export class SanctionsService {
+  /**
+   * Retain sanctions snapshot storage. Host-only construction; no screening occurs and callers must
+   * supply resolved trading wallet identities to checks.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   constructor(private readonly db: ChainDb) {}
+  /**
+   * Check the normalized wallet against the latest complete nonempty sanctions snapshot on each
+   * call. Caller supplies the authenticated trading wallet; absent/invalid snapshot or DB failure
+   * becomes stale_data and listed wallets throw sanctioned. No maximum snapshot age is imposed here;
+   * absent wallet still requires usable data.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async assertWallet(wallet?: string | null): Promise<void> {
     try {
       const result = await this.db.sql.query<{ listed: boolean }>(
@@ -30,6 +44,12 @@ export class SanctionsService {
       throw new ScreeningError('stale_data');
     }
   }
+  /**
+   * Return latest stored snapshot and refresh-attempt metadata or nulls. Public operational read, no
+   * wallet auth; SQL failures reject. Reading age does not itself enforce an age ceiling.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async freshness() {
     const snapshot = (await this.db.sql.query<{ version: string; refreshed_at: Date; published_at: Date; address_count: number }>(
       'SELECT version, refreshed_at, published_at, cardinality(addresses) AS address_count FROM ofac_sdn ORDER BY version DESC LIMIT 1',
@@ -41,7 +61,14 @@ export class SanctionsService {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_BYTES = 32 * 1024 * 1024;
-/** Bounded public-list HTTP read. Never sends account data, cookies or authentication. */
+/** Bounded public-list HTTP read. Never sends account data, cookies or authentication.
+ * @remarks
+ * Fetch only credential-free Treasury HTTPS XML without redirects, with a 30-second timeout and 32
+ * MB streaming cap. Host source selection only; invalid source, HTTP/body/size/UTF-8/transport
+ * failures reject and no user data is sent.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function downloadSdn(url: string): Promise<string> {
   const target = new URL(url);
   if (target.protocol !== 'https:' || target.username || target.password || target.hash ||
@@ -66,18 +93,44 @@ export async function downloadSdn(url: string): Promise<string> {
 export class SanctionsWorker {
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
+  /**
+   * Wire storage, configured public source, bounded downloader, clock and finite outcome observer.
+   * Host-only construction; no download/timer starts until lifecycle methods.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   constructor(private readonly db: ChainDb, private readonly source?: string,
     private readonly download: (url: string) => Promise<string> = downloadSdn,
     private readonly now: () => number = Date.now,
     private readonly observe: (failed: boolean) => void = () => {}) {}
 
-  /** Startup checks persisted cadence; a restart cannot cause another daily download. */
+  /** Startup checks persisted cadence; a restart cannot cause another daily download.
+   * @remarks
+   * Start a one-minute refresh timer once and immediately tick using persisted daily cadence. Host
+   * worker call, no wallet auth. Refresh failures are recorded/reported through tick rather than
+   * treated as an empty list.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   start() {
     if (this.timer) return;
     void this.tick();
     this.timer = setInterval(() => void this.tick(), 60_000);
   }
+  /**
+   * Clear the refresh timer and await in-flight work. Host shutdown call, no wallet auth; a throwing
+   * injected observation callback can still reject the pending work.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
+  /**
+   * Share one refresh promise per instance; preserve the last complete snapshot and report refresh
+   * failure through the observer. Host worker call; no wallet auth. Normal acquisition/storage
+   * failures are caught; injected observer failures may reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   tick(): Promise<void> {
     if (this.running) return this.running;
     this.running = this.refresh().catch(() => { this.observe(true); }).finally(() => { this.running = undefined; });

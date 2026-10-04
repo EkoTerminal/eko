@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GUARD_CHECK_IDS, GUARD_CHECK_TIERS } from '@eko/shared';
 import type { GuardLevelV2, Policy, PreflightResult } from '@eko/shared';
-import { applyPreset, evaluate, orderHash, resolveRepeat } from '../src/index.js';
-import { agent, approval, ASSET, card, deps, NOW, policy, request, verdict } from './fixtures.js';
+import { applyPreset, evaluate as evaluatePolicy, orderHash, resolveRepeat } from '../src/index.js';
+import { approval, ASSET, card, NOW, policy, verdict } from './fixtures.js';
 import { cachedGuard, guardFixture } from './guard-fixtures.js';
+import { agent, deps, request, bindRequest } from './actual-fixtures.js';
+import type { Agent, PreflightRequest } from '@eko/shared';
+import type { Deps } from '../src/index.js';
+// Rebind the policy under test so these existing gate tests still isolate their original invariant.
+const evaluate = (req: PreflightRequest, p: Policy, a: Agent, d: Deps) =>
+  evaluatePolicy(d.guardPolicyV2 ? bindRequest(req, p) : req, p, a, d);
 
 const modes = ['safe', 'balanced', 'degen'] as const;
 const thresholds = [null, 'danger', 'monitor'] as const;
@@ -91,7 +97,7 @@ describe('coherent migration and shadow isolation (§7.2)', () => {
     const legacy = { ...verdict, level: 'danger' as const };
     for (const mode of modes) for (const blockPlaybookLevel of thresholds) {
       const p = { ...policy, mode, blockPlaybookLevel };
-      const baseline = evaluate(request, p, agent, { ...deps, verdictFor: () => legacy });
+      const baseline = evaluate(request, p, agent, { ...deps, guardPolicyV2: false, verdictFor: () => legacy });
       const withCandidate = evaluate(request, p, agent, { ...deps, guardPolicyV2: flag,
         verdictFor: () => ({ ...legacy, guardV2: guardFixture('high') }) });
       expect({ ...withCandidate, senses: baseline.senses }).toEqual(baseline);
@@ -134,7 +140,7 @@ describe('coherent migration and shadow isolation (§7.2)', () => {
     const guard = guardFixture();
     guard.chainId = guard.cursor.chainId = guard.availabilityCut.cursor.chainId = 8453;
     const req = { ...request, order: { ...request.order, venue: 'base' as const } };
-    expect(evaluate(req, policy, agent, { ...migrated, verdictFor: () => cachedGuard(guard) }).decision).toBe('allow');
+    expect(evaluate(req, policy, agent, { ...migrated, verdictFor: () => cachedGuard(guard) }).decision).toBe('deny');
     expect(evaluate(req, policy, agent, { ...migrated, verdictFor: () => cachedGuard() }).decision).toBe('deny');
     const lookup = vi.fn(() => { throw new Error('unexpected senses lookup'); });
     for (const venue of ['robinhood', 'perp'] as const) expect(evaluate({ ...request, order: { ...request.order, venue } },

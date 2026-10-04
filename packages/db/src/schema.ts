@@ -6,6 +6,10 @@ const event = () => ({ block: block(), txHash: bytes('tx_hash').notNull(), logIn
 export const chainBlocks = pgTable('chain_blocks', {
   number: bigint('number', { mode: 'bigint' }).primaryKey(), block: block(), hash: bytes('hash').notNull(), parentHash: bytes('parent_hash').notNull(), ts: ts('ts').notNull(),
 });
+// TODO(spec): Persist the selected pricing source so freshness uses the indexer's identity across roles.
+export const ethUsdReferenceSources = pgTable('eth_usd_reference_sources', {
+  block: block().primaryKey(), poolId: bytes('pool_id').notNull(), venue: text('venue').notNull(), fee: integer('fee').notNull(),
+});
 export const ingestCursors = pgTable('ingest_cursors', { stream: text('stream').primaryKey(), block: block(), hash: bytes('hash') });
 export const ingestRanges = pgTable('ingest_ranges', {
   stream: text('stream').notNull(), fromBlock: bigint('from_block', { mode: 'bigint' }).notNull(), toBlock: bigint('to_block', { mode: 'bigint' }).notNull(),

@@ -1,3 +1,4 @@
+import { receiptMappingRevision } from './receipt-actors.js';
 import { walletProtocolTopics } from './wallet-protocol.js';
 import { createMeteredClients, loadRegistry, type RpcEnv } from '@eko/chain';
 import { binary, hex, refreshBars, type ChainDb } from '@eko/db';
@@ -9,10 +10,19 @@ import { loadSenderScope } from './sender-scope.js';
 import { BlockRows } from './rows.js';
 import type { ChainClient, RpcBlock, RpcReceipt, TokenMetadata } from './types.js';
 interface Pending {block:string;tx_hash:Uint8Array;log_index:number;ts:Date|null;source:string;raw_data:import('./types.js').RpcLog|null}
-/** On-demand historical sender/metadata fill. Every network read precedes its bounded write transaction. */
+/** On-demand historical sender/metadata fill. Every network read precedes its bounded write transaction.
+ * @remarks
+ * Validate the indexed coin and acquire bounded historical sender/metadata evidence before
+ * canonical lease/current-block-checked write transactions and derived bar refresh. Indexer
+ * operator supplies the client or role-configured metered RPC; no wallet auth. Missing indexed
+ * coin, inconsistent provider evidence, budget/SQL failures reject; retained gaps stay explicit
+ * and owned meter is closed in finally.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+ */
 export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:ChainClient) {
   if(!isAddress(coin))throw new Error('Invalid enrichment coin');
-  const registry=loadRegistry();
+  const registry=loadRegistry(),mappingRevision=receiptMappingRevision(registry);
   const owned=providedClient?undefined:createMeteredClients(process.env as RpcEnv,{db,transientRetrySec:300});
   const client=providedClient??createClients(process.env as RpcEnv,registry,owned!.meter,{enrich:true});
   const decoder=new BlockDecoder(client,registry),rpc=new Semaphore(16);
@@ -21,7 +31,7 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
     const scope=await loadSenderScope(db);
     const discovered=new Map<string,{block:string;pool:import('./types.js').PoolMetadata}>();
     const raw=(await db.sql.query<{emitter:Uint8Array;block:string}>(`SELECT emitter,min(block)::text AS block FROM pending_pool_events WHERE emitter IN (SELECT emitter FROM pending_pool_events WHERE currency_hints ? $1) GROUP BY emitter`,[lower(coin)])).rows;
-    await settle(raw.map(r=>rpc.run(async()=>{const id=hex(r.emitter);const p=await client.v3Pool(id as Address,BigInt(r.block));if(p&&[p.currency0,p.currency1].some(a=>lower(a)===lower(coin))){discovered.set(id,{block:r.block,pool:p});scope.pools.set(id,p);scope.poolRows.push({id:r.emitter,venue:'uniswap_v3',currency0:binary(p.currency0),currency1:binary(p.currency1),fee:p.fee,tick_spacing:p.tickSpacing,hooks:null});for(const address of [p.currency0,p.currency1])if(!scope.tokenRows.some(t=>hex(t.address)===lower(address)))scope.tokenRows.push({address:binary(address),curve:null,launchpad:null,decimals:null,name:null,symbol:null});}})));
+    await settle(raw.map(r=>rpc.run(async()=>{const id=hex(r.emitter);const p=await client.v3Pool(id as Address,BigInt(r.block));if(p&&[p.currency0,p.currency1].some(a=>lower(a)===lower(coin))){discovered.set(id,{block:r.block,pool:p});scope.pools.set(id,p);scope.poolRows.push({id:r.emitter,venue:'uniswap_v3',currency0:binary(p.currency0),currency1:binary(p.currency1),fee:p.fee,tick_spacing:p.tickSpacing,hooks:null,creation_verified:false,created_block:r.block});for(const address of [p.currency0,p.currency1])if(!scope.tokenRows.some(t=>hex(t.address)===lower(address)))scope.tokenRows.push({address:binary(address),curve:null,launchpad:null,decimals:null,name:null,symbol:null});}})));
     const pools=new Map([...scope.pools].filter(([,p])=>[p.currency0,p.currency1].some(a=>lower(a)===lower(coin))));
     const metadata=new Map<string,TokenMetadata>(scope.tokenRows.map(t=>[hex(t.address),{symbol:t.symbol,name:t.name,decimals:t.decimals,totalSupply:t.total_supply==null?null:BigInt(t.total_supply),supplyBlock:t.supply_block==null?null:BigInt(t.supply_block)}]));
     const addresses=[...new Set([coin,...[...pools.values()].flatMap(p=>[p.currency0,p.currency1])].map(lower))].filter(a=>a!=='0x0000000000000000000000000000000000000000') as Address[];
@@ -35,12 +45,20 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
     let after:{block:string;tx_hash:Uint8Array;log_index:number}|undefined;
     for(;;) {
       const rawIds=[...discovered.keys()];
-      const params:unknown[]=[binary(coin),...rawIds.map(binary)];
+      const params:unknown[]=[binary(coin),...rawIds.map(binary),mappingRevision];
+      // Unresolved logs already attempted with these receipt brackets and registry
+      // stay idle. A new deployment/mapping revision makes them eligible again.
+      const mappingParameter=`$${params.length}::text`;
+      const unresolved=(table:string,field:string)=>`${table}.${field} IS NULL AND NOT EXISTS(SELECT 1 FROM wallet_protocol_coverage c
+        WHERE c.chain_id=4663 AND c.tx_hash=${table}.tx_hash AND c.block=${table}.block AND c.data->>'receipt'='complete'
+        AND c.data->'holderAttribution'->>'mappingRevision'=${mappingParameter}
+        AND EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(c.data->'holderAttribution'->'gaps','[]'::jsonb)) g
+          WHERE g->>'logIndex'=${table}.log_index::text))`;
       const position=after?`WHERE (block,tx_hash,log_index)>($${params.length+1}::bigint,$${params.length+2}::bytea,$${params.length+3}::integer)`:'';
       if(after)params.push(after.block,after.tx_hash,after.log_index);
-      const pending=(await db.sql.query<Pending>(`SELECT * FROM (SELECT block,tx_hash,log_index,ts,'swaps' AS source,NULL::jsonb AS raw_data FROM swaps WHERE (coin=$1 OR quote_asset=$1) AND (senders_pending OR pricing_pending)
+      const pending=(await db.sql.query<Pending>(`SELECT * FROM (SELECT block,tx_hash,log_index,ts,'swaps' AS source,NULL::jsonb AS raw_data FROM swaps WHERE (coin=$1 OR quote_asset=$1) AND (senders_pending OR pricing_pending OR (${unresolved('swaps','trader')}))
         UNION ALL SELECT e.block,e.tx_hash,e.log_index,e.ts,'liquidity' AS source,NULL::jsonb AS raw_data FROM liquidity_events e JOIN pools p ON p.id=e.pool_id
-        WHERE (p.currency0=$1 OR p.currency1=$1) AND e.senders_pending
+        WHERE (p.currency0=$1 OR p.currency1=$1) AND (e.senders_pending OR (${unresolved('e','actor')}))
         UNION ALL SELECT e.block,e.tx_hash,e.log_index,b.ts,'raw' AS source,e.data AS raw_data FROM pending_pool_events e LEFT JOIN chain_blocks b ON b.number=e.block WHERE e.emitter IN (${rawIds.map((_,i)=>`$${i+2}`).join(',')||'NULL'})) p ${position} ORDER BY block,tx_hash,log_index LIMIT 1000`,params)).rows;
       if(!pending.length){if(fresh.length)await db.tx(async tx=>{for(const a of fresh){const m=metadata.get(lower(a))!;await tx.sql.query('UPDATE tokens SET name=coalesce(name,$2),symbol=coalesce(symbol,$3),decimals=coalesce(decimals,$4),total_supply=coalesce(total_supply,$5::numeric),supply_block=coalesce(supply_block,$6::bigint) WHERE address=$1',[binary(a),m.name,m.symbol,m.decimals,m.totalSupply?.toString()??null,m.totalSupply==null?null:(m.supplyBlock??BigInt(firstBlock)).toString()]);}});break;}
       const numbers=[...new Set(pending.map(r=>r.block))].slice(0,32);
@@ -89,8 +107,8 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
             const types=table==='swaps'?['bytea','integer','bigint','bytea','bytea','bytea','double precision','double precision','bigint','boolean']:['bytea','integer','bigint','bytea','bytea','bytea'];
             const params:unknown[]=[];
             const values=rows.slice(offset,offset+250).map(r=>`(${fields.map((f,i)=>{params.push(r[f]);return `$${params.length}::${types[i]}`;}).join(',')})`);
-            const changes=fields.slice(3).map(f=>`${f}=p.${f}`).join(',');
-            const result=await tx.sql.query(`UPDATE ${table} s SET ${changes},senders_pending=false FROM (VALUES ${values}) AS p(${fields}) WHERE s.tx_hash=p.tx_hash AND s.log_index=p.log_index AND s.block=p.block AND (s.senders_pending${table==='swaps'?' OR (s.pricing_pending AND NOT p.pricing_pending)':''}) RETURNING s.tx_hash`,params);
+            const changes=fields.slice(3).map(f=>['trader','actor','tx_from','tx_to'].includes(f) ? `${f}=coalesce(p.${f},s.${f})` : `${f}=p.${f}`).join(',');
+            const result=await tx.sql.query(`UPDATE ${table} s SET ${changes},senders_pending=false FROM (VALUES ${values}) AS p(${fields}) WHERE s.tx_hash=p.tx_hash AND s.log_index=p.log_index AND s.block=p.block AND (s.senders_pending OR s.${table==='swaps'?'trader':'actor'} IS NULL${table==='swaps'?' OR (s.pricing_pending AND NOT p.pricing_pending)':''}) RETURNING s.tx_hash`,params);
             enriched+=result.rows.length;
           }
         }

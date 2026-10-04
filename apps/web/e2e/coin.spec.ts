@@ -1,4 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './helpers';
+test.use({ demo: true });
 const address='0xe9082becaa27f99717e78cf80c3dfb1fdbc6f2b1';
 type CoreProbe={xForTime(t:number):number|null;scale:number;view:{s:number;e:number};data:{ts:number}[]};
 async function lockError(page:Page){return page.locator('.coin-chart').evaluate(el=>{

@@ -1,4 +1,4 @@
-export { DYOR, NON_AFFILIATION, BUILT_ON } from '@eko/shared';
+export { DYOR, NON_AFFILIATION, BUILT_ON } from '@eko/shared/disclosures';
 export const ADVISORY = 'Advisory: your agent is told to check with EKO before every order. Robinhood’s own trade approvals, when they’re on, remain the enforced stop.';
 export const ENFORCED_ONCHAIN = 'Enforced on-chain by this agent’s session-key policy.';
 export const ONCHAIN_ADVISORY = 'Advisory for now: on-chain enforcement turns on after its contract review passes.';

@@ -65,10 +65,36 @@ export class ReorgDepthError extends Error {}
 export class HeadFollower {
   private prefetch?: BlockPrefetch;
   private queue: BlockQueue | null = null; private stopRequested = false;
+  /**
+   * Retain full-block provider/decoder/storage and reorg/start/prefetch options. Indexer operator
+   * construction only; no I/O or validation occurs until lifecycle methods.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   constructor(readonly client: ChainClient, readonly db: ChainDb, readonly decoder: BlockDecoder, readonly options: { startBlock?: bigint; prefetchBlocks?: number; reorgDepth: number; logger?: Logger }) {}
   private get logger() { return this.options.logger ?? log; }
+  /**
+   * Require RPC chain id 4663 before running full-block ingest. Indexer operator configures the
+   * provider; no wallet auth. Wrong chain or RPC failure rejects.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async assertChain() { if (await this.client.chainId() !== 4663) throw new Error('RPC chain ID must be 4663'); }
+  /**
+   * Request stop and wake/stop queue and prefetch scheduling. Host lifecycle only; does not undo
+   * committed ingest or cancel already running provider calls.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   stop() { this.stopRequested = true; this.queue?.stop(); this.prefetch?.stop(); }
+  /**
+   * Search backward within configured reorg depth for a stored canonical ancestor, transactionally
+   * delete chain data above it/reset cursor and invalidate decoder caches. Indexer role only;
+   * RPC/SQL failure or no retained ancestor throws, including ReorgDepthError. Return first
+   * replacement block.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async rollback(from: bigint): Promise<bigint> {
     for (let depth = 0, n = from; depth < this.options.reorgDepth && n >= 0n; depth++, n--) {
       const block = await this.client.block(n);
@@ -85,6 +111,14 @@ export class HeadFollower {
     this.logger('alert', { reason: 'reorg_depth_exceeded', depth: this.options.reorgDepth });
     throw new ReorgDepthError('Reorg exceeds INDEX_REORG_DEPTH; indexer halted');
   }
+  /**
+   * Check parent/stored block conflicts and full receipt/log consistency before atomic decoder
+   * writes/cursor notification. Indexer role supplies acquired block/receipts; conflicts return
+   * false, inconsistent data or prepare/SQL failure rejects. Decoder caches advance only after
+   * commit.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async ingest(block: RpcBlock, receipts: RpcReceipt[], remote?: RemoteInputs): Promise<boolean> {
     const n = BigInt(block.number);
     const stored = n > 0n ? await this.db.blockHash(n - 1n) : null;
@@ -105,6 +139,13 @@ export class HeadFollower {
     this.decoder.metrics.observe(block.timestamp);
     return true;
   }
+  /**
+   * Assert chain, recover cursor/reorg state, follow head with bounded prefetch and retries, commit
+   * in block order and drain on stop. Indexer operator only; deep reorg, exhausted retries or RPC
+   * budget/SQL failures reject. Defaults to current head when no start/cursor is configured.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+   */
   async run() {
     await this.assertChain();
     const cursor = await this.db.cursor('head');

@@ -45,4 +45,5 @@ export const GuardWsServerSchema = z.union([
   z.strictObject({t:z.literal('ack'),version:z.literal(2),ch:z.string().regex(/^coin:0x[0-9a-f]{40}$/),seq:count}),
   z.strictObject({t:z.literal('resync'),version:z.literal(2),ch:z.string().regex(/^coin:0x[0-9a-f]{40}$/)}),
   z.strictObject({t:z.literal('err'),version:z.literal(2),code:z.literal('internal_error'),message:z.literal('Card is unavailable.')}),
+  z.strictObject({t:z.literal('err'),version:z.literal(2),code:z.literal('rate_limited'),message:z.string()}),
 ]);

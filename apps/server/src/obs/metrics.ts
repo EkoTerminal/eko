@@ -20,7 +20,12 @@ export const METRIC_DESCRIPTIONS: Record<string, string> = {
   'ui.click_to_card_ms': 'Click on signal → execution card interactive (client)',
   'ui.click_to_submit_ms': 'Execution card opened → order submitted (client)',
   'ui.quote_roundtrip_ms': 'Quote request sent → quote rendered (client)',
+  'ui.scan_to_verdict_ms': 'Scan submitted → verdict rendered (client)',
+  'ui.ws_event_to_paint_ms': 'WebSocket event received → painted (client)',
+  'ui.chart_load_ms': 'Chart data received → chart ready (client)',
+  'ui.approval_open_ms': 'Approval link opened → buttons ready (client)',
   'ws.rtt_ms': 'WebSocket ping round trip (client)',
+  'alerts.discovery_to_ws_ms': 'Committed alert source discovered → owner WebSocket send (excludes pre-discovery delay)',
 };
 
 interface Series {

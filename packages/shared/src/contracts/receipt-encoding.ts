@@ -28,21 +28,55 @@ export interface ReceiptHashing {
  * Reference: https://github.com/OpenZeppelin/merkle-tree/tree/master/src
  */
 // Cross-checked against StandardMerkleTree in test/receipts-oz.test.ts (devDependency only).
+/**
+ * Create pure receipt leaf/tree/proof operations using trusted supplied hashing primitives. No
+ * wallet authentication or I/O; correctness assumes compatible keccak/ABI implementations.
+ * Returned operations validate their bounded schemas; this factory grants no publication
+ * authority.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export function createReceiptEncoder(hashing: ReceiptHashing) {
   const { keccak256, encodeAbiParameters, stringToHex, concat } = hashing;
+  /**
+   * Hash a validated string id with supplied keccak/string encoding. Pure public operation without
+   * auth; schema/hashing failures throw.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   function receiptItemId(id: string): Bytes32 {
     return keccak256(stringToHex(z.string().parse(id)));
   }
+  /**
+   * Schema-validate the item and double-hash its ABI-encoded kind/id-hash/payload-hash tuple. Pure
+   * public operation without auth; invalid schema/hashing failures throw, payload content is not
+   * inspected.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   function encodeReceiptLeaf(input: ReceiptItem): Bytes32 {
     const item = ReceiptItemSchema.parse(input);
     return keccak256(keccak256(encodeAbiParameters(RECEIPT_LEAF_ENCODING, [
       RECEIPT_KIND_IDS[item.kind], receiptItemId(item.id), item.hash,
     ])));
   }
+  /**
+   * Validate two bytes32 nodes, lexically sort their normalized hex and hash the concatenation. Pure
+   * public operation without auth; invalid nodes/hashing failures throw.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   function hashReceiptPair(left: Bytes32, right: Bytes32): Bytes32 {
     const pair = [Bytes32Schema.parse(left), Bytes32Schema.parse(right)].sort();
     return keccak256(concat(pair));
   }
+  /**
+   * Build a complete sorted-leaf/sorted-pair binary Merkle tree and proofs retaining input order.
+   * Pure public operation without auth; empty batch, invalid items or hashing failures throw;
+   * duplicate items are not rejected here.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   function buildReceiptTree(items: readonly ReceiptItem[]) {
     if (items.length === 0)
       throw new Error('A receipt tree needs at least one item');
@@ -66,6 +100,13 @@ export function createReceiptEncoder(hashing: ReceiptHashing) {
     // Leaves and proofs retain input order, independent of the tree's sorted layout.
     return { root: tree[0]!, leaves: entries.map(({ leaf }) => leaf), proofs };
   }
+  /**
+   * Return false for invalid item/root/proof-node schemas, otherwise fold sorted pairs to compare
+   * the normalized root. Pure public operation without auth; supplied hashing failures may throw.
+   * This verifies inclusion, not truth of payloads.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   function verifyReceiptProof(item: ReceiptItem, proof: readonly Bytes32[], root: Bytes32): boolean {
     if (!ReceiptItemSchema.safeParse(item).success || !Bytes32Schema.safeParse(root).success
       || !proof.every((node) => Bytes32Schema.safeParse(node).success))

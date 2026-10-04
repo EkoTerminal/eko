@@ -1,7 +1,15 @@
 import { binary, hex, ScanJobs, scanTarget, type ChainDb } from '@eko/db';
 import type { ChainClient } from './types.js';
 
-/** Uses the indexer's existing metered metadata acquisition; the API never writes chain truth. */
+/** Uses the indexer's existing metered metadata acquisition; the API never writes chain truth.
+ * @remarks
+ * Claim one acquisition job, use pinned metered code/metadata reads and write token facts only
+ * while the lease and indexed head remain current. Indexer role only; no job returns false.
+ * Acquisition errors mark the job failed; claim/failure-record SQL errors may reject. Missing
+ * identity stays pending and no launch/deployer truth is fabricated.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+ */
 export async function acquireScanJob(db:ChainDb,client:ChainClient,jobs=new ScanJobs(db)) {
   const job=await jobs.claim('acquisition');
   if(!job)return false;

@@ -11,6 +11,12 @@ import { allocateGuardFactors, familyMaxima, GUARD_FAMILY_ORDER } from './guard-
 import type { GuardCompatibility } from './guard-allocation.js';
 import { evaluateHistoryBoosterV2 } from './history-v2.js';
 
+/**
+ * Hash canonical Guard score input with keccak256/string encoding. Pure trusted-input operation
+ * without auth; canonicalization failures throw and no release gate is implied.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Guard, policy and approval invariants}
+ */
 export const guardScoreHash = (value: unknown): `0x${string}` => keccak256(stringToHex(canonicalize(value)));
 interface ReleaseEntry<Id> { readonly id: Id; readonly status: string; readonly acceptanceArtifact: string | null }
 export interface GuardScoringRegistry {
@@ -30,7 +36,15 @@ const reasonCodes: Record<FactorId, GuardReasonV2['code']> = {
   current_sell_pressure: 'SELL_PRESSURE', campaign_pressure: 'SELL_PRESSURE', harmful_selling: 'SELL_PRESSURE', operator_dump: 'ATTRIBUTED_DUMP',
   mutable_control: 'CONTROL', arbitrary_control: 'CONTROL', removable_depth: 'CONTROL', exercised_control: 'CONTROL', cycling: 'CYCLING', agent_instruction: 'TEXT_INSTRUCTION',
 };
-/** §§5–6: pure facts -> maximum justified assignment -> history -> independent tier overlay. */
+/** §§5–6: pure facts -> maximum justified assignment -> history -> independent tier overlay.
+ * @remarks
+ * Evaluate schema-bounded Guard checks/factors/coverage and calibration inputs into a
+ * deterministic assessment. Trusted caller supplies captured evidence and release state; no
+ * account auth or I/O. Validation failures throw or produce explicit incomplete assessments as
+ * specified by the implementation; a candidate score alone is not active release evidence.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Guard, policy and approval invariants}
+ */
 export function evaluateGuardV2(raw: GuardScoreInput, registry: GuardScoringRegistry = CONFIG_GUARD_V2): GuardScoreResult {
   const input = GuardScoreInputSchema.parse(raw), { cursor, availabilityCut } = input;
   if (cursor.boundary !== 'block_end' || compareGuardCursors(cursor, availabilityCut.cursor) > 0) throw new Error('Guard score needs captured block-end state');

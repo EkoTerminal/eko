@@ -1,16 +1,40 @@
 # Public export scope
 
-Source snapshot: `2997466a96d4a62ffd5ac6b9e93f8f8ce343e1ed`.
+## Current scope (since October 3, 2026)
 
-The public tree preserves tracked application, package, contract, infrastructure and test source
-from that snapshot. Existing dependency notices and bundled font/library licenses remain.
-No private Git objects, credentials, environment-secret files, task reports, launch plans,
-research notes, internal screenshots or retired brand collateral are imported. Public documentation,
-an animated banner, noncommercial terms, identity guards and CI were added for this export.
+The public tree tracks the complete source tree: application, package, contract, infrastructure and test
+source, plus the project documentation (`docs/`, including the spec in `docs/eko`, security and operations
+docs, task packets and reports), brand assets, the audit-grade record (`.audit-grade/`) and CI workflows.
+No private Git objects are imported, and no credentials or environment-secret files exist in the tree.
+Two source paths stay out: internal captures (`docs/screenshots/`, which cannot be reviewed for identifiers
+as text) and local editor tooling (`.claude/`).
 
-The web development configuration uses a project-relative optional landing directory in place
-of a private machine-specific path. No configured personal identifier occurred in retained source
-content. Internal documentation is omitted; it is not required to build or run the final source tree.
+Public-only files sit on top of the source tree: `LICENSE`, this README, `docs/EXPORT.md`,
+`docs/PUBLIC_HISTORY.md`, the banner (`docs/media/banner.gif`, `scripts/render-banner.py`), the identity
+guard (`scripts/public-guard.py`, `scripts/public-identity.json`, `scripts/test-public-guard.py`) and the
+`public-guard` CI job. `AGENTS.md` adds a public-repository section to the source rules.
+
+One source adaptation remains: the web development configuration resolves the optional marketing landing
+directory relative to the project instead of a machine-specific path.
+
+Every sync is scanned for configured personal identifiers before commit (the guard runs in the commit
+and push hooks and in CI); no identifier occurred in the synced source content.
+
+## Source revisions
+
+Commit hashes in `.audit-grade/` and `docs/operations/` refer to the source repository. Each synced source
+revision maps to a public commit:
+
+| Source revision | Public commit | Date |
+| --- | --- | --- |
+| `2997466a96d4a62ffd5ac6b9e93f8f8ce343e1ed` | end of the reconstructed history | 2026-10-02 |
+| `4641564ea803184b5e6d6705bb066c16762c285c` | the commit titled "Sync public tree with source 4641564" | 2026-10-03 |
+
+## Original export (October 2, 2026)
+
+The first export covered tracked application, package, contract, infrastructure and test source from
+`2997466`. It excluded internal documentation, task reports, launch plans, research notes, internal
+screenshots and brand collateral; those are included from the October 3 sync onwards.
 
 PolyForm Noncommercial applies to EKO-owned material only. It does not replace any third-party
 license, attribution or copyright notice. Upstream bundled sources retain their existing terms.

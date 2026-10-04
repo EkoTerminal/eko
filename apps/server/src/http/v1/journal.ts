@@ -9,6 +9,14 @@ const Params = z.object({ id: z.uuid() });
 const Query = z.object({ cursor: z.uuid().optional(), kind: JournalEntrySchema.shape.kind.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50) }).strict();
 export interface JournalServices { auth: AuthService; journal: JournalService }
+/**
+ * Register owner-only encrypted journal reads, explicit consent and destruction. Wallet sessions
+ * are mandatory; mutations require allowed Origin and reject demos. Invalid
+ * ownership/consent/key/cursor/storage state rejects; the group suppresses private operation error
+ * details from remote reporting.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function journalRoutes(app: FastifyInstance, services: JournalServices) {
   const { auth, journal } = services;
   app.addHook('onRequest', async (_req,reply) => { reply.header('Cache-Control','private, no-store'); });

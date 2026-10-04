@@ -57,7 +57,7 @@ describe('onboarding preferences', () => {
       version: 1,
       welcomeDone: true,
       tourDone: true,
-      checklist: { paper_trade: true, close_position: false, go_live: false },
+      checklist: { ...DEFAULT_ONBOARDING.checklist, paper_trade: true, scan_coin: true, open_evidence: true, scan_bags: true, guarded_trade: true, connect_agent: true },
       checklistDismissed: false,
       liveIntroSeen: true,
     };

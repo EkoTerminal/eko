@@ -1,8 +1,12 @@
+import { WatchButton } from '../../components/WatchButton';
 import { useGuardCoin } from './useGuardCoin';
+import { antiSnipeDeadline } from '../../components/trade/tradePanelModel';
+import { serverNow } from '../../lib/clock';
+import { TradePanel } from '../../components/trade/TradePanel';
 import { CompactVerdictChip, GuardCompact } from '../../components/GuardCompact';
 import { AnalysisPolicyNotice } from '../../components/PolicyLinks';
-import { SCANNING, NOT_CHECKED, NOT_FULLY_CHECKED, PENDING_ORDER } from '../../copy/availability';
-import { memo, useEffect, useRef, type ReactNode } from 'react';
+import { SCANNING, NOT_CHECKED, NOT_FULLY_CHECKED } from '../../copy/availability';
+import { memo, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import type { CoinCard, CoinSignal, RadarRow, Flow } from '@eko/shared';
 import { HeatTag, Info, UnavailableValue, UntrustedText, VerdictChip } from '../../components/ui';
 import { MiniBars, Spark } from '../../components/ui/charts';
@@ -16,21 +20,13 @@ import { Link } from '../../lib/Link';
 import { Decode, Roll } from './radarMotion';
 import { age, exitText, pct, PLAYBOOK_NAMES, price, usd } from './radarModel';
 import { formatAge } from '../../lib/format';
+import { FlowBar } from './FlowBar';
+
+export { FlowBar };
 
 export const ROLES = ['momentum', 'liquidity', 'holders', 'narrative', 'risk'] as const;
 export function SignalBars({ signal }: { signal: CoinSignal }) {
   return <span className="rt-sig"><b className="num">{signal.composite}</b><span className="rt-read" aria-hidden="true">{ROLES.map((role) => <i key={role} style={{ height: `${Math.max(14, signal.readings[role])}%` }} />)}</span></span>;
-}
-export function FlowBar({ flow, unavailable = false, legend = false, compact = false }: { flow: Flow; unavailable?: boolean; legend?: boolean; compact?: boolean }) {
-  if (unavailable || flow.meta?.unavailable) return <span className="muted availability">{NOT_CHECKED}</span>;
-  const parts = flow.declaredAgentPct !== undefined && flow.likelyAgentPct !== undefined
-    ? [{ name: 'Declared agents', className: 'agent', value: flow.declaredAgentPct }, { name: 'Likely agents', className: 'likely', value: flow.likelyAgentPct }]
-    : [{ name: 'Agents', className: 'agent', value: flow.agentPct }];
-  parts.push({ name: 'Crews', className: 'crew', value: flow.crewPct }, { name: 'Humans', className: 'human', value: flow.humanPct });
-  return <div className="radar-flow"><div className="flowbar" role="img" aria-label={parts.map((p) => `${p.name} ${Math.round(p.value)}%`).join(', ')}>{parts.map((p) => <i key={p.name} className={p.className} style={{ width: `${p.value}%` }} />)}{flow.washEstPct > 0 && <i className="wash" style={{ width: `${flow.washEstPct}%` }} />}</div>
-    {flow.beta && !compact && <span className="flow-beta"><span className="tag">Beta</span> {flow.confidence === undefined ? 'Confidence unavailable' : `${Math.round(flow.confidence * 100)}% confidence`}</span>}
-    {legend && <div className="legend">{parts.map((p) => <span key={p.name}><i className={p.className} />{p.name}<b className="num">{Math.round(p.value)}%</b></span>)}{flow.washEstPct > 0 && <span><i className="wash" />Wash estimate {Math.round(flow.washEstPct)}%</span>}</div>}
-  </div>;
 }
 export function HeatLegend() {
   return <div className="heat-legend" aria-label="How rows are marked">{['Hot', 'Normal', 'Fading', 'Danger'].map((word, i) => <span key={word}><i className={`sw ${['hot', 'normal', 'fading', 'avoid'][i]}`} />{word}</span>)}<Info label="How rows are marked">A blue-white shimmer grows from warming (3%+ in an hour, agents 25%+, signal 60+) to Hot (signal 70+, rising, agents 30%+) to surging (10%+, agents 40%+). A dark ember marks falling activity (down 8%+, signal under 65), Danger, and red flags (honeypot, 75%+ exit cost, or a Danger match at 97%+ confidence). Danger always wins. Without signal, only price and flow predicates apply. The marks describe activity; they are not a reason to buy.</Info></div>;
@@ -55,19 +51,16 @@ export function HotStrip({ coins, selected, select }: { coins: RadarRow[]; selec
   if (!coins.length) return null;
   return <section className="hot-strip" aria-labelledby="hot-h"><div className="sec-head" style={{ marginTop: 26 }}><h2 id="hot-h">Hot right now</h2><span className="sub">Unusual activity and agent buying in the last hour. Not a recommendation.</span></div><div className="hot-grid">{coins.map((c) => <button key={c.address} className={`htile ${markClass(marking(c))}${selected === c.address ? ' sel' : ''}`} aria-pressed={selected === c.address} onClick={(e) => select(c, e.currentTarget)}><span className="htile-top"><span className="htile-sym" title={`$${c.symbol.text}`}><Decode text={`$${c.symbol.text}`}><span>$<UntrustedText value={c.symbol} /></span></Decode></span><span className="htile-tags"><HeatTag heat={heatOf(c)} /><CompactVerdictChip linked={false} level={c.verdict} guard={c.guardV2} failed={c.guardRefreshFailed} pending={c.verdictPending} evaluatedPlaybooks={c.evaluatedPlaybooks} missing={c.missingChecks} /></span></span>{c.spark8h && <span className="htile-spark"><Spark series={c.spark8h} height={46} /></span>}<span className="htile-facts">{c.signal && <span><span className="htile-signal-label">Signal <span className="signal-beta">Beta</span></span><b className="num score">{c.signal.composite}</b></span>}<span>Agents<b className="num">{c.unavailable?.includes('flow') ? <UnavailableValue /> : `${Math.round(c.flow.agentPct)}%`}</b></span><span>1h<b className="num up">{c.unavailable?.includes('change') ? <UnavailableValue /> : <Roll value={pct(c.change1hPct)} />}</b></span></span></button>)}</div></section>;
 }
-// TODO(spec): M3 TradePanel. This slot deliberately never quotes, signs, or submits.
-export function DisabledTradePanel({ row, priceFormat = price }: { row: Pick<RadarRow, 'priceUsd'> & Partial<Pick<RadarRow,'verdict'|'verdictPending'|'priceUnavailable'>>; priceFormat?: (value: number) => string }) {
-  return <div className="tpanel">{row.verdict === 'pending' && !row.verdictPending && <p className="muted">{PENDING_ORDER}</p>}<fieldset disabled><div className="tp-side"><div className="seg"><button aria-pressed="true">Buy</button><button>Sell</button></div><span className="muted">Mode <b>Balanced</b></span></div><div className="tp-amounts">{[25, 50, 100, 250].map((v) => <button className="btn btn-sm" key={v}>${v}</button>)}<input className="input num" placeholder="Custom" aria-label="Custom trade amount" /></div><dl className="tp-quote"><dt>You receive</dt><dd>—</dd><dt>Price</dt><dd>{row.priceUnavailable ? NOT_CHECKED : priceFormat(row.priceUsd)}</dd><dt>Route</dt><dd>—</dd><dt>Terminal fee</dt><dd>—</dd></dl><div className="tp-guard"><div className="tp-guard-head">Guard checks <span className="tag">Pending M3</span></div><ul className="tp-checks">{['Sell simulation', 'Scam playbooks', 'Exit cost at $100', 'Taxes', 'Per-trade cap', 'Data freshness'].map((label) => <li key={label}><span className="tp-ic">○</span><span><b>{label}</b><span>Waiting for the guarded panel</span></span></li>)}</ul></div><button className="btn btn-primary tp-submit">Trading opens with the guarded panel</button></fieldset><AnalysisPolicyNotice /></div>;
-}
 function Section({ title, figure, children }: { title: string; figure?: ReactNode; children: ReactNode }) { return <section className="insp-sec"><h3>{title}{figure}</h3>{children}</section>; }
 export function InspectorGuard({ card, href, mark = '' }: { card: CoinCard; href: string; mark?: string }) {
   const top = card.playbooks.find(p => p.level === 'danger') ?? card.playbooks.find(p => p.level === 'monitor');
   return <div className={`insp-box insp-guard${card.verdict.level === 'danger' ? ' danger' : ''} ${mark}`}><div className="insp-guard-top"><b>{card.verdict.level === 'pending' ? NOT_FULLY_CHECKED : top ? `Watch for: ${PLAYBOOK_NAMES[top.id]}` : 'No scam playbooks matched'}</b><Link to={href} className="insp-link">Evidence</Link></div><p>{card.verdict.reasons.join(' ')}{top?.history && ` Deployer: ${top.history.deployerRuns} prior flagged runs.`}</p><AnalysisPolicyNotice /></div>;
 }
-export function CoinInspector({ row, close, onCard, formatRowAge = age }: { row: HeatRow; close: () => void; onCard: (card: CoinCard) => void; formatRowAge?: typeof formatAge }) {
+export function CoinInspector({ row, close, onCard, formatRowAge = age, stale = false, tradeVisible = true }: { row: HeatRow; close: () => void; onCard: (card: CoinCard) => void; formatRowAge?: typeof formatAge; stale?: boolean; tradeVisible?: boolean }) {
   const guard = useGuardCoin(row.address);
   const wide = useMedia('(min-width:1480px)'), panel = useRef<HTMLElement>(null);
   const [card, setCard] = useState<CoinCard | null>(null), [error, setError] = useState(false), [retry, setRetry] = useState(0);
+  const antiSnipeEndsAt = useMemo(() => antiSnipeDeadline(card, guard.card, serverNow()), [card, guard.card]);
   useEffect(() => { const ac = new AbortController(); setCard(null); setError(false); void fetchParsed(`/coins/${row.address}`, CoinCardSchema, { signal: ac.signal }).then((data) => { if (!ac.signal.aborted) { setCard(data); onCard(data); } }).catch((e) => { if (e.name !== 'AbortError') setError(true); }); return () => ac.abort(); }, [row.address, retry]);
   useEffect(() => { if (!wide) panel.current?.focus(); }, [wide]);
   const signal = card?.signal, flow = card?.flow;
@@ -88,6 +81,7 @@ export function CoinInspector({ row, close, onCard, formatRowAge = age }: { row:
       {signal && <Section title="Signal · five readings" figure={<b className="num">{signal.composite} <span className="tag">Beta</span></b>}><div className="insp-roles">{ROLES.map((role) => <div key={role}><span>{role[0].toUpperCase() + role.slice(1)}</span><i><i style={{ width: `${signal.readings[role]}%` }} /></i><b className="num">{signal.readings[role]}</b></div>)}</div></Section>}
       {row.unavailable?.includes('flow') ? <Section title="Who’s buying">{NOT_CHECKED}</Section> : flow && <Section title="Who’s buying" figure={<b className="num">{Math.round(flow.agentPct)}% agents</b>}><FlowBar flow={flow} legend /></Section>}
     </>}
-    <Section title="Trade"><div className="insp-box"><DisabledTradePanel row={row} /></div></Section>
+    <Section title="Watch"><WatchButton kind="coin" target={row.address} /></Section>
+    <Section title="Trade"><div className="insp-box"><TradePanel coin={row.address} priceUsd={row.priceUsd} priceUnavailable={row.priceUnavailable} guard={guard.assessment ?? row.guardV2} stale={stale} visible={tradeVisible} antiSnipeEndsAt={antiSnipeEndsAt} /></div></Section>
   </aside></>;
 }

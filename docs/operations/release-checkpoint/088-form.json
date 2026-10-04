@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "candidate": {
+    "revision": null,
+    "sourceHash": null
+  },
+  "records": {
+    "evalB": null,
+    "evalT": null,
+    "decisionB": null,
+    "decisionT": null,
+    "guardVetoClear": null,
+    "siwe-entitlements-ws": null,
+    "scan-share": null,
+    "guarded-quotes": null,
+    "mcp-code": null,
+    "mcp-hosted-or-d0": null,
+    "receipt-proof": null,
+    "pons-fallback-fee": null,
+    "delete-harness-data": null,
+    "telegram": null,
+    "phone-alert": null,
+    "final-team-trade": null,
+    "rollback": null,
+    "incidents": null,
+    "betaDaily": null,
+    "stopVerification": null,
+    "publicLaunch": null,
+    "onCall": null,
+    "decisionProduct": null,
+    "decisionCapIncrease": null
+  }
+}

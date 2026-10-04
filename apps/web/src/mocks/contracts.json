@@ -2107,7 +2107,7 @@
     ]
   },
   "OAuthRequest": {
-    "id": "fixture",
+    "id": "00000000-0000-4000-8000-000000000098",
     "clientName": {
       "text": "fixture",
       "truncated": false,
@@ -2117,14 +2117,21 @@
     },
     "redirectUri": "https://example.invalid/callback",
     "scopes": [
-      "senses:read"
-    ]
+      "senses:read",
+      "preflight",
+      "journal"
+    ],
+    "redirectHost": "example.invalid",
+    "resource": "https://mcp.example.invalid/mcp",
+    "expiresAt": "2026-10-03T12:00:00Z"
   },
   "OAuthConsent": {
-    "requestId": "fixture",
-    "agentId": "fixture",
+    "requestId": "00000000-0000-4000-8000-000000000098",
+    "agentId": "00000000-0000-4000-8000-000000000090",
     "scopes": [
-      "senses:read"
+      "senses:read",
+      "preflight",
+      "journal"
     ],
     "decision": "approve"
   },
@@ -2922,5 +2929,8 @@
       "volumeUsd": 1,
       "block": 1
     }
+  },
+  "OAuthConsentResult": {
+    "redirect": "https://example.invalid/callback?code=fixture&state=fixture"
   }
 }

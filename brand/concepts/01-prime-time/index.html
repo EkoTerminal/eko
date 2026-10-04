@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SignalOS · Prime Time</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:ital,wght@0,400;0,500;0,600;0,700;0,800;1,600;1,700&family=Big+Shoulders+Display:wght@700;800;900&family=Doto:wght@700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#070B22; --panel:#10173D; --panel2:#0B1131; --line:#252E63; --text:#F3F5FF;
+  --mute:#AEB4DE; --dim:#7880B6; --amber:#FFB21A; --mag:#FF2E88; --long:#2EE88F; --short:#FF4B55; --cyan:#3CD2FF;
+  --disp:'Big Shoulders Display','Big Shoulders',Impact,sans-serif;
+  --ui:'Barlow Semi Condensed',system-ui,sans-serif;
+  --led:'Doto',monospace; --mono:'Share Tech Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#1d1e24}
+body{padding:40px 0;display:flex;flex-direction:column;align-items:center;gap:40px}
+.board{position:relative;width:1600px;height:900px;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--ui);flex:none;-webkit-font-smoothing:antialiased}
+.abs{position:absolute}
+.disp{font-family:var(--disp)}
+.buy{color:var(--long)} .sell{color:var(--short)}
+svg{display:block}
+.seg{display:inline-block;vertical-align:middle}
+
+/* shared bits */
+.livebug{display:inline-flex;align-items:center;gap:6px;background:var(--mag);color:#fff;font:800 12px/1 var(--ui);letter-spacing:.18em;padding:5px 9px 5px 8px;transform:skewX(-14deg)}
+.livebug>*{transform:skewX(14deg)}
+.livebug i{width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.28)}
+.ptag{display:inline-flex;align-items:center;justify-content:center;background:var(--mag);transform:skewX(-14deg);flex:none}
+.ptag>*{transform:skewX(14deg)}
+.dchip{display:inline-flex;align-items:center;gap:4px;background:var(--bg);font:900 15px/1 var(--disp);letter-spacing:.04em;padding:4px 7px 3px}
+.illus{font:600 11px/1 var(--ui);letter-spacing:.04em;color:var(--dim)}
+.paper{display:inline-block;border:1px solid currentColor;padding:2px 5px 1px;font:800 11px/1 var(--ui);letter-spacing:.14em}
+
+/* ============ BOARD 1 · HERO ============ */
+.b1 .haze{position:absolute;inset:0;background:
+  radial-gradient(760px 420px at 70% 30%, rgba(96,124,255,.20), transparent 70%),
+  radial-gradient(520px 300px at 100% 0%, rgba(200,214,255,.16), transparent 70%),
+  radial-gradient(520px 300px at 34% -4%, rgba(200,214,255,.10), transparent 70%),
+  radial-gradient(900px 260px at 60% 100%, rgba(255,46,136,.10), transparent 70%),
+  var(--bg)}
+.b1 .beams{position:absolute;inset:0;pointer-events:none}
+.b1 .grain{position:absolute;inset:0;pointer-events:none;opacity:.5;background-image:radial-gradient(rgba(255,255,255,.035) 1px, transparent 1.4px);background-size:5px 5px}
+.nav{position:absolute;left:64px;right:60px;top:22px;height:56px;display:flex;align-items:center}
+.lockup{display:flex;align-items:center;gap:12px}
+.wm{font:900 30px/1 var(--disp);letter-spacing:.07em;color:var(--text)}
+.nav ul{list-style:none;display:flex;gap:30px;margin-left:64px}
+.nav li{font:700 14px/1 var(--ui);letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+.nav li b{color:var(--mag);font-weight:800;margin-right:6px}
+.nav-r{margin-left:auto;display:flex;align-items:center;gap:14px}
+.modechip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);padding:9px 12px;font:700 12px/1 var(--ui);letter-spacing:.16em;color:var(--mute);background:rgba(16,23,61,.6)}
+.modechip i{width:8px;height:8px;border-radius:50%;border:2px solid var(--text)}
+.btn-ghost{display:inline-flex;align-items:center;gap:8px;border:1.5px solid var(--text);padding:10px 16px;font:800 13px/1 var(--ui);letter-spacing:.16em;text-transform:uppercase;transform:skewX(-14deg)}
+.btn-ghost>*{transform:skewX(14deg)}
+
+.hero-l{position:absolute;left:64px;top:112px;width:640px}
+.kicker{display:flex;align-items:center;gap:14px;font:700 13px/1 var(--ui);letter-spacing:.2em;color:var(--mute);text-transform:uppercase}
+.botsband{position:relative;display:inline-flex;align-items:center;margin-top:22px;height:92px;padding:0 46px 0 22px;margin-left:6px}
+.botsband:before{content:"";position:absolute;inset:0;background:var(--mag);transform:skewX(-14deg);box-shadow:10px 10px 0 rgba(255,46,136,.22)}
+.botsband span{position:relative;font:900 86px/1 var(--disp);letter-spacing:.005em;color:#fff;padding-top:6px}
+.botsband .chev{position:absolute;right:-78px;top:0;height:92px}
+.h1{font:900 158px/.82 var(--disp);letter-spacing:-.005em;margin-top:18px;text-transform:uppercase}
+.h1 em{font-style:normal;color:var(--amber);display:block}
+.sub{margin-top:24px;width:580px;font:500 20px/1.42 var(--ui);color:#D6DAF4}
+.sub b{font-weight:700;color:var(--text)}
+.ctas{display:flex;align-items:center;gap:26px;margin-top:26px}
+.cta{position:relative;display:inline-flex;align-items:center;gap:18px;height:70px;padding:0 26px 0 30px;color:#1A1100}
+.cta:before{content:"";position:absolute;inset:0;background:var(--amber);transform:skewX(-14deg);box-shadow:0 0 0 1px rgba(255,178,26,.4),0 14px 40px rgba(255,178,26,.28)}
+.cta .t{position:relative;display:flex;flex-direction:column;gap:5px}
+.cta .t b{font:900 30px/1 var(--disp);letter-spacing:.04em}
+.cta .t small{font:700 12px/1 var(--ui);letter-spacing:.16em;text-transform:uppercase;opacity:.8}
+.cta svg{position:relative}
+.cta2{font:700 15px/1 var(--ui);letter-spacing:.14em;text-transform:uppercase;color:var(--text);display:flex;align-items:center;gap:10px;border-bottom:1.5px solid var(--line);padding-bottom:6px}
+.fine{margin-top:18px;white-space:nowrap;font:500 12px/1.4 var(--ui);color:var(--dim);letter-spacing:.02em}
+.fine b{color:var(--mute);font-weight:700}
+
+.jumbo{position:absolute;left:700px;top:100px;width:840px;height:700px}
+.truss{position:absolute;left:30px;right:30px;top:0;height:22px}
+.plate{position:absolute;left:50%;top:-6px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:#0B1131;border:1px solid var(--line);padding:5px 14px 5px 8px;clip-path:polygon(6% 0,94% 0,100% 100%,0 100%)}
+.plate span{font:900 15px/1 var(--disp);letter-spacing:.2em}
+.legs{position:absolute;top:520px;left:0;width:840px;height:190px}
+.jframe{position:absolute;left:0;top:26px;width:840px;height:500px;border-radius:12px;padding:12px;background:linear-gradient(180deg,#1E2657,#0C1231 60%,#0A0F29);box-shadow:0 0 0 1px #313B7A inset,0 0 0 1px #05071a,0 40px 90px rgba(0,0,0,.65),0 0 160px rgba(96,124,255,.22)}
+.jframe:after{content:"";position:absolute;left:12px;right:12px;top:12px;bottom:12px;border-radius:4px;box-shadow:0 0 0 2px #03040E}
+.bolt{position:absolute;width:6px;height:6px;border-radius:50%;background:#2F3977;box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
+.jscreen{position:relative;width:100%;height:100%;overflow:hidden;border-radius:4px;background:radial-gradient(700px 360px at 55% 40%,#0E1540,#050818 75%)}
+.jscreen .pix{position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(circle,transparent 55%,rgba(0,0,0,.26) 62%);background-size:4px 4px}
+.jscreen .glare{position:absolute;inset:0;pointer-events:none;background:linear-gradient(118deg,rgba(255,255,255,.07),rgba(255,255,255,0) 34%,rgba(255,255,255,0) 70%,rgba(255,255,255,.035))}
+.jchart{position:absolute;left:0;top:62px;width:736px;height:340px}
+.jaxis{position:absolute;left:736px;top:62px;width:80px;height:340px}
+.jaxis span{position:absolute;right:10px;font:700 12px/1 var(--led);color:#6F78B8;transform:translateY(-50%)}
+.bug{position:absolute;left:16px;top:16px;white-space:nowrap;display:flex;align-items:stretch;height:38px;filter:drop-shadow(0 6px 14px rgba(0,0,0,.5))}
+.bug>div{display:flex;align-items:center;padding:0 12px;transform:skewX(-14deg);margin-right:3px}
+.bug>div>*{transform:skewX(14deg)}
+.bug .b-logo{background:#0B1131;border:1px solid var(--line);padding:0 8px}
+.bug .b-mkt{background:var(--text);color:var(--bg);font:900 20px/1 var(--disp);letter-spacing:.06em}
+.bug .b-tf{background:var(--panel);font:800 14px/1 var(--ui);letter-spacing:.12em;color:var(--mute)}
+.bug .b-px{background:#03050F;padding:0 14px}
+.bug .b-live{background:var(--mag);font:800 12px/1 var(--ui);letter-spacing:.18em;gap:7px}
+.bug .b-live i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#fff;margin-right:7px}
+.jclock{position:absolute;right:16px;top:16px;display:flex;align-items:center;gap:10px;background:rgba(3,5,15,.85);border:1px solid var(--line);padding:6px 12px;height:38px}
+.jclock small{font:700 11px/1.1 var(--ui);letter-spacing:.16em;color:var(--mute);text-align:right}
+.jnote{position:absolute;right:16px;top:62px;font:600 11px/1 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:#8A92C6;background:rgba(3,5,15,.7);padding:5px 8px}
+.jwipe{position:absolute;left:-40px;top:0;height:100%;opacity:.9}
+
+/* pundit flags (shared by boards) */
+.flag{position:absolute;width:0;height:0;z-index:3}
+.flag .pole{position:absolute;left:-1px;width:2px;background:var(--mag)}
+.flag.up .pole{top:0}
+.flag.dn .pole{bottom:0}
+.flag .pin{position:absolute;left:-8px;top:-8px;width:16px;height:16px}
+.flag .fl{position:absolute;display:flex;align-items:center;gap:8px;height:30px;padding:0 10px 0 0;white-space:nowrap;filter:drop-shadow(0 6px 12px rgba(0,0,0,.45))}
+.flag .fl:before{content:"";position:absolute;inset:0;background:var(--mag);transform:skewX(-14deg)}
+.flag .fl>*{position:relative}
+.flag .fl .g{display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:rgba(0,0,0,.22)}
+.flag .fl b{font:900 17px/1 var(--disp);letter-spacing:.08em;color:#fff}
+.flag .fl .tl{font:700 12px/1 var(--ui);letter-spacing:.08em;color:#fff}
+.flag.l .fl{right:-4px;flex-direction:row}
+.flag.r .fl{left:-4px}
+.flag.big .fl{height:38px}
+.flag.big .fl .g{width:38px;height:38px}
+.flag.big .fl b{font-size:21px}
+.flag.big .dchip{font-size:18px;padding:5px 8px 4px}
+.flag.big .fl .tl{font-size:13px}
+.flag.old .fl:before{background:#3A2350;opacity:1}
+.flag.old .pole{background:#6B3A7D}
+.flag.old .fl b,.flag.old .fl .tl{color:#C9B4D6}
+.flag.mini .fl{height:24px;gap:6px}
+.flag.mini .fl .g{width:24px;height:24px}
+.flag.mini .fl b{font-size:14px}
+.flag.mini .dchip{font-size:13px;padding:3px 5px 2px}
+
+/* lower thirds */
+.l3{position:absolute;display:flex;align-items:stretch;height:66px;z-index:5;filter:drop-shadow(0 16px 26px rgba(0,0,0,.55))}
+.l3>div{position:relative;display:flex;align-items:center}
+.l3>div:before{content:"";position:absolute;inset:0;transform:skewX(-14deg)}
+.l3>div>*{position:relative}
+.l3 .tag{padding:0 18px 0 16px;gap:12px;min-width:196px}
+.l3 .tag:before{background:var(--mag)}
+.l3 .tag b{font:900 32px/1 var(--disp);letter-spacing:.06em;color:#fff}
+.l3 .tag .gb{width:38px;height:38px;border:2px solid rgba(255,255,255,.85);display:flex;align-items:center;justify-content:center;transform:skewX(-14deg)}
+.l3 .tag .gb svg{transform:skewX(14deg)}
+.l3 .body{flex-direction:column;align-items:flex-start;justify-content:center;gap:5px;padding:0 20px 0 22px;width:356px;margin-left:-2px}
+.l3 .body:before{background:var(--text)}
+.l3 .body .desk{font:800 12px/1 var(--ui);letter-spacing:.18em;color:#C3106A;text-transform:uppercase}
+.l3 .body .why{font:600 17px/1.1 var(--ui);color:#0A0F2B;white-space:nowrap}
+.l3 .call{padding:0 18px;margin-left:-2px}
+.l3 .call:before{background:#0A0F2B}
+.l3 .call span{font:900 32px/1 var(--disp);letter-spacing:.04em}
+.l3 .tleft{flex-direction:column;align-items:flex-start;justify-content:center;gap:6px;padding:0 18px 0 16px;margin-left:3px}
+.l3 .tleft:before{background:#03050F;box-shadow:inset 0 0 0 1px var(--line)}
+.l3 .tleft small{font:700 11px/1 var(--ui);letter-spacing:.18em;color:var(--mute)}
+.desktab{position:absolute;z-index:6;display:flex;align-items:center;gap:8px;height:26px;padding:0 12px;font:800 12px/1 var(--ui);letter-spacing:.2em;color:var(--bg)}
+.desktab:before{content:"";position:absolute;inset:0;background:var(--amber);transform:skewX(-14deg)}
+.desktab>*{position:relative}
+
+.ticker{position:absolute;left:0;right:0;top:792px;height:50px;background:#02030B;border-top:1px solid #1B2250;border-bottom:1px solid #1B2250;display:flex;align-items:stretch;z-index:6}
+.tk-c{position:relative}.tk-c:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,transparent 88%,#02030B),radial-gradient(circle,transparent 45%,rgba(2,3,11,.5) 60%) 0 0/3px 3px}
+.tk-l{position:relative;display:flex;align-items:center;gap:8px;padding:0 26px 0 64px;background:var(--mag);font:800 13px/1 var(--ui);letter-spacing:.2em;clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%);flex:none}
+.tk-l i{width:8px;height:8px;border-radius:50%;background:#fff}
+.tk-c{flex:1;overflow:hidden;display:flex;align-items:center;gap:30px;padding-left:24px;white-space:nowrap;font:900 22px/1 var(--led);color:var(--amber);letter-spacing:.02em}
+.tk-c .it{display:flex;align-items:center;gap:12px}
+.tk-c .w{color:#E9ECFF}
+.tk-c .sep{color:var(--mag)}
+.tk-c .m{color:#8D95CC}
+.tk-r{position:relative;display:flex;align-items:center;padding:0 60px 0 28px;background:#0B1131;clip-path:polygon(14px 0,100% 0,100% 100%,0 100%);font:700 12px/1 var(--ui);letter-spacing:.14em;color:var(--mute);text-transform:uppercase;flex:none}
+
+.teaser{position:absolute;left:64px;right:60px;top:852px;height:48px;display:flex;align-items:center;gap:18px}
+.teaser .nx{font:800 12px/1 var(--ui);letter-spacing:.2em;color:var(--mag)}
+.teaser h3{font:900 30px/1 var(--disp);letter-spacing:.06em}
+.teaser p{font:500 15px/1.2 var(--ui);color:var(--mute)}
+.teaser .chips{margin-left:auto;display:flex;gap:10px}
+.chip{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:rgba(16,23,61,.7);height:30px;padding:0 12px 0 0;font:800 13px/1 var(--ui);letter-spacing:.12em}
+.chip .ptag{width:30px;height:30px;margin-left:-1px}
+
+/* ============ BOARD 2 · WORKSPACE ============ */
+.b2{background:#060A1E}
+.tb{position:absolute;left:0;right:0;top:0;height:60px;background:#0A0F2B;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 16px;gap:14px}
+.tb *,.ch-h *,.prow *{white-space:nowrap}
+.tb .wm{font-size:22px}
+.vsep{width:1px;height:32px;background:var(--line)}
+.mkt{display:flex;align-items:center;gap:10px}
+.mkt .coin{width:28px;height:28px;border-radius:50%;background:#1B2356;display:flex;align-items:center;justify-content:center;border:1px solid #2F3A7C}
+.mkt b{font:900 21px/1 var(--disp);letter-spacing:.06em}
+.mkt small{display:block;font:600 11px/1 var(--ui);letter-spacing:.1em;color:var(--dim);margin-top:4px;text-transform:uppercase}
+.pxbox{display:flex;flex-direction:column;gap:4px}
+.tfs{display:flex;border:1px solid var(--line)}
+.tfs span{font:700 13px/1 var(--ui);letter-spacing:.04em;color:var(--mute);padding:9px 8px}
+.tfs span.on{background:var(--text);color:var(--bg)}
+.modes{display:flex;gap:4px;margin-left:6px}
+.mode{position:relative;display:flex;align-items:center;gap:10px;height:44px;padding:0 16px 0 14px}
+.mode:before{content:"";position:absolute;inset:0;transform:skewX(-14deg);background:#0E1438;border:1px solid var(--line)}
+.mode.on:before{background:#18204F;border:2px solid var(--amber)}
+.mode>*{position:relative}
+.mode .ic{width:12px;height:12px;border-radius:50%;border:2px solid var(--mute)}
+.mode.on .ic{border-color:var(--text)}
+.mode .ic.half{background:linear-gradient(90deg,var(--cyan) 50%,transparent 50%);border-color:var(--cyan)}
+.mode .ic.full{background:var(--mag);border-color:var(--mag)}
+.mode b{display:block;font:900 16px/1 var(--disp);letter-spacing:.07em;color:var(--mute)}
+.mode.on b{color:var(--text)}
+.mode small{display:block;font:600 11px/1 var(--ui);letter-spacing:.08em;color:var(--dim);margin-top:3px}
+.mode.on small{color:var(--amber)}
+.tb-r{margin-left:auto;display:flex;align-items:center;gap:12px}
+.auto{display:flex;align-items:center;gap:8px;font:700 12px/1 var(--ui);letter-spacing:.12em;color:var(--mute);border:1px solid var(--line);padding:8px 10px}
+.auto .sw{width:26px;height:14px;border-radius:7px;background:#1B2356;position:relative}
+.auto .sw:after{content:"";position:absolute;left:2px;top:2px;width:10px;height:10px;border-radius:50%;background:#5E67A3}
+.wallet{display:flex;align-items:center;gap:8px;font:700 12px/1 var(--ui);letter-spacing:.12em;color:var(--dim);border:1px dashed #36407F;padding:8px 12px;text-transform:uppercase}
+
+.pp{position:absolute;left:0;top:60px;width:296px;bottom:0;background:#090E28;border-right:1px solid var(--line);padding:16px 14px 0 16px}
+.pp-h{display:flex;align-items:baseline;justify-content:space-between}
+.pp-h h4{font:900 24px/1 var(--disp);letter-spacing:.08em}
+.pp-h span{font:600 12px/1 var(--ui);color:var(--dim);letter-spacing:.06em}
+.ptabs{display:flex;margin-top:12px;border-bottom:1px solid var(--line)}
+.ptabs span{font:700 12px/1 var(--ui);letter-spacing:.14em;color:var(--dim);padding:0 10px 9px}
+.ptabs span.on{color:var(--text);box-shadow:inset 0 -2px 0 var(--mag)}
+.grp{display:flex;align-items:center;justify-content:space-between;margin:12px 0 5px;font:800 11px/1 var(--ui);letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
+.grp em{font-style:normal;font-weight:600;letter-spacing:.04em;text-transform:none;color:#6770A6}
+.prow{display:flex;align-items:center;gap:10px;height:43px;padding:0 8px 0 4px;border-bottom:1px solid #151C47;position:relative}
+.prow .ptag{width:34px;height:28px}
+.prow .nm{flex:1;min-width:0}
+.prow .nm b{display:block;font:900 17px/1 var(--disp);letter-spacing:.08em}
+.prow .nm small{display:block;font:600 11px/1 var(--ui);color:var(--dim);margin-top:3px;letter-spacing:.04em}
+.prow .st{text-align:right}
+.prow .st b{display:block;font:900 15px/1 var(--disp);letter-spacing:.06em}
+.prow .st small{display:block;font:600 11px/1 var(--mono);color:var(--mute);margin-top:3px}
+.prow .st .q{font:600 12px/1 var(--ui);color:var(--dim);letter-spacing:.04em}
+.prow .eye{width:16px;opacity:.9}
+.prow.sel{background:linear-gradient(90deg,rgba(255,46,136,.18),rgba(255,46,136,0));box-shadow:inset 3px 0 0 var(--mag)}
+.prow.dim .ptag{background:#3A2350}
+.howto{margin-top:10px;border:1px solid var(--line);background:#0B1131;padding:10px 12px}
+.howto .hh{display:flex;align-items:center;gap:8px}
+.howto .ptag{width:24px;height:20px}
+.howto b{font:900 15px/1 var(--disp);letter-spacing:.1em}
+.howto em{margin-left:auto;font:600 11px/1 var(--ui);font-style:normal;color:var(--dim);letter-spacing:.06em}
+.howto p{margin-top:7px;font:500 12px/1.4 var(--ui);color:var(--mute)}
+.pp-foot{position:absolute;left:16px;right:14px;bottom:14px;display:flex;gap:8px}
+.pp-foot div{flex:1;border:1px solid var(--line);padding:8px 10px;font:800 12px/1 var(--ui);letter-spacing:.14em}
+.pp-foot small{display:block;font:500 11px/1.2 var(--ui);letter-spacing:.02em;color:var(--dim);margin-top:4px}
+
+.ch-h{position:absolute;left:296px;top:60px;width:896px;height:44px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 14px}
+.ch-h .sb{display:flex;align-items:center;height:26px}
+.ch-h .sb span{display:flex;align-items:center;height:26px;padding:0 10px;transform:skewX(-14deg);margin-right:3px}
+.ch-h .sb span>*{transform:skewX(14deg)}
+.ohlc{font:400 13px/1 var(--mono);color:var(--mute);display:flex;gap:12px}
+.ohlc b{font-weight:400;color:var(--text)}
+.ch-h .ind{display:flex;gap:6px;margin-left:auto}
+.ch-h .ind span{font:700 11px/1 var(--ui);letter-spacing:.12em;color:var(--mute);border:1px solid var(--line);padding:6px 8px}
+.ch-h .ind span.on{color:var(--text);border-color:#3A4691;background:#10173D}
+.tools{position:absolute;left:296px;top:104px;width:40px;height:556px;border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:10px;background:#070B21}
+.tools i{width:30px;height:30px;display:flex;align-items:center;justify-content:center;color:var(--mute)}
+.tools i.on{background:#18204F;color:var(--cyan);box-shadow:inset 2px 0 0 var(--cyan)}
+.chart2{position:absolute;left:336px;top:104px;width:792px;height:524px}
+.wmk{position:absolute;left:380px;top:250px;font:900 110px/1 var(--disp);letter-spacing:.06em;color:rgba(37,46,99,.16);white-space:nowrap}
+.paxis{position:absolute;left:1128px;top:104px;width:64px;height:524px;border-left:1px solid var(--line)}
+.paxis span{position:absolute;left:8px;font:400 12px/1 var(--mono);color:var(--dim);transform:translateY(-50%)}
+.paxis .tag{left:-1px;padding:4px 5px;color:var(--bg);background:var(--text);font-weight:400}
+.paxis .tag.ref{background:var(--mag);color:#fff}
+.taxis{position:absolute;left:336px;top:628px;width:856px;height:32px;border-top:1px solid var(--line)}
+.taxis span{position:absolute;top:9px;font:400 12px/1 var(--mono);color:var(--dim);transform:translateX(-50%)}
+.ch-note{position:absolute;left:350px;top:114px;font:600 11px/1 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+
+.feed{position:absolute;left:296px;top:660px;width:896px;bottom:0;border-top:1px solid var(--line);display:flex}
+.feed .cs{flex:1;padding:0 14px 0 14px;border-right:1px solid var(--line)}
+.feed .ps{width:300px;padding:0 14px}
+.ftabs{display:flex;gap:18px;height:40px;align-items:center;border-bottom:1px solid var(--line)}
+.ftabs>span{font:800 12px/1 var(--ui);letter-spacing:.16em;color:var(--dim);height:40px;display:flex;align-items:center;gap:6px}
+.ftabs>span.on{color:var(--text);box-shadow:inset 0 -2px 0 var(--mag)}
+.ftabs .r{margin-left:auto;font:600 11px/1 var(--ui);letter-spacing:.06em;color:var(--dim);text-transform:none;box-shadow:none}
+table.tbl{width:100%;border-collapse:collapse}
+.tbl th{font:700 11px/1 var(--ui);letter-spacing:.14em;color:var(--dim);text-align:left;padding:9px 0 7px;border-bottom:1px solid #151C47}
+.tbl td{font:500 13px/1 var(--ui);color:var(--mute);padding:0;height:31px;border-bottom:1px solid #121941;white-space:nowrap}
+.tbl td.m{font:400 13px/1 var(--mono);color:var(--text)}
+.tbl .who{display:flex;align-items:center;gap:8px;font:900 15px/1 var(--disp);letter-spacing:.08em;color:var(--text)}
+.tbl .who .ptag{width:24px;height:20px}
+.tbl .d{font:900 15px/1 var(--disp);letter-spacing:.06em}
+.st-live{display:inline-flex;align-items:center;gap:6px;color:var(--text);font-weight:700}
+.st-live i{width:6px;height:6px;border-radius:50%;background:var(--mag)}
+.rcpt{font:400 12px/1 var(--mono);color:var(--dim)}
+.pos{margin-top:12px;border:1px solid var(--line);background:#0B1131;padding:12px}
+.pos .row1{display:flex;align-items:center;gap:10px}
+.pos .row1 b{font:900 18px/1 var(--disp);letter-spacing:.06em}
+.pos dl{display:grid;grid-template-columns:auto 1fr;gap:7px 12px;margin-top:10px}
+.pos dt{font:600 12px/1 var(--ui);color:var(--dim);letter-spacing:.04em}
+.pos dd{font:400 13px/1 var(--mono);text-align:right}
+.pos-note{margin-top:10px;font:500 12px/1.35 var(--ui);color:var(--dim)}
+
+.tc{position:absolute;left:1192px;top:60px;right:0;bottom:0;background:#090E28;border-left:1px solid var(--line);padding:16px 20px 0}
+.tc-h{display:flex;align-items:center;justify-content:space-between}
+.tc-h .ttl{position:relative;display:flex;align-items:center;gap:10px;height:30px;padding:0 14px 0 12px}
+.tc-h .ttl:before{content:"";position:absolute;inset:0;background:var(--text);transform:skewX(-14deg)}
+.tc-h .ttl>*{position:relative}
+.tc-h .ttl b{font:900 18px/1 var(--disp);letter-spacing:.12em;color:var(--bg)}
+.tc-h .x{font:700 11px/1 var(--ui);letter-spacing:.14em;color:var(--dim)}
+.follow{display:flex;align-items:center;gap:10px;margin-top:14px;padding:10px 10px;background:#0E1438;border:1px solid var(--line)}
+.follow .ptag{width:36px;height:30px}
+.follow .t{flex:1}
+.follow .t b{font:900 17px/1 var(--disp);letter-spacing:.08em}
+.follow .t small{display:block;font:600 12px/1.2 var(--ui);color:var(--mute);margin-top:3px}
+.follow .tm{text-align:right}
+.follow .tm small{display:block;font:700 11px/1 var(--ui);letter-spacing:.14em;color:var(--dim);margin-bottom:4px}
+.dir{display:flex;gap:6px;margin-top:14px;height:64px}
+.dir div{position:relative;flex:1;display:flex;align-items:center;justify-content:center;gap:10px}
+.dir div:before{content:"";position:absolute;inset:0;transform:skewX(-14deg)}
+.dir div>*{position:relative}
+.dir .on:before{background:var(--long)}
+.dir .on span{color:#03140B}
+.dir .off:before{border:1.5px solid #3A4380}
+.dir span{font:900 38px/1 var(--disp);letter-spacing:.05em}
+.dir .off span{color:#8B93C8;font-size:30px}
+.sect{display:flex;align-items:center;justify-content:space-between;margin-top:16px;font:800 12px/1 var(--ui);letter-spacing:.2em;color:var(--mute);text-transform:uppercase}
+.sect em{font-style:normal;font-weight:600;letter-spacing:.06em;color:var(--dim);text-transform:none}
+.four{margin-top:8px;border-left:2px solid var(--cyan)}
+.four .r{display:flex;align-items:center;height:44px;background:#0E1438;margin-bottom:3px;padding-right:12px}
+.four .r:nth-child(even){background:#0C1233}
+.four .n{width:30px;height:44px;display:flex;align-items:center;justify-content:center;font:900 20px/1 var(--disp);color:var(--bg);background:var(--text);margin-right:12px;flex:none}
+.four .lb{flex:1}
+.four .lb b{display:block;font:800 14px/1 var(--ui);letter-spacing:.1em;text-transform:uppercase}
+.four .lb small{display:block;font:500 12px/1 var(--ui);color:var(--dim);margin-top:4px}
+.four .v{font:400 20px/1 var(--mono);letter-spacing:.02em}
+.four .v.pend{font:700 13px/1 var(--ui);letter-spacing:.12em;color:var(--amber);text-transform:uppercase}
+.costs{display:grid;grid-template-columns:1fr auto;gap:8px 10px;margin-top:10px;padding:10px 12px;border:1px solid var(--line)}
+.costs span{font:500 13px/1 var(--ui);color:var(--mute)}
+.costs b{font:400 13px/1 var(--mono);color:var(--text);text-align:right}
+.amt{display:flex;align-items:center;gap:12px;margin-top:8px;height:58px;padding:0 14px;background:#03050F;border:1px solid #36407F}
+.amt .u{font:900 22px/1 var(--disp);letter-spacing:.08em;color:var(--mute)}
+.amt .eq{margin-left:auto;text-align:right;font:600 12px/1.3 var(--ui);color:var(--dim)}
+.amt .eq b{display:block;font:400 14px/1 var(--mono);color:var(--text)}
+.qs{display:flex;gap:6px;margin-top:8px}
+.qs span{flex:1;text-align:center;border:1px solid var(--line);padding:7px 0;font:700 12px/1 var(--ui);letter-spacing:.1em;color:var(--mute)}
+.qs span.on{border-color:#4A56A6;color:var(--text);background:#10173D}
+.act{position:relative;display:flex;align-items:center;justify-content:space-between;margin:16px 6px 0;height:76px;padding:0 22px 0 26px}
+.act:before{content:"";position:absolute;inset:0;transform:skewX(-14deg);border:3px solid var(--amber);background:linear-gradient(90deg,rgba(255,178,26,.16),rgba(255,178,26,.04));box-shadow:0 0 30px rgba(255,178,26,.18)}
+.act>*{position:relative}
+.act b{display:block;font:900 30px/1 var(--disp);letter-spacing:.06em;color:var(--amber)}
+.act small{display:flex;align-items:center;gap:6px;margin-top:5px;font:700 13px/1 var(--ui);letter-spacing:.1em;color:var(--text);text-transform:uppercase}
+.pass{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font:700 12px/1 var(--ui);letter-spacing:.14em;color:var(--mute);text-transform:uppercase}
+.pass span{border-bottom:1px solid var(--line);padding-bottom:3px}
+.tc-foot{margin-top:12px;font:500 12px/1.4 var(--ui);color:var(--dim)}
+.tc-foot b{color:var(--mute);font-weight:700}
+
+/* ============ BOARD 3 · BRAND + FILM ============ */
+.b3{background:#070B22}
+.b3 .left{position:absolute;left:0;top:0;width:880px;height:900px;padding:32px 40px 0 40px}
+.b3 .right{position:absolute;left:880px;top:0;width:720px;height:900px;background:#050818;border-left:1px solid var(--line);padding:32px 36px 0 36px}
+.b3-h{display:flex;align-items:baseline;gap:16px}
+.b3-h h2{font:900 40px/1 var(--disp);letter-spacing:.06em}
+.b3-h span{font:700 12px/1 var(--ui);letter-spacing:.2em;color:var(--mute);text-transform:uppercase}
+.b3-h .tg{margin-left:auto;font:700 12px/1 var(--ui);letter-spacing:.2em;color:var(--dim)}
+.lbl{font:800 11px/1 var(--ui);letter-spacing:.22em;color:var(--dim);text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.lbl:after{content:"";flex:1;height:1px;background:var(--line)}
+.rowA{display:flex;gap:16px;margin-top:14px;height:196px}
+.logohero{position:relative;width:470px;height:196px;overflow:hidden;background:radial-gradient(360px 200px at 50% 0%,rgba(110,136,255,.28),transparent 70%),linear-gradient(#0D1438,#070B22);border:1px solid var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.logohero .lk{display:flex;align-items:center;gap:22px}
+.logohero .wm{font-size:64px;letter-spacing:.07em}
+.logohero .tl{font:700 13px/1 var(--ui);letter-spacing:.3em;color:var(--mute);text-transform:uppercase}
+.logohero .tl b{color:var(--amber);font-weight:800}
+.rcol{flex:1;display:grid;grid-template-columns:104px 1fr;grid-template-rows:1fr 64px;gap:10px}
+.card{position:relative;background:#0B1131;border:1px solid var(--line);overflow:hidden}
+.card .cap{position:absolute;left:8px;bottom:6px;font:700 11px/1 var(--ui);letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+.appic{display:flex;align-items:center;justify-content:center}
+.appic .sq{width:70px;height:70px;border-radius:17px;background:linear-gradient(160deg,#1A2258,#070B22);box-shadow:inset 0 0 0 1px #34408A,0 8px 18px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;margin-top:-14px}
+.constr{display:flex;align-items:center;justify-content:center;gap:10px}
+.constr .eq{font:900 22px/1 var(--disp);color:var(--dim)}
+.bugcard{grid-column:1 / 3;display:flex;align-items:flex-end;justify-content:center;padding-bottom:8px}
+.bugcard .cap{top:7px;bottom:auto}
+.pal{display:grid;grid-template-columns:.85fr .72fr .72fr .9fr 1.22fr 1.16fr .72fr .72fr 1.1fr;gap:7px;margin-top:8px}
+.sw .c{height:38px;border:1px solid rgba(255,255,255,.08);position:relative}
+.sw .c.split{background:linear-gradient(90deg,var(--long) 50%,var(--short) 50%)}
+.sw b{display:block;font:800 12px/1.05 var(--ui);letter-spacing:.02em;margin-top:6px;white-space:nowrap}
+.sw code{display:block;font:400 12px/1 var(--mono);color:var(--mute);margin-top:3px}
+.sw small{display:block;font:500 11px/1.2 var(--ui);color:var(--dim);margin-top:3px}
+.types{display:grid;grid-template-columns:1.1fr 1.1fr .9fr;gap:10px;margin-top:12px}
+.ty{background:#0B1131;border:1px solid var(--line);padding:10px 12px;height:86px;position:relative;overflow:hidden}
+.ty .nm{font:700 11px/1 var(--ui);letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+.ty .s1{font:900 40px/1 var(--disp);letter-spacing:.01em;margin-top:8px;white-space:nowrap}
+.ty .s1 em{font-style:normal;color:var(--amber)}
+.ty .s2{font:600 17px/1.2 var(--ui);margin-top:8px}
+.ty .s2 small{display:block;font:400 13px/1.3 var(--ui);color:var(--mute)}
+.ty .s3{display:flex;align-items:center;gap:12px;margin-top:10px}
+.ty .s3 span{font:900 20px/1 var(--led);color:var(--amber)}
+.bots{display:grid;grid-template-columns:repeat(3,1fr);gap:7px 10px;margin-top:8px}
+.np{display:flex;align-items:stretch;height:40px;background:#0B1131;border:1px solid var(--line);overflow:hidden}
+.np .ptag{width:50px;height:40px;margin-left:-6px;padding-left:6px;gap:4px}
+.np .ptag i{font:900 12px/1 var(--disp);font-style:normal;color:#fff;opacity:.85}
+.np .t{display:flex;flex-direction:column;justify-content:center;padding-left:12px}
+.np .t b{font:900 18px/1 var(--disp);letter-spacing:.08em}
+.np .t small{font:600 11px/1 var(--ui);letter-spacing:.1em;color:var(--dim);text-transform:uppercase;margin-top:3px}
+.np.legend{background:transparent;border:1px dashed var(--line);flex-direction:column;justify-content:center;padding:0 12px;font:500 11px/1.3 var(--ui);color:var(--dim)}
+.np.legend b{color:var(--mute);font-weight:700}
+.motifs{display:grid;grid-template-columns:1fr 1fr 1.1fr;gap:10px;margin-top:14px}
+.mo{height:122px;background:#0B1131;border:1px solid var(--line);position:relative;overflow:hidden}
+.mo .cap{position:absolute;left:10px;top:9px;font:700 11px/1 var(--ui);letter-spacing:.14em;color:var(--mute);text-transform:uppercase}
+.mo .cap em{font-style:normal;color:var(--dim);letter-spacing:.04em;text-transform:none;font-weight:500}
+
+.film-k{display:flex;align-items:center;gap:12px}
+.film-k span{font:700 12px/1 var(--ui);letter-spacing:.2em;color:var(--mute);text-transform:uppercase}
+.film-t{font:900 64px/.9 var(--disp);letter-spacing:.02em;margin-top:12px}
+.film-t em{font-style:normal;color:var(--amber)}
+.logline{font:500 15px/1.4 var(--ui);color:#C9CEEE;margin-top:10px;width:640px}
+.frames{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px;margin-top:16px}
+.fr{position:relative;width:315px;height:177px;overflow:hidden;background:#070B22;border:1px solid #2A3470}
+.fcap{margin-top:7px;display:flex;gap:10px;align-items:baseline}
+.fcap .tcx{font:400 12px/1 var(--mono);color:var(--amber);flex:none}
+.fcap .bt{font:500 12.5px/1.3 var(--ui);color:#C2C7E8}
+.fcap .bt b{color:var(--text);font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-right:4px}
+.tcode{position:absolute;right:6px;top:6px;display:flex;align-items:center;gap:5px;background:rgba(3,5,15,.8);padding:3px 6px;font:400 11px/1 var(--mono);color:var(--text);z-index:4}
+.tcode i{width:6px;height:6px;border-radius:50%;background:var(--mag)}
+</style>
+</head>
+<body>
+<script src="../shared/chart.js"></script>
+<script>
+/* ---------- helpers (deterministic drawing) ---------- */
+const GLYPHS = {
+  wave: '<path d="M2 10c1.6 0 1.6-4 3.2-4s1.6 4 3.2 4 1.6-4 3.2-4 1.6 4 2.4 4" />',
+  bolt: '<path d="M9.4 2 4.5 9h3.6l-1 5L12 7H8.4l1-5Z" />',
+  spring: '<path d="M3 12.5 5.2 3.5 7.4 12.5 9.6 3.5 11.8 12.5 13 7.5" />',
+  gate: '<path d="M4 3v10M12 3v10" /><path d="M2 8h8.5M8.5 5.5 11 8l-2.5 2.5" />',
+  hex: '<path d="M8 2.2 13 5v6l-5 2.8L3 11V5l5-2.8Z" /><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none" />',
+  orbit: '<circle cx="8" cy="8" r="2.4" /><ellipse cx="8" cy="8" rx="6" ry="3.2" transform="rotate(-24 8 8)" /><circle cx="13.2" cy="5.6" r="1.1" fill="currentColor" stroke="none" />',
+  prism: '<path d="M8 2.5 13.5 12.5h-11L8 2.5Z" /><path d="M8 2.5v10" />',
+  compass: '<circle cx="8" cy="8" r="5.6" /><path d="m10.4 5.6-1.6 3.2-3.2 1.6 1.6-3.2 3.2-1.6Z" fill="currentColor" />',
+  flare: '<path d="M8 2v3M8 11v3M2 8h3M11 8h3M3.8 3.8l2 2M10.2 10.2l2 2M12.2 3.8l-2 2M5.8 10.2l-2 2" />',
+  delta: '<path d="M8 3 13.5 13h-11L8 3Z" /><path d="M5.5 10h5" />',
+  ring: '<circle cx="8" cy="8" r="5.6" /><circle cx="8" cy="8" r="2.8" /><circle cx="8" cy="2.4" r="1" fill="currentColor" stroke="none" />',
+};
+const BOTS = [
+  { n: 'Tideline', g: 'wave', desk: 'Trend desk', k: 'Rules', no: '01' },
+  { n: 'Kinetic', g: 'bolt', desk: 'Momentum desk', k: 'Rules', no: '02' },
+  { n: 'Recoil', g: 'spring', desk: 'Mean-reversion desk', k: 'Rules', no: '03' },
+  { n: 'Breakline', g: 'gate', desk: 'Breakout desk', k: 'Rules', no: '04' },
+  { n: 'Meridian', g: 'orbit', desk: 'AI analyst', k: 'AI', no: '05' },
+  { n: 'Vector', g: 'prism', desk: 'AI analyst', k: 'AI', no: '06' },
+  { n: 'Lumen', g: 'flare', desk: 'AI analyst', k: 'AI', no: '07' },
+  { n: 'Halcyon', g: 'compass', desk: 'AI analyst', k: 'AI', no: '08' },
+  { n: 'Deep Current', g: 'delta', desk: 'AI analyst', k: 'AI', no: '09' },
+  { n: 'Quorum', g: 'hex', desk: 'Ensemble', k: 'Ensemble', no: '10' },
+  { n: 'Council', g: 'ring', desk: 'Ensemble', k: 'Ensemble', no: '11' },
+];
+const B = Object.fromEntries(BOTS.map((b) => [b.n, b]));
+function glyph(name, size = 16, color = '#fff', sw = 2) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" style="color:${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${GLYPHS[name]}</svg>`;
+}
+/** Logo: the S is two offset chevron wipes inside a score-bug lozenge, with a LIVE dot. */
+const LOZ = 'M16 3H84Q87 3 88.5 5.6L97 27.4Q98.4 30 97 32.6L88.5 54.4Q87 57 84 57H16Q13 57 11.5 54.4L3 32.6Q1.6 30 3 27.4L11.5 5.6Q13 3 16 3Z';
+function sMark(a = '#FFB21A', b = '#F3F5FF') {
+  return `<g transform="translate(50 30) skewX(-9) translate(-50 -30)"><polygon points="36,9 68,9 64,17 44,17 60,27 50,31 30,19" fill="${a}"/><polygon points="64,51 32,51 36,43 56,43 40,33 50,29 70,41" fill="${b}"/></g>`;
+}
+function mark(h = 40, o = {}) {
+  const w = (h * 100) / 60;
+  const live = o.live === false ? '' : `<circle cx="85" cy="14" r="${o.ring ? 6.5 : 0}" fill="#FF2E88" opacity=".25"/><circle cx="85" cy="14" r="3.6" fill="#FF2E88"/>`;
+  return `<svg class="mark" width="${w}" height="${h}" viewBox="0 0 100 60"><path d="${LOZ}" fill="${o.fill || '#10173D'}" stroke="${o.stroke || '#343F86'}" stroke-width="${o.sw || 2}"/>${sMark(o.a, o.b)}${live}</svg>`;
+}
+/** Seven-segment scoreboard digits (italic, with ghost "off" segments). */
+function seg7(str, { h = 30, c = '#FFB21A', off = 'rgba(255,178,26,.10)', skew = -8 } = {}) {
+  const W = h * 0.5, t = h * 0.125, g = t * 0.22, sp = h * 0.16;
+  const map = { 0: 'abcdef', 1: 'bc', 2: 'abdeg', 3: 'abcdg', 4: 'bcfg', 5: 'acdfg', 6: 'acdefg', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg', '-': 'g', ' ': '' };
+  const hs = (x1, x2, y) => `${x1},${y} ${x1 + t / 2},${y - t / 2} ${x2 - t / 2},${y - t / 2} ${x2},${y} ${x2 - t / 2},${y + t / 2} ${x1 + t / 2},${y + t / 2}`;
+  const vs = (x, y1, y2) => `${x},${y1} ${x + t / 2},${y1 + t / 2} ${x + t / 2},${y2 - t / 2} ${x},${y2} ${x - t / 2},${y2 - t / 2} ${x - t / 2},${y1 + t / 2}`;
+  let x = 0, s = '';
+  for (const ch of String(str)) {
+    if (ch === '.' || ch === ',') { s += `<rect x="${x - sp * 0.3}" y="${h - t}" width="${t}" height="${t}" fill="${c}"/>`; x += t + sp * 0.4; continue; }
+    if (ch === ':') { s += `<rect x="${x}" y="${h * 0.28}" width="${t}" height="${t}" fill="${c}"/><rect x="${x}" y="${h * 0.64}" width="${t}" height="${t}" fill="${c}"/>`; x += t + sp; continue; }
+    const x0 = x + t / 2, x1 = x + W - t / 2, y0 = t / 2, ym = h / 2, y1 = h - t / 2;
+    const S = { a: hs(x0 + g, x1 - g, y0), g: hs(x0 + g, x1 - g, ym), d: hs(x0 + g, x1 - g, y1), f: vs(x0, y0 + g, ym - g), b: vs(x1, y0 + g, ym - g), e: vs(x0, ym + g, y1 - g), c: vs(x1, ym + g, y1 - g) };
+    const on = map[ch] ?? '';
+    for (const k of 'abcdefg') { const lit = on.includes(k); if (!lit && !off) continue; s += `<polygon points="${S[k]}" fill="${lit ? c : off}"/>`; }
+    x += W + sp;
+  }
+  const tw = x - sp, pad = Math.tan((Math.abs(skew) * Math.PI) / 180) * h;
+  return `<svg class="seg" width="${(tw + pad).toFixed(1)}" height="${h}" viewBox="${-pad} 0 ${tw + pad} ${h}"><g transform="skewX(${skew})">${s}</g></svg>`;
+}
+/** Chevron wipe (broadcast transition shape): n parallel chevrons. */
+function chevrons(h, cols, { gap = 0.34, t = 0.34, lean = 0.42 } = {}) {
+  const w = h * lean; let s = '', x = 0;
+  for (const c of cols) { const T = h * t * 0.6; s += `<polygon points="${x},0 ${x + T},0 ${x + T + w},${h / 2} ${x + T},${h} ${x},${h} ${x + w},${h / 2}" fill="${c}"/>`; x += T + h * gap * 0.5; }
+  return `<svg width="${(x + w).toFixed(1)}" height="${h}" viewBox="0 0 ${x + w} ${h}">${s}</svg>`;
+}
+/** Expiry ring for a signal pin. frac = share of time left. */
+function pinRing(frac, stroke = '#FF2E88', size = 16) {
+  const r = 5.2, C = 2 * Math.PI * r;
+  return `<svg class="pin" width="${size}" height="${size}" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7.2" fill="#070B22"/><circle cx="8" cy="8" r="${r}" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.2"/><circle cx="8" cy="8" r="${r}" fill="none" stroke="#fff" stroke-width="2.2" stroke-dasharray="${(C * frac).toFixed(2)} ${C}" transform="rotate(-90 8 8)"/><circle cx="8" cy="8" r="2" fill="${stroke}"/></svg>`;
+}
+function dchip(dir) { return dir === 'buy' ? `<span class="dchip buy">▲ BUY</span>` : `<span class="dchip sell">▼ SELL</span>`; }
+/** A pundit flag pinned to (x,y). side 'up' = hangs below the pin (BUY under the low), 'dn' = rises above (SELL over the high). */
+function flag({ x, y, bot, dir, tl, side, pole = 40, align = 'r', cls = '', frac = 0.6 }) {
+  const b = B[bot];
+  const fl = `<div class="fl" style="${side === 'up' ? `top:${pole}px` : `bottom:${pole}px`}"><span class="g">${glyph(b.g, cls.includes('big') ? 20 : cls.includes('mini') ? 13 : 16)}</span><b>${b.n.toUpperCase()}</b>${dchip(dir)}${tl ? `<span class="tl">${tl}</span>` : ''}</div>`;
+  return `<div class="flag ${side} ${align} ${cls}" style="left:${x.toFixed(1)}px;top:${y.toFixed(1)}px"><i class="pole" style="height:${pole}px"></i>${fl}${pinRing(frac)}</div>`;
+}
+function fmt(p) { return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+</script>
+
+<!-- =====================================================================
+     BOARD 1 · LANDING HERO
+     ===================================================================== -->
+<section class="board b1" id="b1">
+  <div class="haze"></div>
+  <svg class="beams" width="1600" height="900" viewBox="0 0 1600 900">
+    <defs>
+      <linearGradient id="bm1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#DDE5FF" stop-opacity=".16"/><stop offset="1" stop-color="#DDE5FF" stop-opacity="0"/></linearGradient>
+      <filter id="blur14"><feGaussianBlur stdDeviation="14"/></filter>
+      <radialGradient id="flood" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset=".35" stop-color="#CFE0FF" stop-opacity=".35"/><stop offset="1" stop-color="#CFE0FF" stop-opacity="0"/></radialGradient>
+    </defs>
+    <g filter="url(#blur14)">
+      <polygon points="1640,-40 1590,-60 980,900 1260,900" fill="url(#bm1)"/>
+      <polygon points="1500,-60 1460,-60 560,900 760,900" fill="url(#bm1)" opacity=".55"/>
+      <polygon points="420,-60 470,-60 1100,900 880,900" fill="url(#bm1)" opacity=".4"/>
+    </g>
+  </svg>
+  <svg class="abs" style="left:0;top:0" width="1600" height="900" viewBox="0 0 1600 900" id="stands"></svg>
+  <div class="grain"></div>
+
+  <nav class="nav">
+    <div class="lockup"><span data-mark="44" data-ring="1"></span><span class="wm">SIGNALOS</span></div>
+    <ul><li><b>●</b>The Desk</li><li>Receipts</li><li>Quant Lab</li><li>Bot Shop</li><li>Rulebook</li></ul>
+    <div class="nav-r">
+      <span class="modechip"><i></i>PRESEASON · PAPER</span>
+      <span class="btn-ghost"><span>Enter the booth</span></span>
+    </div>
+  </nav>
+
+  <div class="hero-l">
+    <div class="kicker"><span class="livebug"><span style="display:flex;align-items:center;gap:6px"><i></i>LIVE</span></span>From the candle · Non-custodial · Robinhood Chain</div>
+    <div class="botsband"><span>BOTS CALL IT.</span><span class="chev" data-chev="92"></span></div>
+    <div class="h1">You make<em>the call.</em></div>
+    <p class="sub">Eleven bot pundits call <b>▲ BUY</b> or <b>▼ SELL</b> on the exact candle. You’re the ref: check four prices, then sign in <b>your own wallet</b>, or wave it off. Nothing trades without your signature.</p>
+    <div class="ctas">
+      <span class="cta"><span class="t"><b>START PRESEASON</b><small>Paper trading · no wallet needed</small></span><span data-chev2="34"></span></span>
+      <span class="cta2">Meet the pundit desk <svg width="14" height="14" viewBox="0 0 14 14"><path d="M4 2l6 5-6 5" fill="none" stroke="#F3F5FF" stroke-width="2"/></svg></span>
+    </div>
+    <p class="fine"><b>Not investment advice.</b> Preseason = paper, simulated fills · Scrimmage = testnet · Regular Season = live, opt-in.</p>
+  </div>
+
+  <div class="jumbo">
+    <svg class="legs" width="840" height="190" viewBox="0 0 840 190">
+      <defs><linearGradient id="leg" x1="0" x2="1"><stop offset="0" stop-color="#0B1030"/><stop offset=".5" stop-color="#1A2254"/><stop offset="1" stop-color="#0B1030"/></linearGradient>
+      <linearGradient id="legfade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <mask id="lm"><rect width="840" height="190" fill="url(#legfade)"/></mask></defs>
+      <g mask="url(#lm)">
+        <polygon points="150,0 196,0 204,190 142,190" fill="url(#leg)"/>
+        <polygon points="644,0 690,0 698,190 636,190" fill="url(#leg)"/>
+        <path d="M150 20 L690 150 M690 20 L150 150" stroke="#161D4A" stroke-width="3"/>
+      </g>
+    </svg>
+    <svg class="truss" width="780" height="22" viewBox="0 0 780 22" data-truss></svg>
+    <div class="jframe">
+      <i class="bolt" style="left:4px;top:4px"></i><i class="bolt" style="right:4px;top:4px"></i><i class="bolt" style="left:4px;bottom:4px"></i><i class="bolt" style="right:4px;bottom:4px"></i>
+      <div class="jscreen">
+        <div class="jchart" id="jchart"></div>
+        <div class="jaxis" id="jaxis"></div>
+        <div class="bug">
+          <div class="b-logo"><span data-mark="24" data-live="0"></span></div>
+          <div class="b-mkt"><span>ETH/USD</span></div>
+          <div class="b-tf"><span>15M</span></div>
+          <div class="b-px"><span id="jpx"></span></div>
+          <div class="b-live"><span><i></i>LIVE</span></div>
+        </div>
+        <div class="jclock"><small>NEXT<br>CANDLE</small><span data-seg="04:12" data-h="22" data-c="#F3F5FF" data-off="rgba(243,245,255,.07)"></span></div>
+        <div class="jnote">Illustration · made-up prices · paper</div>
+        <div class="pix"></div>
+        <div class="glare"></div>
+      </div>
+    </div>
+    <div class="desktab" style="left:-6px;top:432px"><span>PUNDIT DESK · SPLIT DECISION</span></div>
+    <div class="l3" style="left:-40px;top:462px" id="l3a"></div>
+    <div class="l3" style="left:30px;top:540px" id="l3b"></div>
+  </div>
+
+  <div class="ticker">
+    <div class="tk-l"><i></i>LIVE CALLS</div>
+    <div class="tk-c" id="tk"></div>
+    <div class="tk-r">Illustration · made-up prices</div>
+  </div>
+
+  <div class="teaser">
+    <span class="nx">NEXT UP ▾</span>
+    <h3>THE PUNDIT DESK</h3>
+    <p>11 bots, 3 desks, and not one of them can trade for you.</p>
+    <div class="chips" id="tchips"></div>
+  </div>
+</section>
+
+<!-- =====================================================================
+     BOARD 2 · TRADING WORKSPACE
+     ===================================================================== -->
+<section class="board b2" id="b2">
+  <div class="tb">
+    <div class="lockup"><span data-mark="32"></span><span class="wm">SIGNALOS</span></div>
+    <span class="vsep"></span>
+    <div class="mkt"><span class="coin"><svg width="14" height="20" viewBox="0 0 14 20"><path d="M7 0 14 10 7 14 0 10Z" fill="#C9D0FF"/><path d="M7 15.5 14 11.5 7 20 0 11.5Z" fill="#8E98E0"/></svg></span><div><b>ETH/USD</b><small>Robinhood Chain</small></div><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 3l4 4 4-4" fill="none" stroke="#AEB4DE" stroke-width="1.6"/></svg></div>
+    <div class="pxbox"><span id="tbpx"></span><span class="illus">Illustration · made-up prices</span></div>
+    <span class="vsep"></span>
+    <div class="tfs"><span>1m</span><span>5m</span><span class="on">15m</span><span>1h</span><span>4h</span><span>1D</span></div>
+    <div class="modes">
+      <div class="mode on"><i class="ic"></i><div><b>PRESEASON</b><small>Paper</small></div></div>
+      <div class="mode"><i class="ic half"></i><div><b>SCRIMMAGE</b><small>Testnet</small></div></div>
+      <div class="mode"><i class="ic full"></i><div><b>REGULAR SEASON</b><small>Live · real funds</small></div></div>
+    </div>
+    <div class="tb-r">
+      <span class="auto"><span class="sw"></span>AUTO-TRADE OFF</span>
+      <span class="wallet">No wallet needed · paper</span>
+    </div>
+  </div>
+
+  <aside class="pp">
+    <div class="pp-h"><h4>PUNDIT PANEL</h4><span>11 bots · 3 desks</span></div>
+    <div class="ptabs"><span class="on">ALL</span><span>RULES</span><span>AI</span><span>ENSEMBLE</span><span>SHOP</span></div>
+    <div id="plist"></div>
+    <div class="howto"><div class="hh"><span class="ptag" id="howtag"></span><b>HOW KINETIC CALLS</b><em>Rules bot</em></div><p>▲ BUY when momentum breaks the 20-bar high, ▼ SELL on the mirror. Calls expire after 4 candles; each one gets a receipt.</p></div>
+    <div class="pp-foot"><div>QUANT LAB<small>Backtest rules bots, fees + slippage in</small></div><div>BOT SHOP<small>Community bots, moderated</small></div></div>
+  </aside>
+
+  <div class="ch-h">
+    <div class="sb"><span style="background:var(--text);color:var(--bg)"><b style="font:900 16px/1 var(--disp);letter-spacing:.08em">ETH/USD</b></span><span style="background:var(--panel);font:800 12px/1 var(--ui);letter-spacing:.12em;color:var(--mute)"><b>15M</b></span><span style="background:var(--mag);font:800 11px/1 var(--ui);letter-spacing:.16em"><b>● 3 LIVE CALLS</b></span></div>
+    <div class="ohlc" id="ohlc"></div>
+    <div class="ind"><span class="on">CALL FLAGS</span><span class="on">SIGNAL REF</span><span>EMA 20</span></div>
+  </div>
+  <div class="tools" id="tools"></div>
+  <div class="wmk">ETH/USD · 15M</div>
+  <div class="chart2" id="chart2"></div>
+  <div class="ch-note">Illustration · made-up prices · Preseason (paper)</div>
+  <div class="paxis" id="paxis"></div>
+  <div class="taxis" id="taxis"></div>
+
+  <div class="feed">
+    <div class="cs">
+      <div class="ftabs"><span class="on">CALL SHEET</span><span>RECEIPTS</span><span>QUANT LAB</span><span class="r">Append-only · every call gets a receipt</span></div>
+      <table class="tbl" id="calls"></table>
+    </div>
+    <div class="ps">
+      <div class="ftabs"><span class="on">POSITIONS</span><span>ORDERS</span><span class="r"><span class="paper" style="color:var(--mute)">PAPER</span></span></div>
+      <div class="pos">
+        <div class="row1"><b>ETH/USD</b><span class="dchip buy" style="background:#070B22">▲ BUY</span><span class="paper" style="color:var(--mute);margin-left:auto">PAPER</span></div>
+        <dl><dt>Size</dt><dd>0.25 ETH</dd><dt>Entry (paper fill)</dt><dd>2,171.40</dd><dt>Chart last</dt><dd id="poslast">2,182.55</dd><dt>Opened</dt><dd>11:30 · your click</dd></dl>
+      </div>
+      <p class="pos-note">Preseason positions use simulated fills. Nothing on-chain, nothing signed.</p>
+    </div>
+  </div>
+
+  <aside class="tc">
+    <div class="tc-h"><div class="ttl"><b>REVIEW BOOTH</b></div><span class="x">YOUR CALL · ESC TO CLOSE</span></div>
+    <div class="follow"><span class="ptag"></span><div class="t"><b>KINETIC · MOMENTUM DESK</b><small>Called ▲ BUY on the 14:15 candle</small></div><div class="tm"><small>TIME LEFT</small><span data-seg="04:12" data-h="18" data-c="#F3F5FF" data-off="rgba(243,245,255,.07)"></span></div></div>
+    <div class="dir"><div class="on"><span>▲ BUY</span></div><div class="off"><span>▼ SELL</span></div></div>
+    <div class="sect">The four prices <em>ETH/USD · illustration · made-up prices</em></div>
+    <div class="four">
+      <div class="r"><span class="n">1</span><div class="lb"><b>Signal reference</b><small>Price on Kinetic’s call candle</small></div><span class="v">2,184.20</span></div>
+      <div class="r"><span class="n">2</span><div class="lb"><b>Chart last</b><small>Latest print on this chart</small></div><span class="v">2,182.55</span></div>
+      <div class="r"><span class="n">3</span><div class="lb"><b>Executable quote</b><small>What you can trade at now · simulated</small></div><span class="v">2,183.40</span></div>
+      <div class="r"><span class="n">4</span><div class="lb"><b>Fill</b><small>Recorded after you make the call</small></div><span class="v pend">Pending</span></div>
+    </div>
+    <div class="costs"><span>Fees · pool 0.30% + network</span><b>3.28 · sim</b><span>Price impact</span><b>0.04%</b><span>Max slippage</span><b>0.50%</b></div>
+    <div class="sect" style="margin-top:14px">Amount <em>Paper balance 10,000.00 USD</em></div>
+    <div class="amt"><span data-seg="0.50" data-h="28" data-c="#F3F5FF" data-off="rgba(243,245,255,.06)"></span><span class="u">ETH</span><span class="eq">≈ USD · PAPER<b>1,091.70</b></span></div>
+    <div class="qs"><span>10%</span><span class="on">25%</span><span>50%</span><span>MAX</span></div>
+    <div class="act"><div><b>MAKE THE CALL</b><small><span class="buy">▲ BUY</span> 0.50 ETH · <span class="paper" style="color:var(--text)">PAPER</span></small></div><span data-chev3="40"></span></div>
+    <div class="pass"><span>Pass · no trade</span><span style="border:0;color:var(--dim)">Shortcut · B</span></div>
+    <p class="tc-foot"><b>Scrimmage and Regular Season:</b> you sign in your own wallet. Nothing trades without that signature. Live = ETH ⇄ USDG on Uniswap v3; other markets are paper-only.</p>
+  </aside>
+</section>
+
+<!-- =====================================================================
+     BOARD 3 · BRAND SHEET + LAUNCH FILM
+     ===================================================================== -->
+<section class="board b3" id="b3">
+  <div class="left">
+    <div class="b3-h"><h2>PRIME TIME</h2><span>SignalOS · brand system</span><span class="tg">BOTS CALL IT. YOU MAKE THE CALL.</span></div>
+    <div class="rowA">
+      <div class="logohero">
+        <svg class="abs" style="left:0;top:0" width="470" height="196" viewBox="0 0 470 196"><g opacity=".6"><polygon points="-40,196 30,196 150,0 80,0" fill="rgba(255,46,136,.10)"/><polygon points="380,196 450,196 570,0 500,0" fill="rgba(255,178,26,.07)"/></g></svg>
+        <div class="lk"><span data-mark="78" data-ring="1" data-sw="2.4"></span><span class="wm">SIGNALOS</span></div>
+        <div class="tl">Live from the candle · <b>your call</b></div>
+      </div>
+      <div class="rcol">
+        <div class="card appic"><div class="sq"><svg width="52" height="44" viewBox="18 2 64 56"></svg></div><span class="cap">App icon</span></div>
+        <div class="card constr" id="constr"></div>
+        <div class="card bugcard" id="bugcard"></div>
+      </div>
+    </div>
+    <div class="lbl" style="margin-top:14px;margin-bottom:0">Palette · every colour has one job</div>
+    <div class="pal" id="pal"></div>
+    <div class="types">
+      <div class="ty"><div class="nm">Big Shoulders Display 900 · headlines</div><div class="s1">MAKE <em>THE CALL.</em></div></div>
+      <div class="ty"><div class="nm">Barlow Semi Condensed · UI</div><div class="s2">Signal reference · Chart last<small>Executable quote · Fill · fees, impact, slippage</small></div></div>
+      <div class="ty"><div class="nm">Segment digits + Doto · LED</div><div class="s3" style="margin-top:8px"><span data-seg="2184.20" data-h="26"></span><span>LIVE</span></div><div class="illus" style="margin-top:8px">Illustration · made-up price</div></div>
+    </div>
+    <div class="lbl" style="margin-top:14px;margin-bottom:0">Bot identity · pundit nameplates (IDs, never records)</div>
+    <div class="bots" id="bots"></div>
+    <div class="motifs">
+      <div class="mo" id="mo1"></div>
+      <div class="mo" id="mo2"></div>
+      <div class="mo" id="mo3"></div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="film-k"><span class="livebug"><span style="display:flex;align-items:center;gap:6px"><i></i>ON AIR</span></span><span>Launch film · 0:40 · broadcast parody</span></div>
+    <div class="film-t">LIVE FROM <em>THE CANDLE</em></div>
+    <p class="logline">A 40-second pre-game show: bot pundits argue BUY vs SELL, the telestrator marks the candle, then the cameras cut to the only official who matters. You, in the review booth, where your wallet is the whistle.</p>
+    <div class="frames" id="frames"></div>
+  </div>
+</section>
+
+<script>
+/* ---------- generic fills ---------- */
+document.querySelectorAll('[data-mark]').forEach((el) => {
+  el.outerHTML = mark(+el.dataset.mark, { live: el.dataset.live !== '0', ring: !!el.dataset.ring, sw: el.dataset.sw ? +el.dataset.sw : undefined });
+});
+document.querySelectorAll('[data-seg]').forEach((el) => {
+  el.outerHTML = seg7(el.dataset.seg, { h: +(el.dataset.h || 30), c: el.dataset.c || '#FFB21A', off: el.dataset.off || 'rgba(255,178,26,.10)' });
+});
+document.querySelectorAll('[data-chev]').forEach((el) => { el.innerHTML = chevrons(+el.dataset.chev, ['#FF2E88', 'rgba(255,46,136,.55)', 'rgba(255,46,136,.25)']); });
+document.querySelectorAll('[data-chev2]').forEach((el) => { el.outerHTML = chevrons(+el.dataset.chev2, ['#1A1100', 'rgba(26,17,0,.55)'], { t: 0.3, gap: 0.3 }); });
+document.querySelectorAll('[data-chev3]').forEach((el) => { el.outerHTML = chevrons(+el.dataset.chev3, ['#FFB21A', 'rgba(255,178,26,.55)', 'rgba(255,178,26,.25)'], { t: 0.3, gap: 0.3 }); });
+
+/* truss */
+(function () {
+  const el = document.querySelector('[data-truss]'); let s = '<rect x="0" y="2" width="780" height="3" fill="#2A3470"/><rect x="0" y="17" width="780" height="3" fill="#2A3470"/>';
+  for (let x = 0; x < 780; x += 20) s += `<path d="M${x} 4 L${x + 10} 18 L${x + 20} 4" stroke="#222A60" stroke-width="2" fill="none"/>`;
+  el.innerHTML = s;
+})();
+
+/* stadium: tiers with seat lights + floodlight rigs (deterministic) */
+(function () {
+  const r = SOS.rng(7);
+  let s = '<defs><linearGradient id="tier" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#121A4A" stop-opacity=".0"/><stop offset=".35" stop-color="#121A4A" stop-opacity=".75"/><stop offset="1" stop-color="#0A1033"/></linearGradient><linearGradient id="tfade" x1="0" x2="1"><stop offset=".36" stop-color="#fff" stop-opacity="0"/><stop offset=".56" stop-color="#fff"/></linearGradient><mask id="tmask"><rect width="1600" height="900" fill="url(#tfade)"/></mask><radialGradient id="fl" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fff"/><stop offset=".3" stop-color="#DCE6FF" stop-opacity=".6"/><stop offset="1" stop-color="#DCE6FF" stop-opacity="0"/></radialGradient></defs>';
+  // three tiers curving under the jumbotron
+  const tiers = [[640, 1700, 702, 60], [600, 1720, 738, 52], [560, 1740, 772, 44]];
+  s += '<g mask="url(#tmask)">';
+  for (const [x0, x1, y, bow] of tiers) {
+    s += `<path d="M${x0} ${y + 30} Q ${(x0 + x1) / 2} ${y - bow} ${x1} ${y + 30} L ${x1} 800 L ${x0} 800Z" fill="url(#tier)"/>`;
+    for (let i = 0; i < 90; i++) {
+      const t = r(); const x = x0 + t * (x1 - x0); const yy = y + 30 - 4 * bow * t * (1 - t) + 8 + r() * 14;
+      if (yy > 790) continue;
+      s += `<circle cx="${x.toFixed(1)}" cy="${yy.toFixed(1)}" r="${(0.8 + r() * 0.9).toFixed(2)}" fill="${r() > 0.93 ? '#FFB21A' : '#9FB0FF'}" opacity="${(0.18 + r() * 0.45).toFixed(2)}"/>`;
+    }
+  }
+  s += '</g>';
+  // floodlight rigs at both ends of the truss
+  for (const [cx, cy] of [[676, 96], [1564, 96]]) {
+    s += `<circle cx="${cx}" cy="${cy}" r="70" fill="url(#fl)" opacity=".35"/>`;
+    s += `<rect x="${cx - 22}" y="${cy - 14}" width="44" height="26" rx="3" fill="#0B1131" stroke="#2A3470"/>`;
+    for (let j = 0; j < 2; j++) for (let i = 0; i < 4; i++) s += `<circle cx="${cx - 15 + i * 10}" cy="${cy - 6 + j * 11}" r="3.2" fill="#EEF3FF" opacity=".92"/><circle cx="${cx - 15 + i * 10}" cy="${cy - 6 + j * 11}" r="6" fill="#DCE6FF" opacity=".18"/>`;
+  }
+  document.getElementById('stands').innerHTML = s;
+})();
+
+/* ---------- BOARD 1 jumbotron chart ---------- */
+(function () {
+  const W = 736, H = 340, n = 44, I = 42;
+  const c = SOS.candlesSVG({ w: W, h: H, n, seed: 46630, up: '#2EE88F', down: '#FF4B55', grid: 'rgba(60,210,255,.08)', pad: 24, strokeW: 1.8, radius: 1 });
+  const k = c.data[I], K = 3.2, P = (v) => 2184.2 + (v - k.c) * K, V = (p) => k.c + (p - 2184.2) / K;
+  const last = c.data[n - 1];
+  const [x, yh] = c.pt(I, k.h), [, yl] = c.pt(I, k.l), [, ylast] = c.pt(n - 1, last.c), [, yref] = c.pt(I, k.c);
+  let ov = `<svg class="abs" style="left:0;top:0" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  // signal reference rail + last price rail
+  ov += `<line x1="0" x2="${W}" y1="${yref}" y2="${yref}" stroke="#FF2E88" stroke-width="1.2" stroke-dasharray="3 5" opacity=".7"/>`;
+  ov += `<line x1="0" x2="${W}" y1="${ylast}" y2="${ylast}" stroke="#FFB21A" stroke-width="1.2" stroke-dasharray="2 4" opacity=".75"/>`;
+  // telestrator (hand-drawn loop + arrow) in broadcast cyan
+  const cy = (yh + yl) / 2, rx = 30, ry = (yl - yh) / 2 + 30;
+  ov += `<g fill="none" stroke="#3CD2FF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="filter:drop-shadow(0 0 6px rgba(60,210,255,.7))">
+    <path d="M${x + 4} ${cy - ry - 2} C ${x + rx + 14} ${cy - ry + 4}, ${x + rx + 8} ${cy + ry - 2}, ${x - 2} ${cy + ry + 1} C ${x - rx - 12} ${cy + ry - 4}, ${x - rx - 10} ${cy - ry + 8}, ${x + 10} ${cy - ry - 6}"/>
+    <path d="M186 ${H - 60} C 330 ${H - 120}, 520 ${cy - 10}, ${x - rx - 16} ${cy + 4}"/>
+    <path d="M${x - rx - 38} ${cy - 6} L ${x - rx - 14} ${cy + 4} L ${x - rx - 32} ${cy + 22}"/></g>`;
+  ov += `<g transform="rotate(-5 40 ${H - 52})"><text x="40" y="${H - 72}" fill="#3CD2FF" font-family="Big Shoulders Display" font-weight="900" font-size="27" letter-spacing="1.5" style="filter:drop-shadow(0 0 5px rgba(60,210,255,.55))">SAME CANDLE.</text><text x="40" y="${H - 44}" fill="#3CD2FF" font-family="Big Shoulders Display" font-weight="900" font-size="27" letter-spacing="1.5" style="filter:drop-shadow(0 0 5px rgba(60,210,255,.55))">TWO CALLS.</text></g>`;
+  ov += '</svg>';
+  const el = document.getElementById('jchart');
+  el.innerHTML = c.svg + ov +
+    flag({ x, y: yh - 6, bot: 'Recoil', dir: 'sell', tl: '09:40', side: 'dn', pole: 40, align: 'l', cls: 'big', frac: 0.8 }) +
+    flag({ x, y: yl + 6, bot: 'Kinetic', dir: 'buy', tl: '04:12', side: 'up', pole: 40, align: 'l', cls: 'big', frac: 0.35 });
+  // axis
+  let ax = '';
+  for (let p = 2160; p <= 2200; p += 10) { const yy = c.pt(0, V(p))[1]; if (yy > 14 && yy < H - 10 && Math.abs(yy - ylast) > 18) ax += `<span style="top:${yy}px">${p}</span>`; }
+  ax += `<span style="top:${ylast}px;right:2px;background:#FFB21A;color:#1A1100;padding:4px 5px 3px;font:400 12px/1 var(--mono)">${P(last.c).toFixed(2)}</span>`;
+  document.getElementById('jaxis').innerHTML = ax;
+  document.getElementById('jpx').outerHTML = seg7(P(last.c).toFixed(2), { h: 22 });
+})();
+
+/* lower thirds */
+function l3(bot, desk, why, dir, tl) {
+  const b = B[bot];
+  return `<div class="tag"><span class="gb">${glyph(b.g, 20)}</span><b>${b.n.toUpperCase()}</b></div>
+    <div class="body"><span class="desk">${desk}</span><span class="why">${why}</span></div>
+    <div class="call"><span class="${dir}">${dir === 'buy' ? '▲ BUY' : '▼ SELL'}</span></div>
+    <div class="tleft"><small>TIME LEFT</small>${seg7(tl, { h: 22, c: '#F3F5FF', off: 'rgba(243,245,255,.07)' })}</div>`;
+}
+document.getElementById('l3a').innerHTML = l3('Kinetic', 'Momentum desk · rules bot', '“Momentum turned up through the 20-bar high.”', 'buy', '04:12');
+document.getElementById('l3b').innerHTML = l3('Recoil', 'Mean-reversion desk · rules bot', '“Price is stretched well above its average.”', 'sell', '09:40');
+
+/* ticker */
+(function () {
+  const items = [
+    ['Kinetic', 'buy', 'ETH/USD 2,184.20', '04:12 LEFT'],
+    ['Recoil', 'sell', 'ETH/USD 2,184.20', '09:40 LEFT'],
+    ['Meridian', 'buy', 'BTC/USD · PAPER', '11:05 LEFT'],
+    ['Quorum', null, 'NO CALL · MEMBERS SPLIT', ''],
+    ['Lumen', 'sell', 'SOL/USD · PAPER', '02:31 LEFT'],
+    ['Breakline', null, 'WATCHING THE RANGE', ''],
+  ];
+  document.getElementById('tk').innerHTML = items.map(([n, d, m, t]) => `<span class="it"><span class="w">${n.toUpperCase()}</span>${d ? `<span class="${d}">${d === 'buy' ? '▲ BUY' : '▼ SELL'}</span>` : ''}<span class="m">${m}</span>${t ? `<span>${t}</span>` : ''}</span><span class="sep">◆</span>`).join('');
+  document.getElementById('tchips').innerHTML = ['Tideline', 'Kinetic', 'Recoil', 'Meridian', 'Lumen', 'Quorum'].map((n) => `<span class="chip"><span class="ptag">${glyph(B[n].g, 15)}</span>${n.toUpperCase()}</span>`).join('');
+})();
+
+/* ---------- BOARD 2 ---------- */
+(function () {
+  // pundit panel
+  const rows = [
+    ['grp', 'Rules desk', 'Price rules'],
+    ['Tideline', 'Trend', null, 'No call', ''],
+    ['Kinetic', 'Momentum', 'buy', '04:12 left', 'sel'],
+    ['Recoil', 'Mean reversion', 'sell', 'Expired', 'dim'],
+    ['Breakline', 'Breakout', null, 'Watching range', ''],
+    ['grp', 'AI analyst booth', 'Operator-set providers'],
+    ['Meridian', 'AI analyst', 'buy', '11:05 left', ''],
+    ['Vector', 'AI analyst', null, 'No call', ''],
+    ['Lumen', 'AI analyst', 'sell', '02:31 left', ''],
+    ['Halcyon', 'AI analyst', null, 'No call', ''],
+    ['Deep Current', 'AI analyst', null, 'Provider off', 'dim'],
+    ['grp', 'Ensemble panel', 'Calls only on agreement'],
+    ['Quorum', 'Ensemble', null, 'Split · no call', ''],
+    ['Council', 'Ensemble', null, 'Waiting', ''],
+  ];
+  const eye = (on) => `<svg class="eye" width="16" height="12" viewBox="0 0 16 12"><path d="M1 6s2.6-5 7-5 7 5 7 5-2.6 5-7 5-7-5-7-5Z" fill="none" stroke="${on ? '#AEB4DE' : '#3A4380'}" stroke-width="1.4"/><circle cx="8" cy="6" r="2" fill="${on ? '#AEB4DE' : '#3A4380'}"/></svg>`;
+  document.getElementById('plist').innerHTML = rows.map((r) => {
+    if (r[0] === 'grp') return `<div class="grp">${r[1]}<em>${r[2]}</em></div>`;
+    const [n, desk, d, st, cls] = r;
+    const call = d ? `<b class="${d}">${d === 'buy' ? '▲ BUY' : '▼ SELL'}</b><small>${st}</small>` : `<span class="q">${st}</span>`;
+    return `<div class="prow ${cls}"><span class="ptag">${glyph(B[n].g, 16)}</span><div class="nm"><b>${n.toUpperCase()}</b><small>${desk}</small></div><div class="st">${call}</div>${eye(!!d && cls !== 'dim')}</div>`;
+  }).join('');
+  document.querySelector('.follow .ptag').innerHTML = glyph('bolt', 17);
+  document.getElementById('howtag').innerHTML = glyph('bolt', 12);
+
+  // tools
+  const T = [
+    '<path d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="1.5"/>',
+    '<path d="M2 14 14 2" stroke="currentColor" stroke-width="1.5"/><circle cx="2.5" cy="13.5" r="1.6" fill="currentColor"/><circle cx="13.5" cy="2.5" r="1.6" fill="currentColor"/>',
+    '<path d="M3 13c2-6 5-9 10-10" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M11 1.5l3 1.5-1.5 3" stroke="currentColor" stroke-width="1.5" fill="none"/>',
+    '<path d="M3 3h10M8 3v10" stroke="currentColor" stroke-width="1.6"/>',
+    '<rect x="1.5" y="5" width="13" height="6" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M4 5v3M7 5v2M10 5v3M13 5v2" stroke="currentColor" stroke-width="1.2"/>',
+    '<circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.6"/>',
+  ];
+  document.getElementById('tools').innerHTML = T.map((p, i) => `<i class="${i === 2 ? 'on' : ''}"><svg width="16" height="16" viewBox="0 0 16 16">${p}</svg></i>`).join('');
+
+  // chart (candles use the left 660px; the rest is 'future' space for the live flags)
+  const W = 792, CW = 604, H = 524, n = 72, I = 69;
+  const c = SOS.candlesSVG({ w: CW, h: H, n, seed: 46630, up: '#2EE88F', down: '#FF4B55', grid: false, volume: true, pad: 30, strokeW: 1.3, radius: 0.8 });
+  const k = c.data[I], K = 2.4, P = (v) => 2184.2 + (v - k.c) * K, V = (p) => k.c + (p - 2184.2) / K;
+  const last = c.data[n - 1];
+  const [, ylast] = c.pt(n - 1, last.c), [, yref] = c.pt(I, k.c);
+  const volH = H * 0.18;
+  let ov = `<svg class="abs" style="left:0;top:0" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  for (let g = 1; g < 5; g++) ov += `<line x1="0" x2="${W}" y1="${(H - volH) * (g / 5)}" y2="${(H - volH) * (g / 5)}" stroke="rgba(37,46,99,.6)"/>`;
+  for (let i = 6; i < n; i += 12) { const xx = c.pt(i, 0)[0]; ov += `<line x1="${xx}" x2="${xx}" y1="0" y2="${H}" stroke="rgba(37,46,99,.45)"/>`; }
+  ov += `<line x1="0" x2="${W}" y1="${yref}" y2="${yref}" stroke="#FF2E88" stroke-width="1.2" stroke-dasharray="4 4" opacity=".85"/>`;
+  ov += `<line x1="0" x2="${W}" y1="${ylast}" y2="${ylast}" stroke="#F3F5FF" stroke-width="1" stroke-dasharray="2 3" opacity=".7"/>`;
+  const cx = c.pt(58, 0)[0];
+  ov += `<line x1="${cx}" x2="${cx}" y1="0" y2="${H}" stroke="#3CD2FF" stroke-width="1" stroke-dasharray="1 3" opacity=".7"/>`;
+  const [kx, kyl] = c.pt(I, k.l), [, kyh] = c.pt(I, k.h);
+  ov += `<path d="M${kx + 3} ${kyh - 14} C ${kx + 22} ${kyh - 8}, ${kx + 20} ${kyl + 12}, ${kx - 2} ${kyl + 14} C ${kx - 21} ${kyl + 10}, ${kx - 19} ${kyh - 4}, ${kx + 8} ${kyh - 18}" fill="none" stroke="#3CD2FF" stroke-width="2.5" stroke-linecap="round" opacity=".95"/>`;
+  ov += '</svg>';
+  const flags = [
+    { i: 33, bot: 'Tideline', dir: 'sell', tl: '', side: 'dn', cls: 'old mini', align: 'r', pole: 30, frac: 0 },
+    { i: 45, bot: 'Recoil', dir: 'sell', tl: '', side: 'dn', cls: 'old mini', align: 'r', pole: 34, frac: 0 },
+    { i: 69, bot: 'Kinetic', dir: 'buy', tl: '04:12', side: 'up', cls: '', align: 'r', pole: 46, frac: 0.35 },
+    { i: 70, bot: 'Lumen', dir: 'sell', tl: '02:31', side: 'dn', cls: 'mini', align: 'r', pole: 40, frac: 0.2 },
+  ];
+  let fh = '';
+  for (const f of flags) {
+    const d = c.data[f.i];
+    const [fx, fy] = f.side === 'up' ? c.pt(f.i, d.l) : c.pt(f.i, d.h);
+    fh += flag({ x: fx, y: f.side === 'up' ? fy + 6 : fy - 6, bot: f.bot, dir: f.dir, tl: f.tl, side: f.side, pole: f.pole, align: f.align, cls: f.cls, frac: f.frac });
+  }
+  document.getElementById('chart2').innerHTML = c.svg + ov + fh;
+  // axes: stack the signal-ref and last tags when they sit close together
+  let ty1 = yref, ty2 = ylast;
+  if (ty2 - ty1 < 22) { const m = (ty1 + ty2) / 2; ty1 = m - 11; ty2 = m + 11; }
+  let ax = '';
+  for (let p = 2120; p <= 2240; p += 10) { const yy = c.pt(0, V(p))[1]; if (yy > 10 && yy < H * 0.8 && Math.abs(yy - ty1) > 16 && Math.abs(yy - ty2) > 16) ax += `<span style="top:${yy}px">${p.toLocaleString('en-US')}.00</span>`; }
+  ax += `<span class="tag ref" style="top:${ty1}px">${fmt(P(k.c))}</span>`;
+  ax += `<span class="tag" style="top:${ty2}px">2,182.55</span>`;
+  document.getElementById('paxis').innerHTML = ax;
+  const times = ['Tue 21:00', '00:00', '03:00', '06:00', '09:00', '12:00'];
+  let tx = ''; for (let j = 0, i = 6; i < n; i += 12, j++) tx += `<span style="left:${c.pt(i, 0)[0]}px">${times[j]}</span>`;
+  document.getElementById('taxis').innerHTML = tx;
+  document.getElementById('ohlc').innerHTML = `<span>O <b>${fmt(P(last.o))}</b></span><span>H <b>${fmt(P(last.h))}</b></span><span>L <b>${fmt(P(last.l))}</b></span><span>C <b>2,182.55</b></span>`;
+  document.getElementById('tbpx').outerHTML = seg7('2182.55', { h: 22, c: '#F3F5FF', off: 'rgba(243,245,255,.06)' });
+
+  // call sheet
+  const calls = [
+    ['14:26', 'Lumen', 'sell', '14:15', '2,185.10', ['live', '02:31 left']],
+    ['14:16', 'Kinetic', 'buy', '14:15', '2,184.20', ['live', '04:12 left']],
+    ['14:02', 'Meridian', 'buy', '14:00', '2,180.65', ['live', '11:05 left']],
+    ['11:17', 'Recoil', 'sell', '11:15', '2,171.90', ['rc', 'Expired · rcpt 0x9a1f']],
+    ['08:32', 'Tideline', 'sell', '08:30', '2,158.35', ['rc', 'Expired · rcpt 0x8c27']],
+  ];
+  document.getElementById('calls').innerHTML = `<tr><th>TIME</th><th>PUNDIT</th><th>CALL</th><th>ON CANDLE</th><th>SIGNAL REF</th><th>STATUS</th></tr>` + calls.map(([t, n, d, cd, ref, [s, st]]) => `<tr><td class="m" style="color:var(--mute)">${t}</td><td><span class="who"><span class="ptag">${glyph(B[n].g, 12)}</span>${n.toUpperCase()}</span></td><td><span class="d ${d}">${d === 'buy' ? '▲ BUY' : '▼ SELL'}</span></td><td class="m">${cd}</td><td class="m">${ref}</td><td>${s === 'live' ? `<span class="st-live"><i></i>${st}</span>` : `<span class="rcpt">${st}</span>`}</td></tr>`).join('');
+})();
+
+/* ---------- BOARD 3 ---------- */
+(function () {
+  document.querySelector('.appic .sq svg').innerHTML = sMark();
+  document.getElementById('constr').innerHTML = `<svg width="46" height="44" viewBox="26 5 48 50"><g transform="translate(50 30) skewX(-9) translate(-50 -30)"><polygon points="36,9 68,9 64,17 44,17 60,27 50,31 30,19" fill="#FFB21A"/></g></svg><span class="eq">+</span><svg width="46" height="44" viewBox="26 5 48 50"><g transform="translate(50 30) skewX(-9) translate(-50 -30)"><polygon points="64,51 32,51 36,43 56,43 40,33 50,29 70,41" fill="#F3F5FF"/></g></svg><span class="eq">=</span>${mark(44, { live: false })}<span class="cap">Two wipes = one S</span>`;
+  document.getElementById('bugcard').innerHTML = `<div class="bug" style="position:static;filter:none;height:32px;transform:scale(.9);transform-origin:50% 100%"><div class="b-logo"><span>${mark(20, { live: false })}</span></div><div class="b-mkt" style="font-size:17px"><span>ETH/USD</span></div><div class="b-px"><span>${seg7('2184.20', { h: 17 })}</span></div><div class="b-live"><span><i></i>LIVE</span></div></div><span class="cap">Score bug · in context · illustration price</span>`;
+  const pal = [
+    ['Night navy', '#070B22', 'Base · the night'],
+    ['Panel', '#10173D', 'Cards, bugs'],
+    ['Line', '#252E63', 'Rules, grids'],
+    ['Floodlight', '#F3F5FF', 'Type, lower-thirds'],
+    ['Scoreboard amber', '#FFB21A', 'Hero + primary CTA'],
+    ['Replay magenta', '#FF2E88', 'Bot calls, LIVE'],
+    ['Long', '#2EE88F', '▲ BUY only'],
+    ['Short', '#FF4B55', '▼ SELL only'],
+    ['Broadcast cyan', '#3CD2FF', 'Data rails, pen'],
+  ];
+  document.getElementById('pal').innerHTML = pal.map(([n, h, j]) => `<div class="sw"><div class="c" style="background:${h}"></div><b>${n}</b><code>${h}</code><small>${j}</small></div>`).join('');
+  document.getElementById('bots').innerHTML = BOTS.map((b) => `<div class="np"><span class="ptag"><i>${b.no}</i>${glyph(b.g, 15)}</span><div class="t"><b>${b.n.toUpperCase()}</b><small>${b.desk}</small></div></div>`).join('') +
+    `<div class="np legend"><span><b>Magenta tag</b> = a bot is talking.</span><span>Numbers are IDs. No records, no streaks.</span></div>`;
+
+  // motifs
+  document.getElementById('mo1').innerHTML = `<svg class="abs" style="left:0;top:32px" width="260" height="80" viewBox="0 0 260 96" preserveAspectRatio="none"><defs><clipPath id="mc1"><rect width="260" height="96"/></clipPath></defs><g clip-path="url(#mc1)">
+    <polygon points="-40,0 60,0 110,48 60,96 -40,96 10,48" fill="#10173D"/>
+    <polygon points="70,0 110,0 160,48 110,96 70,96 120,48" fill="#FFB21A"/>
+    <polygon points="118,0 138,0 188,48 138,96 118,96 168,48" fill="#FF2E88"/>
+    <polygon points="146,0 156,0 206,48 156,96 146,96 196,48" fill="#F3F5FF" opacity=".8"/>
+    <polygon points="164,0 168,0 218,48 168,96 164,96 214,48" fill="#F3F5FF" opacity=".4"/></g></svg>
+    <span class="cap">Chevron wipe <em>· every cut, every reveal</em></span>`;
+  (function () {
+    const c = SOS.candlesSVG({ w: 232, h: 46, n: 20, seed: 46630, up: '#2EE88F', down: '#FF4B55', grid: false, pad: 4, strokeW: 1.2, radius: 0.6 });
+    const I = 18, d = c.data[I]; const [x, y] = c.pt(I, d.l);
+    document.getElementById('mo2').innerHTML = `<div class="abs" style="left:12px;top:32px;width:232px;height:46px">${c.svg}${flag({ x, y: y + 6, bot: 'Kinetic', dir: 'buy', tl: '04:12', side: 'up', pole: Math.max(10, 46 - y + 4), align: 'l', cls: 'mini', frac: 0.35 })}</div><span class="cap">Pundit flag <em>· pinned to the exact candle</em></span>`;
+  })();
+  document.getElementById('mo3').innerHTML = `<div class="abs" style="left:0;right:0;top:50px;height:42px;background:#02030B;display:flex;align-items:center;gap:10px;padding-left:0;overflow:hidden;border-top:1px solid #1B2250;border-bottom:1px solid #1B2250">
+    <span style="background:#FF2E88;height:40px;display:flex;align-items:center;padding:0 14px 0 10px;font:800 11px/1 var(--ui);letter-spacing:.18em;clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%)">LIVE</span>
+    <span style="position:absolute;right:0;top:0;bottom:0;width:60px;background:linear-gradient(90deg,transparent,#02030B)"></span><span style="font:900 19px/1 var(--led);color:#FFB21A;white-space:nowrap"><span style="color:#E9ECFF">KINETIC</span> <span class="buy">▲ BUY</span> 04:12 <span style="color:#FF2E88">◆</span> <span style="color:#E9ECFF">RECOIL</span> <span class="sell">▼ SELL</span></span></div>
+    <span class="cap">LED crawl <em>· live calls, made-up prices labelled</em></span>`;
+
+  /* ---------- film frames ---------- */
+  const F = [];
+  // 1 · pre-game
+  F.push(['00:00', 'Pre-game', 'Floodlights snap on. Chevron wipes slam in the title card.', `
+    <div class="abs" style="inset:0;background:radial-gradient(240px 120px at 70% 0%,rgba(200,214,255,.35),transparent 70%),radial-gradient(200px 110px at 10% 0%,rgba(200,214,255,.2),transparent 70%),#070B22"></div>
+    <svg class="abs" style="left:0;top:0" width="315" height="177" viewBox="0 0 315 177"><g opacity=".35"><polygon points="250,-10 262,-10 150,177 100,177" fill="#DDE5FF" opacity=".25"/><polygon points="40,-10 52,-10 190,177 140,177" fill="#DDE5FF" opacity=".18"/></g>
+    <g><polygon points="196,0 236,0 296,88 236,177 196,177 256,88" fill="#FFB21A"/><polygon points="244,0 262,0 322,88 262,177 244,177 304,88" fill="#FF2E88"/><polygon points="270,0 278,0 338,88 278,177 270,177 330,88" fill="#F3F5FF" opacity=".7"/></g>
+    <g fill="#F3F5FF" opacity=".9">${[0, 1, 2, 3].map((i) => `<circle cx="${22 + i * 9}" cy="12" r="2.6"/><circle cx="${22 + i * 9}" cy="20" r="2.6"/>`).join('')}</g></svg>
+    <div class="abs" style="left:18px;top:52px"><div style="font:900 13px/1 var(--ui);letter-spacing:.24em;color:#AEB4DE">SIGNALOS PRESENTS</div><div style="font:900 40px/.86 var(--disp);letter-spacing:.02em;margin-top:6px">LIVE FROM<br><span style="color:#FFB21A">THE CANDLE</span></div></div>
+    <div class="abs" style="left:18px;bottom:12px">${mark(22)}</div>`]);
+  // 2 · pundit desk
+  F.push(['00:06', 'The desk', 'Two pundits, one candle: KINETIC calls BUY, RECOIL calls SELL.', `
+    <div class="abs" style="inset:0;background:linear-gradient(90deg,#0E1540 50%,#130B30 50%)"></div>
+    <svg class="abs" style="left:0;top:0" width="315" height="177" viewBox="0 0 315 177">
+      <path d="M0 132 Q157 112 315 132 L315 177 L0 177Z" fill="#10173D"/><path d="M0 132 Q157 112 315 132" stroke="#FFB21A" stroke-width="2" fill="none"/>
+      <g transform="translate(48 40)"><rect width="64" height="50" rx="4" fill="#050818" stroke="#FF2E88" stroke-width="2"/><g transform="translate(16 9) scale(2)" fill="none" stroke="#FF2E88" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${GLYPHS.bolt}</g><rect x="28" y="50" width="8" height="30" fill="#252E63"/></g>
+      <g transform="translate(203 40)"><rect width="64" height="50" rx="4" fill="#050818" stroke="#FF2E88" stroke-width="2"/><g transform="translate(16 9) scale(2)" fill="none" stroke="#FF2E88" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${GLYPHS.spring}</g><rect x="28" y="50" width="8" height="30" fill="#252E63"/></g>
+      <polygon points="150,0 172,0 160,177 138,177" fill="#070B22"/>
+    </svg>
+    <div class="abs" style="left:132px;top:66px;width:52px;text-align:center;font:900 26px/1 var(--disp);color:#FFB21A;z-index:2">VS</div>
+    <div class="abs" style="left:10px;bottom:10px;display:flex;align-items:center;height:24px"><span class="ptag" style="height:24px;padding:0 8px 0 6px"><b style="font:900 13px/1 var(--disp);letter-spacing:.08em;color:#fff">KINETIC</b></span><span class="dchip buy" style="font-size:13px;margin-left:2px">▲ BUY</span></div>
+    <div class="abs" style="right:10px;bottom:10px;display:flex;align-items:center;height:24px"><span class="ptag" style="height:24px;padding:0 8px 0 6px"><b style="font:900 13px/1 var(--disp);letter-spacing:.08em;color:#fff">RECOIL</b></span><span class="dchip sell" style="font-size:13px;margin-left:2px">▼ SELL</span></div>`]);
+  // 3 · telestrator
+  F.push(['00:14', 'Telestrator', 'The pen circles the exact candle each call is pinned to.', (() => {
+    const c = SOS.candlesSVG({ w: 315, h: 177, n: 26, seed: 46630, up: '#2EE88F', down: '#FF4B55', grid: 'rgba(60,210,255,.06)', pad: 22, strokeW: 1.4, radius: 0.6 });
+    const I = 21, d = c.data[I]; const [x, yl] = c.pt(I, d.l), [, yh] = c.pt(I, d.h); const cy = (yl + yh) / 2, ry = (yl - yh) / 2 + 18;
+    return `${c.svg}<svg class="abs" style="left:0;top:0" width="315" height="177" viewBox="0 0 315 177"><g fill="none" stroke="#3CD2FF" stroke-width="3" stroke-linecap="round" style="filter:drop-shadow(0 0 4px rgba(60,210,255,.8))"><path d="M${x + 2} ${cy - ry} C ${x + 26} ${cy - ry + 4}, ${x + 22} ${cy + ry}, ${x - 2} ${cy + ry} C ${x - 24} ${cy + ry - 2}, ${x - 20} ${cy - ry + 4}, ${x + 8} ${cy - ry - 4}"/><path d="M${x - 46} ${cy - 56} C ${x - 32} ${cy - 50}, ${x - 26} ${cy - 36}, ${x - 22} ${cy - 14}"/><path d="M${x - 36} ${cy - 18} L${x - 23} ${cy - 10} L${x - 20} ${cy - 26}"/></g>
+      <text x="${x - 150}" y="${cy - 50}" fill="#3CD2FF" font-family="Big Shoulders Display" font-weight="900" font-size="19" letter-spacing="1" transform="rotate(-4 ${x - 150} ${cy - 50})">THIS CANDLE.</text></svg>
+      <div class="abs" style="left:8px;bottom:8px"><span class="livebug" style="font-size:11px;padding:4px 8px;background:#3CD2FF;color:#070B22"><span>TELESTRATOR</span></span></div>`;
+  })()]);
+  // 4 · review booth
+  F.push(['00:22', 'Review booth', 'Cut to the ref. You check four prices before anything moves.', `
+    <div class="abs" style="inset:0;background:linear-gradient(#0B1131,#070B22)"></div>
+    <div class="abs" style="left:92px;top:8px;height:18px;padding:0 10px;background:#FFB21A;color:#1A1100;font:900 12px/18px var(--disp);letter-spacing:.2em;transform:skewX(-14deg)"><span style="display:inline-block;transform:skewX(14deg)">UNDER REVIEW</span></div>
+    <div class="abs" style="left:92px;top:34px;width:210px;height:108px;background:#03050F;border:2px solid #2A3470;padding:6px 8px">
+      ${[['1', 'SIGNAL REF', '2,184.20'], ['2', 'CHART LAST', '2,182.55'], ['3', 'EXEC. QUOTE', '2,183.40'], ['4', 'FILL', 'PENDING']].map(([n, l, v]) => `<div style="display:flex;align-items:center;height:23px;border-bottom:1px solid #151C47;font:700 11px/1 var(--ui);letter-spacing:.1em;color:#AEB4DE"><span style="width:14px;height:14px;background:#F3F5FF;color:#070B22;font:900 11px/14px var(--disp);text-align:center;margin-right:7px">${n}</span>${l}<span style="margin-left:auto;font:400 12px/1 var(--mono);color:${v === 'PENDING' ? '#FFB21A' : '#F3F5FF'}">${v}</span></div>`).join('')}
+    </div>
+    <div class="abs" style="left:92px;top:148px;font:600 11px/1 var(--ui);color:#7880B6;letter-spacing:.06em">Illustration · made-up prices</div>
+    <svg class="abs" style="left:0;top:0" width="315" height="177" viewBox="0 0 315 177"><defs><pattern id="ref" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="6" height="12" fill="#F3F5FF"/><rect x="6" width="6" height="12" fill="#0A0A12"/></pattern><clipPath id="refc"><path d="M-10 177 C -8 128, 10 112, 40 108 C 60 106, 76 116, 84 134 L 92 177Z"/></clipPath></defs>
+      <rect x="-10" y="100" width="110" height="80" fill="url(#ref)" clip-path="url(#refc)"/>
+      <circle cx="38" cy="80" r="24" fill="#1A1E3A"/><path d="M14 74 C 16 50, 60 50, 62 74" stroke="#2A3470" stroke-width="5" fill="none"/><rect x="58" y="70" width="8" height="14" rx="3" fill="#2A3470"/></svg>`]);
+  // 5 · the whistle
+  F.push(['00:30', 'The whistle', 'The ref signs in their own wallet, or waves it off. Your call.', `
+    <div class="abs" style="inset:0;background:radial-gradient(200px 120px at 30% 60%,rgba(255,178,26,.16),transparent 70%),#070B22"></div>
+    <svg class="abs" style="left:10px;top:58px" width="120" height="100" viewBox="0 0 120 100"><g fill="none" stroke="#FFB21A" stroke-width="3" stroke-linecap="round"><path d="M92 26 L106 16"/><path d="M96 38 L114 36"/><path d="M90 14 L94 2"/></g>
+      <path d="M18 44 h44 a24 24 0 1 1 -6 24 H18 a6 6 0 0 1 -6 -6 v-12 a6 6 0 0 1 6 -6Z" fill="#FFB21A"/><circle cx="74" cy="62" r="10" fill="#070B22"/><rect x="40" y="36" width="14" height="10" fill="#C98700"/></svg>
+    <div class="abs" style="right:12px;top:30px;width:160px;height:134px;background:#F3F5FF;color:#070B22;padding:9px 10px">
+      <div style="font:800 11px/1 var(--ui);letter-spacing:.12em;color:#5A6190">YOUR WALLET · SIGNATURE REQUEST</div>
+      <div style="font:900 20px/1 var(--disp);margin-top:7px">▲ BUY 0.50 ETH</div>
+      <div style="font:600 11px/1.3 var(--ui);color:#3C4270;margin-top:4px">SignalOS · Scrimmage (testnet)<br>Quote 2,183.40 · max slip 0.50%</div>
+      <div style="display:flex;gap:6px;margin-top:9px"><span style="flex:1;text-align:center;border:1.5px solid #070B22;font:800 11px/22px var(--ui);letter-spacing:.12em">WAVE OFF</span><span style="flex:1;text-align:center;background:#070B22;color:#FFB21A;font:800 11px/22px var(--ui);letter-spacing:.12em">SIGN</span></div>
+    </div>
+    <div class="abs" style="left:14px;top:14px;font:900 17px/.95 var(--disp);letter-spacing:.05em">NOTHING TRADES<br><span style="color:#FFB21A">WITHOUT IT.</span></div>`]);
+  // 6 · end card
+  F.push(['00:36', 'End card', 'Tagline, logo, “Start preseason”. Not investment advice.', `
+    <div class="abs" style="inset:0;background:radial-gradient(260px 130px at 50% 0%,rgba(110,136,255,.3),transparent 70%),#070B22"></div>
+    <svg class="abs" style="left:0;top:0" width="315" height="177" viewBox="0 0 315 177"><polygon points="-20,0 20,0 -30,177 -70,177" fill="#FF2E88" opacity=".5"/><polygon points="296,0 318,0 268,177 246,177" fill="#FFB21A" opacity=".9"/><polygon points="324,0 336,0 286,177 274,177" fill="#FF2E88" opacity=".9"/></svg>
+    <div class="abs" style="left:0;right:0;top:22px;display:flex;flex-direction:column;align-items:center">
+      <div style="display:flex;align-items:center;gap:8px">${mark(28)}<span style="font:900 22px/1 var(--disp);letter-spacing:.08em">SIGNALOS</span></div>
+      <div style="font:900 25px/.95 var(--disp);letter-spacing:.02em;margin-top:12px;text-align:center">BOTS CALL IT.<br><span style="color:#FFB21A">YOU MAKE THE CALL.</span></div>
+      <div style="margin-top:10px;background:#FFB21A;color:#1A1100;font:900 13px/1 var(--disp);letter-spacing:.12em;padding:5px 12px;transform:skewX(-14deg)"><span style="display:inline-block;transform:skewX(14deg)">START PRESEASON · PAPER</span></div>
+      <div style="margin-top:8px;font:600 11px/1 var(--ui);letter-spacing:.1em;color:#AEB4DE">NOT INVESTMENT ADVICE</div>
+    </div>`]);
+  document.getElementById('frames').innerHTML = F.map(([t, name, beat, html], i) => `<div><div class="fr">${html}<span class="tcode"><i></i>${t}</span></div><div class="fcap"><span class="tcx">${t}</span><span class="bt"><b>${name}</b>${beat}</span></div></div>`).join('');
+})();
+</script>
+</body>
+</html>

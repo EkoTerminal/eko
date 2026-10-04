@@ -114,7 +114,7 @@ export class ProviderRegistry {
   }
 
   /** Runs inference with at most one retry for retryable errors, inside the overall timeout. */
-  async infer(id: ProviderId, req: InferenceRequest): Promise<InferenceResult> {
+  async infer(id: ProviderId, req: InferenceRequest, options: { retry?: boolean } = {}): Promise<InferenceResult> {
     const p = this.providers.get(id);
     const h = this.health.get(id)!;
     if (!p || !p.configured) throw new ProviderError('unconfigured', `${id} is not configured`);
@@ -135,7 +135,7 @@ export class ProviderRegistry {
       } catch (err) {
         const e = err instanceof ProviderError ? err : new ProviderError('unknown', String((err as Error)?.message ?? err));
         const wait = Math.min(e.opts.retryAfterMs ?? 1500 * attempt, 8000);
-        if (attempt < 2 && e.retryable && Date.now() + wait < deadline - 1000) {
+        if (options.retry !== false && attempt < 2 && e.retryable && Date.now() + wait < deadline - 1000) {
           await new Promise((r) => setTimeout(r, wait));
           continue;
         }

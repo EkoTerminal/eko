@@ -3,9 +3,16 @@
   "purpose": "staging-only",
   "candidateRevision": "96c0205f469664b980763e70c72ba098f08ccb38",
   "rollbackTargetSeconds": 600,
+  "identityAttestation": {
+    "buildArgument": "EKO_SOURCE_REVISION",
+    "buildRoute": "/v1/build",
+    "configVersion": 1,
+    "workerReadyMessage": "EKO worker ready"
+  },
   "commonEnvironment": {
     "NODE_ENV": "production",
     "HOST": "0.0.0.0",
+    "TRUST_PROXY_HOPS": "1",
     "PORT": "8710",
     "LIVE_TRADING_ENABLED": "false",
     "TRADING_ALLOWLIST_ONLY": "true",
@@ -177,7 +184,7 @@
         "cpu": 1,
         "memoryMb": 2048
       },
-      "readiness": "unavailable; require committed registry event + proof"
+      "readiness": "receipts_started + committed registry event + proof; startup alone insufficient"
     },
     "bots": {
       "config": "infra/railway/bots.json",

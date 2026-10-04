@@ -1,0 +1,15 @@
+{
+  "formatVersion": 1,
+  "configVersion": 1,
+  "bundleFiles": [
+    "build-identity.js",
+    "census-eval.js",
+    "db/migrate-cli.js",
+    "engines.js",
+    "index.js",
+    "indexer.js",
+    "launch.js",
+    "mcp.js",
+    "receipts.js"
+  ]
+}

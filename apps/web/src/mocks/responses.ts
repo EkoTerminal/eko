@@ -108,7 +108,7 @@ export const endpoints: MockEndpoint[] = [
   endpoint('GET', '/referrals', s.ReferralsSchema, f.createReferrals), endpoint('GET', '/me/trial-recap', s.TrialRecapSchema, f.createTrialRecap),
   ...['GET', 'PUT'].map((method) => endpoint(method, '/me/preferences', s.PreferencesSchema, () => s.DEFAULT_PREFERENCES)),
   endpoint('POST', '/telegram/link', url, () => ({ url: 'https://t.me/{{BOT_HANDLE}}' })),
-  success('POST', '/push/subscriptions'), success('DELETE', '/push/subscriptions'), success('POST', '/telemetry'), success('DELETE', '/me/data'),
+  success('POST', '/push/subscriptions'), success('DELETE', '/push/subscriptions'), success('POST', '/telemetry'), endpoint('DELETE', '/me/data', z.object({ deletedAt: z.string().datetime() }), () => ({ deletedAt: '2026-10-13T12:00:00.000Z' })),
   // TODO(spec): CA-9 demo claims, CA-25 RPC, CA-26 host metadata and CA-27 dev injection
   // are transport contracts without frozen shared schemas; keep their mocks local.
   endpoint('GET', '/demo/:token', z.object({ flags: s.FlagsSchema }), () => ({ flags: createConfig().flags })),

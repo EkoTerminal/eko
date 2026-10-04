@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 import guardCodeFiles from './guard-code-files.json' with { type: 'json' };
 import { keccak256, toHex } from 'viem';
 import { canonicalize } from '@eko/policy';
-import { evaluateGuardV2, guardScoreHash } from '@eko/playbooks';
+import { guardScoreHash } from '@eko/playbooks';
+import { IncrementalGuardCache } from './incremental-guard.js';
+const shadowCache = new IncrementalGuardCache();
 import { GuardAvailabilityManifestSchema, GuardScoreInputSchema, GuardShadowRunSchema, Bytes32Schema, compareGuardCursors } from '@eko/shared';
 import type { Address, GuardAvailabilityManifest, GuardStoredEvidence, GuardStoredRole, GuardScoreInput, CoinSignal } from '@eko/shared';
 import { GuardVerdictStore, guardRowsKnownAt, guardStorageHash, hex } from '@eko/db';
@@ -70,7 +72,8 @@ export async function persistShadowGuardV2(db: ChainDb, target: { coin: Address;
       }
     }
   }
-  const result=evaluateGuardV2(input), sourceRevision=manifest?.sourceRevision ?? guardScoreHash({method:'uncaptured-shadow',cursor});
+  const sourceRevision=manifest?.sourceRevision ?? guardScoreHash({method:'uncaptured-shadow',cursor});
+  const result=shadowCache.evaluate(input,{sourceRevision:sourceRevision.slice(2),route:null,sizeRaw:null,account:null});
   const id=guardScoreHash({legacyVerdictId:target.legacyVerdictId,replayMode:target.replayMode,sourceRevision,input});
   let run=GuardShadowRunSchema.parse({id,legacyVerdictId:target.legacyVerdictId,manifestId:manifest?.id ?? null,
     sourceRevision,input,...result,recordedAt});

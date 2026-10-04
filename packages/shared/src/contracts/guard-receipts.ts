@@ -19,6 +19,13 @@ export const GuardReceiptRevisionKeySchema = z.strictObject({
   profileHash: a.profileHash, calibrationManifestHash: a.calibrationManifestHash, snapshotHash: a.snapshotHash,
   manifestId: Bytes32Schema, sourceRevision: Bytes32Schema, context: GuardVerdictRevisionInputSchema.shape.context,
 });
+/**
+ * Schema-validate a revision identity binding assessment versions/cursor/availability/hashes to
+ * manifest, source revision and context. Pure public operation without auth; invalid fields throw;
+ * supplied evidence is not independently acquired here.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export function guardReceiptRevisionKey(a: Omit<GuardAssessmentV2, 'receipt'>, manifestId: string, sourceRevision: string, context: GuardVerdictRevisionInput['context']) {
   return GuardReceiptRevisionKeySchema.parse({ schemaVersion: a.schemaVersion, canonicalization: 'jcs-rfc8785/v1', receiptVersion: 'guard-receipt-2',
     chainId: a.chainId, coin: a.coin, cursor: a.cursor, availability: a.availabilityCut, mode: a.mode,
@@ -37,15 +44,44 @@ export const GuardReceiptPayloadSchema = z.strictObject({
 export type GuardReceiptPayload = z.infer<typeof GuardReceiptPayloadSchema>;
 
 /** Decision identity includes the raw snapshot and every assignment/reason, but
- * excludes storage time, supersession and recursive hash/proof metadata. */
+ * excludes storage time, supersession and recursive hash/proof metadata.
+ * @remarks
+ * Project the decision identity by removing recursive receipt/hash/root/supersession metadata
+ * while retaining snapshot/assignment/reason data. Pure typed-input operation without auth or I/O;
+ * it does not validate the assessment.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export function guardDecisionBody(a: Omit<GuardAssessmentV2, 'receipt'> | GuardAssessmentV2) {
   const { decisionHash: _, evidenceRoot: _root, supersedes: _supersedes, ...rest } = a;
   const { receipt: _ref, ...body } = rest as typeof rest & { receipt?: unknown };
   return body;
 }
+/**
+ * Create pure canonical payload hashing, Guard envelope binding checks and Merkle proof
+ * verification using trusted supplied primitives. Public operation without auth; no RPC or signing
+ * authority. Legacy payloads receive hash checks without a full legacy schema; returned functions
+ * have their own failure contracts.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export function createGuardReceiptCodec(hashing: ReceiptHashing) {
   const encoder = createReceiptEncoder(hashing);
+  /**
+   * Hash canonicalized data with the supplied keccak/string conversion primitives. Pure public
+   * operation without auth; noncanonicalizable input or primitive failure throws.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   const hash = (value: unknown) => hashing.keccak256(hashing.stringToHex(canonicalize(value)));
+  /**
+   * Require the payload hash and, for Guard v2, schema, revision key, decision and deterministic
+   * snapshot bindings to agree with the receipt item. Pure public verification without auth; caught
+   * schema/hash failures return false. Legacy payloads check only hash equality here, with
+   * additional validation owned by consumers.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   function verifyPayload(payload: unknown, item: ReceiptItem): boolean {
     try {
       if (hash(payload) !== item.hash) return false;
@@ -63,6 +99,13 @@ export function createGuardReceiptCodec(hashing: ReceiptHashing) {
     } catch { return false; }
   }
   return { ...encoder, hash, verifyPayload,
+    /**
+     * Require payload binding plus receipt Merkle proof agreement. Pure public verification without
+     * auth; malformed proof schemas return false through the encoder, and uncaught hashing/type
+     * failures may throw. No registry transaction/canonical block is checked here.
+     * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+     */
     verifyPublicProof(payload: unknown, item: ReceiptItem, proof: readonly `0x${string}`[], root: `0x${string}`) {
       return verifyPayload(payload, item) && encoder.verifyReceiptProof(item, proof, root);
     } };

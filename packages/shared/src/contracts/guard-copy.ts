@@ -22,9 +22,7 @@ export const GUARD_CHECK_LABELS: Record<CheckId, string> = {
   launcher_service: 'Launcher or service', operator_history: 'Operator history',
 };
 
-export const DYOR = 'DYOR · Not financial advice · AI-generated analysis';
-export const NON_AFFILIATION = 'Not affiliated with, endorsed by, or officially connected with Robinhood Markets, Inc.';
-export const BUILT_ON = 'Built on Robinhood Chain';
+export { DYOR, NON_AFFILIATION, BUILT_ON } from '../disclosures.js';
 export const GUARD_SHARE_TITLE = 'EKO · Buyer risk snapshot';
 export const GUARD_REASON_LABELS = { EXIT_COST: 'Venue round-trip cost', DEPTH: 'Directional depth', ENTRY_LIMIT: 'Entry limit', SELL_RESTRICTION: 'Sell restriction', CONTROL: 'Control capability', GROUP_HELD: 'Group holdings', TOP_HOLDERS: 'Holder concentration', EARLY_BUYERS: 'Early buyers', SAME_BLOCK: 'Same-block buyers', ORIGIN_SALE: 'Launch-origin sale', SELL_PRESSURE: 'Sell pressure', ATTRIBUTED_DUMP: 'Attributed selling', EXEMPTIONS: 'Tax exemptions', CYCLING: 'Repeated cycling', CLONE: 'Identity collision', HISTORY: 'Operator history', TEXT_INSTRUCTION: 'Untrusted instruction', INCOMPLETE: 'Not fully checked', POLICY_DENIAL: 'Policy refusal' } as const;
 

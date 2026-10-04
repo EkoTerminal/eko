@@ -1,3 +1,4 @@
+import type {} from '@fastify/cookie';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { FlagNameSchema, type FlagName } from '@eko/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -19,6 +20,12 @@ declare module 'fastify' {
   }
 }
 
+/**
+ * Mint a 24-hour HMAC demo token with deduplicated flags. Host issuer must possess the configured
+ * demo secret; it is not wallet authorization. Short secret or invalid payload throws.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function createDemoToken(flags: FlagName[], secret: string, now = Date.now()): string {
   if (secret.length < 32) throw new Error('DEMO_SECRET (≥32 chars) is required');
   const payload = PayloadSchema.parse({ flags: [...new Set(flags)], expiry: now + DEMO_TTL_MS });
@@ -26,6 +33,13 @@ export function createDemoToken(flags: FlagName[], secret: string, now = Date.no
   return `${encoded}.${createHmac('sha256', secret).update(encoded).digest('base64url')}`;
 }
 
+/**
+ * Verify bounded token shape, canonical signature encoding, constant-time HMAC, schema and expiry
+ * window. Authentication is the demo-secret signature only; invalid/missing/expired input returns
+ * null and grants no trading rights.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function verifyDemoToken(token: string, secret: string | undefined, now = Date.now()): DemoSession | null {
   if (!secret || token.length > 4096) return null;
   const parts = token.split('.');
@@ -47,15 +61,29 @@ export function verifyDemoToken(token: string, secret: string | undefined, now =
 
 /** Demo sessions may sign in/out, send telemetry and POST bounded read-only RPC. None of them trade or
  * write harness data (CA-9), and blocking sign-in would lock a visitor who opened a demo link out for 24 h. */
-export const DEMO_WRITE_ALLOW = new Set(['/api/auth/verify', '/api/auth/logout', '/api/telemetry', '/v1/auth/siwe/nonce', '/v1/auth/siwe/verify', '/v1/auth/logout', '/v1/rpc']);
+export const DEMO_WRITE_ALLOW = new Set(['/api/auth/verify', '/api/auth/logout', '/api/telemetry', '/v1/telemetry', '/v1/auth/siwe/nonce', '/v1/auth/siwe/verify', '/v1/auth/logout', '/v1/rpc']);
 
-/** Mandatory for later write routes; also installed globally for legacy and v1 HTTP writes. */
+/** Mandatory for later write routes; also installed globally for legacy and v1 HTTP writes.
+ * @remarks
+ * Refuse demo HTTP mutations except the finite auth/telemetry/read-RPC allowlist, returning
+ * forbidden. Requires the caller to populate demoSession; this does not resolve wallet
+ * authentication itself.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function guardDemoWrite(req: FastifyRequest, reply: FastifyReply) {
   if (req.demoSession && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !DEMO_WRITE_ALLOW.has(req.url.split('?')[0]!)) {
     return sendError(reply, 'forbidden', 'Demo sessions cannot write');
   }
 }
 
+/**
+ * Decorate requests, validate any demo cookie and apply the global demo-write refusal hook. Host
+ * registration call; invalid tokens become null, while plugin/decorator registration failures
+ * throw.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function installDemoGuard(app: FastifyInstance, cfg: Config) {
   app.decorateRequest('demoSession', null);
   app.addHook('onRequest', async (req, reply) => {
@@ -65,6 +93,13 @@ export function installDemoGuard(app: FastifyInstance, cfg: Config) {
   });
 }
 
+/**
+ * Register token-based demo session entry, setting a bounded HttpOnly cookie with no-store/no-
+ * referrer headers. Demo bearer authentication only; invalid token yields not_found and malformed
+ * input rejects. It grants display flags, not wallet execution.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function demoRoutes(app: FastifyInstance, cfg: Config) {
   app.get('/demo/:token', async (req, reply) => {
     const { token } = parse(z.object({ token: z.string() }), req.params);

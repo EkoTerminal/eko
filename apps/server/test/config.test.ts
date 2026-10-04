@@ -5,6 +5,14 @@ import { loadConfig } from '../src/config.js';
 const base = { DEMO_SECRET: 'demo-test-placeholder'.repeat(2), SESSION_SECRET: 'test-only-placeholder'.repeat(2), PGLITE_DIR: ':memory:' };
 
 describe('EKO market configuration', () => {
+  it('defaults proxy trust to zero and accepts only non-negative integer hop counts', () => {
+    expect(loadConfig(base).TRUST_PROXY_HOPS).toBe(0);
+    for (const value of ['0', '1', '2']) expect(loadConfig({ ...base, TRUST_PROXY_HOPS: value }).TRUST_PROXY_HOPS).toBe(Number(value));
+    for (const value of ['', '-1', '1.5', 'true', 'NaN', 'Infinity', '1e2', ' 1 ', '9007199254740992']) {
+      expect(() => loadConfig({ ...base, TRUST_PROXY_HOPS: value })).toThrow(/TRUST_PROXY_HOPS/);
+    }
+  });
+
   it('defaults to demo outside production and accepts explicit demo in production', () => {
     for (const NODE_ENV of ['development', 'test']) {
       expect(loadConfig({ ...base, NODE_ENV }).MARKET_DATA_SOURCE).toBe('demo');

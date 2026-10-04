@@ -1,36 +1,46 @@
 import { Suspense, lazy, useEffect, useRef } from 'react';
-import { useConnection } from 'wagmi';
+import { useWalletState } from './lib/walletState';
 import { z } from 'zod';
 import { FeedItemSchema, ApprovalSchema, MeSchema, PublicConfigSchema } from '@eko/shared';
 import { Header, Sidebar, MobileBar, MobileTabs } from './components/shell/Shell';
 import { RealtimeContext } from './lib/RealtimeContext';
+import { Onboarding } from './components/onboarding/Onboarding';
+import { WatchRuntime } from './components/WatchButton';
+import { AlertsDrawer } from './components/shell/AlertsDrawer';
 import { Toasts } from './components/Shell';
 import { CommandPalette, ShortcutsHelp, useShortcuts } from './components/Command';
 import { fetchParsed, MOCKS } from './lib/api';
 import { Link } from './lib/Link';
 import { usePath } from './lib/router';
 import { createRealtime, type Realtime } from './lib/realtime';
-import { flushPendingReports } from './lib/trade';
-import { ROUTES, resolveRoute } from './routes';
+import { flushPendingReports } from './lib/pendingReports';
+import { ROUTES, INTERNAL_ROUTES, resolveRoute } from './routes';
 import { useApp } from './store/app';
 import { useShell } from './store/shell';
+import { useUi } from './store/ui';
 import { SHELL_COPY as C } from './copy/shell';
 import { DYOR, NON_AFFILIATION } from './copy';
+import { trackEvent } from './lib/telemetry';
 import { captureReferral } from './lib/referral';
+import { SkipLink } from './components/SkipLink';
+import { useShareMeta } from './lib/share';
 
-const pages = new Map(ROUTES.map((route) => [route, lazy(route.load)]));
+const pages = new Map([...ROUTES, ...INTERNAL_ROUTES].map((route) => [route, lazy(route.load)]));
 export function NotFound() { return <div className="shell-page"><div className="page-head"><h1>{C.notFound}</h1></div><Link to="/radar" className="btn">{C.back}</Link></div>; }
 async function loadConfig(signal?: AbortSignal) {
   try { const config = await fetchParsed('/config', PublicConfigSchema, { signal }); useShell.setState({ config, configError: null }); }
   catch (err) { if ((err as Error).name !== 'AbortError') useShell.setState({ configError: (err as Error).message }); }
 }
-export function App() {
+const WalletRuntime = lazy(() => import('./WalletRuntime'));
+export function App({ walletEnabled = false }: { walletEnabled?: boolean }) {
+  const density = useUi(s => s.density);
   const path = usePath(), config = useShell((s) => s.config), error = useShell((s) => s.configError);
-  const account = useApp((s) => s.account), connection = useConnection();
+  const account = useApp((s) => s.account), connection = useWalletState();
   const signedIn = account?.kind === 'wallet' && !!connection.address && account.walletAddress === connection.address.toLowerCase();
   const realtime = useRef<Realtime | null>(null);
   const signedInRef = useRef(signedIn); signedInRef.current = signedIn;
   useShortcuts();
+  useEffect(() => { trackEvent({ name: 'page_view' }); }, [path]);
   useEffect(() => {
     captureReferral();
     const controller = new AbortController(); let client: Realtime | null = null;
@@ -80,15 +90,14 @@ export function App() {
   const Page = resolved ? pages.get(resolved.route)! : null;
   // The title follows the resolved route, which can change after /config loads its flags; focus moves only on navigation.
   const pageTitle = resolved?.route.title ?? C.notFound;
-  useEffect(() => { document.title = `${pageTitle} · EKO`; }, [pageTitle]);
-  useEffect(() => { document.getElementById('main')?.focus(); }, [path]);
-  return <RealtimeContext.Provider value={sharedRealtime}><div className="eko-shell" data-style="desk"><a className="skip" href="#main">{C.skip}</a><Header /><div className="shell-frame"><Sidebar /><MobileBar /><main className="shell-main" id="main" tabIndex={-1}>
+  useShareMeta(path, pageTitle);
+  const page = Page && resolved ? <>{!(resolved.route.workspace === 'mission' && resolved.route.auth === 'siwe' && !signedIn && !MOCKS && (path.startsWith('/mission/agents/') || path === '/mission/connect' || path === '/mission/approvals' || path.startsWith('/approve/'))) && <Page params={resolved.params} />}{resolved.route.auth === 'siwe' && path !== '/bags' && path !== '/watch' && !signedIn && !(MOCKS && resolved.route.workspace === 'mission') ? <div className="connect-card"><p>{C.connect}</p><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-wallet'))}>{C.wallet}</button></div> : null}
+    {['/scan/', '/bags/r/', '/receipt/'].some(prefix => path.startsWith(prefix)) && <div className="shell-note"><p>{DYOR}</p><p>{NON_AFFILIATION}</p></div>}
+  </> : <NotFound />;
+  return <RealtimeContext.Provider value={sharedRealtime}><WatchRuntime owner={MOCKS ? 'demo-account' : signedIn ? account!.walletAddress : null} /><AlertsDrawer /><div className="eko-shell" data-style="desk" data-density={density}><SkipLink /><Header /><div className="shell-frame"><Sidebar /><MobileBar /><main className="shell-main" id="main" tabIndex={-1}>
     {error && <div className="shell-error" role="status">{C.configError} <button className="btn" onClick={() => void loadConfig()}>{C.retry}</button></div>}
     <Suspense fallback={<div className="shell-page"><div className="skel" style={{ height: 200 }} /></div>}>
-      {Page && resolved ? <>{!(resolved.route.workspace === 'mission' && resolved.route.auth === 'siwe' && !signedIn && !MOCKS && (path.startsWith('/mission/agents/') || path === '/mission/connect' || path === '/mission/approvals' || path.startsWith('/approve/'))) && <Page params={resolved.params} />}{resolved.route.auth === 'siwe' && !signedIn && !(MOCKS && resolved.route.workspace === 'mission') ? <div className="connect-card"><p>{C.connect}</p><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-wallet'))}>{C.wallet}</button></div> : null}
-        {path === '/settings/plan' && !config?.flags.tiers_active && <p className="shell-note">{C.planDormant}</p>}
-        {['/scan/', '/bags/r/', '/receipt/'].some((prefix) => path.startsWith(prefix)) && <div className="shell-note"><p>{DYOR}</p><p>{NON_AFFILIATION}</p></div>}
-      </> : <NotFound />}
+      {walletEnabled ? <WalletRuntime>{page}</WalletRuntime> : page}
     </Suspense>
-  </main></div><MobileTabs /><CommandPalette /><ShortcutsHelp /><Toasts /></div></RealtimeContext.Provider>;
+  </main></div><MobileTabs /><Onboarding /><CommandPalette /><ShortcutsHelp /><Toasts /></div></RealtimeContext.Provider>;
 }

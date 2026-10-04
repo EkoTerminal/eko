@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Config } from '../../config.js';
 import type { FlagService } from '../../flags/service.js';
 import { reportError } from '../../obs/errors.js';
+import { packRoutes } from './packs.js';
 import { configRoutes } from './config.js';
 import { demoRoutes } from './demo.js';
 import { readRoutes, type ReadServices } from './reads.js';
@@ -16,9 +17,25 @@ import { rpcRoutes } from './rpc.js';
 import { TradeAccessService } from '../../exec/trade-access.js';
 import { tradeAdminRoutes } from './trade-admin.js';
 import type { ReceiptApiStore } from '@eko/db';
+import { bagsRoutes } from './bags.js';
+import { telemetryRoutes } from './telemetry.js';
+import type { LatencyStore } from '../../obs/telemetry.js';
+import type { ExecutionService } from '../../exec/service.js';
+import { tradeRoutes } from './trade.js';
 import { receiptRoutes } from './receipts.js';
+import { watchRoutes, type WatchServices } from './watch.js';
+import { telegramRoutes, type TelegramServices } from './telegram.js';
+import { oauthConsentRoutes, type OAuthConsentServices } from './oauth.js';
 
-export async function registerV1(app: FastifyInstance, cfg: Config, flags: FlagService, rpcUsage: () => ReturnType<RpcMeter['usage']>, reads?: ReadServices, account?: AccountServices, rpc?: PublicClient, agents?: AgentServices, journal?: JournalServices, receipts?: ReceiptApiStore) {
+/**
+ * Register optional core v1 route groups under /v1 plus config/demo/health and the shared bounded
+ * error envelope. Host call; each group owns its session/Origin/role checks. Registration and
+ * dependency failures reject; generic request failures are reported except where groups override
+ * private handling.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
+export async function registerV1(app: FastifyInstance, cfg: Config, flags: FlagService, rpcUsage: () => ReturnType<RpcMeter['usage']>, reads?: ReadServices, account?: AccountServices, rpc?: PublicClient, agents?: AgentServices, journal?: JournalServices, receipts?: ReceiptApiStore, watches?: WatchServices, telemetry?: LatencyStore, exec?: ExecutionService, oauth?: OAuthConsentServices, telegram?: TelegramServices) {
   const access = account ? TradeAccessService.fromDb(cfg, flags, account.db) : new TradeAccessService(cfg, flags, async () => undefined);
   await app.register(async (v1) => {
     v1.setNotFoundHandler((_req, reply) => notFound(reply));
@@ -32,14 +49,21 @@ export async function registerV1(app: FastifyInstance, cfg: Config, flags: FlagS
       reportError(err, { where: 'v1', method: req.method });
       return sendError(reply, 'internal_error', 'Internal error');
     });
+    if (telemetry) await v1.register(async area => telemetryRoutes(area, telemetry));
     if (reads) await v1.register(async area => readRoutes(area, reads, account?.auth));
     if (receipts) await v1.register(async area => receiptRoutes(area, receipts));
+    if (watches) await v1.register(async area => watchRoutes(area, watches));
+    if (telegram) await v1.register(async area => telegramRoutes(area, telegram));
     if (account) await v1.register(async area => accountRoutes(area, cfg, account));
+    if (reads && account) await v1.register(async area => bagsRoutes(area, reads.store, account));
     if (journal) await v1.register(async area => journalRoutes(area, journal));
+    if (oauth) await v1.register(async area => oauthConsentRoutes(area, cfg, oauth));
     if (agents) await v1.register(async area => agentRoutes(area, cfg, flags, agents));
+    if (account && exec) await v1.register(async area => tradeRoutes(area, account, exec));
     if (account) await v1.register(async area => tradeAdminRoutes(area, cfg, account));
     if (rpc) await v1.register(async area => rpcRoutes(area, rpc));
-    await v1.register(async area => healthRoutes(area, rpcUsage));
+    await v1.register(async area => healthRoutes(area, rpcUsage, cfg));
+    await v1.register(async area => packRoutes(area));
     await v1.register(async (area) => configRoutes(area, cfg, flags, access, account));
     await v1.register(async (area) => demoRoutes(area, cfg));
   }, { prefix: '/v1' });

@@ -1,0 +1,6 @@
+6006e0002b970b15fd6ac1f02003b0ab1a2f230b2a121bbbea8a58ec6bbacba9  apps/indexer/src/backfill-gate-cli.ts
+6b8ac9dadeda5a2adfae455610a53f3b19fa9148bec96341e7e22fae733d9ad3  apps/indexer/src/backfill-gate-snapshot.ts
+bf5d87c5907622a96ce4cd248d830977c1cbc61ef04aed5d09180626ce31629a  apps/indexer/src/backfill-gate.ts
+1a0226e5a6d1da519c69d31803a86a59d8c0ebb687ee96773b44cbaa7ec19a4b  apps/indexer/test/backfill-gate.test.ts
+eb6bd5635fbc7cfbb5495e6a00d011df422d5ce0081c88c900c6d2786ec7ba5f  apps/indexer/test/fixtures/backfill-gate/snapshot.json
+68e8d02779fbd00b3a2ffc5a51c47fac44de566d5de4b629e38bf39178c880d0  docs/operations/backfill-gate/inventory-local-captures.py

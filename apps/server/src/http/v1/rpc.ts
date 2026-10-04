@@ -46,7 +46,15 @@ const params = {
 
 const error = (id: string | number | null, code: number, message: string) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
-/** Accept only method/validated params; HTTP headers, cookies and provider errors never cross this boundary. */
+/** Accept only method/validated params; HTTP headers, cookies and provider errors never cross this boundary.
+ * @remarks
+ * Register public bounded read-only chain-4663 RPC POST with an explicit method/parameter
+ * allowlist, one request at a time and per-IP rate limits. No wallet authentication.
+ * Invalid/oversized/rate-limited requests reject; provider failure returns fixed 503 text. Caller
+ * headers/cookies and state overrides are not forwarded.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function rpcRoutes(app: FastifyInstance, client: PublicClient) {
   if (client.chain?.id !== 4663) throw new Error('Read RPC requires chain 4663');
   app.addHook('onRequest', async (_req, reply) => { reply.header('Cache-Control', 'no-store'); });

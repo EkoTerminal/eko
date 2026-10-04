@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { AddressSchema, UntrustedSchema, HexSchema } from './common.js';
 import { VerdictSchema } from './coin.js';
 import { UnsignedTxSchema } from './transactions.js';
+import { ActualOrderBindingSchema } from './actual-order.js';
 // FACTS §7 and BACKEND §23 (v1.2).
 export const PolicySchema = z.object({
   mode: z.enum(['safe', 'balanced', 'degen']),
@@ -56,6 +57,7 @@ export const PreflightRequestSchema = z.object({
     limitPrice: z.number().optional(),
     leverage: z.number().optional(),
     tx: PreflightOrderTxSchema.optional(),
+    execution: ActualOrderBindingSchema.optional(),
   }),
   context: z.object({
     positions: z.array(z.object({

@@ -7,6 +7,8 @@ import { wagmiConfig, type SupportedChainId } from './wallet';
 import { useApp } from '../store/app';
 import { useShell } from '../store/shell';
 import { capturedReferral, clearReferral } from './referral';
+import { rememberPending, forgetPending } from './pendingReports';
+export { flushPendingReports } from './pendingReports';
 
 export function newIdempotencyKey() {
   return `ik_${crypto.randomUUID()}`;
@@ -47,57 +49,21 @@ export async function ensureChain(chainId: number) {
 /** Exact-amount ERC-20 approval (no unlimited allowances), waits for confirmation. */
 export async function approveToken(q: Quote): Promise<Hex> {
   if (!q.tx?.approval) throw new Error('No approval needed');
-  const { token, spender, amount } = q.tx.approval;
+  return approveExactToken(q.tx.approval, q.tx.chainId);
+}
+
+/** Shared exact ERC-20 primitive; guarded callers pin the account and revalidate immediately before signing. */
+export async function approveExactToken(step: { token: string; spender: string; amount: string }, chainId = 4663, account?: string, check?: () => void): Promise<Hex> {
+  const { token, spender, amount } = step;
+  check?.();
   const hash = await writeContract(wagmiConfig, {
-    address: token as Address,
-    abi: erc20Abi,
-    functionName: 'approve',
-    args: [spender as Address, BigInt(amount)],
-    chainId: q.tx.chainId as SupportedChainId,
+    address: token as Address, abi: erc20Abi, functionName: 'approve',
+    args: [spender as Address, BigInt(amount)], chainId: chainId as SupportedChainId,
+    ...(account ? { account: account as Address } : {}),
   });
-  const r = await waitForTransactionReceipt(wagmiConfig, { hash, chainId: q.tx.chainId as SupportedChainId });
-  if (r.status !== 'success') throw new Error('Approval transaction reverted');
+  const receipt = await waitForTransactionReceipt(wagmiConfig, { hash, chainId: chainId as SupportedChainId });
+  if (receipt.status !== 'success') throw new Error('Approval transaction reverted');
   return hash;
-}
-
-const PENDING_KEY = 'eko.pendingTx';
-
-function rememberPending(orderId: string, txHash: string) {
-  try {
-    const all = JSON.parse(localStorage.getItem(PENDING_KEY) ?? '{}');
-    all[orderId] = { txHash, at: Date.now() };
-    localStorage.setItem(PENDING_KEY, JSON.stringify(all));
-  } catch {
-    /* ignore */
-  }
-}
-function forgetPending(orderId: string) {
-  try {
-    const all = JSON.parse(localStorage.getItem(PENDING_KEY) ?? '{}');
-    delete all[orderId];
-    localStorage.setItem(PENDING_KEY, JSON.stringify(all));
-  } catch {
-    /* ignore */
-  }
-}
-
-/** After a reload/reconnect: report any tx hash the wallet returned but the server never received. */
-export async function flushPendingReports() {
-  let all: Record<string, { txHash: string; at: number }> = {};
-  try {
-    all = JSON.parse(localStorage.getItem(PENDING_KEY) ?? '{}');
-  } catch {
-    return;
-  }
-  for (const [orderId, v] of Object.entries(all)) {
-    try {
-      await api(`/api/orders/${orderId}/submitted`, { body: { txHash: v.txHash } });
-      forgetPending(orderId);
-    } catch (err) {
-      if (Date.now() - v.at > 24 * 3600_000) forgetPending(orderId);
-      void err;
-    }
-  }
 }
 
 export function isUserRejection(err: unknown): boolean {

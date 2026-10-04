@@ -31,8 +31,9 @@ and what happened next. EKO is built around that loop.
 
 This is a **development snapshot**, with simulated data enabled for local exploration. Source presence
 does not establish a production launch, completed contract review, live integration or measured accuracy.
-The `onchain` market-data boot mode currently refuses startup; production mode defaults to that mode,
-so a production-style demo must explicitly select `MARKET_DATA_SOURCE=demo`.
+Production mode defaults to the `onchain` market-data source, which serves chain-derived records the
+indexer writes to Postgres; without a running indexer its markets are empty. Select
+`MARKET_DATA_SOURCE=demo` for a production-style demo with simulated data.
 
 Brokerage-connected agent checks are advisory. The agent must call them, and the brokerage's own
 trade approvals remain the enforced stop. The source also contains on-chain execution components;
@@ -78,12 +79,26 @@ until a maintainer provides it. See [the guard prerequisites](docs/PUBLIC_HISTOR
 | [`apps/indexer`](apps/indexer) | Block/log ingestion, catch-up and chain-derived records |
 | [`apps/engines`](apps/engines) | Scan workers, simulations and evaluations |
 | [`apps/mcp`](apps/mcp) | MCP transport and tools |
+| [`apps/bots`](apps/bots) | X and Farcaster summon bots (transports off by default) |
+| [`apps/og-renderer`](apps/og-renderer) | Deterministic PNG share cards |
 | [`packages`](packages) | Shared contracts, chain tools, database, policies, playbooks and signal engines |
 | [`contracts`](contracts) | Solidity source and contract tests; third-party libraries retain their licenses |
 | [`infra`](infra) | Deployment role definitions, monitoring and backup examples |
+| [`docs`](docs) | Product spec ([`docs/eko`](docs/eko)), security model and invariants, operations runbooks, task packets and reports |
+| [`.audit-grade`](.audit-grade) | The latest audit-grade report, findings ledger and score history |
 
 TypeScript ties the workspace together. Postgres/Drizzle, PGlite, viem, wagmi and TradingView
 Lightweight Charts support the data and terminal layers. Dependencies are pinned in the lockfile.
+
+## Audit and live staging
+
+[`.audit-grade/REPORT.md`](.audit-grade/REPORT.md) is the latest audit-grade report; its findings ledger and
+score history sit beside it. Commit hashes in those files and in the operations evidence refer to the
+source repository; [`docs/EXPORT.md`](docs/EXPORT.md) maps each synced source revision to its public commit.
+
+Staging runs at **https://app.staging.ekoterminal.com** with live trading off. `/v1/build` reports the public
+commit it was built from, its bundle digests and its non-secret configuration digest; from a checkout of that
+commit, `node scripts/verify-staging-identity.mjs <origin> --revision <sha>` checks them read-only.
 
 ## A transparent public history
 
@@ -92,9 +107,12 @@ source snapshot. The late-June start reflects the owner's reported development p
 not the original contemporaneous commits, and their displayed dates are not evidence of when any
 specific component was built. Every commit includes a reconstruction trailer.
 
+Commits after the reconstruction are genuine updates with their real dates. Each one syncs the public tree
+to a newer source revision, now including the project documentation, task reports and audit record.
+
 Read [the history disclosure](docs/PUBLIC_HISTORY.md) and [export scope](docs/EXPORT.md) before treating
-the timeline as project provenance. Internal planning, task reports and private captures are excluded.
-Neutral commit identities and content guards do not hide the GitHub account or authenticated activity.
+the timeline as project provenance. Neutral commit identities and content guards do not hide the GitHub
+account or authenticated activity.
 
 ## License and contributions
 

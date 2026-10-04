@@ -26,7 +26,7 @@ function clientFor(blocks: Map<bigint, RpcBlock>, receipts = new Map<bigint, Rpc
     code: async () => '0x', v3Pool: async () => null,
     tokenMetadata: async () => ({ symbol: '<sample>', name: '<sample>', decimals: 18 }),
     tokenMetadataBatch: async addresses => addresses.map(() => ({ symbol: '<sample>', name: '<sample>', decimals: 18 })),
-    ethUsdRate: async n => ({ value: 2000, block: n }),
+    ethUsdRate: async n => ({ value: 2000, block: n, source: { address: registry.requireAddress('uniswapV3.quoterV2'), venue: 'uniswap_v3' as const, fee: 3000 } }),
   };
 }
 function tradeBlocks(count: number, first = 1200) {
@@ -158,14 +158,14 @@ describe('batched receipts, metadata and historical pricing', () => {
   },10000);
   it('caches samples within a bucket, never uses a future sample, and invalidates orphaned cached reads', async () => {
     const db=await database(),data=tradeBlocks(2,1799);await seedToken(db,data.token,data.curve);const client=clientFor(data.blocks,data.receipts);
-    client.ethUsdRate=vi.fn(async n=>({value:n===1200n?2000:3000,block:n}));const decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);
+    client.ethUsdRate=vi.fn(async n=>({value:n===1200n?2000:3000,block:n,source:{ address: registry.requireAddress('uniswapV3.quoterV2'), venue: 'uniswap_v3' as const, fee: 3000 }}));const decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);
     for(const n of [1799n,1800n]){const block=data.blocks.get(n)!,receipts=data.receipts.get(n)!;const prepared=await decoder.prepare(db,block,receipts,{ponsOnly:true});await db.tx(async tx=>{await tx.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await decoder.write(tx,block,receipts,prepared,{ponsOnly:true});});}
     const rows=(await db.sql.query<{block:number;priced_block:number;usd:number;amount_quote:string}>('SELECT * FROM swaps ORDER BY block,log_index')).rows;
     expect(rows.every(r=>BigInt(r.priced_block)<=BigInt(r.block))).toBe(true);
     expect(rows.filter(r=>BigInt(r.block)===1799n).every(r=>BigInt(r.priced_block)===1200n&&Math.abs(r.usd-Number(r.amount_quote)/1e18*2000)<1e-9)).toBe(true);
     expect(rows.filter(r=>BigInt(r.block)===1800n).every(r=>BigInt(r.priced_block)===1800n&&Math.abs(r.usd-Number(r.amount_quote)/1e18*3000)<1e-9)).toBe(true);
     expect(client.ethUsdRate).toHaveBeenCalledTimes(2);decoder.invalidate();await decoder.prefetch(data.blocks.get(1800n)!,data.receipts.get(1800n)!,{ponsOnly:true});expect(client.ethUsdRate).toHaveBeenCalledTimes(3);
-    client.ethUsdRate=async n=>({value:2000,block:n+600n});decoder.invalidate();await expect(decoder.prefetch(data.blocks.get(1799n)!,data.receipts.get(1799n)!,{ponsOnly:true})).rejects.toThrow('historical');
+    client.ethUsdRate=async n=>({value:2000,block:n+600n,source:{ address: registry.requireAddress('uniswapV3.quoterV2'), venue: 'uniswap_v3' as const, fee: 3000 }});decoder.invalidate();await expect(decoder.prefetch(data.blocks.get(1799n)!,data.receipts.get(1799n)!,{ponsOnly:true})).rejects.toThrow('historical');
   });
   it('fills legacy null USD on replay, preserves amounts/actor, and does not duplicate notifications', async () => {
     const db=await database(),data=tradeBlocks(1);await seedToken(db,data.token,data.curve);const client=clientFor(data.blocks,data.receipts);

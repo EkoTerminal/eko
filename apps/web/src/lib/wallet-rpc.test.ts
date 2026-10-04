@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.resetModules(); });
 
 describe('keyless wallet and receipt reads (mock fetch only)', () => {
-  it('uses the API proxy for wallet reads, latest registry verification and transaction receipts, without credentials', async () => {
+  it('uses the API proxy for wallet reads and direct keyless RPC for historical receipt checks, without credentials', async () => {
     vi.stubEnv('VITE_API_URL', 'https://api.eko.example/v1');
     // Legacy provider overrides must never select a browser transport.
     vi.stubEnv('VITE_RH_MAINNET_RPC_URL', 'https://rpc.mainnet.chain.robinhood.com');
@@ -20,13 +20,14 @@ describe('keyless wallet and receipt reads (mock fetch only)', () => {
     expect(READ_RPC_URL).toBe('https://api.eko.example/v1/rpc');
     expect(await wagmiConfig.getClient({ chainId: 4663 }).request({ method: 'eth_chainId' })).toBe('0x1237');
     expect(await receiptReadClient.readContract({ address: `0x${'11'.repeat(20)}`, functionName: 'lastBatchId',
+      blockNumber: 100n,
       abi: [{ type: 'function', name: 'lastBatchId', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint64' }] }],
     })).toBe(1n);
     expect(await receiptReadClient.request({ method: 'eth_getTransactionReceipt', params: [`0x${'22'.repeat(32)}`] })).toBeNull();
     expect(calls.map(call => call.body.method)).toEqual(['eth_chainId', 'eth_call', 'eth_getTransactionReceipt']);
-    expect((calls[1]!.body.params as unknown[])[1]).toBe('latest');
+    expect((calls[1]!.body.params as unknown[])[1]).toBe('0x64');
+    expect(calls.map(call => call.url)).toEqual([READ_RPC_URL, 'https://rpc.mainnet.chain.robinhood.com/', 'https://rpc.mainnet.chain.robinhood.com/']);
     for (const call of calls) {
-      expect(call.url).toBe(READ_RPC_URL);
       expect(call.credentials).toBe('omit');
       expect(call.headers.map(([name]) => name)).not.toContain('authorization');
       expect(call.headers.map(([name]) => name)).not.toContain('cookie');

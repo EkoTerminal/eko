@@ -35,7 +35,7 @@ it.each([true,false])('preserves hostile chain identities through migration and 
   expect(Buffer.byteLength(name)).toBeGreaterThanOrEqual(10*1024);expect(Buffer.byteLength(symbol)).toBeGreaterThanOrEqual(10*1024);
   const client:ChainClient={chainId:async()=>4663,head:async()=>BigInt(blocks[1].block.number),block:async n=>blocks.find(b=>BigInt(b.block.number)===n)!.block,
    receipts:async n=>blocks.find(b=>BigInt(b.block.number)===n)!.receipts,code:async()=> '0x',logs:async()=>[],v3Pool:async()=>null,
-   tokenMetadata:async(_a,n)=>({name,symbol,decimals:18,totalSupply:10n**27n,supplyBlock:n}),ethUsdRate:async n=>({value:2000,block:n})};
+   tokenMetadata:async(_a,n)=>({name,symbol,decimals:18,totalSupply:10n**27n,supplyBlock:n}),ethUsdRate:async n=>({value:2000,block:n,source:{address:registry.requireAddress('uniswapV3.quoterV2'),venue:'uniswap_v3',fee:3000}})};
   const decoder=new BlockDecoder(client,registry,undefined,()=>{});
   for(const [i,{block,receipts}] of blocks.entries()) {
    block.timestamp=`0x${Math.floor(now/1000-120+i*60).toString(16)}`;

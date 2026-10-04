@@ -1,6 +1,6 @@
 {
   "route": {
-    "receiver": "unconfigured",
+    "receiver": "ops-and-oncall",
     "group_by": [
       "alertname",
       "severity"
@@ -31,13 +31,26 @@
   },
   "receivers": [
     {
-      "name": "unconfigured"
+      "name": "ops",
+      "webhook_configs": [
+        {
+          "url": "${OPS_ALERT_WEBHOOK_URL}",
+          "send_resolved": true
+        }
+      ]
     },
     {
-      "name": "ops"
-    },
-    {
-      "name": "ops-and-oncall"
+      "name": "ops-and-oncall",
+      "webhook_configs": [
+        {
+          "url": "${OPS_ALERT_WEBHOOK_URL}",
+          "send_resolved": true
+        },
+        {
+          "url": "${ONCALL_ALERT_WEBHOOK_URL}",
+          "send_resolved": true
+        }
+      ]
     }
   ]
 }

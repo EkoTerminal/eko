@@ -127,7 +127,7 @@ export class ChatCompletionsProvider implements AIProvider {
             { role: 'user', content: req.user },
           ],
           ...(response_format ? { response_format } : {}),
-          max_tokens: 4096,
+          max_tokens: req.maxOutputTokens ?? 4096,
           ...this.opts.extraBody,
         }),
       },

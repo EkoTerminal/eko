@@ -1,3 +1,4 @@
+import { attributionGap } from './attribution-coverage.js';
 import { loadReferenceInputs } from './reference-simulation.js';
 import { binary, type ChainDb } from '@eko/db';
 import { loadRegistry, type PonsProfileClient } from '@eko/chain';
@@ -19,15 +20,16 @@ export interface TokenRow {
   graduated_block: string | null; graduated_pool: Uint8Array | null;
 }
 export interface SwapRow {
-  block: string; ts: Date; tx_hash: Uint8Array; log_index: number; trader: Uint8Array;
+  block: string; ts: Date; tx_hash: Uint8Array; log_index: number; trader: Uint8Array | null; senders_pending?:boolean;
   traderHex?:Address;quoteHex?:Address;poolHex?:Address;txHex?:Address;sec?:number;
   side: number; amount_coin: string; amount_quote: string; price_quote: number; usd: number | null;
   venue: string; pool_id: Uint8Array; quote_asset: Uint8Array;
 }
 export interface PoolRow { id: Uint8Array; currency0: Uint8Array; currency1: Uint8Array; venue: PoolRef['venue']; fee: number; hooks: Uint8Array | null; created_block:string }
-export interface EventRow { block: string; ts: Date; tx_hash: Uint8Array; log_index: number; kind: string; actor: Uint8Array; pool_id: Uint8Array; data: Record<string, string> }
+export interface EventRow { block: string; ts: Date; tx_hash: Uint8Array; log_index: number; kind: string; actor: Uint8Array | null; senders_pending?:boolean; pool_id: Uint8Array; data: Record<string, string> }
 export interface Holding { holder: Uint8Array; amount: string; block: string; holderHex?:Address }
 export interface LoadedSources extends CardSources {
+  attributionCoverage?: Record<string,import('@eko/shared').AttributionCoverageGap>;
   referenceResults?: import('@eko/chain').ReferenceResult[];
   curvePct?:number;trade:TradeView;holderSummary:{count:number;previousCount:number;top10:number;dev:number;burned:bigint;inventory:bigint};
   token: TokenRow; swaps: SwapRow[]; holdings: Holding[]; previousHoldings: Holding[]; events: EventRow[];
@@ -57,16 +59,12 @@ export async function historyAt(db: ChainDb, deployer: Address, coin: Address, b
     WHERE deployer=$1 AND coin<>$2 AND valid_from_block<=$3 AND rules_version=$4 ORDER BY coin,valid_from_block DESC`, [binary(deployer), binary(coin), block, RULES_VERSION])).rows;
   return { launches: stats.map(r => r.data) };
 }
-export async function loadSources(db: ChainDb, coin: Address, block: number, client?: PonsProfileClient, clock?:ClockCache,cache?:ReplayCache,retrospective=false): Promise<LoadedSources | null> {
+async function readSources(db: ChainDb, coin: Address, block: number, client?: PonsProfileClient, clock?:ClockCache,cache?:ReplayCache,retrospective=false): Promise<LoadedSources | null> {
   const token = cache ? cache.tokens.get(coin) : (await db.sql.query<TokenRow>('SELECT * FROM tokens WHERE address=$1 AND first_block<=$2', [binary(coin), block])).rows[0];
-  if(token && Number(token.first_block)>block)return null;
-  // Pending sender evidence must never enter an aggregate or a card, including cached replay.
-  if((await db.sql.query(`SELECT 1 FROM swaps WHERE coin=$1 AND block<=$2 AND (senders_pending OR trader IS NULL)
-    UNION ALL SELECT 1 FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block<=$2 AND (e.senders_pending OR e.actor IS NULL)
-    UNION ALL SELECT 1 FROM pending_pool_events e JOIN pools p ON p.id=e.emitter WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block<=$2 LIMIT 1`,[binary(coin),block])).rows.length)return null;
-  if (!token?.deployer || token.name == null || token.symbol == null) return null;
+  if(token && Number(token.first_block)>block)return unavailable(db,coin,block,'launch_after_checkpoint');
+  if (!token?.deployer || token.name == null || token.symbol == null) return unavailable(db,coin,block,'missing_launch_identity');
   const [now,created]=await Promise.all([resolveClock(db,block,undefined,clock),resolveClock(db,Number(token.first_block),undefined,clock)]);
-  if (!now || !created) return null;
+  if (!now || !created) return unavailable(db,coin,block,'missing_block_clock');
   const asOfSec = seconds(now.ts), createdAtSec = seconds(created.ts);
   const cachedRows=cache ? await cache.coinRows(coin) : undefined;
   const swaps = cachedRows ? cachedRows.swaps : (await db.sql.query<SwapRow>('SELECT * FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY block,log_index,tx_hash', [binary(coin), block])).rows.map(prepareSwap);
@@ -166,6 +164,7 @@ export async function loadSources(db: ChainDb, coin: Address, block: number, cli
     const owned = new Map<string, { actor: Address; amount: bigint; refs: EvidenceRef[] }>();
     for (const e of pe) {
       if (!['Mint', 'Burn', 'ModifyLiquidity'].includes(e.kind)) continue;
+      if(e.actor==null || e.senders_pending)continue;
       const actor = (e.data.owner ?? e.data.sender ?? rowHex(e.actor)).toLowerCase() as Address;
       const key = `${actor}:${e.data.tickLower}:${e.data.tickUpper}:${e.data.salt ?? ''}`;
       const o = owned.get(key) ?? { actor, amount: 0n, refs: [] };
@@ -225,6 +224,31 @@ export async function loadSources(db: ChainDb, coin: Address, block: number, cli
   s.trending=cache ? await cache.trending(s.createdAtBlock,trending) : await trending();
   const ranked=cache ? await cache.ranked(block,asOfSec) : await liveRanks(db,block,asOfSec);
   const rank=ranked.get(coin);if(rank!=null)s.trendingRank=rank;
+  const lifetime=trade.attribution,hour=attributionGap(trade.recent,'trailing_1h');
+  const liquidityMissing=events.filter(e=>e.actor==null || e.senders_pending).length;
+  const deferred=Number((await db.sql.query<{n:string}>(`SELECT count(*) AS n FROM pending_pool_events e JOIN pools p ON p.id=e.emitter
+    WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block<=$2`,[binary(coin),block])).rows[0].n);
+  const liquidityGap:import('@eko/shared').AttributionCoverageGap={reason:'unattributed_liquidity',window:'pool_creation_to_checkpoint',status:liquidityMissing || deferred ? 'incomplete':'complete',
+    threshold:0,totalCount:events.length+deferred,unattributedCount:liquidityMissing+deferred,countShare:events.length+deferred ? (liquidityMissing+deferred)/(events.length+deferred):0,
+    totalVolumeUsd:null,unattributedVolumeUsd:null,volumeShare:null,unknownVolumeCount:liquidityMissing+deferred};
+  let graduationGap=lifetime;
+  if(s.graduation)graduationGap=attributionGap(timeWindow(swaps,s.graduation.atSec-0.001,s.graduation.atSec+300,swapEnd,trade.monotonic),'graduation_to_5m');
+  s.attributionCoverage={holder_concentration:lifetime,insider_sells:graduationGap,deployer_sells:lifetime,bundles:lifetime,fresh_wallet_share:lifetime,
+    wallet_flow:hour,wash_trading:hour,exempt_insiders:lifetime,liquidity_ownership:liquidityGap};
+  if(hour.status==='incomplete'){delete s.wash;delete s.dominantPair;}
+  if(lifetime.status==='incomplete')delete s.pons;
+  if(graduationGap.status==='incomplete')delete s.graduation;
+  if(liquidityGap.status==='incomplete')delete s.liquidity;
   await loadReferenceInputs(db,s,retrospective || cache!==undefined);
   return s;
+}
+
+async function unavailable(db:ChainDb,coin:Address,block:number,reason:string):Promise<null> {
+  await db.sql.query(`INSERT INTO engine_card_failures(coin,attempts,last_block,reason) VALUES($1,1,$2,$3)
+    ON CONFLICT(coin) DO UPDATE SET attempts=engine_card_failures.attempts+1,last_block=excluded.last_block,reason=excluded.reason`,[binary(coin),block,reason]);
+  return null;
+}
+export async function loadSources(db:ChainDb,coin:Address,block:number,client?:PonsProfileClient,clock?:ClockCache,cache?:ReplayCache,retrospective=false) {
+  try {return await readSources(db,coin,block,client,clock,cache,retrospective);}
+  catch(error){await unavailable(db,coin,block,'source_load_failed');throw error;}
 }

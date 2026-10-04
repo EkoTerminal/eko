@@ -67,7 +67,19 @@ export const PilotManifestSchema = z.strictObject({
   if (overhead > BigInt(m.budget.capNanoUsd)) fail('Fixed costs exceed shared cap');
 });
 export type PilotManifest = z.infer<typeof PilotManifestSchema>;
+/**
+ * SHA-256 hash canonical pilot input for checkpoint/artifact identities. Pure host-input operation
+ * without auth; canonicalization failures throw and a hash alone is not acquisition approval.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export const pilotHash = (value: unknown) => createHash('sha256').update(canonicalize(value)).digest('hex');
+/**
+ * Hash a supplied pilot job for deduplication/artifact recovery. Pure host-input operation without
+ * auth; canonicalization failures throw; the run path separately schema-validates jobs.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export const pilotJobKey = (job: PilotJob) => pilotHash(job);
 export class PilotStop extends Error {}
 
@@ -89,7 +101,14 @@ export interface PilotIO {
   stopped(): boolean;
   now(): number; rss(): number;
 }
-/** Split the largest expensive dimension; topic ORs remain ORs at the same position. */
+/** Split the largest expensive dimension; topic ORs remain ORs at the same position.
+ * @remarks
+ * Split range first, then addresses, then topic alternatives while preserving each filter
+ * position; return empty when unsplittable. Pure worker helper with no auth; assumes a typed valid
+ * log job and invalid integer input can throw.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function splitPilotLogs(job: Extract<PilotJob, { kind: 'logs' }>): PilotJob[] {
   const span = BigInt(job.through) - BigInt(job.from) + 1n;
   if (span > 1n) {
@@ -107,6 +126,13 @@ export function splitPilotLogs(job: Extract<PilotJob, { kind: 'logs' }>): PilotJ
   }
   return [];
 }
+/**
+ * Build a prepared checkpoint bound to manifest/candidate hashes, prioritizing critical logs and
+ * deduplicating shared trace pins. Operator supplies reviewed manifest; no auth or I/O; malformed
+ * typed input/hashing failures throw and no acquisition is approved here.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function initialPilotCheckpoint(m: PilotManifest, candidateRevision: string): PilotCheckpoint {
   const priority = (j: PilotJob) => j.kind === 'trace' ? 2 : { critical: 0, candidates: 1, history: 3 }[j.priority];
   // Deduplicate shared block/hash diagnostics, never trace once per candidate wallet.
@@ -119,7 +145,15 @@ export function initialPilotCheckpoint(m: PilotManifest, candidateRevision: stri
   return { version: 1, manifestHash: pilotHash(m), candidateRevision, pending, completed: [],
     replay: { complete: false, evaluations: 0, elapsedMs: 0 }, elapsedMs: 0, peakRssBytes: 0, status: 'prepared', reason: null };
 }
-/** A damaged cursor must never expand the approved address/topic/range plan. */
+/** A damaged cursor must never expand the approved address/topic/range plan.
+ * @remarks
+ * Require checkpoint manifest binding and bounded state, then validate pending jobs as subsets of
+ * approved range/address/topic scope. Operator supplies manifest/checkpoint; no authentication.
+ * Invalid/damaged/expanded pending state throws before acquisition; completed artifact content is
+ * verified by the I/O adapter.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function validatePilotCheckpoint(m: PilotManifest, c: PilotCheckpoint) {
   if (c.version !== 1 || c.manifestHash !== pilotHash(m) || !Array.isArray(c.pending) || !Array.isArray(c.completed) ||
     !Number.isFinite(c.elapsedMs) || c.elapsedMs < 0 || !Number.isFinite(c.peakRssBytes) || c.peakRssBytes < 0 ||
@@ -142,7 +176,16 @@ export function validatePilotCheckpoint(m: PilotManifest, c: PilotCheckpoint) {
     if (!authorized) throw new Error('Pilot checkpoint expanded scope');
   }
 }
-/** Serialized work bounds memory and isolates this enrichment budget from baseline ingest. */
+/** Serialized work bounds memory and isolates this enrichment budget from baseline ingest.
+ * @remarks
+ * Validate manifest/checkpoint, run retained replay and optionally serialized bounded acquisition
+ * with immutable artifact recovery and checkpoint persistence. Operator controls acquire and must
+ * supply approval/pricing refs; adapters enforce budgets. Missing refs/shutdown/budget closure
+ * yields stopped, acquisition errors failed; initial validation/save failures can reject. Job
+ * completion never upgrades captured check coverage.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function runCoveragePilot(m: PilotManifest, c: PilotCheckpoint, io: PilotIO, acquire: boolean) {
   m = PilotManifestSchema.parse(m);
   validatePilotCheckpoint(m, c);
@@ -198,6 +241,13 @@ export async function runCoveragePilot(m: PilotManifest, c: PilotCheckpoint, io:
   }
   await save(); return c;
 }
+/**
+ * Project captured candidate/exclusion raw balances and required-check completion from selected
+ * manifest state. Public pure report projection without auth; assumes validated manifest and
+ * invalid raw quantities can throw. Completed RPC jobs do not set check completion.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function pilotCoverage(m: PilotManifest) {
   return m.selected.map(s => {
     const candidates = s.candidates.filter(c => c.selected), excluded = s.candidates.filter(c => !c.selected);
@@ -212,6 +262,14 @@ export function pilotCoverage(m: PilotManifest) {
       critical, lower, criticalComplete: complete(critical), lowerComplete: complete(lower) };
   });
 }
+/**
+ * Project checkpoint performance and captured coverage; freeze an operational target only for
+ * measured completed replay, retain explicit gaps and released=false. Public report projection
+ * without auth; assumes validated typed manifest/checkpoint and malformed data can throw.
+ * Diagnostic traces do not establish live funding completeness.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function pilotReport(m: PilotManifest, c: PilotCheckpoint) {
   const coverage = pilotCoverage(m), latencies = c.completed.map(j => j.latencyMs).sort((a, b) => a - b);
   const p95 = latencies.length ? latencies[Math.ceil(latencies.length * .95) - 1] : null;

@@ -2,6 +2,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { PAPER_QUOTE_ASSET, PAPER_STARTING_CASH, type Balance, type Fill, type Position, type TradingMode } from '@eko/shared';
 import type { Db } from '../db/client.js';
 import { fills, paperBalances, positions } from '../db/schema.js';
+import { accountSpotFill } from './position-accounting.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
@@ -17,26 +18,9 @@ export async function applyFillToPosition(
   fee: number,
 ) {
   const [cur] = await tx.select().from(positions).where(and(eq(positions.accountId, accountId), eq(positions.mode, mode), eq(positions.market, market)));
-  let quantity = cur?.quantity ?? 0;
-  let costBasis = cur?.costBasis ?? 0;
-  let realized = cur?.realizedPnl ?? 0;
-  if (side === 'buy') {
-    quantity += baseQty;
-    costBasis += quoteQty + fee;
-  } else {
-    // Only the part of the sale backed by recorded buys has a known cost basis. Selling assets
-    // acquired outside EKO (possible on-chain) must not be booked as realized profit.
-    const sold = Math.min(baseQty, quantity);
-    const avg = quantity > 0 ? costBasis / quantity : 0;
-    const share = baseQty > 0 ? sold / baseQty : 0;
-    realized += (quoteQty - fee) * share - avg * sold;
-    costBasis -= avg * sold;
-    quantity -= sold;
-    if (quantity < 1e-12) {
-      quantity = 0;
-      costBasis = 0;
-    }
-  }
+  const { quantity, costBasis, realizedPnl: realized } = accountSpotFill({
+    quantity: cur?.quantity ?? 0, costBasis: cur?.costBasis ?? 0, realizedPnl: cur?.realizedPnl ?? 0,
+  }, side, baseQty, quoteQty, fee);
   const avgCost = quantity > 0 ? costBasis / quantity : 0;
   await tx
     .insert(positions)
@@ -48,18 +32,42 @@ export async function applyFillToPosition(
 }
 
 export class PortfolioService {
+  /**
+   * Retain database for account-scoped simulated balances and position/fill reads. Host-only
+   * construction; no account authentication/query occurs here.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   constructor(private db: Db) {}
 
+  /**
+   * Idempotently provision initial simulated quote balance for the supplied account. Caller
+   * authenticates account; SQL failures reject. No real funds are created.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async ensurePaperAccount(accountId: string) {
     await this.db.insert(paperBalances).values({ accountId, asset: PAPER_QUOTE_ASSET, amount: PAPER_STARTING_CASH }).onConflictDoNothing();
   }
 
+  /**
+   * Provision then read only this account's simulated balances. Caller authenticates account;
+   * database failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async paperBalances(accountId: string): Promise<Balance[]> {
     await this.ensurePaperAccount(accountId);
     const rows = await this.db.select().from(paperBalances).where(eq(paperBalances.accountId, accountId));
     return rows.map((r) => ({ asset: r.asset, amount: r.amount }));
   }
 
+  /**
+   * Read account/mode positions and derive optional unrealized PnL using caller-supplied marks.
+   * Caller authenticates account and trusts the mark provider; SQL or mark callback failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async positions(accountId: string, mode: TradingMode, marks: (market: string) => number | null): Promise<Position[]> {
     const rows = await this.db.select().from(positions).where(and(eq(positions.accountId, accountId), eq(positions.mode, mode)));
     return rows
@@ -81,6 +89,12 @@ export class PortfolioService {
       });
   }
 
+  /**
+   * Read account/mode fill history newest first with the supplied limit. Caller authenticates
+   * account; SQL failures reject and the limit is not independently validated.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async fills(accountId: string, mode: TradingMode, limit = 200): Promise<Fill[]> {
     const rows = await this.db
       .select()
@@ -104,7 +118,13 @@ export class PortfolioService {
     }));
   }
 
-  /** Resets the PAPER account only. Order and fill history is kept (and remains labelled paper). */
+  /** Resets the PAPER account only. Order and fill history is kept (and remains labelled paper).
+   * @remarks
+   * Transactionally reset only simulated balances/positions, retaining order/fill history. Caller
+   * authenticates account; SQL failures reject without a partial transaction commit.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async resetPaper(accountId: string) {
     await this.db.transaction(async (tx) => {
       await tx.delete(paperBalances).where(eq(paperBalances.accountId, accountId));

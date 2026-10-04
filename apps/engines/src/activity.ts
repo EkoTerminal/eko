@@ -78,9 +78,9 @@ export async function coinActivity(db: ChainDb, to: number, readBlock?: BlockRea
   const rows=(await db.sql.query<{ coin:Uint8Array;block:string;ts:Date;kind:string;low:number | null;high:number | null;price:number | null;revision:string }>(`WITH activity AS (
     SELECT coin,block,'swap' AS kind,min(ts) AS ts,min(price_quote) AS low,max(price_quote) AS high,
       (array_agg(price_quote ORDER BY log_index DESC,tx_hash DESC))[1] AS price,
-      count(*)::text||':'||count(usd)::text AS revision FROM swaps WHERE block<=$1 GROUP BY coin,block
+      count(*)::text||':'||count(usd)::text||':'||(count(*) FILTER(WHERE senders_pending))::text||':'||coalesce(string_agg(coalesce(encode(trader,'hex'),'missing'),',' ORDER BY log_index,tx_hash),'') AS revision FROM swaps WHERE block<=$1 GROUP BY coin,block
     UNION ALL SELECT token,block,'transfer',min(ts),NULL,NULL,NULL,count(*)::text FROM token_transfers WHERE block<=$1 GROUP BY token,block
-    UNION ALL SELECT t.address,e.block,'liquidity',min(e.ts),NULL,NULL,NULL,count(*)::text FROM liquidity_events e
+    UNION ALL SELECT t.address,e.block,'liquidity',min(e.ts),NULL,NULL,NULL,count(*)::text||':'||(count(*) FILTER(WHERE e.senders_pending))::text||':'||coalesce(string_agg(coalesce(encode(e.actor,'hex'),'missing'),',' ORDER BY e.log_index,e.tx_hash),'') FROM liquidity_events e
       JOIN pools p ON p.id=e.pool_id JOIN tokens t ON t.address=p.currency0 OR t.address=p.currency1 WHERE e.block<=$1 GROUP BY t.address,e.block
     UNION ALL SELECT token,e.block,'pons',b.ts,NULL,NULL,NULL,count(*)::text FROM pons_events e
       JOIN engine_block_times b ON b.number=e.block WHERE e.block<=$1 GROUP BY token,e.block,b.ts

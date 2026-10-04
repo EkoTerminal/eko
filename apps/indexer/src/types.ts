@@ -1,11 +1,12 @@
 import { safeError } from './safe-error.js';
 import type { Address, Hex } from 'viem';
-export interface RpcTransaction { hash: Hex; from: Address; to: Address | null; type?: Hex; transactionIndex?: Hex; authorizationList?: { chainId: Hex; address: Address; nonce: Hex; yParity: Hex; r: Hex; s: Hex }[] }
+export interface RpcTransaction { hash: Hex; from: Address; to: Address | null; input?: Hex; gas?: Hex; type?: Hex; transactionIndex?: Hex; authorizationList?: { chainId: Hex; address: Address; nonce: Hex; yParity: Hex; r: Hex; s: Hex }[] }
 export interface RpcLog { address: Address; topics: [Hex, ...Hex[]]; data: Hex; blockNumber: Hex; blockHash: Hex; transactionHash: Hex; logIndex: Hex; removed?: boolean; blockTimestamp?: Hex }
-export interface RpcReceipt { synthetic?: boolean; transactionIndex?: Hex; status?: Hex; transactionHash: Hex; blockHash: Hex; blockNumber: Hex; logs: RpcLog[]; from?: Address; to?: Address | null; type?: Hex }
+export interface RpcReceipt { synthetic?: boolean; gasUsed?: Hex; transactionIndex?: Hex; status?: Hex; transactionHash: Hex; blockHash: Hex; blockNumber: Hex; logs: RpcLog[]; from?: Address; to?: Address | null; type?: Hex }
 export interface RpcBlock { number: Hex; hash: Hex; parentHash: Hex; timestamp: Hex; transactions: RpcTransaction[]; transactionsComplete?: boolean }
 export interface TokenMetadata { symbol: string | null; name: string | null; decimals: number | null; totalSupply?: bigint | null; supplyBlock?: bigint | null }
-export interface EthUsdRate { value: number; block: bigint }
+export interface EthUsdSource { address: Address; venue: 'uniswap_v3'; fee: number }
+export interface EthUsdRate { value: number; block: bigint; source: EthUsdSource }
 export interface PoolMetadata { currency0: Address; currency1: Address; fee: number; tickSpacing: number }
 export interface ChainClient {
   rpcStopped?(): boolean;
@@ -19,6 +20,7 @@ export interface ChainClient {
   receipts(n: bigint): Promise<RpcReceipt[]>;
   logs(input: { from: bigint; to: bigint; address?: Address; addresses?: Address[]; topics: Hex[]; topicFilters?: (Hex | Hex[] | null)[] }): Promise<RpcLog[]>;
   timestampLogs?(input:{from:bigint;to:bigint;topics:Hex[]}):Promise<RpcLog[]>;
+  agentWallets?(ids: bigint[], n: bigint): Promise<{ owner: Address; wallet: Address; tokenUri: string | null }[]>;
   tokenMetadata(address: Address, n: bigint): Promise<TokenMetadata>;
   tokenMetadataBatch?(addresses: Address[], n: bigint): Promise<TokenMetadata[]>;
   ethUsdRate?(n: bigint): Promise<EthUsdRate | null>;

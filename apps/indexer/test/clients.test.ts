@@ -44,16 +44,35 @@ describe('Multicall3 and archive reads', () => {
     expect(input.contracts.map((c: { functionName: string }) => c.functionName)).toEqual(['decimals','symbol','name','totalSupply','decimals','symbol','name','totalSupply']);
     expect(input.contracts.map((c: { address: string }) => c.address)).toEqual([addresses[0],addresses[0],addresses[0],addresses[0],addresses[1],addresses[1],addresses[1],addresses[1]]); expect(mocks.publicRead).not.toHaveBeenCalled(); expect(mocks.contractRead).not.toHaveBeenCalled();
   });
+  it('pins batched owner/wallet/URI reads to the registered Multicall3 and rejects missing wallets',async()=>{
+    const owner=registry.requireAddress('tokens.WETH'),wallet=registry.requireAddress('tokens.USDG');
+    mocks.archive.mockResolvedValueOnce([success(owner),success(wallet),success('ipfs://fixture'),success(owner),success(native),failure]);
+    const client=make();
+    expect(await client.agentWallets!([1n,2n],77n)).toEqual([{owner,wallet,tokenUri:'ipfs://fixture'},{owner,wallet:native,tokenUri:null}]);
+    expect(mocks.archive.mock.calls[0][0]).toMatchObject({multicallAddress:registry.requireAddress('multicall3'),blockNumber:77n});
+    expect(mocks.archive.mock.calls[0][0].contracts.map((c:{functionName:string})=>c.functionName)).toEqual(['ownerOf','getAgentWallet','tokenURI','ownerOf','getAgentWallet','tokenURI']);
+    mocks.archive.mockResolvedValueOnce([success(owner),failure,success('ipfs://fixture')]);
+    await expect(client.agentWallets!([1n],78n)).rejects.toThrow('wallet/owner');
+  });
+  it('bounds registry Multicall batches and propagates spend-guard failures',async()=>{
+    const owner=registry.requireAddress('tokens.WETH');
+    mocks.archive.mockImplementation(async input=>input.contracts.map((c:{functionName:string})=>success(c.functionName==='tokenURI'?'ipfs://fixture':owner)));
+    const client=make();expect(await client.agentWallets!(Array.from({length:201},(_,i)=>BigInt(i)),88n)).toHaveLength(201);
+    expect(mocks.archive.mock.calls.map(([i])=>i.contracts.length)).toEqual([600,3]);
+    const error=new RpcGuardError('rpc_session_budget_reached');
+    mocks.archive.mockResolvedValueOnce([{status:'failure',error},success(owner),success('ipfs://fixture')]);
+    await expect(client.agentWallets!([1n],89n)).rejects.toBe(error);
+  });
   it('uses archive slot0 and token decimals from the deepest initialized reference pool', async () => {
     const pools = [registry.requireAddress('uniswapV3.quoterV2'), registry.requireAddress('uniswapV3.swapRouter02')]; // Neutral test addresses for mock contracts only.
     const slot = (price: number) => [BigInt(Math.floor(Math.sqrt(price/1e12)*2**96)),0,0,0,0,0,true];
-    mocks.archive.mockResolvedValueOnce([success(pools[0]),success(pools[1]),success(native),success(native)])
-      .mockResolvedValueOnce([success(slot(2000)),success(1n),success(registry.requireAddress('tokens.WETH')),success(slot(3000)),success(10n),success(registry.requireAddress('tokens.WETH'))]);
-    const client = make(); const rate = await client.ethUsdRate!(1200n); expect(rate!.value).toBeCloseTo(3000,8); expect(rate!.block).toBe(1200n);
+    mocks.archive.mockResolvedValueOnce([success(native),success(pools[0]),success(pools[1]),success(native)])
+      .mockResolvedValueOnce([success(slot(90000)),success(1n),success(registry.requireAddress('tokens.WETH')),success(slot(2000)),success(10n),success(registry.requireAddress('tokens.WETH'))]);
+    const client = make(); const rate = await client.ethUsdRate!(1200n); expect(rate!.value).toBeCloseTo(2000,8); expect(rate!.block).toBe(1200n); expect(rate!.source).toEqual({ address: pools[1], venue: 'uniswap_v3', fee: 3000 });
     expect(mocks.archive.mock.calls.every(([input]) => input.blockNumber === 1200n)).toBe(true); expect(mocks.publicRead).not.toHaveBeenCalled(); expect(mocks.contractRead).not.toHaveBeenCalled();
     expect(mocks.archive.mock.calls[0][0].contracts.every((c: { address: string }) => c.address === registry.requireAddress('uniswapV3.factory'))).toBe(true);
-    mocks.slotRead.mockResolvedValue(slot(3100));
-    expect(await client.ethUsdRate!(1800n)).toEqual({value:expect.closeTo(3100,8),block:1800n});
+    mocks.slotRead.mockResolvedValue(slot(2100));
+    expect(await client.ethUsdRate!(1800n)).toEqual({value:expect.closeTo(2100,8),block:1800n,source:{address:pools[1],venue:'uniswap_v3',fee:3000}});
     expect(mocks.archive).toHaveBeenCalledTimes(2);expect(mocks.slotRead).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({address:pools[1],blockNumber:1800n,functionName:'slot0'}));
   });
   it('shares initial reference discovery across adjacent prefetched sample periods',async()=>{

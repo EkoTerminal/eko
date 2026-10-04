@@ -20,8 +20,21 @@ export const checkNames = ['api', 'indexer', 'engines', 'mcp', 'oauth', 'guard',
 export type CheckName = typeof checkNames[number];
 
 export class LaunchMonitor {
+  /**
+   * Retain measurement SQL and clock. Host-only construction; no measurements are collected and no
+   * ingestion authorization occurs here.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   constructor(private sql: SqlClient, private now: () => number = Date.now) {}
   // Missing rows remain missing. These reads never call a chain provider.
+  /**
+   * Record API activity and derive head/receipt heartbeat/anchor timestamps from persisted rows,
+   * deleting absent measurements. Host/public scrape caller, no chain provider or wallet auth; SQL
+   * failures reject rather than inventing samples.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async collect() {
     await this.record({ metric: 'role_api', value: 1 });
     const head = (await this.sql.query<{ timestamp: string }>('SELECT EXTRACT(EPOCH FROM ts) AS timestamp FROM chain_blocks ORDER BY number DESC LIMIT 1')).rows[0];
@@ -36,11 +49,25 @@ export class LaunchMonitor {
     if (anchor) await this.record({ metric: 'receipt_commit_timestamp_s', value: Number(anchor.at) });
     else await this.sql.query('DELETE FROM launch_measurements WHERE metric=$1', ['receipt_commit_timestamp_s']);
   }
+  /**
+   * Validate finite nonnegative measurements with binary constraints, then persist a clocked bounded
+   * sample. Caller must authorize manual ingestion; this method itself has no admin check.
+   * Schema/SQL failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async record(input: Measurement) {
     const measurement = MeasurementSchema.parse(input);
     const at = this.now();
     await writeLaunchMeasurement(this.sql, measurement.metric, measurement.value, at);
   }
+  /**
+   * Project retained finite metrics with expiry, p95 latency, failure ratios or latest values.
+   * Public operational read without auth; future/expired/missing samples yield unavailable and SQL
+   * failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async snapshot(): Promise<Partial<Record<Metric, Check>>> {
     const rows = (await this.sql.query<Row>('SELECT metric,samples,updated_at FROM launch_measurements')).rows;
     const result: Partial<Record<Metric, Check>> = {};
@@ -59,6 +86,13 @@ export class LaunchMonitor {
     }
     return result;
   }
+  /**
+   * Combine fresh measurements into named operational checks with configured thresholds and explicit
+   * inactive phase-dependent checks. Public operational read without auth; missing metrics stay
+   * unavailable and SQL failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async checks(burnActive: boolean, summonsActive = false): Promise<Record<CheckName, Check>> {
     const s = await this.snapshot();
     const limit = (metric: Metric, max: number, age = false, inclusive = true): Check => {
@@ -89,6 +123,13 @@ export class LaunchMonitor {
       quote: limit('quote_ms', 1500), preflight: limit('preflight_ms', 150, false, false), simulation: limit('simulation_failure', .05),
       backup: (() => { const m = s.backup_success; return !m || m.value === null ? { state: 'unavailable', value: null } : { state: m.value === 1 ? 'healthy' : 'unhealthy', value: m.value }; })(), daily_burn: burn };
   }
+  /**
+   * Render finite metric/check labels and read durable trading switch and action counts at scrape
+   * time. Public operational read without auth; SQL failures reject. The trading gauge is the
+   * durable flag only, not the host ceiling or live delivery evidence.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async prometheus(burnActive: boolean, summonsActive = false) {
     const snapshot = await this.snapshot();
     const checks = await this.checks(burnActive, summonsActive);
@@ -106,6 +147,14 @@ export class LaunchMonitor {
       lines.push(`eko_check_active{check="${check}"} ${value.state === 'inactive' ? 0 : 1}`);
       lines.push(`eko_check_healthy{check="${check}"} ${value.state === 'healthy' || value.state === 'inactive' ? 1 : 0}`);
     }
+    // Read durable controls at scrape time; no cached flags, wallet labels or incident payloads.
+    const trading = (await this.sql.query<{ enabled: boolean }>("SELECT enabled FROM feature_flags WHERE key='trading_live'")).rows[0];
+    lines.push('# TYPE eko_trading_live gauge', `eko_trading_live ${trading?.enabled ? 1 : 0}`);
+    const actions = (await this.sql.query<{ action: string; count: string }>(`SELECT action,COUNT(*) AS count FROM audit_log
+      WHERE action IN ('trading.live_changed','ops.incident') GROUP BY action`)).rows;
+    lines.push('# TYPE eko_trading_live_changes_total counter', '# TYPE eko_incidents_total counter');
+    lines.push(`eko_trading_live_changes_total ${actions.find(row => row.action === 'trading.live_changed')?.count ?? 0}`);
+    lines.push(`eko_incidents_total ${actions.find(row => row.action === 'ops.incident')?.count ?? 0}`);
     return lines.join('\n') + '\n';
   }
 }

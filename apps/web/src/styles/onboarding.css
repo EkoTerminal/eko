@@ -2082,3 +2082,34 @@
     transform: rotate(-8deg) scale(0.8);
   }
 }
+
+/* Launch tour: offers never cover the page or capture focus. */
+.ob-tour-offer {
+  position: fixed;
+  bottom: 80px;
+  left: 12px;
+  z-index: 70;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100vw - 24px);
+  padding: 8px;
+  border: 1px solid var(--line-3);
+  border-radius: 18px;
+  background: var(--bg-glass);
+}
+.ob-cl, .ob-cl-pill { bottom: calc(80px + var(--ob-lift, 0px)); max-width: calc(100vw - 24px); }
+:root[data-motion='off'] .ob-root, :root[data-motion='off'] .ob-root * {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='on']) .ob-root, :root:not([data-motion='on']) .ob-root * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+/* Checklist progress does not celebrate trades or animate their controls. */
+.ob-cl-pill.is-bump, .ob-cl-item .ob-status--ok { animation: none; }
+
+.tour[data-anchor='trade'] .tour-hole { animation: none; transition: none; }

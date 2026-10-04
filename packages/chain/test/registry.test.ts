@@ -8,10 +8,10 @@ import codes from './fixtures/4663/registry-code.json' with { type: 'json' };
 const yaml = readFileSync(new URL('../addresses.4663.yaml', import.meta.url), 'utf8');
 afterEach(() => vi.unstubAllEnvs());
 describe('registry', () => {
-  it('loads all 14 captured deployments in checksum form, preserving TODO/null and stage requirements', () => {
+  it('loads all 17 captured deployments in checksum form, preserving TODO/null and stage requirements', () => {
     const registry = parseRegistry(yaml);
     const addresses = registry.entries().filter(([, e]) => e.address !== 'TODO').map(([, e]) => e.address);
-    expect(addresses).toHaveLength(14);
+    expect(addresses).toHaveLength(17);
     expect(addresses).toEqual(expect.arrayContaining(Object.values(codes.codes).map(e => getAddress(e.address))));
     expect(registry.addressOf('ours.burnWallet')).toBeNull();
     expect(registry.data.ours.burnWallet.required_for).toBe('D0');
@@ -29,6 +29,9 @@ describe('registry', () => {
     ['root key', `${yaml}\nunexpected: TODO`],
     ['nested key', yaml.replace('  quoterV2:', '  typo:')],
     ['entry key', yaml.replace('decimals: 18', 'decimals: 18, typo: true')],
+    ['owner checksum', yaml.replace('owner: TODO', 'owner: "0x1234"')],
+    ['committer checksum', yaml.replace('committer: TODO', 'committer: "0x1234"')],
+    ['record outside release', yaml.replace('contracts/release/ReceiptsRegistry.build.json', '../some-record.json')],
     ['malformed YAML', 'chainId: ['],
     ['duplicate YAML key', `${yaml}\nchainId: 4663`],
   ])('rejects %s', (_name, text) => expect(() => parseRegistry(text)).toThrow());

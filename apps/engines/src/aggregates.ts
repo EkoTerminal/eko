@@ -1,3 +1,4 @@
+import { gapFromTotals, type AttributionTotals } from './attribution-coverage.js';
 import { hex, binary } from '@eko/db';
 import type { Address } from '@eko/shared';
 import type { SwapRow, Holding } from './sources.js';
@@ -6,7 +7,7 @@ const encoded=new WeakMap<Uint8Array,Address>();
 export function rowHex(bytes:Uint8Array):Address {let value=encoded.get(bytes);if(!value){value=hex(bytes) as Address;encoded.set(bytes,value);}return value;}
 export const ZERO=`0x${'0'.repeat(40)}` as Address,DEAD=`0x${'0'.repeat(36)}dead` as Address;
 export const isSink=(holder:Address,coin:Address)=>holder===coin || holder===ZERO || holder===DEAD;
-export function prepareSwap(row:SwapRow) {row.traderHex=rowHex(row.trader);row.quoteHex=rowHex(row.quote_asset);row.poolHex=rowHex(row.pool_id);row.txHex=rowHex(row.tx_hash);row.sec=new Date(row.ts).getTime()/1000;return row;}
+export function prepareSwap(row:SwapRow) {row.traderHex=row.trader!=null && !row.senders_pending ? rowHex(row.trader) : undefined;row.quoteHex=rowHex(row.quote_asset);row.poolHex=rowHex(row.pool_id);row.txHex=rowHex(row.tx_hash);row.sec=new Date(row.ts).getTime()/1000;return row;}
 export function prepareHolding(row:Holding){row.holderHex=rowHex(row.holder);return row;}
 export function upperTime(rows:SwapRow[],sec:number,end=rows.length) {let low=0,high=end;while(low<high){const mid=(low+high)>>>1;if(rows[mid].sec!<=sec)low=mid+1;else high=mid;}return low;}
 export function timeWindow(rows:SwapRow[],start:number,end:number,count=rows.length,monotonic=true) {
@@ -38,8 +39,9 @@ export class HolderAggregate {
   rows():Holding[]{return [...this.amounts].filter(([,v])=>v.amount>0n).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([holder,v])=>({holder:binary(holder),holderHex:holder,amount:String(v.amount),block:String(v.block)}));}
 }
 export interface ActorVolume {rows:SwapRow[];buy:number;sell:number}
-export interface TradeView {count:number;last?:SwapRow;previous5m?:SwapRow;previous1h?:SwapRow;lastPriced?:SwapRow;usdComplete:boolean;hasEth:boolean;curveVolume:number;curveProgress:number;recent:SwapRow[];actors:Map<Address,ActorVolume>;volumeUsd1h:number;buy1h:number;buyPrevious1h:number;monotonic:boolean}
+export interface TradeView {attribution:import('@eko/shared').AttributionCoverageGap;count:number;last?:SwapRow;previous5m?:SwapRow;previous1h?:SwapRow;lastPriced?:SwapRow;usdComplete:boolean;hasEth:boolean;curveVolume:number;curveProgress:number;recent:SwapRow[];actors:Map<Address,ActorVolume>;volumeUsd1h:number;buy1h:number;buyPrevious1h:number;monotonic:boolean}
 export class TradeAggregate {
+  private attributionTotals:AttributionTotals={totalCount:0,unattributedCount:0,totalVolumeUsd:0,unattributedVolumeUsd:0,unknownVolumeCount:0};
   count=0;lastPriced:SwapRow|undefined;usdComplete=true;hasEth=false;curveVolume=0;curveProgress=0;
   boughtByActor=new Map<Address,number>();actorVolumes=new Map<Address,ActorVolume>();private boughtSets=new Map<string,{count:number;amount:number}>();
   private windowStart=0;private windowEnd=0;private buckets=new Map<Address,SwapRow[]>();
@@ -49,26 +51,28 @@ export class TradeAggregate {
     for(let i=state.count;i<this.count;i++){const r=this.rows[i];if(r.side===1 && actors.has(r.traderHex!))state.amount+=Number(r.amount_coin);}state.count=this.count;this.boughtSets.set(key,state);return state.amount;}
   advance(count:number,sec:number):TradeView {
     if(count<this.count)throw new Error('Trade aggregate checkpoints must advance');
-    for(let i=this.count;i<count;i++){const r=this.rows[i];this.usdComplete &&=r.usd!=null;this.hasEth ||=r.quoteHex===ZERO;
+    for(let i=this.count;i<count;i++){const r=this.rows[i];this.attributionTotals.totalCount++;this.attributionTotals.totalVolumeUsd+=r.usd ?? 0;
+      if(!r.traderHex){this.attributionTotals.unattributedCount++;this.attributionTotals.unattributedVolumeUsd+=r.usd ?? 0;if(r.usd==null)this.attributionTotals.unknownVolumeCount++;}
+      this.usdComplete &&=r.usd!=null;this.hasEth ||=r.quoteHex===ZERO;
       if(r.usd!=null && Number(r.amount_coin)>0)this.lastPriced=r;
-      if(r.side===1)this.boughtByActor.set(r.traderHex!,(this.boughtByActor.get(r.traderHex!) ?? 0)+Number(r.amount_coin));
+      if(r.traderHex && r.side===1)this.boughtByActor.set(r.traderHex!,(this.boughtByActor.get(r.traderHex!) ?? 0)+Number(r.amount_coin));
       if(r.venue==='pons_curve'){this.curveVolume+=r.usd ?? 0;this.curveProgress+=r.side*(r.usd ?? 0);}}
     this.count=count;
     // A timestamp anomaly falls back to block-bounded filtering, preserving indexed row order.
     const start=this.monotonic ? upperTime(this.rows,sec-3600,count) : 0;
     const recent=this.monotonic ? this.rows.slice(start,count) : this.rows.slice(0,count).filter(r=>r.sec!>sec-3600);
     if(this.monotonic){
-      for(let i=this.windowStart;i<Math.min(start,this.windowEnd);i++){const r=this.rows[i],bucket=this.buckets.get(r.traderHex!)!;bucket.shift();if(!bucket.length)this.buckets.delete(r.traderHex!);}
-      for(let i=Math.max(this.windowEnd,start);i<count;i++){const r=this.rows[i],bucket=this.buckets.get(r.traderHex!) ?? [];bucket.push(r);this.buckets.set(r.traderHex!,bucket);}
+      for(let i=this.windowStart;i<Math.min(start,this.windowEnd);i++){const r=this.rows[i];if(!r.traderHex)continue;const bucket=this.buckets.get(r.traderHex)!;bucket.shift();if(!bucket.length)this.buckets.delete(r.traderHex!);}
+      for(let i=Math.max(this.windowEnd,start);i<count;i++){const r=this.rows[i];if(!r.traderHex)continue;const bucket=this.buckets.get(r.traderHex) ?? [];bucket.push(r);this.buckets.set(r.traderHex!,bucket);}
       this.windowStart=start;this.windowEnd=count;
-    }else{this.buckets.clear();for(const r of recent){const bucket=this.buckets.get(r.traderHex!) ?? [];bucket.push(r);this.buckets.set(r.traderHex!,bucket);}}
+    }else{this.buckets.clear();for(const r of recent){if(!r.traderHex)continue;const bucket=this.buckets.get(r.traderHex!) ?? [];bucket.push(r);this.buckets.set(r.traderHex!,bucket);}}
     // Snapshot only the active hour. Preserve row/actor order and floating summation
     // order rather than letting repeated subtraction drift near rule thresholds.
     const actors=new Map<Address,ActorVolume>();let volumeUsd1h=0;
-    for(const r of recent){if(!actors.has(r.traderHex!)){const rows=this.buckets.get(r.traderHex!)!.slice();let buy=0,sell=0;for(const row of rows){if(row.side===1)buy+=row.usd ?? 0;else if(row.side===-1)sell+=row.usd ?? 0;}actors.set(r.traderHex!,{rows,buy,sell});}volumeUsd1h+=r.usd ?? 0;}
+    for(const r of recent){volumeUsd1h+=r.usd ?? 0;if(!r.traderHex)continue;if(!actors.has(r.traderHex!)){const rows=this.buckets.get(r.traderHex!)!.slice();let buy=0,sell=0;for(const row of rows){if(row.side===1)buy+=row.usd ?? 0;else if(row.side===-1)sell+=row.usd ?? 0;}actors.set(r.traderHex!,{rows,buy,sell});}}
     this.actorVolumes=actors;
     const buy=(start:number,end:number)=>timeWindow(this.rows,start,end,count,this.monotonic).reduce((sum,r)=>sum+(r.side===1 ? r.usd ?? 0 : 0),0);
     const previous=(duration:number)=>this.monotonic ? this.rows[upperTime(this.rows,sec-duration,count)-1] : this.rows.slice(0,count).filter(r=>r.sec!<=sec-duration).at(-1);
-    return {count,last:this.rows[count-1],previous5m:previous(300),previous1h:previous(3600),lastPriced:this.lastPriced,usdComplete:this.usdComplete,hasEth:this.hasEth,curveVolume:this.curveVolume,curveProgress:Math.max(0,this.curveProgress),recent,actors,volumeUsd1h,buy1h:buy(sec-3600,sec),buyPrevious1h:buy(sec-7200,sec-3600),monotonic:this.monotonic};
+    return {attribution:gapFromTotals({...this.attributionTotals},'launch_to_checkpoint'),count,last:this.rows[count-1],previous5m:previous(300),previous1h:previous(3600),lastPriced:this.lastPriced,usdComplete:this.usdComplete,hasEth:this.hasEth,curveVolume:this.curveVolume,curveProgress:Math.max(0,this.curveProgress),recent,actors,volumeUsd1h,buy1h:buy(sec-3600,sec),buyPrevious1h:buy(sec-7200,sec-3600),monotonic:this.monotonic};
   }
 }

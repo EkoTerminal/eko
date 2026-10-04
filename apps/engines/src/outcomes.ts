@@ -34,8 +34,8 @@ export async function updateOutcomes(db: ChainDb, block: number, nowSec: number,
     const s=await loadSources(db,coin,Number(end.number),undefined,clock,cache,true);
     if (!s || !s.swaps.length) continue;
     const insiders=new Set([s.deployer,...s.exemptionWallets]);
-    const buys=s.swaps.filter(r=>r.side===1 && insiders.has(rowHex(r.trader)) && seconds(r.ts)<=s.createdAtSec+3600).reduce((n,r)=>n+Number(r.amount_coin),0);
-    const sells=s.swaps.filter(r=>r.side===-1 && insiders.has(rowHex(r.trader)));
+    const buys=s.swaps.filter(r=>r.side===1 && r.trader!=null && !r.senders_pending && insiders.has(rowHex(r.trader)) && seconds(r.ts)<=s.createdAtSec+3600).reduce((n,r)=>n+Number(r.amount_coin),0);
+    const sells=s.swaps.filter(r=>r.side===-1 && r.trader!=null && !r.senders_pending && insiders.has(rowHex(r.trader)));
     const firstHourSold=sells.filter(r=>seconds(r.ts)<=s.createdAtSec+3600).reduce((n,r)=>n+Number(r.amount_coin),0);
     const opening=await holdingsAt(db,coin,s.createdAtBlock,cache,'outcome-opening');
     const initialHeld=opening.filter(r=>insiders.has(rowHex(r.holder))).reduce((n,r)=>n+Number(r.amount),0);
@@ -60,9 +60,10 @@ export async function updateOutcomes(db: ChainDb, block: number, nowSec: number,
     const outcome = matches.some(m=>m.id==='honeypot' && m.level==='danger') ? 'honeypot' :
       liquidityRug || (drop!=null && drop>=0.9 && sells.length>0) ? 'rugged' :
       denominator>0 && firstHourSold/denominator>0.5 ? 'dumped' : 'survived';
+    if(outcome==='survived' && Object.values(s.attributionCoverage ?? {}).some(g=>g.status==='incomplete'))continue;
     const refs: EvidenceRef[]=[...s.swaps.slice(0,1).map(r=>evidence(r,'Outcome initial price')),...s.swaps.slice(-1).map(r=>evidence(r,'Outcome horizon price')),
       ...sells.map(r=>evidence(r,'Outcome insider sell'))];
-    const data={ evidence:refs,priceDrop:drop,liquidityRug,firstHourSoldShare:denominator ? firstHourSold/denominator : null };
+    const data={ evidence:refs,attributionCoverage:s.attributionCoverage,priceDrop:drop,liquidityRug,firstHourSoldShare:denominator ? firstHourSold/denominator : null };
     await db.sql.query('INSERT INTO outcomes VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [token.address,horizon,end.number,outcome,JSON.stringify(data)]);
     cache?.recordOutcome(coin,{horizon,valid_from_block:String(end.number),outcome,data});
     await materializeHistory(db,coin,block,cache);

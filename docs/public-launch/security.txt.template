@@ -1,0 +1,8 @@
+# DRAFT TEMPLATE ONLY: forwarding, public URLs and HTTPS delivery unconfirmed.
+Contact: mailto:security@ekoterminal.com
+Contact: https://{{PUBLIC_REPOSITORY_HOST}}/{{PUBLIC_ORG}}/{{PUBLIC_REPOSITORY}}/security/advisories/new
+Expires: 2026-11-01T13:00:00Z
+Preferred-Languages: en
+Canonical: https://{{PUBLIC_DOMAIN}}/.well-known/security.txt
+Policy: https://{{PUBLIC_REPOSITORY_HOST}}/{{PUBLIC_ORG}}/{{PUBLIC_REPOSITORY}}/blob/main/SECURITY.md
+# Set a future Expires value at release; remove draft comments after acceptance.

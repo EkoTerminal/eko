@@ -1,0 +1,7 @@
+#audit-grade v2	id	status	severity	lane	location	title	first_seen	last_seen
+v2	offchain-backend|apps/server/src/ws/hub.ts|unbounded-subscription-work	fixed	Medium	offchain-backend	apps/server/src/ws/hub.ts:55-77	Public WebSocket subscriptions accumulate unbounded database work	2026-10-02	2026-10-03
+v2	tee-oracle|apps/indexer/src/decode.ts|unverified-reference-price	fixed	Medium	tee-oracle	apps/indexer/src/decode.ts:200,231-245,344-347	Unverified pool events overwrite trusted ETH/USD accounting	2026-10-02	2026-10-03
+v2	evm-stack|packages/db/src/receipt-committer.ts|private-receipt-batch-dos	fixed	Medium	evm-stack	packages/db/src/receipt-committer.ts:97-104	One private journal receipt blocks subsequent receipt batches for everyone	2026-10-03	2026-10-03
+v2	data-engines|apps/indexer/src/decode.ts|secondary-reference-pool-overwrite	fixed	Medium	data-engines	apps/indexer/src/decode.ts:234-253,364-365	A secondary canonical pool can overwrite the selected USD reference	2026-10-03	2026-10-03
+v2	mcp-auth|apps/server/src/app.ts|untrusted-forwarded-ip-rate-limit	fixed	Medium	mcp-auth	apps/server/src/app.ts:230,238-244;apps/server/src/http/v1/rpc.ts:68-81	Caller-controlled forwarded addresses bypass anonymous telemetry and RPC limits	2026-10-03	2026-10-03
+v2	data-engines|apps/server/src/obs/security-collectors.ts|unconfigured-token-stalls-wallet-collector	fixed	Low	data-engines	apps/server/src/obs/security-collectors.ts:211-244	An arbitrary token event stalls configured wallet monitoring	2026-10-03	2026-10-03

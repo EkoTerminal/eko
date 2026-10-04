@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # The runtime stays on the Node 22 LTS line that CI tests (Dockerfile, package.json engines);
+      # a major bump is a deliberate release decision, not a weekly update.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+# infra/monitoring/compose.json is not discovered by Dependabot's YAML-only
+# Docker Compose fetcher; review its image pins manually (docs/security/ADVISORIES.md).

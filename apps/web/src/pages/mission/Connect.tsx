@@ -1,9 +1,10 @@
 import { MISSION_LABELS as L, MISSION_TEXT as T, CONNECT_STEPS as STEPS } from '../../copy/mission';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { z } from 'zod';
-import { AgentDetailSchema, UnsignedTxSchema, type AgentDetail, type Flags, type Pack } from '@eko/shared';
+import { UnsignedTxSchema, type AgentDetail, type Flags, type Pack } from '@eko/shared';
 import { fetchParsed } from '../../lib/api';
-import { createAgent, createKey, fillPack, loadPacks, loadPresets, packAvailable, type PresetsResponse } from '../../lib/mission';
+import { connectionReceived, createAgent, createKey, fillPack, loadPacks, loadPresets, packAvailable, type PresetsResponse } from '../../lib/mission';
+import { useOnboarding } from '../../store/onboarding';
 import { useShell } from '../../store/shell';
 import { Link } from '../../lib/Link';
 import { IconShield, IconArrow, IconCheck } from '../../components/icons';
@@ -37,12 +38,30 @@ export function ConnectScreen({ packs, presets, flags, phase }: { packs: Pack[];
   const agentName = name.trim() || T.defaultAgent(PLATFORM_COPY[selected][0].split(' ')[0]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; key.current = ''; generation.current++; }; }, []);
   useEffect(() => {
-    if (!rt || !agent) return;
-    const check = async () => { const a = await fetchParsed(`/agents/${encodeURIComponent(agent.id)}`, AgentDetailSchema); if (mounted.current && a.lastSeen) { setConnected(true); setWaiting(false); key.current = ''; setVisibleKey(''); } };
-    return rt.subscribe('agents', (e) => {
-      if ((e.kind === 'preflight' && e.data.agentId === agent.id) || (e.kind === 'agent' && e.data.id === agent.id && !!e.data.lastSeen)) { setConnected(true); setWaiting(false); key.current = ''; setVisibleKey(''); }
+    if (!agent || connected) return;
+    const controller = new AbortController(), run = generation.current;
+    let pending = false;
+    const check = async () => {
+      if (pending || controller.signal.aborted) return;
+      pending = true;
+      const onboardingOwner = useOnboarding.getState().owner;
+      try {
+        const received = await connectionReceived(agent.id, controller.signal);
+        if (!controller.signal.aborted && mounted.current && generation.current === run && received) {
+          if (useOnboarding.getState().owner === onboardingOwner) useOnboarding.getState().markStep('connect_agent');
+          setConnected(true); setWaiting(false); key.current = ''; setVisibleKey('');
+        }
+      } catch (error) {
+        if (!controller.signal.aborted && mounted.current && generation.current === run) setError((error as Error).message);
+      } finally { pending = false; }
+    };
+    const unsubscribe = rt?.subscribe('agents', (e) => {
+      if ((e.kind === 'preflight' && e.data.agentId === agent.id) || (e.kind === 'agent' && e.data.id === agent.id)) void check();
     }, check);
-  }, [rt, agent?.id]);
+    const timer = waiting ? setInterval(() => void check(), 3000) : undefined;
+    if (waiting) void check();
+    return () => { controller.abort(); unsubscribe?.(); if (timer) clearInterval(timer); };
+  }, [rt, agent?.id, waiting, connected]);
   const select = (platform: Platform) => { if (busy) return; generation.current++; key.current = ''; setVisibleKey(''); setKeyIssued(false); setAgent(null); setError(''); setWaiting(false); setConnected(false); setSessionConfirmed(false); setSelected(platform); };
   const ensureAgent = async () => {
     if (agent) return agent;
@@ -66,7 +85,7 @@ export function ConnectScreen({ packs, presets, flags, phase }: { packs: Pack[];
   };
   const verify = async () => {
     if (busy) return; setBusy(true); setError(''); setVisibleKey('');
-    try { const a = await ensureAgent(), latest = await fetchParsed(`/agents/${encodeURIComponent(a.id)}`, AgentDetailSchema); setWaiting(!latest.lastSeen); setConnected(!!latest.lastSeen); if (latest.lastSeen) key.current = ''; }
+    try { const a = await ensureAgent(), received = await connectionReceived(a.id); setWaiting(!received); setConnected(received); if (received) key.current = ''; }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   if (!pack) return <div className="page"><h1>{L.connectAnAgent}</h1><p>{L.noInstallPacksAreAvailableYet}</p></div>;

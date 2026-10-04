@@ -70,7 +70,7 @@ export class ReplayCache {
       ]);
       for(const row of transfers.rows){row.fromHex=rowHex(row.from_address);row.toHex=rowHex(row.to_address);}
       for(const row of pools.rows){rowHex(row.id);rowHex(row.currency0);rowHex(row.currency1);if(row.hooks)rowHex(row.hooks);}
-      for(const row of events.rows){rowHex(row.actor);rowHex(row.pool_id);rowHex(row.tx_hash);}
+      for(const row of events.rows){if(row.actor!=null)rowHex(row.actor);rowHex(row.pool_id);rowHex(row.tx_hash);}
       for(const row of exemptions.rows){rowHex(row.wallet);rowHex(row.tx_hash);}
       const normalized=swaps.rows.map(prepareSwap);
       return {progress:curveProgress(pons.rows,Number(this.tokens.get(coin)!.first_block)),swaps:normalized,nonCurveSwaps:normalized.filter(r=>r.venue!=='pons_curve'),pools:pools.rows,events:events.rows,transfers:transfers.rows,lastTransfer:Number(last.rows[0].block ?? -1),balances:balances.rows.map(prepareHolding),exemptions:exemptions.rows};

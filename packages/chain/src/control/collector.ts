@@ -13,7 +13,15 @@ export const CONTROL_SLOTS = {
 } as const;
 class ControlBudgetError extends Error {}
 const zero = `0x${'0'.repeat(64)}` as Hex;
+/**
+ * Recognize only the zero and dead addresses as inert authority hints. Pure predicate; this does
+ * not prove absence of other controllers.
+ */
 export const inertAuthority = (a: string) => /^0x0{40}$/.test(a) || /^0x0{36}dead$/i.test(a);
+/**
+ * Decode an ABI word with twelve leading zero bytes into a lowercase address, or return null for
+ * malformed/non-address words. Pure decoding; no chain read or authority acceptance occurs.
+ */
 export const controlWordAddress = (v: string): Address | null => /^0x0{24}[0-9a-f]{40}$/i.test(v) ? `0x${v.slice(-40).toLowerCase()}` as Address : null;
 export const CONTROL_SELECTORS = [
   ['setTax(uint256)', 'tax_raise', 'tax'], ['setFees(uint256,uint256)', 'tax_raise', 'tax'],

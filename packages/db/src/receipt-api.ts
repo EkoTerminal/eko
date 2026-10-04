@@ -24,8 +24,23 @@ interface AnchorRow {
 /** Read-only CA-16 adapter. Only retained original bytes can be revealed; no
  * journal/decryption or producer/committer mutation occurs on this path. */
 export class ReceiptApiStore {
+  /**
+   * Wire read storage, configured registry, chain reader and reveal clock. Host-only construction;
+   * no account auth, chain read or payload integrity check occurs until get.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   constructor(readonly db: ChainDb, readonly registry: Address | undefined,
     readonly reader: ReceiptRegistryReader, public now: () => number = Date.now) {}
+  /**
+   * Read a public item/commitment, authenticate canonical payload/leaf/revision and proof/anchor
+   * bindings, and re-read chain 4663 successful transaction, matching registry event and canonical
+   * block. Anonymous API read; missing id returns null, integrity/schema/RPC/SQL failures reject.
+   * Forecast reveal starts from authenticated commit-block time; private journal payloads never
+   * reveal.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async get(id: string): Promise<ReceiptLookup | null> {
     let row = (await this.db.sql.query<ItemRow>(`SELECT id,producer,kind,chain_id,revision_id,payload_hash,leaf,canonical_payload,data,recorded_at FROM receipt_items WHERE id=$1
       UNION ALL SELECT id,producer,kind,chain_id,revision_id,payload_hash,NULL,canonical_payload,data,recorded_at

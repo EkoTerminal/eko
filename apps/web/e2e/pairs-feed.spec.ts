@@ -1,4 +1,6 @@
-import { expect, test } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { test } from './helpers';
+test.use({ demo: true });
 
 for (const [width, height] of [[1512, 982], [1440, 900], [1280, 800], [390, 844]]) {
   test(`Pairs geometry, pending guard and inspector at ${width}×${height}`, async ({ page }) => {
@@ -26,7 +28,7 @@ for (const [width, height] of [[1512, 982], [1440, 900], [1280, 800], [390, 844]
     const pick = page.locator('.prow [data-pick]').first(); await pick.click();
     const inspector = page.locator('#radar-inspector'); await expect(inspector).toBeVisible();
     if (width < 1480) await expect(inspector).toHaveAttribute('role', 'dialog');
-    await expect(inspector.getByRole('button', { name: 'Trading opens with the guarded panel' })).toBeDisabled();
+    await expect(inspector.locator('.tp-submit')).toBeDisabled();
     await page.keyboard.press('Escape'); await expect(inspector).toHaveCount(0); await expect(pick).toBeFocused();
     if (width === 390) {
       await page.locator('.foot-meta').scrollIntoViewIfNeeded();
@@ -41,7 +43,13 @@ for (const [width, height] of [[1512, 982], [1440, 900], [1280, 800], [390, 844]
     await expect(page.locator('.frow[data-feed-id]').first()).toBeVisible();
     await expect(page.locator('.feed-busy .fb-flow').first()).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    for (const href of await page.locator('.feed-page a').evaluateAll((links) => links.map((a) => a.getAttribute('href')))) expect(href).toMatch(/^\/coin\/0x/);
+    // Packet 037 adds analysis policy links; event/coin links still point only to coin pages.
+    const coinLinks = await page.locator('.feed-grid a').evaluateAll(links => links.map(a => a.getAttribute('href')));
+    expect(coinLinks.length).toBeGreaterThan(0);
+    for (const href of coinLinks) expect(href).toMatch(/^\/coin\/0x[0-9a-f]{40}$/);
+    await expect(page.locator('.feed-page').getByRole('link', { name: 'Risk disclosure', exact: true })).toBeVisible();
+    for (const href of await page.locator('.feed-page a').evaluateAll(links => links.map(a => a.getAttribute('href')))) expect(href).toMatch(/^\/(coin\/0x[0-9a-f]{40}|legal\/(risk|ai|terms))$/);
+
     await page.screenshot({ path: `e2e/.artifacts/pairs-feed/feed-${width}x${height}.png` });
     const list = page.locator('.feed-list'); await list.hover({ position: { x: 20, y: 60 } });
     const first = page.locator('.frow[data-feed-id]').first(), id = await first.getAttribute('data-feed-id'), before = await first.boundingBox();
@@ -75,9 +83,10 @@ test('pairs stream arrivals, stage moves, disabled trade drawer and expanding fu
   await expect(page.locator('.prow').filter({ hasText: '$ASTER' }).getByRole('button', { name: /^Trade/ })).toBeDisabled();
   const trade = page.locator('.prow[data-pending="false"] .btn:not(:disabled)').first(); await trade.click();
   await expect(page.locator('.radar-trade-drawer')).toBeVisible();
-  // Playwright's toBeDisabled ignores <fieldset>; check the attribute and that the controls inside are disabled.
-  await expect(page.locator('.radar-trade-drawer fieldset')).toHaveAttribute('disabled', '');
-  for (const control of await page.locator('.radar-trade-drawer fieldset :is(button, input, select)').all()) await expect(control).toBeDisabled(); await page.getByRole('button', { name: 'Close trade', exact: true }).click();
+  // Packet 077: quote controls remain usable; only execution is blocked for the paused demo configuration.
+  await expect(page.locator('.radar-trade-drawer .tp-submit')).toBeDisabled();
+  await expect(page.locator('.radar-trade-drawer')).toContainText('Terminal fee');
+  await expect(page.locator('.radar-trade-drawer input').first()).toBeEnabled(); await page.getByRole('button', { name: 'Close trade', exact: true }).click();
   await page.locator('.prow [data-pick]').first().click();
   await page.getByRole('link', { name: 'Open the full page', exact: true }).click(); await page.clock.fastForward(1000);
   await expect(page).toHaveURL(/\/coin\/0x[0-9a-f]{40}$/);

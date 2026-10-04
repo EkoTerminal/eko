@@ -1,0 +1,426 @@
+{
+  "version": 1,
+  "chainId": 4663,
+  "candidateRevision": "33e65459bce4dee430912eaf7657f5a31516b20e",
+  "origin": "fixture",
+  "capturedAt": "2026-10-02T00:00:00.000Z",
+  "snapshotHash": "0x57add4728e67f429018ef24513bb7ad79b0aca6558f29168755dca5cf08b31b2",
+  "checkpoint": "fixture-086-v1",
+  "cost": {
+    "paidUnits": 0,
+    "costUsd": 0
+  },
+  "scope": {
+    "phaseC": "sevenDayCandidates",
+    "tokens": [
+      "0x1111111111111111111111111111111111111111"
+    ],
+    "head": {
+      "block": "90",
+      "hash": "0x000000000000000000000000000000000000000000000000000000000000005a",
+      "timestamp": "2026-10-01T00:00:00.000Z"
+    }
+  },
+  "status": "unresolved",
+  "liveApproved": false,
+  "findings": [
+    {
+      "check": "row-bound",
+      "status": "verified",
+      "detail": {
+        "maxRows": 10000
+      }
+    },
+    {
+      "check": "canonical-boundaries",
+      "status": "verified",
+      "detail": "All declared window boundaries must match the exported canonical headers."
+    },
+    {
+      "check": "calendar-recent",
+      "status": "verified",
+      "detail": {
+        "cutoff": "2026-09-01T00:00:00.000Z",
+        "from": "60",
+        "to": "90"
+      }
+    },
+    {
+      "check": "calendar-sevenDay",
+      "status": "verified",
+      "detail": {
+        "cutoff": "2026-09-24T00:00:00.000Z",
+        "from": "83",
+        "to": "90"
+      }
+    },
+    {
+      "check": "coverage-ponsFactory",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:pons_factory",
+        "from": "0",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0xd7c529d07d0bbebb0a452cbc597ec1bbac6bf60bfe819961e1ff6401a17287b5"
+      }
+    },
+    {
+      "check": "coverage-ponsCurves",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:pons_curves",
+        "from": "0",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0xf01d34abeb88050e0fd359ac4fbcc34f94da18551eebab848335bba644d8c5bc"
+      }
+    },
+    {
+      "check": "coverage-identityRegistry",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:identity_registry",
+        "from": "0",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0xc976cec7638bfa688086b07750e23bf7c776f3aea1d9b06eee9b7949b8d84ff8"
+      }
+    },
+    {
+      "check": "coverage-pools",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:pools",
+        "from": "60",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0xe3346d59a257b444414f63cc3cda5715d86c79eb50fe69bde5ebf871e7c36aaf"
+      }
+    },
+    {
+      "check": "coverage-swaps",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:pair_swaps:fixture-set",
+        "from": "60",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0x2fc265bea7eddd65848267a2dcb9d771f52b87f26dc554ec61e00e0325f80b74"
+      }
+    },
+    {
+      "check": "coverage-holders",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:holders:fixture-set",
+        "from": "60",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0x0d9e4ce4accd6959d7677889a838010b824bc37a6cfc3e87a30299d8d63bf8d9"
+      }
+    },
+    {
+      "check": "coverage-occupy",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:occupy",
+        "from": "60",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0x2146a9fe57cb3307667f36298802a91ebf60377eec5d5755fb79c4115f8a5501"
+      }
+    },
+    {
+      "check": "coverage-flap",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:flap",
+        "from": "60",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0x21e0ec6e3f3ccf7f0866b0eba8c004b0f2fe24750c07ae0b58ecfb0a121fe666"
+      }
+    },
+    {
+      "check": "coverage-klik",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:klik",
+        "from": "60",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0x5744a9f6ff030745543f598990610d7dcabba0d7c44dd2f166b426b7497de786"
+      }
+    },
+    {
+      "check": "coverage-weth",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:weth",
+        "from": "60",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0xfadfdec87c1298d4a88ee08ef3780b0bac6c4018553a702bdaea4b31441daf72"
+      }
+    },
+    {
+      "check": "coverage-entryPoints",
+      "status": "verified",
+      "detail": {
+        "stream": "logs:entry_points",
+        "from": "60",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0x58d4cf8e7b2aa22008a7f8010c6ea413251e5ddae875323c151c31803383f89e"
+      }
+    },
+    {
+      "check": "coverage-fullBlocks",
+      "status": "verified",
+      "detail": {
+        "stream": "blocks:full",
+        "from": "83",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0x1e2fffd0ecdd14fdf6bc4b42aa84eea0eb41b31a61dd3f9f4c8bb4ca4f486e65"
+      }
+    },
+    {
+      "check": "coverage-candidateFunding",
+      "status": "verified",
+      "detail": {
+        "stream": "funders:fixture-candidates",
+        "from": "83",
+        "to": "90",
+        "gaps": [],
+        "leases": [],
+        "invalid": [],
+        "duplicates": 0,
+        "rangeCount": 1,
+        "hash": "0xb5c3ea3bd64c8043bbb1582b451b8430c9bf9b4fbbca468743643756e964cb87"
+      }
+    },
+    {
+      "check": "candidate-funding-denominator",
+      "status": "unresolved",
+      "detail": "The fallback also needs the 048 manifest of every eligible candidate wallet and its source coverage; a stream lease alone does not establish that denominator."
+    },
+    {
+      "check": "distinct-streams",
+      "status": "verified",
+      "detail": "Each acquisition content group requires its own exact stream; aliases cannot certify different sources."
+    },
+    {
+      "check": "head-checkpoint",
+      "status": "verified",
+      "detail": [
+        {
+          "stream": "head",
+          "block": "90",
+          "hash": "0x000000000000000000000000000000000000000000000000000000000000005a",
+          "canonicalHash": "0x000000000000000000000000000000000000000000000000000000000000005a"
+        }
+      ]
+    },
+    {
+      "check": "reorg-checkpoints",
+      "status": "verified",
+      "detail": "Offline canonical consistency only; a fresh metered head/hash check is required before live acceptance."
+    },
+    {
+      "check": "duplicates-pons_events",
+      "status": "verified",
+      "detail": [
+        {
+          "table": "pons_events",
+          "rows": "1",
+          "duplicates": "0"
+        }
+      ]
+    },
+    {
+      "check": "duplicates-pools",
+      "status": "verified",
+      "detail": [
+        {
+          "table": "pools",
+          "rows": "1",
+          "duplicates": "0"
+        }
+      ]
+    },
+    {
+      "check": "duplicates-swaps",
+      "status": "verified",
+      "detail": [
+        {
+          "table": "swaps",
+          "rows": "1",
+          "duplicates": "0"
+        }
+      ]
+    },
+    {
+      "check": "duplicates-token_transfers",
+      "status": "verified",
+      "detail": [
+        {
+          "table": "token_transfers",
+          "rows": "1",
+          "duplicates": "0"
+        }
+      ]
+    },
+    {
+      "check": "duplicates-balances",
+      "status": "verified",
+      "detail": [
+        {
+          "table": "balances",
+          "rows": "1",
+          "duplicates": "0"
+        }
+      ]
+    },
+    {
+      "check": "duplicates-bars_1m",
+      "status": "verified",
+      "detail": [
+        {
+          "table": "bars_1m",
+          "rows": "1",
+          "duplicates": "0"
+        }
+      ]
+    },
+    {
+      "check": "supply-0x1111111111111111111111111111111111111111",
+      "status": "verified",
+      "detail": {
+        "token": "0x1111111111111111111111111111111111111111",
+        "firstBlock": "0",
+        "to": "90",
+        "minted": "1000000000000000000000000000001",
+        "burned": "1",
+        "held": "1000000000000000000000000000000",
+        "negativeHolders": "0",
+        "mismatchedHolders": "0",
+        "totalSupply": "1000000000000000000000000000000",
+        "supplyBlock": "90",
+        "transferRows": "3",
+        "gaps": [],
+        "conserved": true,
+        "sampled": true,
+        "exact": true
+      }
+    },
+    {
+      "check": "token-scope",
+      "status": "verified",
+      "detail": {
+        "tokens": 1,
+        "scope": "Only the declared token set; broader coverage is not inferred."
+      }
+    },
+    {
+      "check": "candles",
+      "status": "verified",
+      "detail": {
+        "expected": "1",
+        "actual": "1",
+        "mismatches": "0",
+        "unpricedSwaps": "0"
+      }
+    },
+    {
+      "check": "guard-availability",
+      "status": "unresolved",
+      "detail": []
+    },
+    {
+      "check": "guard-048",
+      "status": "unresolved",
+      "detail": {
+        "manifests": [],
+        "reason": "Acquisition/review manifest absent"
+      }
+    },
+    {
+      "check": "guard-057",
+      "status": "unresolved",
+      "detail": {
+        "manifests": [],
+        "reason": "Acquisition/review manifest absent"
+      }
+    },
+    {
+      "check": "incident-53-launches",
+      "status": "unresolved",
+      "detail": "Requires verified full addresses/transactions, archive coverage and independently reconciled cash paths from 057; allegation is not a reproduced incident."
+    },
+    {
+      "check": "clone-fixtures",
+      "status": "unresolved",
+      "detail": "Requires the owning review manifest for both named clone challenges; synthetic fixtures alone do not certify live clones."
+    },
+    {
+      "check": "50-deployer-histories",
+      "status": "unresolved",
+      "detail": "Requires 50 distinct point-in-time deployer comparisons and independent human review; no judgments are inferred."
+    },
+    {
+      "check": "follower",
+      "status": "unresolved",
+      "detail": "No measured catch-up/head-lag log supplied."
+    }
+  ]
+}

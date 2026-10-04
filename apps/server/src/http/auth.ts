@@ -28,11 +28,23 @@ declare module 'fastify' {
 const hash = (t: string) => createHash('sha256').update(t).digest('hex');
 
 export class AuthService {
+  /**
+   * Retain account/session database and validated host cookie/origin/admin configuration. Host-only
+   * construction; no session is issued/resolved and no wallet authentication occurs yet.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   constructor(
     private db: Db,
     private cfg: Config,
   ) {}
 
+  /**
+   * Derive signed, HttpOnly, Lax cookie settings from configured origins/domain; Secure is enabled
+   * in production or HTTPS. No request authentication is performed. Invalid configured URLs throw.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   cookieOptions() {
     const prod = this.cfg.NODE_ENV === 'production';
     const url = new URL(this.cfg.origins[0]!);
@@ -46,6 +58,12 @@ export class AuthService {
     return { id: r.id, kind: r.kind, walletAddress: r.walletAddress, displayName: r.displayName, role: isAdmin ? 'admin' : r.role };
   }
 
+  /**
+   * Resolve an unexpired SHA-256 token-hash session and apply the configured wallet admin allowlist
+   * over the stored role. Missing/unknown/expired tokens return null; database failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async fromToken(token: string | undefined): Promise<Account | null> {
     if (!token) return null;
     const rows = await this.db
@@ -56,22 +74,47 @@ export class AuthService {
     return rows[0] ? this.toAccount(rows[0].a) : null;
   }
 
-  async createSession(accountId: string, userAgent?: string) {
+  /**
+   * Issue a random 32-byte token for the supplied account, persisting only its hash with a 90-day
+   * expiry, bounded user-agent text and the optional authentication time. Caller must authorize
+   * that account; database failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
+  async createSession(accountId: string, userAgent?: string, authenticatedAt?: Date) {
     const token = randomBytes(32).toString('base64url');
-    await this.db.insert(sessions).values({ tokenHash: hash(token), accountId, expiresAt: new Date(Date.now() + SESSION_TTL_MS), userAgent: userAgent?.slice(0, 200) });
+    await this.db.insert(sessions).values({ tokenHash: hash(token), accountId, expiresAt: new Date(Date.now() + SESSION_TTL_MS), userAgent: userAgent?.slice(0, 200), authenticatedAt });
     return token;
   }
 
+  /**
+   * Insert a guest account and issue its session without wallet verification. Database failures
+   * reject; account creation and session creation are separate writes.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async createGuest(userAgent?: string) {
     const [a] = await this.db.insert(accounts).values({ kind: 'guest' }).returning();
     const token = await this.createSession(a!.id, userAgent);
     return { account: this.toAccount(a!), token };
   }
 
+  /**
+   * Delete the persisted session matching the supplied token hash; absent tokens do nothing. Caller
+   * handles cookie clearing; database failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async destroySession(token: string | undefined) {
     if (token) await this.db.delete(sessions).where(eq(sessions.tokenHash, hash(token)));
   }
 
+  /**
+   * Unsign the session cookie using Fastify's cookie verifier. Missing or invalidly signed cookies
+   * return undefined; this does not check persistence or expiry.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   readCookie(req: FastifyRequest): string | undefined {
     const raw = req.cookies[SESSION_COOKIE];
     if (!raw) return undefined;
@@ -79,7 +122,13 @@ export class AuthService {
     return u.valid ? (u.value ?? undefined) : undefined;
   }
 
-  /** Resolve the session, creating a guest account when none exists. */
+  /** Resolve the session, creating a guest account when none exists.
+   * @remarks
+   * Resolve the signed cookie or create a guest and set a new signed cookie. No wallet authorization
+   * is implied; storage/cookie failures propagate.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async ensure(req: FastifyRequest, reply: FastifyReply): Promise<Account> {
     const token = this.readCookie(req);
     const acc = await this.fromToken(token);
@@ -92,12 +141,25 @@ export class AuthService {
 
   // ─────────────── SIWE (EIP-4361) ───────────────
 
+  /**
+   * Persist a ten-minute account-bound legacy nonce. Caller supplies the session account; this
+   * legacy path does not bind an Origin or session hash. Database failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async nonce(accountId: string) {
     const nonce = generateSiweNonce();
     await this.db.insert(siweNonces).values({ nonce, accountId, expiresAt: new Date(Date.now() + 10 * 60_000) });
     return nonce;
   }
 
+  /**
+   * Require an allowed Origin/Referer and a signed cookie, then persist a ten-minute challenge bound
+   * to the caller-supplied account, origin and token hash. Caller must resolve that account first;
+   * missing session yields 401 and invalid origin 403; schema/storage failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async challenge(req: FastifyRequest, accountId: string): Promise<SiweNonce> {
     const origin = this.originFor(req, true);
     const token = this.readCookie(req);
@@ -109,6 +171,12 @@ export class AuthService {
     return SiweNonceSchema.parse({ nonce, domain: new URL(origin).host, uri: origin, issuedAt: issuedAt.toISOString(), expirationTime: expirationTime.toISOString() });
   }
 
+  /**
+   * Return the first configured origin's host, using the local fallback when none exists. No request
+   * authorization occurs; invalid URL configuration throws.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   expectedDomain(): string {
     return new URL(this.cfg.origins[0] ?? 'http://localhost:5173').host;
   }
@@ -117,6 +185,12 @@ export class AuthService {
    * The configured origin the request came from (Origin, then Referer), falling back to the
    * first configured origin. Wallets warn when the SIWE domain differs from the page's origin,
    * so with several PUBLIC_ORIGIN values the message must name the one the user is on.
+   * @remarks
+   * Select an allowed Origin then Referer. Strict mode rejects missing/foreign/malformed headers
+   * with 403; non-strict mode falls back to the first configured origin. This checks request origin,
+   * not account authentication.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
    */
   originFor(req: FastifyRequest, strict = false): string {
     const candidates = [req.headers.origin, req.headers.referer].filter((v): v is string => typeof v === 'string');
@@ -137,6 +211,14 @@ export class AuthService {
   /**
    * Verifies a SIWE message + signature. EOAs are verified offline by signature recovery;
    * smart-contract wallets (ERC-1271/6492) fall back to on-chain verification via RPC.
+   * @remarks
+   * Verify nonce/account/expiry and wallet signature, consume the nonce by compare-and-set before
+   * signature checks, resolve or upgrade the wallet account, and rotate the session. v1 also binds
+   * chain 4663, exact statement/domain/URI, challenge timestamps, Origin and cookie hash. Malformed
+   * input yields 400; replay, mismatch or signature failure yields 401; storage errors reject.
+   * Failed signatures still consume the nonce.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | SIWE and session invariants}
    */
   async verifySiwe(
     req: FastifyRequest,
@@ -204,7 +286,7 @@ export class AuthService {
     }
     // Rotate the session on privilege change.
     await this.destroySession(this.readCookie(req));
-    const token = await this.createSession(account.id, req.headers['user-agent']);
+    const token = await this.createSession(account.id, req.headers['user-agent'], new Date());
     reply.setCookie(SESSION_COOKIE, token, this.cookieOptions());
     await this.db.insert(auditLog).values({ accountId: account.id, action: 'auth.siwe', data: { address, chainId: fields.chainId } });
     return account;

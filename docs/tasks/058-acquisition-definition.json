@@ -1,0 +1,75 @@
+{
+  "version": "acquisition-definition-058.1",
+  "origin": "measured",
+  "chainId": 4663,
+  "startSec": "1791072000",
+  "labelsInspected": false,
+  "historyMetadata": true,
+  "sampling": {
+    "version": "probability-sample-057.1",
+    "seed": "0x61f6c6cbaf823b6f012a895014413cdaa3f18cc133a4661339c207989f26e90d",
+    "query": {
+      "version": "1.0.0",
+      "artifact": {
+        "enumeration": "all_indexed_launch_metadata_no_verdict_exclusion",
+        "chainId": 4663,
+        "fromSec": "1791072000",
+        "untilSec": "1792281600",
+        "eligibility": "pinned_evidence_priority_operator_sale_restriction_non_operator_legacy_remainder",
+        "methodVersion": "probability-sample-057.1",
+        "memberLists": "pending_complete_enumeration",
+        "grouping": "accepted_and_suspected_transitive_components_unresolved_combined",
+        "labels": "not_inspected"
+      },
+      "artifactHash": "0xcbb2b41c58867b7c2e31e300d02acbc1995d3aa49aa974311e3f869895aa9787"
+    }
+  },
+  "sources": [
+    {
+      "id": "planned-launches-source",
+      "role": "launches",
+      "status": "awaiting_observation",
+      "availability": null
+    },
+    {
+      "id": "planned-funding-source",
+      "role": "funding",
+      "status": "unavailable",
+      "availability": null
+    },
+    {
+      "id": "planned-recycling-source",
+      "role": "recycling",
+      "status": "unavailable",
+      "availability": null
+    },
+    {
+      "id": "planned-history-source",
+      "role": "history",
+      "status": "unavailable",
+      "availability": null
+    },
+    {
+      "id": "planned-comparator-source",
+      "role": "comparator",
+      "status": "unavailable",
+      "availability": null
+    }
+  ],
+  "population": null,
+  "budget": {
+    "approvalRef": null,
+    "pricingEvidence": null,
+    "checkpointUnits": 250000,
+    "capNanoUsd": "10000000000",
+    "unitNanoUsd": "6000",
+    "fixedNanoUsd": "0",
+    "weights": {
+      "header": 1,
+      "logs": 1,
+      "boundary": 1
+    }
+  },
+  "pilotAcceptanceEvidence": null,
+  "backfill": null
+}

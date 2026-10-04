@@ -1,0 +1,46 @@
+# Task 080 implementation
+
+Candidate: `c6732b24f75656c81e7c0ac0272e7e103f6bf4a4` plus the uncommitted packet-080 changes. SHA-256 of sorted changed paths and contents, excluding this report: `d1b21f06aee9e38a04d98e4cfa97c1797edc1dcd5d06cd3f6181211058e33321`.
+
+Read AGENTS (including rule 9), packet 080, T-GAP-ANALYSIS, BACKEND §§1.2, 13, 18, GO PLAN §6.1, and Guard 2.0 §7.3. Built on 019/024/034/079/082. No spec, prototype, dependency, lockfile, release flag, personal identifier or real secret changes. No commit, push, deployment, paid job, external message or live chain request was performed. Actual paid cost: $0. Fixture signing uses ephemeral keys in memory; it is not live signing or operator approval.
+
+## Changed files
+
+- `apps/engines/src/receipts/worker.ts`: completed five-minute windows, bounded durable outbox replay, exact batch recovery and signed-envelope validation. Restricts broadcasts to chain 4663, configured registry, zero value and exactly `commit(root, count)`. Confirmation authenticates the actual transaction hash, registry emitter, root, count, signing committer and unique `BatchCommitted` event; the registry sequence ID is never inferred from time or other transactions. Records block/hash/log index and emits `receipts.commit_lag_s`.
+- `apps/engines/src/receipts/cli.ts`: `APP_ROLE=receipts`, metered reads/preparation/broadcast, secret-supplied gas-only local committer, registry code and current-committer checks. Exactly one of `RECEIPTS_COMMITTER_KEY` or `RECEIPTS_COMMITTER_KEY_FILE` is required; the mounted secret file is re-read for each fresh signing attempt after rotation. SIGINT/SIGTERM and session-budget shutdown drain current work. No secret, request body or raw provider error is logged.
+- `packages/db/drizzle/0123_receipt_committer.sql`, `src/receipt-schema.ts`, `src/engines-migrate.ts`: additive packet-named migration, DB-clock worker lease, append-only transaction attempts, finalized revert facts, authenticated anchor observations and orphan/finalization events. Exact batches and proofs reuse 079's immutable tables. Packet-named migration avoids collisions with concurrent migration packets.
+- `packages/db/src/receipt-committer.ts`: row-locked, fenced journal writes; a second worker cannot acquire ownership until release/expiry. Persists exact signed bytes/hash/nonce/committer before broadcast. Missing receipts or failed RPC never authorize another transaction; retries resend the identical journaled bytes. Only a finalized canonical revert permits a new attempt. Orphans recover the original tree and transaction, including when an RPC retains a stale orphaned receipt or a previously orphaned block becomes canonical again. Historical facts remain append-only.
+- `packages/db/src/receipt-anchors.ts`, `src/receipt-outbox.ts`, `src/guard-receipts.ts`, `src/index.ts`: expose current authenticated generic anchors through both existing adapters, preserve legacy Guard anchor fallback, and exclude already committed items from Guard's preparation adapter. No Guard scoring/policy/release behavior changes.
+- `.env.example`: empty host-secret placeholders only.
+- `apps/server/build.mjs`, `src/roles.ts`: bundle and dispatch the singleton receipts role in the existing image. Startup remains unavailable without required configuration and a resolved registry.
+- `apps/engines/test/receipt-committer.test.ts`: 8 synthetic tests covering frozen V1/V2 exact leaves/proofs, mixed public/forecast/Guard batches, completed windows, two-worker exclusion/fencing, broadcast/confirmation restart, lost response, RPC failure, rotation, junk events/transactions/envelopes, reorg/recanonicalization, immutable payloads, lag telemetry, missing heartbeat and shutdown.
+- `packages/db/test/merge-migrations.test.ts`: retain exact ledger equality and existing upgrade/idempotence assertions; add the new migration plus all five tables and health view to the expected state.
+- `apps/server/test/roles.test.ts`, `scripts/check-role-image.mjs`, `scripts/fixtures/role-image-preload.mjs`: replace receipts-unavailable expectations with implemented-role/configuration checks. Compiled direct/dispatcher fixtures exercise startup and SIGTERM draining with a temporary synthetic registry and ephemeral key. Fixture RPC permits reads only and rejects signing/broadcast methods; no ports or providers are used.
+
+## Checks and reproduction
+
+All commands run from the worktree root. Evidence is synthetic PGlite, retained encoding vectors, synthetic registry events, mocked singleton sessions and compiled offline role fixtures; it does not establish production Postgres exclusion, live chain finality, latency targets or deployment acceptance.
+
+| Command | Exit | Evidence / log |
+|---|---:|---|
+| `pnpm --filter @eko/engines exec vitest run test/receipt-committer.test.ts --testTimeout=30000 --hookTimeout=30000` | 0 | 8 tests; `/tmp/eko-080-focused-test-final.log` |
+| `pnpm --filter @eko/db exec vitest run test/receipt-outbox.test.ts test/guard-receipts.test.ts` | 0 | 9 compatibility tests; `/tmp/eko-080-compat-test.log` |
+| `pnpm --filter @eko/db exec vitest run test/merge-migrations.test.ts --testTimeout=30000 --hookTimeout=30000` | 0 | 3 upgrade/idempotence tests; `/tmp/eko-080-migrations-test.log` |
+| `pnpm --filter @eko/server exec vitest run test/roles.test.ts` | 0 | 25 role tests; `/tmp/eko-080-roles-test.log` |
+| `pnpm typecheck` | 0 | All workspace packages; `/tmp/eko-080-typecheck-final.log` |
+| `pnpm test` | 0 | 119 Vitest files, 2334 tests, 33 Foundry passes (existing live-fork check skipped: RPC_HTTP_URL unset), web/server builds and compiled role-image gate; `/tmp/eko-080-test-final.log` |
+| `pnpm brand:check` | 0 | Post-build: 124 files; `/tmp/eko-080-brand-final.log` |
+| `pnpm check:addresses` | 0 | `/tmp/eko-080-addresses-final.log` |
+| `git diff --check` | 0 | No whitespace errors |
+
+Initial focused checks exposed PGlite's bigint result representation (fixed with an explicit nonce text projection) and a fixture union that needed type narrowing. A concurrent focused run used Vitest's default five-second timeout instead of the package's established thirty-second timeout; the final focused command uses the package settings. The first full gate stopped at the migration ledger expectation; the expectation was updated additively and its focused regression passed. No existing assertion was deleted or weakened, and no new skip was introduced. The existing live-fork check skipped because RPC_HTTP_URL was unset.
+
+Checkpoint: `/tmp/eko-080-checkpoint.json`; final full-test process 83848 completed with exit 0, log `/tmp/eko-080-test-final.log`; no check remains running. Coverage is the named lifecycle scenarios and the workspace unit/injection/migration/Foundry/offline-image gate; no numeric coverage percentage is claimed. Next action: lead review/commit, then separately authorized operator configuration and acceptance. Web/server/receipts image artifacts were built and tested; nothing was deployed or live-verified.
+
+## TODO(spec), dependencies and operator steps
+
+- New `TODO(spec)` in `apps/engines/src/receipts/worker.ts`: the spec does not prescribe a confirmation depth. Successful canonical inclusion is provisional and rechecked until RPC finalization; only a finalized canonical revert permits a fresh signed attempt. Missing headers/RPC failures are unavailable evidence, not proof of orphaning. Finalized anchors are not repeatedly re-read. Operator acceptance must verify the configured 4663 provider's `finalized` semantics and this confirmation policy through metered clients.
+- Persistent `receipt_commit_health` exposes `heartbeat_at`, `heartbeat_age_s` and `heartbeat_missing` at ten minutes (two windows). The worker emits a redacted alert event on missed heartbeats; an independent monitor must poll the view to detect a dead process and deliver actual paging (085/operator work). No external alert was sent or delivery claimed.
+- Registry deployment/verification, resolved registry configuration, gas funding, secret provisioning, cold-owner rotation and live signing require the separately authorized operator step. The checked-in registry remains TODO. A pending old-key transaction is recovered before any fresh-key attempt; unknown/dropped/externally replaced transactions never trigger guessed nonce or fee replacements and may require operator reconciliation.
+- 081 owns public proof/reveal endpoints. Actual forecast producers must publish their real metadata; authenticated block facts now bind commit-relative windows without rewriting payloads. 092 owns private-journal publication/commitment integration; frozen private-domain leaf vectors pass, but the current 079 producer outbox accepts public verdict/forecast and retained Guard payloads only.
+- Authorized operator entry point, not executed here: provide deployment secrets and registry configuration, then `RPC_SESSION_BUDGET=100 APP_ROLE=receipts pnpm --filter @eko/engines exec node --import tsx src/receipts/cli.ts`. Production uses the existing role dispatcher. Production migration, Postgres multi-process exclusion, live commits/proofs, heartbeat paging, observed commit lag and rotation/reorg drills remain external acceptance evidence.

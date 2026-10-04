@@ -4,9 +4,10 @@ import { daysUntil, exitCostAt, normalizeInstrument, notionalOf } from './helper
 import type { Prices } from './helpers.js';
 import { orderHash } from './canonical.js';
 import { guardBuyGate } from './guard.js';
+import { actualOrderGate, actualNotionalOf, type ActualOrderDeps } from './actual-order.js';
 
 export type Evaluation = Pick<PreflightResult, 'decision' | 'reasons' | 'senses' | 'guardPolicyVersion'>;
-export interface Deps extends Prices {
+export interface Deps extends Prices, ActualOrderDeps {
   /** TODO(spec): deployment flag name is unspecified. Use this same trusted switch for settings and evaluation; defaults off. */
   guardPolicyV2?: boolean;
   now(): number;
@@ -17,7 +18,16 @@ export interface Deps extends Prices {
   approvalsAvailable: boolean;
 }
 
-/** BACKEND §9.6, in its specified evaluation order. All dependencies are in-memory. */
+/** BACKEND §9.6, in its specified evaluation order. All dependencies are in-memory.
+ * @remarks
+ * Evaluate advisory policy in order with kill/inactive agent first, active-input denials,
+ * deliberate sell-exit exceptions and approvals bound to agent/reference/full order hash. Trusted
+ * caller binds authenticated agent and supplies in-memory dependencies; no I/O or signing occurs.
+ * Returns deny/needs_approval/allow; schema/dependency errors can throw. Guard v2 adds exact
+ * actual-account evidence gates when enabled.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Guard, policy and approval invariants}
+ */
 export function evaluate(req: PreflightRequest, policy: Policy, agent: Agent, d: Deps): Evaluation {
   const result = evaluatePolicy(req, policy, agent, d);
   return d.guardPolicyV2 ? { ...result, guardPolicyVersion: 2 } : result;
@@ -30,7 +40,8 @@ function evaluatePolicy(req: PreflightRequest, policy: Policy, agent: Agent, d: 
   const asset = normalizeInstrument(o.venue, o.instrument);
 
   if (p.killed || agent.status !== 'active') return { decision: 'deny', reasons: ['killed: your owner stopped this agent. Place no orders and tell the human.'] };
-  const age = req.context ? d.now() - Date.parse(req.context.reportedAt) : Infinity;
+  const now = d.now();
+  const age = req.context ? now - Date.parse(req.context.reportedAt) : Infinity;
   if (buying && age > 300_000) (p.mode === 'safe' ? deny : warn).push('stale_context: positions and cash are older than 5 minutes');
   if (p.blockAssets?.includes(asset)) deny.push(`blocked_asset: ${asset} is on your block list`);
   if (buying && p.allowAssets?.length && !p.allowAssets.includes(asset)) deny.push(`not_allowed: ${asset} is not on your allow list`);
@@ -41,7 +52,7 @@ function evaluatePolicy(req: PreflightRequest, policy: Policy, agent: Agent, d: 
     if (v === 'unavailable') deny.push('sim_unavailable: simulation is down, so on-chain buys are refused');
     else if (d.guardPolicyV2) {
       verdict = v;
-      const gate = guardBuyGate(v, p, asset, o.venue === 'rhc' ? 4663 : 8453);
+      const gate = guardBuyGate(v, p, asset, o.venue === 'rhc' ? 4663 : 8453, now);
       deny.push(...gate.deny);
       warn.push(...gate.warn);
     }
@@ -55,8 +66,8 @@ function evaluatePolicy(req: PreflightRequest, policy: Policy, agent: Agent, d: 
       else if (v.level === 'danger' && p.blockPlaybookLevel) deny.push(`playbook_danger: ${v.reasons[0]}`);
       else if (v.level === 'monitor' && p.blockPlaybookLevel === 'monitor') deny.push(`playbook_monitor: ${v.reasons[0]}`);
     }
-    // Keep legacy limit inputs until actual-account quote binding (packet 052).
-    if (v && v !== 'unavailable' && (d.guardPolicyV2 || v.level !== 'pending')) {
+    // Legacy replay remains compatible; V2 uses exact actual-account execution observations.
+    if (!d.guardPolicyV2 && v && v !== 'unavailable' && v.level !== 'pending') {
       const card = d.cardFor(asset);
       if (p.minLiquidityUsd !== undefined && p.minLiquidityUsd > 0) {
         if (!card || card.meta?.liquidity?.unavailable) deny.push('liquidity_unavailable');
@@ -71,7 +82,9 @@ function evaluatePolicy(req: PreflightRequest, policy: Policy, agent: Agent, d: 
       }
     }
   }
-  const notional = notionalOf(o, d);
+  if (d.guardPolicyV2 && (o.venue === 'rhc' || o.venue === 'base'))
+    deny.push(...actualOrderGate(req, policy, agent, d, now, verdict));
+  const notional = d.guardPolicyV2 && (o.venue === 'rhc' || o.venue === 'base') ? actualNotionalOf(req, d) : notionalOf(o, d);
   if (buying && notional === undefined) deny.push('missing_notional: send notionalUsd, or qty with limitPrice');
   if (buying && notional !== undefined) {
     const held = req.context?.positions?.find((x) => normalizeInstrument(o.venue, x.instrument) === asset)?.valueUsd ?? 0;
@@ -80,7 +93,7 @@ function evaluatePolicy(req: PreflightRequest, policy: Policy, agent: Agent, d: 
     if (p.maxPositionPct !== undefined && equity > 0 && (held + notional) / equity * 100 > p.maxPositionPct) deny.push('position_pct: above your max position (% of equity)');
   }
   if (buying && p.maxDailyLossUsd !== undefined && (req.context?.dailyPnlUsd ?? 0) <= -p.maxDailyLossUsd) deny.push('daily_loss: daily loss limit reached; only sells are allowed');
-  if (buying && p.earningsBlackoutDays && req.context?.earningsDate && daysUntil(req.context.earningsDate, d.now()) <= p.earningsBlackoutDays) deny.push('earnings_blackout: inside your earnings blackout');
+  if (buying && p.earningsBlackoutDays && req.context?.earningsDate && daysUntil(req.context.earningsDate, now) <= p.earningsBlackoutDays) deny.push('earnings_blackout: inside your earnings blackout');
   if (o.leverage && p.maxLeverage !== undefined && o.leverage > p.maxLeverage) deny.push('leverage: above your max leverage');
   if (deny.length) return { decision: 'deny', reasons: [...deny, ...warn], senses: { verdict } };
 

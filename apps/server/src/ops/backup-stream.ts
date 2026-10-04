@@ -4,7 +4,15 @@ import type { Readable, Writable } from 'node:stream';
 
 /** Concurrent pumps propagate backpressure and any producer/consumer failure.
  * Discard tool stderr: libpq and age diagnostics can contain secret locations.
- * Never use a shell, put connection URLs in argv, or stage plaintext on disk. */
+ * Never use a shell, put connection URLs in argv, or stage plaintext on disk.
+ * @remarks
+ * Spawn the supplied command pipeline without a shell, await every exit, and kill all stages on
+ * stream/process failure. Authorized backup operator controls stage commands/env and endpoints; no
+ * credential validation occurs here. Spawn, pipeline and nonzero-exit failures reject, with child
+ * stderr excluded from output.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function runStream(stages: { command: string; args: string[]; env?: NodeJS.ProcessEnv }[], input?: Readable, output?: Writable) {
   const children = stages.map(stage => spawn(stage.command, stage.args, {
     env: stage.env ?? process.env, stdio: ['pipe', 'pipe', 'ignore'],

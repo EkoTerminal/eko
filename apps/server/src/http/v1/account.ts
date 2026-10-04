@@ -5,7 +5,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Hex, PublicClient } from 'viem';
 import type { Config } from '../../config.js';
 import type { Db } from '../../db/client.js';
-import { preferences, referralCodes, referrals } from '../../db/schema.js';
+import { linkedIdentities, preferences, referralCodes, referrals } from '../../db/schema.js';
 import { AuthService, SESSION_COOKIE, type Account } from '../auth.js';
 import { EntitlementsService } from '../../harness/entitlements.js';
 export { EntitlementsService } from '../../harness/entitlements.js';
@@ -13,6 +13,15 @@ import { parse, sendError } from './helpers.js';
 
 export interface AccountServices { auth: AuthService; db: Db; client: PublicClient }
 
+/**
+ * Register SIWE challenge/verification/logout and account/preferences/referral reads. Challenge
+ * creation may create a guest; verification requires a current session, v1 bindings and signature.
+ * Mutations require allowed Origin; preference/referral checks differ between session and wallet
+ * requirements. Validation/auth/storage errors produce route errors; sessions rotate on sign-in
+ * and logout clears the same cookie scope.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function accountRoutes(app: FastifyInstance, cfg: Config, services: AccountServices) {
   const { auth, db, client } = services;
   const entitlements = new EntitlementsService(cfg);
@@ -25,7 +34,8 @@ export async function accountRoutes(app: FastifyInstance, cfg: Config, services:
     return row!.code;
   };
   const me = async (account: Account): Promise<Me> => MeSchema.parse({
-    account: { id: account.id, ...(account.walletAddress ? { wallet: account.walletAddress } : {}), linked: [] },
+    account: { id: account.id, ...(account.walletAddress ? { wallet: account.walletAddress } : {}),
+      linked: (await db.select({ provider: linkedIdentities.provider }).from(linkedIdentities).where(eq(linkedIdentities.accountId, account.id))).map(row => row.provider) },
     entitlements: entitlements.get(), trial: { status: 'not_open' },
     holdings: { minBalance24h: null }, referralCode: await codeFor(account),
   });

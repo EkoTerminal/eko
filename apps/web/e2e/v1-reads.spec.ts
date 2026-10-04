@@ -1,9 +1,12 @@
-import { expect,test,type Page } from '@playwright/test';
+import { expect,type Page } from '@playwright/test';
+import { test } from './helpers';
+import fixtures from '../src/mocks/contracts.json' with { type: 'json' };
 const identity='0x'+(801).toString(16).padStart(40,'0');
 async function noOverflow(page:Page) {
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
  for(const selector of ['.rt-wrap','.rt','.prow','.coin-head']) {
   for(const el of await page.locator(selector).all())if(await el.isVisible())expect(await el.evaluate(e=>e.scrollWidth<=e.clientWidth+1),selector).toBe(true);
+  if(selector==='.prow')for(const el of await page.locator(selector).all())if(await el.isVisible())expect(await el.evaluate(e=>e.scrollHeight<=e.clientHeight+1),'Guard labels remain unclipped').toBe(true);
  }
 }
 async function symbolFits(page:Page,selector:string) {
@@ -12,6 +15,11 @@ async function symbolFits(page:Page,selector:string) {
 }
 test('indexed review states at desktop and phone widths',async({page})=>{
  const errors:string[]=[];page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});page.on('pageerror',e=>errors.push(e.message));
+ // Packet 077 now requests quotes on coin pages. Only quotes are synthetic; indexed reads stay real.
+ await page.route('**/v1/trade/quote',route=>{
+  const input=route.request().postDataJSON();
+  return route.fulfill({json:{...fixtures.TradeQuote,coin:input.coin,side:input.side,amountUsd:input.amountUsd,account:undefined,binding:false,amountIn:'100',valueWei:'0',expectedOut:'100',minOut:'99',approvals:[],fee:{bps:0,usd:0,destination:null},route:{venue:'uniswap_v3',executable:false},expiresAt:new Date(Date.now()+15000).toISOString()}});
+ });
  await page.goto('/radar');await expect(page.locator('tr[data-address]').first()).toBeVisible();
  const result=await page.request.get('/v1/radar');expect(result.ok()).toBe(true);const radar=await result.json();
  expect(radar.totals.danger).toBe(5);expect(radar.rows.filter((r:{verdict:string})=>r.verdict==='danger')).toHaveLength(0);
@@ -41,6 +49,7 @@ await expect(pair.getByText('Not fully checked',{exact:true})).toHaveCount(1);aw
  await page.goto(`/coin/${radar.rows[0].address}`);await expect(page.locator('.coin-id h1')).toContainText('LONGSAMPLESYMBOL');await symbolFits(page,'.coin-id h1');await noOverflow(page);
  const captured=radar.rows.find((r:{symbol:{text:string}})=>r.symbol.text==='FIX');expect(captured).toBeTruthy();
  await page.goto(`/coin/${captured.address}`);await expect(page.getByText(/No trades in this window · last trade 10 h ago/)).toBeVisible();
+ await expect(page.locator('.tp-quote[data-tour="fee-lines"]')).toContainText('Terminal fee');await expect(page.locator('.tp-submit')).toBeDisabled();
  await expect(page.locator('.chart-flowkeys input')).toHaveCount(4);for(const box of await page.locator('.chart-flowkeys input').all())await expect(box).toBeDisabled();
  await expect(page.getByText('Wallet labels arrive later',{exact:true})).toBeVisible();await noOverflow(page);
  await page.getByRole('button',{name:'Show full history'}).click();await expect(page.getByText(/No trades in this window/)).toHaveCount(0);await expect(page.locator('.coin-ohlc')).toContainText('O ');await expect(page.getByText('Loading indexed candles…',{exact:true})).toHaveCount(0);

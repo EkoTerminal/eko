@@ -11,19 +11,21 @@ import { DEFAULT_ONBOARDING, type OnboardingPrefs, type Preferences } from '@eko
  * useApp.setPreferences) and is mirrored to localStorage, so it survives a failed server write.
  * Every flag only ever goes false → true, so hydration merges the two copies with OR.
  */
-export type TourAnchor = 'markets' | 'chart' | 'amount' | 'trade' | 'positions' | 'mode-switch' | 'wallet' | 'help';
+export type TourAnchor = 'scan' | 'verdict' | 'playbooks' | 'flow-markers' | 'coin-card' | 'fee-lines' | 'trade' | 'mode' | 'mission' | 'wallet';
 
-export type ChecklistStep = 'paper_trade' | 'close_position' | 'go_live';
+export type ProgressInput = Omit<Partial<OnboardingPrefs>, 'checklist'> & { checklist?: Partial<OnboardingPrefs['checklist']> };
 
-export const CHECKLIST_STEPS: ChecklistStep[] = ['paper_trade', 'close_position', 'go_live'];
-/** Steps that make up "getting started"; going live is optional. */
-export const REQUIRED_STEPS: ChecklistStep[] = ['paper_trade', 'close_position'];
+export type ChecklistStep = 'scan_coin' | 'open_evidence' | 'scan_bags' | 'guarded_trade' | 'connect_agent';
+
+export const CHECKLIST_STEPS: ChecklistStep[] = ['scan_coin', 'open_evidence', 'scan_bags', 'guarded_trade', 'connect_agent'];
+/** The five launch actions. */
+export const REQUIRED_STEPS: ChecklistStep[] = [...CHECKLIST_STEPS];
 
 /**
  * Bump when the tour or welcome changes meaningfully: users who finished an older version are
  * offered the new tour once (they are never shown the welcome again).
  */
-export const ONBOARDING_VERSION = 3;
+export const ONBOARDING_VERSION = 4;
 
 /** localStorage key; value 'off' disables all automatic onboarding (used by e2e tests). */
 export const ONBOARDING_LS = 'eko.onboarding';
@@ -49,10 +51,14 @@ function readDisabled(): boolean {
   }
 }
 
-function readLocal(): Partial<OnboardingPrefs> {
+function localKey(owner: string | null): string {
+  return owner ? `${LS_STATE}.${encodeURIComponent(owner)}` : LS_STATE;
+}
+
+function readLocal(owner: string | null = null): ProgressInput {
   try {
-    const v = JSON.parse(store()?.getItem(LS_STATE) ?? '{}');
-    return v && typeof v === 'object' ? (v as Partial<OnboardingPrefs>) : {};
+    const v = JSON.parse(store()?.getItem(localKey(owner)) ?? '{}');
+    return v && typeof v === 'object' ? (v as ProgressInput) : {};
   } catch {
     return {};
   }
@@ -66,20 +72,20 @@ function readOpen(): boolean {
   }
 }
 
-const EMPTY_CHECKLIST: Record<ChecklistStep, boolean> = { paper_trade: false, close_position: false, go_live: false };
+const EMPTY_CHECKLIST = { ...DEFAULT_ONBOARDING.checklist };
 
 /** OR-merge progress from several sources (server, localStorage). Unknown/invalid values are ignored. */
-export function mergeProgress(...sources: (Partial<OnboardingPrefs> | null | undefined)[]): OnboardingPrefs {
+export function mergeProgress(...sources: (ProgressInput | null | undefined)[]): OnboardingPrefs {
   const out: OnboardingPrefs = { ...DEFAULT_ONBOARDING, checklist: { ...EMPTY_CHECKLIST } };
   for (const s of sources) {
     if (!s || typeof s !== 'object') continue;
-    if (typeof s.version === 'number' && Number.isFinite(s.version)) out.version = Math.max(out.version, Math.floor(s.version));
+    if (typeof s.version === 'number' && Number.isFinite(s.version) && s.version >= 0 && s.version <= 1000) out.version = Math.max(out.version, Math.floor(s.version));
     out.welcomeDone ||= s.welcomeDone === true;
     out.tourDone ||= s.tourDone === true;
     out.checklistDismissed ||= s.checklistDismissed === true;
     out.liveIntroSeen ||= s.liveIntroSeen === true;
-    const c = (s.checklist ?? {}) as Partial<Record<ChecklistStep, unknown>>;
-    for (const k of CHECKLIST_STEPS) out.checklist[k] ||= c[k] === true;
+    const c = (s.checklist ?? {}) as Partial<Record<keyof OnboardingPrefs['checklist'], unknown>>;
+    for (const k of Object.keys(EMPTY_CHECKLIST) as (keyof typeof EMPTY_CHECKLIST)[]) out.checklist[k] ||= c[k] === true;
   }
   return out;
 }
@@ -87,11 +93,13 @@ export function mergeProgress(...sources: (Partial<OnboardingPrefs> | null | und
 interface State {
   /** Automatic onboarding is off (test bypass). Help and the tour can still be opened manually. */
   disabled: boolean;
+  owner: string | null;
+  scanSeen: boolean;
   welcomeOpen: boolean;
   tour: { step: number } | null;
   helpOpen: boolean;
   liveSetupOpen: boolean;
-  checklist: Record<ChecklistStep, boolean>;
+  checklist: OnboardingPrefs['checklist'];
   checklistDismissed: boolean;
 
   /** Progress has been loaded from preferences/localStorage (nothing auto-opens before this). */
@@ -120,11 +128,12 @@ interface Actions {
   requestLiveMode(): void;
   closeLiveSetup(): void;
   /** Idempotent: marking a step that is already done does nothing. */
-  markStep(step: ChecklistStep): void;
+  markStep(step: ChecklistStep | 'paper_trade' | 'close_position' | 'go_live'): void;
+  scanRendered(): void;
   dismissChecklist(): void;
 
   /** Load persisted progress (server preferences OR'd with the local mirror). */
-  hydrate(remote: Partial<OnboardingPrefs> | null | undefined): void;
+  hydrate(remote: ProgressInput | null | undefined, owner?: string | null): void;
   showMe(step: ChecklistStep): void;
   clearPointer(): void;
   restoreChecklist(): void;
@@ -132,12 +141,14 @@ interface Actions {
   /** Acknowledge the current guide version without taking the tour. */
   acknowledgeVersion(): void;
   markLiveIntroSeen(): void;
-  /** Start over: clears progress and shows the welcome again. */
+  /** Start over without opening a welcome modal. */
   restart(): void;
 }
 
 export const useOnboarding = create<State & Actions>((set, get) => ({
   disabled: readDisabled(),
+  owner: null,
+  scanSeen: false,
   welcomeOpen: false,
   tour: null,
   helpOpen: false,
@@ -169,25 +180,28 @@ export const useOnboarding = create<State & Actions>((set, get) => ({
   requestLiveMode: () => set({ liveSetupOpen: true, helpOpen: false, pointer: null }),
   closeLiveSetup: () => set({ liveSetupOpen: false }),
   markStep: (step) => {
-    if (!CHECKLIST_STEPS.includes(step) || get().checklist[step]) return;
+    if (!Object.hasOwn(EMPTY_CHECKLIST, step) || get().checklist[step]) return;
     set({ checklist: { ...get().checklist, [step]: true }, pointer: get().pointer === step ? null : get().pointer });
   },
   dismissChecklist: () => set({ checklistDismissed: true, pointer: null }),
 
-  hydrate: (remote) => {
-    const p = mergeProgress(remote, readLocal());
+  scanRendered: () => {
+    set({ scanSeen: true });
+    get().markStep('scan_coin');
+  },
+  hydrate: (remote, owner = null) => {
     const cur = get();
-    // Anything marked before hydration (e.g. a step detected during boot) is kept.
-    const checklist = { ...p.checklist };
-    for (const k of CHECKLIST_STEPS) checklist[k] ||= cur.checklist[k];
-    set({
-      hydrated: true,
-      version: p.version,
-      welcomeDone: p.welcomeDone || cur.welcomeDone,
-      tourDone: p.tourDone || cur.tourDone,
-      checklist,
-      checklistDismissed: p.checklistDismissed || cur.checklistDismissed,
-      liveIntroSeen: p.liveIntroSeen || cur.liveIntroSeen,
+    const changed = cur.owner !== owner;
+    // TODO(spec): CA-10 does not define device progress ownership. Claim anonymous
+    // progress once on sign-in; isolate subsequent accounts by their account id.
+    const anonymous = owner ? readLocal() : null;
+    const keepCurrent = !changed || (cur.owner === null && owner !== null);
+    const p = mergeProgress(remote, readLocal(owner), anonymous, keepCurrent ? progressOf(cur) : null);
+    if (owner) {
+      try { store()?.setItem(localKey(owner), JSON.stringify(p)); store()?.removeItem(LS_STATE); } catch { /* optional storage */ }
+    }
+    set({ ...p, owner, hydrated: true, disabled: readDisabled(),
+      ...(changed ? { tour: null, pointer: null, helpOpen: false, welcomeOpen: false, liveSetupOpen: false, checklistOpen: false } : {}),
     });
   },
   showMe: (step) => set({ pointer: step, helpOpen: false, tour: null, welcomeOpen: false }),
@@ -217,7 +231,7 @@ export const useOnboarding = create<State & Actions>((set, get) => ({
       helpOpen: false,
       tour: null,
       pointer: null,
-      welcomeOpen: true,
+      welcomeOpen: false,
     }),
 }));
 
@@ -238,7 +252,7 @@ export function progressOf(s: Pick<State, 'version' | 'welcomeDone' | 'tourDone'
  * (debounced) through the caller-supplied saver. With the e2e bypass on, only the local mirror is
  * written. Returns an unsubscribe function.
  */
-export function persistProgress(remote: Partial<OnboardingPrefs> | null, save: (p: OnboardingPrefs) => Promise<void>): () => void {
+export function persistProgress(remote: ProgressInput | null, save: (p: OnboardingPrefs) => Promise<void>): () => void {
   // Start from what the server has, so progress that only reached the local mirror gets saved too.
   let last = JSON.stringify(mergeProgress(remote));
   let timer: number | null = null;
@@ -249,7 +263,7 @@ export function persistProgress(remote: Partial<OnboardingPrefs> | null, save: (
     if (json === last) return;
     last = json;
     try {
-      store()?.setItem(LS_STATE, json);
+      store()?.setItem(localKey(s.owner), json);
     } catch {
       /* storage unavailable */
     }
@@ -269,7 +283,7 @@ export function persistProgress(remote: Partial<OnboardingPrefs> | null, save: (
 }
 
 /** Read the (possibly absent, on an older server) onboarding slice from preferences. */
-export function onboardingFromPrefs(prefs: Preferences | null | undefined): Partial<OnboardingPrefs> | null {
+export function onboardingFromPrefs(prefs: Preferences | null | undefined): ProgressInput | null {
   const o = (prefs as Partial<Preferences> | null | undefined)?.onboarding;
   return o && typeof o === 'object' ? o : null;
 }

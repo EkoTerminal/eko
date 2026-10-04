@@ -20,7 +20,22 @@ export class BlockRows {
   async flush(db: ChainDb) {
     const notifications: BusMessage[] = [];
     for (const table of chainTables) {
-      const rows = await db.insertMany(table, this.rows.get(table) ?? []);
+      const rows = table === 'eth_usd_reference_sources' ? [] : await db.insertMany(table, this.rows.get(table) ?? []);
+      if (table === 'eth_usd_reference_sources') {
+        // Canonical replay may select a different source at the same pricing block.
+        const sources = [...new Map((this.rows.get(table) ?? []).map(r => [r.block, r])).values()];
+        for (let offset = 0; offset < sources.length; offset += 500) {
+          const params: unknown[] = [];
+          const values = sources.slice(offset, offset + 500).map(r => {
+            const i = params.length; params.push(r.block, r.pool_id, r.venue, r.fee);
+            return `($${i+1}::bigint,$${i+2}::bytea,$${i+3}::text,$${i+4}::integer)`;
+          });
+          await db.sql.query(`INSERT INTO eth_usd_reference_sources(block,pool_id,venue,fee) VALUES ${values.join(',')}
+            ON CONFLICT(block) DO UPDATE SET pool_id=excluded.pool_id,venue=excluded.venue,fee=excluded.fee
+            WHERE (eth_usd_reference_sources.pool_id,eth_usd_reference_sources.venue,eth_usd_reference_sources.fee)
+              IS DISTINCT FROM (excluded.pool_id,excluded.venue,excluded.fee)`, params);
+        }
+      }
       if (table === 'pons_events') {
         // Re-decoding canonical history fills fields omitted by older decoders without
         // replacing existing evidence or producing duplicate insert notifications.
@@ -40,17 +55,30 @@ export class BlockRows {
       if (table === 'swaps') {
         const id = (r: Row) => `${(r.ts instanceof Date ? r.ts : new Date(r.ts as string)).toISOString()}:${hex(r.tx_hash as Uint8Array)}:${r.log_index}`;
         const inserted = new Set(rows.map(id));
-        const unpriced = (this.rows.get('swaps') ?? []).filter(r => (r.usd != null || r.price_quote != null) && !inserted.has(id(r)));
-        // Replay may fill deferred prices without replacing raw amounts, senders or identity.
-        for (let offset = 0; offset < unpriced.length; offset += 500) {
+        const replayed = (this.rows.get('swaps') ?? []).filter(r => !inserted.has(id(r)));
+        // Re-indexing recomputes derived USD, including clearing values whose reference was unverified.
+        // Raw amounts, senders and identity remain unchanged; candles are refreshed below.
+        for (let offset = 0; offset < replayed.length; offset += 500) {
           const params: unknown[] = [];
-          const values = unpriced.slice(offset, offset + 500).map(r => {
+          const values = replayed.slice(offset, offset + 500).map(r => {
             const i = params.length; params.push(r.ts, r.tx_hash, r.log_index, r.usd, r.priced_block, r.price_quote);
             return `($${i + 1}::timestamptz,$${i + 2}::bytea,$${i + 3}::integer,$${i + 4}::double precision,$${i + 5}::bigint,$${i + 6}::double precision)`;
           });
           await db.sql.query(`UPDATE swaps s SET price_quote=coalesce(s.price_quote,p.price_quote),pricing_pending=s.pricing_pending AND p.price_quote IS NULL,
-            usd=coalesce(s.usd,p.usd),priced_block=CASE WHEN s.usd IS NULL THEN p.priced_block ELSE s.priced_block END
-            FROM (VALUES ${values.join(',')}) AS p(ts,tx_hash,log_index,usd,priced_block,price_quote) WHERE s.ts=p.ts AND s.tx_hash=p.tx_hash AND s.log_index=p.log_index AND (s.usd IS NULL OR s.pricing_pending)`, params);
+            usd=p.usd,priced_block=p.priced_block
+            FROM (VALUES ${values.join(',')}) AS p(ts,tx_hash,log_index,usd,priced_block,price_quote) WHERE s.ts=p.ts AND s.tx_hash=p.tx_hash AND s.log_index=p.log_index AND (s.usd IS DISTINCT FROM p.usd OR s.priced_block IS DISTINCT FROM p.priced_block OR s.pricing_pending)`, params);
+        }
+      }
+      // Canonical re-decoding can fill missing holder actors; never overwrite an attributed row.
+      if (table === 'swaps' || table === 'liquidity_events') {
+        const field=table==='swaps' ? 'trader' : 'actor';
+        const resolved=(this.rows.get(table) ?? []).filter(r=>r[field]!=null && !r.senders_pending);
+        for(let offset=0;offset<resolved.length;offset+=250) {
+          const params:unknown[]=[];
+          const values=resolved.slice(offset,offset+250).map(r=>{const i=params.length;params.push(r.tx_hash,r.log_index,r.block,r[field],r.tx_from,r.tx_to);return `($${i+1}::bytea,$${i+2}::integer,$${i+3}::bigint,$${i+4}::bytea,$${i+5}::bytea,$${i+6}::bytea)`;});
+          await db.sql.query(`UPDATE ${table} e SET ${field}=p.actor,tx_from=p.tx_from,tx_to=p.tx_to,senders_pending=false
+            FROM (VALUES ${values.join(',')}) AS p(tx_hash,log_index,block,actor,tx_from,tx_to)
+            WHERE e.tx_hash=p.tx_hash AND e.log_index=p.log_index AND e.block=p.block AND (e.${field} IS NULL OR e.senders_pending)`,params);
         }
       }
       for (const row of rows) {

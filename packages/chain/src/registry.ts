@@ -12,6 +12,9 @@ const entryObject = z.strictObject({
     verified: z.iso.date().optional(),
     check: z.enum(['code', 'router02_wiring', 'VERIFY', 'VERIFY_ABI']).optional(),
     required_for: z.enum(['T', 'D0']).optional(),
+    owner: z.union([checksum, z.literal('TODO')]).optional(),
+    committer: z.union([checksum, z.literal('TODO')]).optional(),
+    build_record: z.union([z.string().regex(/^contracts\/release\/[A-Za-z0-9_-]+\.build\.json$/), z.literal('TODO')]).optional(),
     hint: z.string().optional(), source: z.string().optional(),
 });
 const entry = z.union([entryObject, z.literal('TODO').transform((): z.infer<typeof entryObject> => ({ address: 'TODO' }))]);

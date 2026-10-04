@@ -1,11 +1,16 @@
-import { expect, test } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { fileURLToPath } from 'node:url';
+import { test, configureContext } from './helpers';
+test.use({ demo: true });
 
 for (const [width,height] of [[1512,982],[1440,900],[1280,800],[390,844]]) test(`Radar geometry and inspector at ${width}×${height}`, async ({page}) => {
   const errors:string[]=[]; page.on('pageerror',e=>errors.push(e.message));
   await page.setViewportSize({width,height}); await page.goto('/radar');
   await expect(page.locator('.rt tbody tr[data-address]')).toHaveCount(30);
   await expect(page.locator('.htile')).toHaveCount(3);
-  await expect(page.locator('.ghost-report')).toContainText('$EKOX');
+  // Packet 118 retired the invented demo accusation; only reviewed public records may render.
+  await expect(page.locator('.ghost-report')).toHaveCount(0);
+  await expect(page.getByRole('article', { name: 'Reviewed Ghost Report' })).toHaveCount(0);
   await expect(page.locator('.radar')).toContainText('30 of 30');
   const inspector=page.locator('#radar-inspector');
   if(width>=1480){await expect(inspector).toBeVisible(); await page.getByRole('button',{name:'Close details',exact:true}).last().click();}
@@ -13,10 +18,11 @@ for (const [width,height] of [[1512,982],[1440,900],[1280,800],[390,844]]) test(
   const row=page.locator('[data-pick]').first(); await row.click(); await expect(inspector).toBeVisible();
   await expect(inspector.getByText('Signal · five readings')).toBeVisible();
   await expect(inspector.getByText('Market cap', { exact: true })).toBeVisible();
-  await expect(inspector.getByRole('button',{name:'Trading opens with the guarded panel'})).toBeDisabled();
+  await expect(inspector.locator('.tp-submit')).toBeDisabled();
   if(width<1480){await expect(inspector).toHaveAttribute('role','dialog');await expect(page.locator('.insp-scrim')).toBeVisible();await expect(page.locator('.radar')).toHaveAttribute('inert','');}
   await page.keyboard.press('Escape'); await expect(inspector).toHaveCount(0); await expect(row).toBeFocused();
-  const columns={'.c-liq':1060,'.c-act':940,'.c-flow':840,'.c-spark':740,'.c-watch':640,'.c-1h':470,'.c-sig':470};
+  // Packets 023/037: bounded identity and Guard columns drop optional readings earlier.
+  const columns={'.c-liq':1160,'.c-act':1020,'.c-flow':940,'.c-spark':840,'.c-watch':740,'.c-1h':600,'.c-sig':600};
   const tableWidth=await page.locator('.rt-wrap').evaluate(e=>e.clientWidth);
   for(const [column,cutoff] of Object.entries(columns)){ const head=page.locator(`.rt thead ${column}`); if(tableWidth<=cutoff) await expect(head).toBeHidden(); else await expect(head).toBeVisible(); }
   for(const column of ['.c-coin','.c-guard','.c-exit']) await expect(page.locator(`.rt thead ${column}`)).toBeVisible();
@@ -77,7 +83,7 @@ test('phone scroll and top bar stay clear of the fixed navigation', async ({page
   await expect(page.locator('.mbar .trial')).toHaveText('Free · launch week');
   const trial=await page.locator('.mbar .trial-top').boundingBox();expect(trial!.height).toBeLessThan(24);
 });
-test('Desktop nav icons, tile labels, and mouse/touch targets', async ({page,browser}) => {
+test('Desktop nav icons, tile labels, and mouse/touch targets', async ({page,browser,baseURL}) => {
   await page.setViewportSize({width:1440,height:900});await page.goto('/radar');
   await expect(page.locator('.side-item').first()).toBeVisible();
   expect(await page.locator('.side-item').evaluateAll(items=>items.every(item=>item.firstElementChild?.tagName.toLowerCase()==='svg'))).toBe(true);
@@ -90,10 +96,40 @@ test('Desktop nav icons, tile labels, and mouse/touch targets', async ({page,bro
   }
   const mouse=page.getByRole('group',{name:'Show',exact:true}).getByRole('button',{name:'All',exact:true});
   const mouseBox=await mouse.boundingBox();expect(mouseBox!.height).toBeGreaterThanOrEqual(24);expect(mouseBox!.height).toBeLessThan(44);
-  const touchContext=await browser.newContext({baseURL:'http://127.0.0.1:5196',hasTouch:true,isMobile:true,viewport:{width:390,height:844}});
+  const touchContext=await browser.newContext({baseURL,hasTouch:true,isMobile:true,viewport:{width:390,height:844}});
+  await configureContext(touchContext, true);
   try{
     const touch=await touchContext.newPage();await touch.goto('/radar');
     const target=touch.getByRole('group',{name:'Show',exact:true}).getByRole('button',{name:'All',exact:true});await expect(target).toBeVisible();
     const box=await target.boundingBox();expect(box!.height).toBeGreaterThanOrEqual(44);expect(box!.width).toBeGreaterThanOrEqual(44);
-  }finally{await touchContext.close();}
+  }finally{await touchContext.unrouteAll({behavior:'wait'});await touchContext.close();}
+});
+
+// Packet 118 replacement for the retired fabricated Ghost Report banner (FRONTEND §3.2, §8).
+test.describe('reviewed Ghost Reports over HTTP', () => {
+  test.use({ demo: false });
+  test('reviewed evidence renders, while an empty public record never invents findings', async ({ page }) => {
+    await page.goto('/__ui');
+    const fixturePath = '/@fs' + fileURLToPath(new URL('../../../packages/shared/test/fixtures/contracts/ghost-reports.ts', import.meta.url));
+    const { ghostRecord, ghostSamples } = await page.evaluate(async path => {
+      const { ghostRecord, ghostSamples } = await import(/* @vite-ignore */ path);
+      return { ghostRecord, ghostSamples };
+    }, fixturePath);
+    const record = { ...ghostRecord, review: ghostSamples.GhostReportReview, status: 'reviewed_partial' };
+    let records = [record];
+    await page.route('**/v2/ghost-reports', route => route.fulfill({ json: { records } }));
+    await page.goto('/radar');
+    const report = page.getByRole('article', { name: 'Reviewed Ghost Report' });
+    await expect(report).toContainText('Facts reviewed · partial evidence');
+    await expect(report).toContainText(record.draft.assessment.coin);
+    await expect(report).toContainText('Not fully checked');
+    await expect(report).toContainText('Receipt anchor verification pending');
+    await expect(report.getByRole('link', { name: 'Verify receipt' })).toHaveAttribute('href', `/receipt/${record.draft.assessment.receipt.id}`);
+    await report.locator('summary').click();
+    await expect(report.locator('pre')).toContainText('Not financial advice');
+    records = [];
+    await page.getByRole('button', { name: 'Refresh reports' }).click();
+    await expect(report).toHaveCount(0);
+    await expect(page.locator('.ghost-report')).toHaveCount(0);
+  });
 });

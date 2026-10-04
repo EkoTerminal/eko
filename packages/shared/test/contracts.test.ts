@@ -4,10 +4,20 @@ import * as contracts from '../src/contracts/index.js';
 import * as flags from '../src/flags.js';
 import samples from './fixtures/contracts/v1.json';
 import { guardSamples } from './fixtures/contracts/guard-v2.js';
+import { sensesSamples } from './fixtures/contracts/mcp-senses.js';
+import { reviewSamples } from './fixtures/contracts/guard-review.js';
+import { actualOrderSamples } from './fixtures/contracts/actual-order.js';
+import { ghostSamples } from './fixtures/contracts/ghost-reports.js';
 import { receiptSamples } from './fixtures/contracts/public-receipts.js';
+import { scoreboardSamples } from './fixtures/contracts/scoreboard.js';
+import { swarmSamples } from './fixtures/contracts/swarm.js';
 import type { WsEvent, WsEventMap, Address } from '../src/index.js';
 
-const sampleByName: Record<string, unknown> = { ...samples, ...guardSamples, ...receiptSamples };
+const attributionGap={reason:'unattributed_swaps',window:'trailing_1h',status:'incomplete',threshold:0.05,totalCount:20,unattributedCount:2,
+  totalVolumeUsd:100,unattributedVolumeUsd:10,countShare:0.1,volumeShare:0.1,unknownVolumeCount:0};
+const sampleByName: Record<string, unknown> = { ...samples, ...sensesSamples, ...guardSamples, ...receiptSamples, ...ghostSamples, ...actualOrderSamples, ...swarmSamples, ...reviewSamples, ...scoreboardSamples, AttributionCoverageGap:attributionGap,
+  ShareMeta: { title: 'EKO · Buyer risk snapshot', description: 'Pending', url: 'https://app.eko.example/receipt/sample-receipt', image: 'https://app.eko.example/og/scan/sample.png' },
+};
 const schemas = Object.entries({ ...contracts, ...flags }).filter(([name]) => name.endsWith('Schema')) as [string, z.ZodType][];
 
 describe('frozen contract samples (FACTS §7, BACKEND §23)', () => {
@@ -33,6 +43,12 @@ describe('frozen contract samples (FACTS §7, BACKEND §23)', () => {
       }
     });
   }
+
+  it('preserves named actor coverage on both coin sections and wallet-flow responses',()=>{
+    const meta={confidence:0,asOfBlock:1,missing:['wallet_flow:unattributed'],coverageGaps:{wallet_flow:attributionGap}};
+    expect(contracts.CoinCardMetaSchema.parse({flow:meta})).toEqual({flow:meta});
+    expect(contracts.FlowSchema.parse({...samples.Flow,meta}).meta).toEqual(meta);
+  });
 
   it('validates and normalizes addresses, including nested addresses', () => {
     const mixed = `0x${'AB'.repeat(20)}`;

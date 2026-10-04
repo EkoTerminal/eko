@@ -3,9 +3,21 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { parseSecurityCollectors } from './obs/security-config.js';
 import { AddressSchema } from '@eko/shared';
 import { parseFlagOverride } from './flags/service.js';
 import { parsePointsRates } from './points/config.js';
+import { TrustProxyHopsSchema } from './proxy-trust.js';
+
+// TODO(spec): BACKEND §15.3 leaves WS budgets unspecified; tune these bounded defaults with load evidence.
+export const WS_DEFAULT_LIMITS = {
+  windowMs: 1000,
+  messagesPerWindow: 30,
+  hardMessagesPerWindow: 90,
+  snapshotsPerConnection: 2,
+  snapshotsGlobal: 16,
+  snapshotQueue: 128,
+};
 
 export const TradeCapsSchema = z.strictObject({
   beta: z.strictObject({ defaultCapUsd: z.strictObject({ team: z.number().positive().max(25), beta_user: z.number().positive().max(100) }) }),
@@ -33,9 +45,17 @@ const EnvSchema = z.object({
   APP_ROLE: z.enum(['api', 'worker', 'dev']).default('api'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().default('0.0.0.0'),
+  TRUST_PROXY_HOPS: TrustProxyHopsSchema,
   PORT: z.coerce.number().int().default(8710),
+  WS_WINDOW_MS: z.coerce.number().int().positive().default(WS_DEFAULT_LIMITS.windowMs),
+  WS_MESSAGES_PER_WINDOW: z.coerce.number().int().positive().default(WS_DEFAULT_LIMITS.messagesPerWindow),
+  WS_HARD_MESSAGES_PER_WINDOW: z.coerce.number().int().positive().default(WS_DEFAULT_LIMITS.hardMessagesPerWindow),
+  WS_SNAPSHOTS_PER_CONNECTION: z.coerce.number().int().positive().default(WS_DEFAULT_LIMITS.snapshotsPerConnection),
+  WS_SNAPSHOTS_GLOBAL: z.coerce.number().int().positive().default(WS_DEFAULT_LIMITS.snapshotsGlobal),
+  WS_SNAPSHOT_QUEUE: z.coerce.number().int().nonnegative().default(WS_DEFAULT_LIMITS.snapshotQueue),
   /** Origin of the web app (CORS + SIWE domain). Comma-separate multiple origins. */
   PUBLIC_ORIGIN: z.string().default('http://localhost:5180'),
+  TELEGRAM_BOT_HANDLE: optionalValue(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{4,31}$/)),
   /** Shared cookie scope for app/api/mcp; inferred from PUBLIC_ORIGIN when unset. */
   SESSION_COOKIE_DOMAIN: optionalValue(z.string().regex(/^\.?[a-zA-Z0-9.-]+$/)),
   /** Unset launch quotas remain unavailable until a launch limit is approved. */
@@ -111,7 +131,7 @@ const EnvSchema = z.object({
   GATEWAY_MODEL_MISTRAL: z.string().optional(),
   GATEWAY_MODEL_GROQ: z.string().optional(),
   /** Hard ceiling on estimated AI spend per UTC day across all providers. */
-  AI_DAILY_BUDGET_USD: z.coerce.number().nonnegative().default(2),
+  AI_DAILY_BUDGET_USD: z.coerce.number().nonnegative().default(0),
   /** Hard ceiling on model calls per bot per hour. */
   AI_MAX_CALLS_PER_BOT_HOUR: z.coerce.number().int().nonnegative().default(12),
   AI_TIMEOUT_MS: z.coerce.number().int().default(25_000),
@@ -130,7 +150,51 @@ const EnvSchema = z.object({
   /** Mainnet execution stays disabled unless this is explicitly true. */
   LIVE_TRADING_ENABLED: bool,
   ADMIN_WALLETS: z.string().default(''),
+  SECURITY_COLLECTORS: z.string().default('{}').transform(parseSecurityCollectors),
 });
+
+// TODO(spec): BACKEND §2.4/§18 do not define deployment identity. Version 1 attests
+// this explicit parsed host-config allowlist; URL/cookie/key/path fields stay excluded.
+export const identityConfigKeys = {
+  APP_ROLE: true, NODE_ENV: true, TRUST_PROXY_HOPS: true, PORT: true,
+  WS_WINDOW_MS: true, WS_MESSAGES_PER_WINDOW: true, WS_HARD_MESSAGES_PER_WINDOW: true,
+  WS_SNAPSHOTS_PER_CONNECTION: true, WS_SNAPSHOTS_GLOBAL: true, WS_SNAPSHOT_QUEUE: true,
+  LAUNCH_WEEK_AGENT_LIMIT: true, POINTS_ACTIVE_FROM: true, POINTS_RATES: true,
+  FLAGS: true, LEGACY_API: true, LEGACY_SIGNALS: true, TIERS_ACTIVE_FROM: true,
+  FEE_ACTIVE_FROM: true, FEE_BPS_DEFAULT: true, TRADE_MAX_USD: true, TRADE_CAPS_FROM: true,
+  TRADING_ALLOWLIST_ONLY: true, BURN_WALLET_ADDRESS: true, RECEIPTS_REGISTRY_ADDRESS: true,
+  MARKET_DATA_SOURCE: true, DEMO_SEED: true, ENABLE_DEV_ROUTES: true, SERVE_WEB: true,
+  RUN_WORKER: true, AI_DAILY_BUDGET_USD: true, AI_MAX_CALLS_PER_BOT_HOUR: true,
+  AI_TIMEOUT_MS: true, RPC_PAID_MAX_RPM: true, RPC_PUBLIC_MAX_RPM: true,
+  RPC_PAID_DAILY_BUDGET: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
+  LIVE_TRADING_ENABLED: true, SECURITY_COLLECTORS: true,
+} as const;
+const IdentityEnvSchema = EnvSchema.pick(identityConfigKeys);
+
+// Parse only allowlisted inputs with the SAME defaults/transforms as runtime boot.
+// No secrets, generated dev secret, file paths or I/O are needed by the verifier.
+export function parseIdentityConfiguration(env: NodeJS.ProcessEnv, tradeCapsText: string) {
+  return normalizeIdentityConfiguration(IdentityEnvSchema.parse(env), parseTradeCaps(tradeCapsText));
+}
+function normalizeIdentityConfiguration(c: z.infer<typeof IdentityEnvSchema>, tradeCaps: TradeCaps) {
+  const rpc = rpcConfig(c);
+  const values: Record<string, unknown> = Object.fromEntries(Object.keys(identityConfigKeys).map(key => [key, c[key as keyof typeof c] ?? null]));
+  values.MARKET_DATA_SOURCE = c.MARKET_DATA_SOURCE ?? (c.NODE_ENV === 'production' ? 'onchain' : 'demo');
+  values.FLAGS = [...parseFlagOverride(c.FLAGS)].sort();
+  values.BURN_WALLET_ADDRESS = c.BURN_WALLET_ADDRESS.toLowerCase();
+  values.RECEIPTS_REGISTRY_ADDRESS = c.RECEIPTS_REGISTRY_ADDRESS.toLowerCase();
+  values.RPC_PAID_MAX_RPM = rpc.paidRpm;
+  values.RPC_PUBLIC_MAX_RPM = rpc.publicRpm;
+  values.RPC_PAID_DAILY_BUDGET = rpc.dailyBudget;
+  values.RPC_SESSION_BUDGET = Number.isFinite(rpc.sessionBudget) ? rpc.sessionBudget : 'unlimited';
+  values.RPC_WEIGHTS = rpc.weights;
+  return { environment: values, tradeCaps };
+}
+export function effectiveIdentityConfiguration(cfg: Config) {
+  // Project parsed values, never re-read process.env or spread the Config (which has secrets).
+  const selected = Object.fromEntries(Object.keys(identityConfigKeys).map(key => [key, cfg[key as keyof typeof identityConfigKeys]]));
+  return normalizeIdentityConfiguration(selected as z.infer<typeof IdentityEnvSchema>, cfg.tradeCaps);
+}
 
 export type Config = Omit<z.infer<typeof EnvSchema>, 'MARKET_DATA_SOURCE'> & {
   MARKET_DATA_SOURCE: 'onchain' | 'demo';
@@ -147,6 +211,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid environment configuration:\n${msg}`);
   }
   const c = { ...parsed.data, MARKET_DATA_SOURCE: parsed.data.MARKET_DATA_SOURCE ?? (parsed.data.NODE_ENV === 'production' ? 'onchain' : 'demo') };
+  if (c.WS_HARD_MESSAGES_PER_WINDOW <= c.WS_MESSAGES_PER_WINDOW) throw new Error('WS_HARD_MESSAGES_PER_WINDOW must exceed WS_MESSAGES_PER_WINDOW');
   if (c.APP_ROLE === 'dev' && (c.NODE_ENV === 'production' || c.DATABASE_URL)) throw new Error('APP_ROLE=dev is for local PGlite only');
   if (c.NODE_ENV === 'production' && !c.DATABASE_URL?.trim()) throw new Error('DATABASE_URL is required in production; PGlite is for local development and tests');
   if (c.NODE_ENV === 'production' && c.APP_ROLE === 'api' && c.RUN_WORKER) throw new Error('API replicas require RUN_WORKER=false; use APP_ROLE=worker for the reconciler');

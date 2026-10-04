@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { useMedia } from '../../lib/useMedia';
 import { useOnboarding, type TourAnchor } from '../../store/onboarding';
 import { IconClose } from '../icons';
-import { POINTERS, TOUR_STEPS, findAnchor, openMobile } from './steps';
+import { POINTERS, availableTourSteps, findAnchor, openMobile } from './steps';
 import { prefersReducedMotion, useDialog } from './useDialog';
 
 type Rect = { left: number; top: number; width: number; height: number };
@@ -25,22 +25,22 @@ function useAnchor(anchor: TourAnchor, waitMs: number, block: ScrollLogicalPosit
     let el: HTMLElement | null = null;
     let last = '';
     let scrolled = false;
-    let everFound = false;
     const t0 = performance.now();
     setStatus('searching');
     setRect(null);
     const tick = () => {
-      if (!el || !el.isConnected) {
-        el = findAnchor(anchor);
+      const visible = findAnchor(anchor);
+      if (!el || el !== visible) {
+        el = visible;
         if (!el) {
-          if (!everFound && performance.now() - t0 > waitMs) {
+          setRect(null);
+          if (performance.now() - t0 > waitMs) {
             setStatus('missing');
             return;
           }
           raf = requestAnimationFrame(tick);
           return;
         }
-        everFound = true;
         setStatus('found');
         if (!scrolled) {
           scrolled = true;
@@ -158,9 +158,10 @@ function TourRunner({ isMobile }: { isMobile: boolean }) {
   const dir = useRef<1 | -1>(1);
   const cardRef = useRef<HTMLDivElement>(null);
   const nextRef = useRef<HTMLButtonElement>(null);
-  const total = TOUR_STEPS.length;
+  const [steps] = useState(availableTourSteps);
+  const total = steps.length;
   const idx = Math.max(0, Math.min(total - 1, step));
-  const def = TOUR_STEPS[idx]!;
+  const def = steps[idx];
   const last = idx === total - 1;
 
   const finish = useCallback(() => {
@@ -181,13 +182,13 @@ function TourRunner({ isMobile }: { isMobile: boolean }) {
 
   // Phones: show the part of the screen that holds this step's element.
   useEffect(() => {
-    if (isMobile) openMobile(def.mobileSheet);
+    if (isMobile) openMobile(def?.mobileSheet ?? 'none');
   }, [def, isMobile]);
 
-  // Desktop needs the element to point at; phones show the card either way.
-  const { status, rect } = useAnchor(def.anchor, idx === 0 ? 2500 : 900, isMobile ? 'start' : 'nearest');
+  // Both layouts skip stops whose implemented anchor is no longer visible.
+  const { status, rect } = useAnchor(def?.anchor ?? 'scan', idx === 0 ? 2500 : 900, isMobile ? 'start' : 'nearest');
   useEffect(() => {
-    if (isMobile || status !== 'missing') return;
+    if (total > 0 && status !== 'missing') return;
     const n = idx + dir.current;
     if (n < 0) go(1);
     else if (n >= total) finish();
@@ -198,13 +199,7 @@ function TourRunner({ isMobile }: { isMobile: boolean }) {
 
   // ←/→ move, from anywhere on the page while the tour is open.
   useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return;
-      if (e.key === 'ArrowRight') (e.preventDefault(), e.stopPropagation(), go(1));
-      else if (e.key === 'ArrowLeft') (e.preventDefault(), e.stopPropagation(), go(-1));
-      else if (e.key === 'Escape') (e.preventDefault(), e.stopPropagation(), finish());
-    };
+    const h = (e: KeyboardEvent) => tourKeyboard(e, go, finish);
     window.addEventListener('keydown', h, true);
     return () => window.removeEventListener('keydown', h, true);
   }, [go, finish]);
@@ -217,14 +212,15 @@ function TourRunner({ isMobile }: { isMobile: boolean }) {
     return () => clearTimeout(t);
   }, [idx]);
 
-  usePlacement(cardRef, isMobile ? null : status === 'found' ? rect : null, def.placement, [idx, isMobile]);
+  usePlacement(cardRef, isMobile ? null : status === 'found' ? rect : null, def?.placement, [idx, isMobile]);
 
-  const showCard = isMobile || status === 'found';
+  if (!def) return null;
+  const showCard = status === 'found';
   const pct = ((idx + 1) / total) * 100;
   const onTop = isMobile && status === 'found' && sheetOnTop(rect);
   const mobileRing = isMobile && status === 'found' ? uncovered(rect, cardRef.current, onTop) : null;
   return (
-    <div className={`ob-root tour ${isMobile ? 'tour--mobile' : 'tour--desktop'}`} data-testid="tour">
+    <div className={`ob-root tour ${isMobile ? 'tour--mobile' : 'tour--desktop'}`} data-anchor={def.anchor} data-testid="tour">
       {!isMobile ? (
         <>
           <div className="tour-block" onPointerDown={(e) => e.preventDefault()} />
@@ -292,10 +288,10 @@ function PointerRunner({ isMobile }: { isMobile: boolean }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (isMobile) openMobile(def.mobileSheet);
+    if (isMobile) openMobile(def?.mobileSheet ?? 'none');
   }, [def, isMobile]);
 
-  const { status, rect } = useAnchor(def.anchor, 1200, isMobile ? 'start' : 'nearest');
+  const { status, rect } = useAnchor(def?.anchor ?? 'scan', 1200, isMobile ? 'start' : 'nearest');
   useDialog(cardRef, { onEscape: clearPointer, trap: false, restore: false });
 
   // Any press outside the hint dismisses it — including pressing the highlighted control itself —
@@ -322,7 +318,7 @@ function PointerRunner({ isMobile }: { isMobile: boolean }) {
   usePlacement(cardRef, isMobile ? null : status === 'found' ? rect : null, undefined, [step, isMobile]);
 
   return (
-    <div className={`ob-root tour tour--pointer ${isMobile ? 'tour--mobile' : ''}`} data-testid="pointer">
+    <div className={`ob-root tour tour--pointer ${isMobile ? 'tour--mobile' : ''}`} data-anchor={def.anchor} data-testid="pointer">
       {!isMobile && status === 'found' ? <Spotlight rect={rect} ring /> : null}
       <div
         ref={cardRef}
@@ -343,7 +339,7 @@ function PointerRunner({ isMobile }: { isMobile: boolean }) {
           {def.title}
         </h3>
         <p className="tour-body">{def.body}</p>
-        {status === 'missing' && !isMobile ? <p className="tour-body muted">It isn’t on screen right now — open the Trade workspace and try again.</p> : null}
+        {status === 'missing' && !isMobile ? <p className="tour-body muted">It isn’t on screen right now — open the relevant page and try again.</p> : null}
         <div className="tour-actions">
           <span className="grow" />
           <button className="btn primary sm" onClick={clearPointer} data-autofocus>
@@ -353,4 +349,14 @@ function PointerRunner({ isMobile }: { isMobile: boolean }) {
       </div>
     </div>
   );
+}
+
+/** Escape dismisses even when focus is still in the scanned input. */
+export function tourKeyboard(e: KeyboardEvent, go: (direction: 1 | -1) => void, finish: () => void) {
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(); return; }
+  const target = e.target as HTMLElement;
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    e.preventDefault(); e.stopPropagation(); go(e.key === 'ArrowRight' ? 1 : -1);
+  }
 }

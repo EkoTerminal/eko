@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "kind": "betaDaily",
+  "source": null,
+  "candidate": {
+    "revision": null,
+    "sourceHash": null
+  },
+  "window": {
+    "from": null,
+    "to": null
+  },
+  "data": {
+    "coverageComplete": null,
+    "confirmedOrders": null,
+    "orders": [],
+    "scanEligible": null,
+    "scanMs": [],
+    "verdictEligible": null,
+    "verdictMs": [],
+    "preflightEligible": null,
+    "preflightMs": [],
+    "metrics": {
+      "refusals": null,
+      "refusalReasons": null,
+      "disputedVerdicts": null,
+      "uncheckedOrders": null,
+      "eligibleOrders": null,
+      "simulationFailures": null,
+      "simulationAttempts": null,
+      "agents": null,
+      "preflights": null,
+      "scans": null,
+      "bagCards": null,
+      "errors": null,
+      "requests": null,
+      "spendUsd": null,
+      "approvedBudgetUsd": null,
+      "labelTruePositive": null,
+      "labelFalsePositive": null
+    },
+    "reviewNote": {
+      "windowAndCandidate": null,
+      "fillsMissesPending": null,
+      "refusalsDisputesLatency": null,
+      "errorsSpendBugs": null,
+      "decisionAndNextStep": null
+    }
+  }
+}

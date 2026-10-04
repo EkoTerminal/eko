@@ -75,6 +75,9 @@ export const FeedItemSchema = z.object({
   // CA-32 (lead, additive, all optional): the structured fields the Feed's one-line descriptions are built from
   // (FRONTEND §3.3), so the web never parses free text. Absent field → that part of the line is left out.
   side: z.enum(['buy', 'sell']).optional(),
+  beta: z.boolean().optional(),
+  confidence: z.number().optional(),
+  modelVersion: z.string().optional(),
   /** A declared agent's self-registered name (ERC-8004): untrusted text. */
   agentName: UntrustedSchema.optional(),
   /** EKO's own name for a crew. */
@@ -122,10 +125,15 @@ export const BagReportSchema = z.object({
   asOfBlock: z.number(),
   holdings: z.array(z.object({
     coin: CoinSummarySchema,
-    balance: z.string(),
+    // TODO(spec): CA-6 has no row availability contract; null is unknown, never zero.
+    balance: z.string().nullable(),
+    balanceStatus: z.enum(['observed', 'unavailable', 'error']).optional(),
+    status: z.enum(['ready', 'pending', 'unavailable', 'error']).optional(),
+    unavailable: z.array(z.enum(['balance', 'value', 'card', 'exitCost'])).optional(),
+    error: z.enum(['balance_unavailable', 'card_unavailable', 'scan_failed', 'scan_queue_full']).optional(),
     valueUsd: z.number().optional(),
     playbooks: z.array(PlaybookIdSchema),
-    exitCost1kPct: z.number(),
+    exitCost1kPct: z.number().nullable(),
   })),
   summary: z.object({
     coins: z.number(),
@@ -134,5 +142,19 @@ export const BagReportSchema = z.object({
     valueUsd: z.number().optional(),
   }),
   shareUrl: z.string().optional(),
+  // Indexed discovery is not an exhaustive chain balance inventory. Summary is per page.
+  coverage: z.literal('indexed_candidates').optional(),
+  cursor: AddressSchema.nullable().optional(),
 });
+export const BagShareRequestSchema = z.object({
+  includeValues: z.boolean().default(false), includeWallet: z.boolean().default(false),
+}).strict();
+export const BagShareResponseSchema = z.object({ id: z.uuid(), shareUrl: z.string() });
+// Public coin dollar fields are optional so omission does not masquerade as measured zero.
+export const PublicBagReportSchema = BagReportSchema.extend({
+  holdings: z.array(BagReportSchema.shape.holdings.element.extend({
+    coin: CoinSummarySchema.omit({ guardV2: true }).partial({ priceUsd: true, liquidityUsd: true }),
+  })),
+});
+export type PublicBagReport = z.infer<typeof PublicBagReportSchema>;
 export type BagReport = z.infer<typeof BagReportSchema>;

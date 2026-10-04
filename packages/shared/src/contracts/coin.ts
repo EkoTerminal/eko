@@ -62,6 +62,12 @@ export const CoinSignalSchema = z.object({
 });
 export type CoinSignal = z.infer<typeof CoinSignalSchema>;
 export type CoinCardFlowExtra = z.infer<typeof CoinCardFlowExtraSchema>;
+export const AttributionCoverageGapSchema = z.object({
+  reason:z.string(), window:z.string(), status:z.enum(['complete','incomplete']), threshold:z.number(),
+  totalCount:z.number(), unattributedCount:z.number(), countShare:z.number(),
+  totalVolumeUsd:z.number().nullable(), unattributedVolumeUsd:z.number().nullable(), volumeShare:z.number().nullable(), unknownVolumeCount:z.number(),
+});
+export type AttributionCoverageGap = z.infer<typeof AttributionCoverageGapSchema>;
 export const CoinCardMetaSchema = z.partialRecord(z.enum(['identity', 'tradeability', 'liquidity', 'supply', 'control', 'flow', 'playbooks']), z.object({
   confidence: z.number(),
   asOfBlock: z.number(),
@@ -69,6 +75,7 @@ export const CoinCardMetaSchema = z.partialRecord(z.enum(['identity', 'tradeabil
   unavailable: z.boolean().optional(),
   missing: z.array(z.string()).optional(),
   flags: z.array(z.string()).optional(),
+  coverageGaps: z.record(z.string(),AttributionCoverageGapSchema).optional(),
 }));
 export type CoinCardMeta = z.infer<typeof CoinCardMetaSchema>;
 export const CoinCardSchema = z.object({
@@ -143,6 +150,7 @@ export const CoinCardSchema = z.object({
     confidence: z.number().optional(),
     declaredAgentPct: z.number().optional(),
     likelyAgentPct: z.number().optional(),
+    modelVersion: z.string().optional(),
   }),
   playbooks: z.array(PlaybookMatchSchema),
   verdict: VerdictSchema,
@@ -162,5 +170,7 @@ export const ChartMarkerSchema = z.object({
   confidence: z.number(),
   wallet: AddressSchema,
   crewId: z.string().optional(),
+  beta: z.boolean().optional(),
+  modelVersion: z.string().optional(),
 });
 export type ChartMarker = z.infer<typeof ChartMarkerSchema>;

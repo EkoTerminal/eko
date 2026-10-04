@@ -55,7 +55,14 @@ export type V3TradeRoute = Pick<TradeQuote,
   'amountIn' | 'valueWei' | 'networkFeeUsd' | 'route' | 'expectedOut' | 'minOut' |
   'priceImpactBps' | 'fee' | 'approvals' | 'expiresAt' | 'asOfBlock'> & { tx: UnsignedTx };
 
-/** Only indexed v3 pools created by this block are eligible; factory identity is checked on-chain. */
+/** Only indexed v3 pools created by this block are eligible; factory identity is checked on-chain.
+ * @remarks
+ * Return a source callback reading indexed v3 pools at or before the requested block. Host
+ * supplies the SQL connection; no account authorization or factory authentication occurs here.
+ * Query failures reject when invoked.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export function indexedV3Pools(sql: SqlClient): V3TradeSources['pools'] {
   return async (coin, block) => {
     const { rows } = await sql.query<{ id: Uint8Array; currency0: Uint8Array; currency1: Uint8Array; fee: number }>(
@@ -96,7 +103,15 @@ function rpcFailure(err: unknown): boolean {
   return /HttpRequestError|TimeoutError|FetchError|SocketClosedError/.test(e.cause?.name ?? e.name ?? '') || /fetch failed|ECONNREFUSED|timed out/i.test(e.message ?? '');
 }
 
-/** Unsigned zero-terminal-fee route construction. Guard/probe/account binding is a separate gate. */
+/** Unsigned zero-terminal-fee route construction. Guard/probe/account binding is a separate gate.
+ * @remarks
+ * Validate amount/slippage, accepted manifest wiring and factory-confirmed indexed pools at one
+ * block, then select the highest net-USD unsigned route. Caller owns wallet auth, Guard/probe and
+ * binding. Missing prices/fee estimates, unsupported routes, RPC failures or invalid raw units
+ * reject. Route remains executable=false with zero terminal fee.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+ */
 export async function quoteV3Trade(client: PublicClient, input: TradeQuoteRequest, sources: V3TradeSources, now = Date.now): Promise<V3TradeRoute> {
   if (!positive(input.amountUsd)) throw new ChainQuoteError('bad_request', 'Amount must be positive and finite');
   if (!Number.isInteger(input.slippageBps) || input.slippageBps < 0 || input.slippageBps >= 10_000) {

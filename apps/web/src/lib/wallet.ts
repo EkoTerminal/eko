@@ -7,7 +7,7 @@ import { API_BASE } from './api';
 
 /**
  * Wallet configuration. Injected wallets are discovered via EIP-6963 (wagmi default).
- * Mainnet reads and receipt verification share the keyless API endpoint.
+ * Wallet reads use the keyless API endpoint; receipts read the public chain RPC directly.
  */
 export const chains = [robinhood, ...(import.meta.env.DEV ? [robinhoodTestnet] : [])] as const;
 export const READ_RPC_URL = `${API_BASE}/rpc`;
@@ -16,6 +16,8 @@ export const readRpcTransport = () => http(READ_RPC_URL, {
 });
 
 export const wagmiConfig = createConfig({
+  // The lazy terminal can remount after landing navigation; hydrate in an effect, after render.
+  ssr: true,
   chains,
   batch: { multicall: false },
   connectors: [injected()],
@@ -25,8 +27,16 @@ export const wagmiConfig = createConfig({
   },
 });
 
-// Packet 113's verifier uses this client for latest registry calls and transaction receipts.
-export const receiptReadClient = getPublicClient(wagmiConfig, { chainId: robinhood.id })!;
+// Packet 113: a separate keyless read configuration has no connectors or paid
+// endpoint. Registry checks never consume an EKO server's RPC response.
+const receiptReadConfig = createConfig({
+  chains: [robinhood],
+  batch: { multicall: false },
+  transports: { [robinhood.id]: http(NETWORKS['robinhood-mainnet'].publicRpcUrl, {
+    batch: false, retryCount: 0, fetchOptions: { credentials: 'omit' },
+  }) },
+});
+export const receiptReadClient = getPublicClient(receiptReadConfig, { chainId: robinhood.id })!;
 
 declare module 'wagmi' {
   interface Register {

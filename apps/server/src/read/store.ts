@@ -1,4 +1,4 @@
-import { binary, hex, type ChainDb } from '@eko/db';
+import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
@@ -80,10 +80,15 @@ export class ReadStore {
       b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,s.points AS spark
     FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
     LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
+    const flows=await readFlows(this.db,result.rows.map(t=>hex(t.address)));
     return result.rows.map(t => {
       const card = t.data ? CoinCardSchema.parse(t.data) : null;
       const verdict = t.verdict ? VerdictSchema.parse(t.verdict) : null;
-      const unavailable: NonNullable<RadarRow['unavailable']> = ['exitCost', 'flow'];
+      const flow=flows.get(hex(t.address))??unavailableFlow('1h');
+      const {meta:flowMeta,...flowValues}=flow;
+      if(card){card.flow=flowValues;card.meta={...card.meta,flow:flowMeta};}
+      const unavailable: NonNullable<RadarRow['unavailable']> = ['exitCost'];
+      if(flow.meta?.unavailable)unavailable.push('flow');
       // Depth is structural in current engine cards, even when LP ownership is known.
       if (!card || card.meta?.liquidity?.unavailable || card.meta?.liquidity?.missing?.includes('depthUsd')) unavailable.push('liquidity');
       if (!card?.signal) unavailable.push('signal');
@@ -107,7 +112,7 @@ export class ReadStore {
         evaluatedPlaybooks: verdict?.evaluatedPlaybooks,
         missingChecks: [...new Set(Object.values(card?.meta ?? {}).flatMap(m => m.missing ?? []))],
         topPlaybook: verdict?.playbooks[0]?.id, ageSec: Math.max(0,now-(t.created_at ? new Date(t.created_at).getTime()/1000 : now)),
-        flow: card?.flow ?? { window:'1h', agentPct:0,crewPct:0,humanPct:0,washEstPct:0 }, exitCost1kPct:0,
+        flow:flowValues, exitCost1kPct:0,
         rank:0, signal:card?.signal, spark8h:t.pricing_pending ? undefined : t.spark ?? [], beta:verdict?.beta, unavailable,
       };
       return { eligible:t.eligible,row,card,volume:t.pricing_pending ? 0 : t.volume,firstBlock:Number(t.first_block),graduationBlock:Number(t.graduated_block ?? 0),activity:t.activity ? new Date(t.activity).getTime() : this.now() };
@@ -120,6 +125,9 @@ export class ReadStore {
     const card = CoinCardSchema.parse(result.rows[0].data);
     const times = await this.db.sql.query<{ ts: Date }>(`SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1`,[card.freshness.block]);
     card.freshness.ageSec = times.rows[0] ? Math.max(0,Math.floor((this.now()-new Date(times.rows[0].ts).getTime())/1000)) : card.freshness.ageSec;
+    const flow=(await readFlows(this.db,[address])).get(address)??unavailableFlow('1h',card.freshness.block);
+    const {meta:flowMeta,...flowValues}=flow;
+    card.flow=flowValues;card.meta={...card.meta,flow:flowMeta};
     return card;
   }
   async verdict(address: Address): Promise<Verdict | null> {

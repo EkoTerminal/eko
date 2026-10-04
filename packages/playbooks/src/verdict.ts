@@ -38,6 +38,14 @@ export function reasonForMatch(match: PlaybookMatch): string {
   return templates[match.id];
 }
 
+/**
+ * Choose danger over monitor over clear and emit up to three deduplicated reasons ordered by
+ * severity then id, retaining supplied metadata/matches. Pure rule-consumer call without auth;
+ * assumes typed evidence, does not prove completeness or validate schema, and malformed input can
+ * throw.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Guard, policy and approval invariants}
+ */
 export function assembleVerdict(matches: PlaybookMatch[], meta: VerdictMeta): Verdict {
   const level = matches.some((m) => m.level === 'danger') ? 'danger' : matches.some((m) => m.level === 'monitor') ? 'monitor' : 'clear';
   // TODO(spec): reason ordering is unspecified; severity first, then stable

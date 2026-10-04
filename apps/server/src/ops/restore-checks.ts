@@ -4,9 +4,22 @@ import type { SqlClient } from '@eko/db';
 
 export const digest = (value: unknown) => createHash('sha256').update(canonicalize(value)).digest('hex');
 const identifier = (name: string) => '"' + name.replaceAll('"', '""') + '"';
+/**
+ * Require a bounded dedicated eko_restore_ database name before restore work. Operator-only input
+ * validation, no credential check; invalid name throws before target creation.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function validateRestoreName(name: string) {
   if (!/^eko_restore_[a-z0-9_]{1,40}$/.test(name)) throw new Error('Restore requires a dedicated fresh database name');
 }
+/**
+ * Check the dedicated name, distinct source/target cluster identities, backup source identity hash
+ * and absence of target database. Operator supplies authorized SQL connections; mismatch/existing
+ * target or SQL failures reject before restore.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function assertFreshRestoreTarget(source: SqlClient, admin: SqlClient, name: string, sourceClusterHash: string) {
   validateRestoreName(name);
   const identity = async (sql: SqlClient) => String((await sql.query<{ id: string }>('SELECT system_identifier::text AS id FROM pg_control_system()')).rows[0]!.id);
@@ -22,7 +35,15 @@ export interface RestoreInventory {
   leasedRanges: string;
 }
 /** Only counts and digests leave this boundary, never journal payloads, keys,
- * account identities or arbitrary database rows. Run in the dump's snapshot. */
+ * account identities or arbitrary database rows. Run in the dump's snapshot.
+ * @remarks
+ * Capture public table counts plus migration/cursor/state/sample digests in the caller's dump
+ * snapshot, excluding legacy plaintext notes. Backup operator supplies authorized SQL access;
+ * missing required tables or a plaintext/missing encrypted journal schema throws; raw rows do not
+ * leave the returned inventory.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function captureInventory(sql: SqlClient): Promise<RestoreInventory> {
   const result: RestoreInventory = { counts: {}, ledgers: {}, state: {}, samples: {}, leasedRanges: '0' };
   const tables = (await sql.query<{ name: string }>(`SELECT tablename AS name FROM pg_tables
@@ -59,6 +80,13 @@ export async function captureInventory(sql: SqlClient): Promise<RestoreInventory
     throw new Error('Encrypted journal schema is required');
   return result;
 }
+/**
+ * Compare count/ledger/state/sample/lease digests and return explicit pass/fail assertions.
+ * Operator supplies inventories; this performs no restore or authentication. Noncanonical inputs
+ * can throw during hashing; mismatches return fail rather than throw.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function compareInventories(before: RestoreInventory, after: RestoreInventory) {
   return (['counts', 'ledgers', 'state', 'samples', 'leasedRanges'] as const).map(name => ({
     assertion: name, status: digest(before[name]) === digest(after[name]) ? 'pass' as const : 'fail' as const,
@@ -66,7 +94,15 @@ export function compareInventories(before: RestoreInventory, after: RestoreInven
 }
 
 /** Target-only: verify fidelity before reclaiming leases. A restored lease is
- * stale even if its old expiration is still in the future. No workers run here. */
+ * stale even if its old expiration is still in the future. No workers run here.
+ * @remarks
+ * Reset leased ingest ranges to todo and clear owners/expiry only on the supplied restore target,
+ * then check no stale lease fields remain. Operator must verify fidelity and select the isolated
+ * target first; this method does not authenticate the connection. SQL failures reject; residual
+ * leases return false.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function reclaimRestoreLeases(sql: SqlClient) {
   await sql.query(`UPDATE ingest_ranges SET status='todo',lease_owner=NULL,lease_until=NULL WHERE status='leased'`);
   return (await sql.query<{ n: string }>("SELECT count(*)::text AS n FROM ingest_ranges WHERE status='leased' OR lease_owner IS NOT NULL OR lease_until IS NOT NULL")).rows[0]!.n === '0';

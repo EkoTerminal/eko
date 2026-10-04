@@ -66,7 +66,7 @@ it('preserves High risk zero with gaps, overlays a cached high Signal and still 
   expect(signal.readings.risk).toBe(0); expect(signal.lowData).toEqual([]); expect(signal.composite).toBe(90);
   expect(signalPresentationV2(signal,source.guard)).toEqual({ overlay: 'high', hotEligible: false });
   const withSignal = { ...baseVerdict(source), signal };
-  expect(guardBuyGate(withSignal, degenPolicy, source.guard.coin,4663).deny[0]).toContain('guard_high');
+  expect(guardBuyGate(withSignal, degenPolicy, source.guard.coin,4663, Number(BigInt(source.guard.cursor.timestampSec) * 1000n)).deny[0]).toContain('guard_high');
   const cached = computeSignalV2({ ...input(), legacySignal: legacy() });
   expect(signalPresentationV2(cached,source.guard)).toEqual({ overlay: 'high', hotEligible: false });
 });
@@ -79,9 +79,9 @@ it('cannot turn a high activity score into permission under incomplete Guard', (
   const source = { ...input(), guard: guardFixture('lower',['reference_exit']), legacySignal: legacy() };
   expect(computeSignalV2(source).composite).toBe(95);
   const verdict = baseVerdict(source);
-  expect(guardBuyGate(verdict,degenPolicy,source.guard.coin,4663).deny[0]).toContain('guard_incomplete');
-  expect(guardBuyGate({ ...verdict, signal: computeSignalV2(source) } as typeof verdict,degenPolicy,source.guard.coin,4663)).toEqual(
-    guardBuyGate(verdict,degenPolicy,source.guard.coin,4663));
+  expect(guardBuyGate(verdict,degenPolicy,source.guard.coin,4663, Number(BigInt(source.guard.cursor.timestampSec) * 1000n)).deny[0]).toContain('guard_incomplete');
+  expect(guardBuyGate({ ...verdict, signal: computeSignalV2(source) } as typeof verdict,degenPolicy,source.guard.coin,4663, Number(BigInt(source.guard.cursor.timestampSec) * 1000n))).toEqual(
+    guardBuyGate(verdict,degenPolicy,source.guard.coin,4663, Number(BigInt(source.guard.cursor.timestampSec) * 1000n)));
 });
 
 it('reuses legacy definitions only; absent/lowData readings become 50 without V2 float/depth substitutions', () => {

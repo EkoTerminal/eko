@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
@@ -5,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { ApiErrorSchema, EntitlementsSchema, MeSchema, PreferencesSchema, ReferralsSchema, SIWE_STATEMENT, SiweNonceSchema } from '@eko/shared';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { siweNonces } from '../src/db/schema.js';
+import { sessions, siweNonces } from '../src/db/schema.js';
 import { EntitlementsService } from '../src/http/v1/account.js';
 import { createDemoToken } from '../src/http/v1/demo.js';
 
@@ -83,6 +84,10 @@ describe('v1 account (offline SIWE and migrated storage)', () => {
     const response = await call(cookie, 'POST', '/auth/siwe/verify', { message, signature });
     expect(response.statusCode).toBe(200);
     const rotated = cookieOf(response);
+    const raw = built.app.unsignCookie(response.cookies.find(c => c.name === 'eko_sid')!.value).value!;
+    const [session] = await built.ctx.dbh.db.select().from(sessions).where(eq(sessions.tokenHash, createHash('sha256').update(raw).digest('hex')));
+    expect(session!.authenticatedAt).toBeInstanceOf(Date);
+    expect(Date.now() - session!.authenticatedAt!.getTime()).toBeLessThan(60_000);
     expect(rotated).not.toBe(cookie);
     expect(MeSchema.parse(response.json()).account.wallet).toBe(walletA.address.toLowerCase());
     expect((await call(cookie, 'GET', '/me/preferences')).statusCode).toBe(401);

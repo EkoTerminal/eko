@@ -2,23 +2,68 @@ import { safeError } from './rpc/safe-error.js';
 import { decodeEventLog, getAddress, keccak256, numberToHex, parseAbi, toEventSelector, toHex, zeroAddress, type AbiEvent, type Address, type Hex, type Log } from 'viem';
 import { v3Abi, v4Abi, ponsFactoryAbi, ponsCurveAbi } from './abis.js';
 import type { DecoderLog } from './decoders.js';
-import type { AddressRegistry } from './registry.js';
+import type { AddressRegistry, RegistryEntry, RegistryKey } from './registry.js';
+import { RegistryBuildRecordSchema, type BuildRecords } from './build-records.js';
+import { rpcStopReason } from './rpc/metered.js';
 export const IMPLEMENTATION_SLOT = numberToHex(BigInt(keccak256(toHex('eip1967.proxy.implementation'))) - 1n, { size: 32 });
 export const routerWiringAbi = parseAbi(['function factory() view returns (address)', 'function WETH9() view returns (address)']);
+export const registryRolesAbi = parseAbi(['function owner() view returns (address)', 'function pendingOwner() view returns (address)', 'function committer() view returns (address)']);
 export type VerificationLog = DecoderLog & Partial<Pick<Log, 'blockNumber' | 'logIndex'>>;
 export interface VerifyClient {
   getChainId(): Promise<number>;
   getBlockNumber(): Promise<bigint>;
   getCode(input: { address: Address; blockNumber: bigint }): Promise<Hex | undefined>;
   getStorageAt(input: { address: Address; slot: Hex; blockNumber: bigint }): Promise<Hex | undefined>;
-  readContract(input: { address: Address; abi: typeof routerWiringAbi; functionName: 'factory' | 'WETH9'; blockNumber: bigint }): Promise<Address>;
+  readContract(input: { address: Address; abi: typeof routerWiringAbi | typeof registryRolesAbi; functionName: 'factory' | 'WETH9' | 'owner' | 'pendingOwner' | 'committer'; blockNumber: bigint }): Promise<Address>;
   getLogs(input: { address: Address; event: AbiEvent; fromBlock: bigint; toBlock: bigint }): Promise<VerificationLog[]>;
 }
 export interface VerificationRow { entry: string; check: string; ok: boolean; detail: string }
-export interface VerificationReport { ok: boolean; block?: bigint; rows: VerificationRow[] }
+export interface VerificationReport { ok: boolean; complete: boolean; block?: bigint; rows: VerificationRow[] }
 /** All I/O is injected; no filesystem, environment, global clients or console access. */
-export async function verifyChain(registry: AddressRegistry, client: VerifyClient, options: { lookback?: bigint; logChunkSize?: bigint } = {}): Promise<VerificationReport> {
+export async function verifyChain(registry: AddressRegistry, rawClient: VerifyClient, options: {
+  lookback?: bigint; logChunkSize?: bigint; prelaunch?: boolean; buildRecords?: BuildRecords;
+  signal?: AbortSignal; timeoutMs?: number;
+} = {}): Promise<VerificationReport> {
   const rows: VerificationRow[] = [];
+  const timeoutMs = options.timeoutMs ?? 120_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be positive and finite');
+  const deadline = Date.now() + timeoutMs;
+  let halted = false;
+  async function rpc<T>(fn: () => Promise<T>): Promise<T> {
+    if (halted || options.signal?.aborted || Date.now() >= deadline) {
+      halted = true;
+      throw new Error('Verification incomplete: interrupted, stopped or deadline exhausted');
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
+    try {
+      return await Promise.race([new Promise<T>((_resolve, reject) => {
+        const stop = (reason: string) => { halted = true; reject(new Error(`Verification incomplete: ${reason}`)); };
+        timer = setTimeout(() => stop('deadline exhausted'), deadline - Date.now());
+        abort = () => stop('interrupted');
+        options.signal?.addEventListener('abort', abort, { once: true });
+      }), Promise.resolve().then(fn)]);
+    } catch (error) {
+      if (rpcStopReason(error)) halted = true;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      if (abort) options.signal?.removeEventListener('abort', abort);
+    }
+  }
+  const client: VerifyClient = {
+    getChainId: () => rpc(() => rawClient.getChainId()),
+    getBlockNumber: () => rpc(() => rawClient.getBlockNumber()),
+    getCode: input => rpc(() => rawClient.getCode(input)),
+    getStorageAt: input => rpc(() => rawClient.getStorageAt(input)),
+    readContract: input => rpc(() => rawClient.readContract(input)),
+    getLogs: input => rpc(() => rawClient.getLogs(input)),
+  };
+  const finish = (block?: bigint): VerificationReport => {
+    const complete = !halted && !options.signal?.aborted && Date.now() < deadline;
+    if (!complete) rows.push({ entry: 'RPC', check: 'completion', ok: false, detail: 'Verification incomplete: interrupted, stopped or deadline exhausted' });
+    return { ok: complete && rows.every(row => row.ok), complete, block, rows };
+  };
   const run = async (entry: string, check: string, fn: () => Promise<string>) => {
     try { rows.push({ entry, check, ok: true, detail: await fn() }); }
     catch (error) { rows.push({ entry, check, ok: false, detail: safeError(error) }); }
@@ -28,10 +73,10 @@ export async function verifyChain(registry: AddressRegistry, client: VerifyClien
     if (id !== 4663) throw new Error(`RPC chainId ${id}, expected 4663`);
     return '4663';
   });
-  if (!rows[0].ok) return { ok: false, rows };
+  if (!rows[0].ok) return finish();
   let block: bigint | undefined;
   await run('RPC', 'head', async () => { block = await client.getBlockNumber(); return String(block); });
-  if (block === undefined) return { ok: false, rows };
+  if (block === undefined) return finish();
   const atBlock = block;
   async function followCode(address: Address, requiredProxy: boolean, visited = new Set<string>()): Promise<string> {
     const key = address.toLowerCase();
@@ -46,9 +91,47 @@ export async function verifyChain(registry: AddressRegistry, client: VerifyClien
     if (requiredProxy) throw new Error('Expected EIP-1967 implementation slot is empty');
     return `${(code.length - 2) / 2} bytes`;
   }
+  async function verifyOwnedContract(key: RegistryKey, entry: RegistryEntry): Promise<void> {
+    // TODO(spec): Later EKO contracts need their own role/delay/immutable checks before deployment.
+    // Fail closed rather than treating an unsupported release as a code-presence check.
+    if (key !== 'ours.receiptsRegistry') {
+      await run(key, 'release profile', async () => { throw new Error('No release verification profile for deployed EKO contract'); });
+      return;
+    }
+    await run(key, 'runtime hash', async () => {
+      if (!entry.build_record || entry.build_record === 'TODO') throw new Error('Build record reference is TODO or missing');
+      const record = RegistryBuildRecordSchema.parse(options.buildRecords?.[entry.build_record]);
+      const code = await client.getCode({ address: entry.address as Address, blockNumber: atBlock });
+      if (!code || !/^0x(?:[0-9a-fA-F]{2})+$/.test(code)) throw new Error('Missing or malformed runtime code');
+      const actual = keccak256(code);
+      if (actual.toLowerCase() !== record.runtimeCodeHash.toLowerCase()) throw new Error(`Runtime hash ${actual} != ${record.runtimeCodeHash}`);
+      return actual;
+    });
+    for (const functionName of ['owner', 'pendingOwner', 'committer'] as const) {
+      await run(key, functionName, async () => {
+        const expected = functionName === 'pendingOwner' ? zeroAddress : entry[functionName];
+        if (!expected || expected === 'TODO') throw new Error(`Manifest ${functionName} is TODO or missing`);
+        if (functionName === 'owner' && expected === zeroAddress) throw new Error('Manifest owner must not be zero');
+        const actual = await client.readContract({ address: entry.address as Address, abi: registryRolesAbi, functionName, blockNumber: atBlock });
+        if (actual.toLowerCase() !== expected.toLowerCase()) throw new Error(`${actual} != ${expected}`);
+        return actual;
+      });
+    }
+  }
   for (const [key, entry] of registry.entries()) {
     if (entry.address === 'TODO') {
-      rows.push({ entry: key, check: 'registry', ok: entry.required_for !== 'T', detail: `TODO${entry.required_for ? ` (required for ${entry.required_for})` : ''}` });
+      rows.push({ entry: key, check: 'registry', ok: options.prelaunch === true && entry.required_for !== 'T', detail: `not deployed${entry.required_for ? ` (required for ${entry.required_for})` : ''}` });
+      continue;
+    }
+    if (entry.address === zeroAddress) {
+      rows.push({ entry: key, check: 'registry', ok: false, detail: 'Zero deployment address' });
+      continue;
+    }
+    if (key.startsWith('ours.')) {
+      // Public fee wallets are addresses, not EKO contract deployments.
+      if (key === 'ours.burnWallet' || key === 'ours.devWallet') {
+        rows.push({ entry: key, check: 'wallet', ok: true, detail: entry.address });
+      } else await verifyOwnedContract(key, entry);
       continue;
     }
     await run(key, 'code', () => followCode(entry.address as Address, key === 'tokens.USDG' || key === 'erc8004.identityRegistry'));
@@ -154,5 +237,5 @@ export async function verifyChain(registry: AddressRegistry, client: VerifyClien
     });
   }
   for (const event of v4Abi) await checkEvent('uniswapV4.poolManager', registry.addressOf('uniswapV4.poolManager'), event);
-  return { ok: rows.every(row => row.ok), block: atBlock, rows };
+  return finish(atBlock);
 }

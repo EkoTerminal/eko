@@ -1,12 +1,12 @@
-import { endpoints, createSession } from './responses';
-import { createAddress } from './fixtures';
+import { endpoints, createSession, createQuote } from './responses';
+import { createAlertSettings, createAddress } from './fixtures';
 import { MOCK_HEAD_BLOCK } from './head';
 import { coinResponse } from './demo/coin';
 import { createRadarCard } from './demo/radar';
 import { createPairCard } from './demo/pairs';
 import { feedSnapshot, pairSnapshot } from './demo/market';
 import { match } from '../lib/router';
-import { DEFAULT_PREFERENCES, PreferencesSchema, SIWE_STATEMENT, AgentDetailSchema, AgentSchema, PolicySchema, ApiKeyInfoSchema, type Preferences } from '@eko/shared';
+import { DEFAULT_PREFERENCES, PreferencesSchema, TelemetrySchema, SIWE_STATEMENT, AgentDetailSchema, AgentSchema, PolicySchema, ApiKeyInfoSchema, AlertSettingsSchema, TradeQuoteRequestSchema, TradeQuoteSchema, type AlertSettings, type Preferences } from '@eko/shared';
 import { createMissionDemo, emitMission } from './demo/mission';
 import { demoPacks, demoPresets } from './demo/mission-packs';
 import { policyErrors } from '../lib/mission';
@@ -17,6 +17,7 @@ export function createMockTransport() {
   let wallet: string | null = null;
   const preferenceStore = new Map<string, Preferences>();
   const mission = createMissionDemo();
+  const alertSettings = new Map<string, AlertSettings>();
   const watches=new Map<string,{kind:'coin'|'wallet'|'crew';target:string}>();
   const account = () => ({ id: 'mock-session', kind: wallet ? 'wallet' : 'guest', walletAddress: wallet, displayName: null, role: 'user' });
   return async (input: string, init: RequestInit = {}): Promise<Response> => {
@@ -34,12 +35,17 @@ export function createMockTransport() {
       }
       if (path === '/api/auth/logout') { wallet = null; return json({ ok: true }); }
       if (path === '/api/orders') return json({ orders: [] });
-      if (path === '/api/telemetry') return json({ ok: true });
       return json({ error: 'not_found', message: 'No offline fixture for this endpoint.' }, 404);
     }
     const route = path.replace(/^\/v1/, '');
+    if (route === '/telemetry' && method === 'POST') {
+      let body: unknown;
+      try { body = JSON.parse(String(init.body)); } catch { return json({ error: 'bad_request', message: 'Invalid telemetry' }, 422); }
+      return TelemetrySchema.safeParse(body).success ? json({ ok: true }) : json({ error: 'bad_request', message: 'Invalid telemetry' }, 422);
+    }
+    if (route === '/metrics' && method === 'GET') return json({ metrics: [], telemetry: [], retentionDays: 30, at: Date.now() });
     const query = new URL(input, 'http://localhost').searchParams;
-    const mockMe = () => ({ ...createSession(), account: { id: wallet ? 'mock-wallet' : 'mock-guest', ...(wallet ? { wallet } : {}), linked: [] } });
+    const mockMe = () => ({ ...createSession(), account: { id: wallet ? `demo-wallet-${wallet.slice(2)}` : 'mock-guest', ...(wallet ? { wallet } : {}), linked: [] } });
     if (route === '/auth/siwe/nonce' && method === 'POST') {
       const issuedAt = new Date(), expirationTime = new Date(issuedAt.getTime() + 600_000);
       return json({ nonce: 'ekoMockNonce123', domain: typeof location === 'undefined' ? 'localhost' : location.host, uri: typeof location === 'undefined' ? 'http://localhost' : location.origin, issuedAt: issuedAt.toISOString(), expirationTime: expirationTime.toISOString() });
@@ -61,6 +67,11 @@ export function createMockTransport() {
         preferenceStore.set(wallet ?? 'guest', parsed.data); return json(parsed.data);
       }
     }
+    if (route === '/me/data' && method === 'DELETE') {
+      if (!wallet) return json({ error: 'wallet_auth_required', message: 'Verify your wallet to delete harness data.' }, 401);
+      preferenceStore.delete(wallet);
+      return json({ deletedAt: '2026-10-13T12:00:00.000Z' });
+    }
     if (route === '/pairs' && method === 'GET') return json({ rows: pairSnapshot().filter((r) => !query.has('stage') || r.column === query.get('stage')).slice(0, 100), cursor: null, delayedSec: 0 });
     if (route === '/feed' && method === 'GET') {
       const kinds = query.get('kinds')?.split(','), rows = feedSnapshot().filter((r) => !kinds || kinds.includes(r.kind));
@@ -68,6 +79,20 @@ export function createMockTransport() {
       return json({ rows: rows.slice(start, start + 500), cursor: null, delayedSec: 0 });
     }
     const body = () => { try { return JSON.parse(String(init.body ?? '{}')); } catch { return {}; } };
+    if (route === '/alerts' && method === 'GET') return json({ rows: [], cursor: null, seq: 0 });
+    if (route === '/alerts/settings') {
+      const key = wallet ?? 'demo-account';
+      if (method === 'PUT') { const parsed = AlertSettingsSchema.safeParse(body()); if (!parsed.success) return json({ error: 'bad_request', message: 'Invalid alert settings.' }, 400); alertSettings.set(key, parsed.data); }
+      return json(alertSettings.get(key) ?? createAlertSettings());
+    }
+    if (route === '/telegram/link' && method === 'POST') return json({ url: 'https://t.me/demo_bot?start=demo-link-code', expiresAt: new Date(Date.now() + 300_000).toISOString() });
+    if (route === '/trade/quote' && method === 'POST') {
+      const parsed = TradeQuoteRequestSchema.extend({ amountUsd: TradeQuoteRequestSchema.shape.amountUsd.positive(), slippageBps: TradeQuoteRequestSchema.shape.slippageBps.int().min(0).max(9999) }).strict().safeParse(body());
+      if (!parsed.success) return json({ error: 'bad_request', message: 'Invalid trade quote request.' }, 400);
+      // Synthetic, request-scoped display only. No executable route or accepted checks.
+      return json(TradeQuoteSchema.parse({ ...createQuote(), coin: parsed.data.coin, side: parsed.data.side, amountUsd: parsed.data.amountUsd, account: parsed.data.account,
+        expiresAt: new Date(Date.now() + 15000).toISOString(), guard: { decision: 'refuse', checks: [{ code: 'sim_unavailable', status: 'refuse', label: 'Execution checks unavailable in this fixture.' }] } }));
+    }
     if(route==='/watch'){if(method==='GET')return json({items:[...watches.values()]});const item=body();if(!['coin','wallet','crew'].includes(item.kind)||typeof item.target!=='string')return json({error:'bad_request',message:'Invalid watch target.'},400);const key=`${item.kind}:${item.target}`;if(method==='POST'){watches.set(key,item);return json(item);}if(method==='DELETE'){watches.delete(key);return json({ok:true});}}
     if (route === '/agents' && method === 'GET') return json({ agents: mission.agents });
     if (route === '/packs' && method === 'GET') return json(demoPacks);

@@ -43,6 +43,44 @@ function rpc(server: ReturnType<typeof app>, key: string, method: string, params
 }
 
 describe('authenticated stateless Streamable HTTP (offline fixtures)', () => {
+  it('validates proxy hop configuration with the same default as the API', () => {
+    const env = { HARNESS_KEY_PEPPER: pepper, MCP_PUBLIC_URL: publicUrl };
+    expect(mcpConfig(env).TRUST_PROXY_HOPS).toBe(0);
+    for (const value of ['0', '1', '2']) expect(mcpConfig({ ...env, TRUST_PROXY_HOPS: value }).TRUST_PROXY_HOPS).toBe(Number(value));
+    for (const value of ['', '-1', '1.5', 'true', 'NaN', 'Infinity', '1e2', ' 1 ', '9007199254740992']) {
+      expect(() => mcpConfig({ ...env, TRUST_PROXY_HOPS: value })).toThrow('Invalid MCP environment');
+    }
+  });
+
+  it.each([0, 1])('uses canonical client IPs for anonymous transport limits with %i trusted hops', async trustProxyHops => {
+    const counts = new Map<string, number>();
+    const consume = vi.fn(async (key: string, max: number) => {
+      const count = (counts.get(key) ?? 0) + 1; counts.set(key, count);
+      return { allowed: count <= max, retryAfterSec: 60 };
+    });
+    const authenticate = vi.fn(async () => null);
+    const server = app(undefined, { trustProxyHops, authenticate, limits: { consume } });
+    const peer = '192.0.2.50', client = '203.0.113.50';
+    try {
+      for (let i = 0; i < 605; i++) {
+        const spoofed = `198.51.${Math.floor(i / 250)}.${i % 250 + 1}`;
+        const response = await server.inject({ method: 'POST', url: '/mcp', remoteAddress: peer,
+          headers: { 'x-forwarded-for': trustProxyHops ? `${spoofed}, 198.51.100.200, ${client}` : i % 2 ? `${spoofed}, ${client}` : spoofed,
+            authorization: `Bearer eko_live_${'a'.repeat(16)}_${'b'.repeat(43)}` },
+          payload: { jsonrpc: '2.0', id: 1, method: 'ping' } });
+        expect(response.statusCode).toBe(i < 600 ? 401 : 429);
+        expect(consume.mock.lastCall).toEqual([`ip:${trustProxyHops ? client : peer}`, 600]);
+        expect(authenticate).toHaveBeenCalledTimes(Math.min(i + 1, 600));
+      }
+      const other = await server.inject({ method: 'POST', url: '/mcp',
+        remoteAddress: trustProxyHops ? peer : '192.0.2.51',
+        headers: { 'x-forwarded-for': '198.51.100.1, 203.0.113.51' },
+        payload: { jsonrpc: '2.0', id: 1, method: 'ping' } });
+      expect(other.statusCode).toBe(401);
+      expect(consume.mock.lastCall).toEqual([`ip:${trustProxyHops ? '203.0.113.51' : '192.0.2.51'}`, 600]);
+    } finally { await server.close(); }
+  });
+
   it('negotiates supported versions, supports ping/list and acknowledges notifications/results', async () => {
     const f = await identity(), server = app(new ToolRegistry().register('preflight', async () => result));
     try {
@@ -244,8 +282,15 @@ describe('MCP process lifecycle without ports/providers', () => {
       const agent = await auth.create(account!.id, { name: 'Sample restored agent', kind: 'other', preset: 'balanced' }, 1);
       const key = await auth.createKey(account!.id, agent.id);
       runtime = await createMcpRuntime({ HARNESS_KEY_PEPPER: pepper, MCP_PUBLIC_URL: publicUrl,
-        LAUNCH_WEEK_AGENT_LIMIT: '1', JOURNAL_TOMBSTONE_PATH: path }, undefined, async () => handle);
-      expect((await rpc(runtime.app, key.secret, 'ping')).statusCode).toBe(200);
+        TRUST_PROXY_HOPS: '1', LAUNCH_WEEK_AGENT_LIMIT: '1', JOURNAL_TOMBSTONE_PATH: path }, undefined, async () => handle);
+      const clientIps: string[] = [];
+      runtime.app.addHook('onRequest', async req => { clientIps.push(req.ip); });
+      expect((await rpc(runtime.app, key.secret, 'ping', undefined, { 'x-forwarded-for': '198.51.100.1, 203.0.113.50' })).statusCode).toBe(200);
+      expect(clientIps).toEqual(['203.0.113.50']);
+      expect((await rpc(runtime.app, key.secret, 'tools/list')).json().result.tools.map((tool: { name: string }) => tool.name))
+        .toEqual(['coin_verdict', 'coin_card', 'playbook_match', 'census_summary', 'receipts_lookup']);
+      expect((await rpc(runtime.app, key.secret, 'tools/call', { name: 'census_summary', arguments: {} }))
+        .json().result.structuredContent).toMatchObject({ status: 'unavailable', dependency: '102', gated: true });
       new FileJournalDestructionLedger(path).destroy(account!.id, '2026-10-02T00:00:00Z');
       // Database still has the key, as a pre-deletion backup would. The current ledger denies it.
       expect(await auth.authenticate(key.secret)).not.toBeNull();

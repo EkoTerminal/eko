@@ -57,7 +57,14 @@ function looksLikeImpersonation(t: string, trending: string[]): boolean {
   return candidate !== '' && trending.some((value) => key(value) === candidate);
 }
 
-/** Shared identity folding for impersonation detection and clone_swarm. */
+/** Shared identity folding for impersonation detection and clone_swarm.
+ * @remarks
+ * Fold identity text using NFKC, control stripping, specified confusables, lowercase extensions
+ * and whitespace normalization. Public pure text operation without auth; it is a comparison key,
+ * not a unique identity proof; nonstring inputs can throw.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function normalizeIdentity(value: string): string {
   // TODO(spec): no full Unicode casefold table is specified. Extend lowercasing
   // with sharp-s and final-sigma folding; reuse the existing confusable table.
@@ -69,6 +76,13 @@ function validateLimit(value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('Character limit must be a non-negative safe integer');
 }
 
+/**
+ * Scan only a bounded raw UTF-16 prefix for implemented bidi, role/override, financial command and
+ * hidden-instruction patterns. Public pure operation without auth; invalid cap throws RangeError.
+ * A false result covers only these heuristics within the scanned prefix.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function isAgentBait(t: string, maxScanChars = DEFAULT_MAX_SCAN_CHARS): boolean {
   validateLimit(maxScanChars);
   // TODO(spec): §7.3 supplies a scan cap without defining its units/order. Bound
@@ -86,6 +100,14 @@ export function isAgentBait(t: string, maxScanChars = DEFAULT_MAX_SCAN_CHARS): b
   return (addressed && (imperative || action)) || imperative || personaHijack || FUND_COMMAND.test(s) || hidden || ROLE_MARKERS.test(normalized);
 }
 
+/**
+ * Normalize third-party text, mark implemented bait/link/impersonation heuristics, remove
+ * role/link markup and boundedly truncate into an Untrusted value. Public pure operation without
+ * auth; invalid length throws RangeError. Consumers must still treat returned text as data rather
+ * than instructions.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function toUntrusted(raw: string | null | undefined, maxLen: number, ctx?: { trending?: string[] }): Untrusted {
   validateLimit(maxLen);
   const flags = new Set<Untrusted['flags'][number]>();

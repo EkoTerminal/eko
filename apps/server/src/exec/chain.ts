@@ -34,6 +34,13 @@ export class ChainClients {
   private health = new Map<NetworkId, NetworkHealth>();
 
   readonly meter: RpcMeter;
+  /**
+   * Construct the shared RPC meter and mainnet/testnet clients with unchecked degraded initial
+   * health. Host-only configuration; invalid meter/client configuration can throw. No wallet
+   * authentication or transaction signing occurs.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   constructor(rpc: { mainnet?: string; testnet?: string }, env: RpcEnv, store: UsageStore) {
     // TODO(spec): TEAM_ALERT_CHAT_ID pager delivery is absent; use the existing Sentry alert path.
     this.meter = new RpcMeter({ ...env, RPC_HTTP_URL: env.RPC_HTTP_URL ?? rpc.mainnet }, { store, log: (event, fields) => logger.info(fields, event), alert: (event, fields) => reportError(new Error(event), fields) });
@@ -52,10 +59,23 @@ export class ChainClients {
   }
   readonly rpcLabel: { mainnet: string; testnet: string };
 
+  /**
+   * Return the configured read client for a typed network id. Host callers select the network; no
+   * wallet authentication or live chain-id validation occurs here.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   get(id: NetworkId): PublicClient {
     return this.clients.get(id)!;
   }
 
+  /**
+   * Probe chain id and block height for each configured network and retain status. Public
+   * operational read, no wallet authentication. Provider failures become down results with bounded
+   * error details rather than rejecting individual probes.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async checkHealth(): Promise<NetworkHealth[]> {
     await Promise.all(
       [...this.clients.entries()].map(async ([id, c]) => {
@@ -79,6 +99,12 @@ export class ChainClients {
     return this.healthList();
   }
 
+  /**
+   * Return the currently retained network health values, possibly empty before probing. Public
+   * operational read; no live validation or authorization occurs.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   healthList() {
     return [...this.health.values()];
   }
@@ -104,6 +130,12 @@ function sqrtPriceToPrice(sqrtPriceX96: bigint, dec0: number, dec1: number): num
 export class UniswapV3Adapter implements ExecutionAdapter {
   readonly id = 'uniswap-v3';
   readonly name = 'Uniswap v3';
+  /**
+   * Retain read clients, configured network, reference-price callback and clock. Host-only
+   * construction without caller authentication; no quote, simulation or signing starts yet.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   constructor(
     private chains: ChainClients,
     private networkId: NetworkId,
@@ -111,15 +143,34 @@ export class UniswapV3Adapter implements ExecutionAdapter {
     private now: () => number = Date.now,
   ) {}
 
+  /**
+   * Read the static definition for the configured network. Host configuration only; this does not
+   * verify a live endpoint or authorize execution.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   get network(): NetworkDef {
     return NETWORKS[this.networkId];
   }
 
+  /**
+   * Find a static route for a market or return null. Public route read; no RPC, wallet
+   * authentication or admission checks occur.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   route(market: string): RouteDef | null {
     return NETWORKS[this.networkId].routes.find(route => route.market === market) ?? null;
   }
 
-  /** CA-7 route fields and unsigned legs; the trade service owns Guard and binding. */
+  /** CA-7 route fields and unsigned legs; the trade service owns Guard and binding.
+   * @remarks
+   * Prepare an indexed zero-terminal-fee unsigned v3 route only on mainnet and record latency.
+   * Caller supplies validated request/trusted sources; no authentication/admission is performed
+   * here. Wrong network and route/price/fee/provider failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async quoteTrade(input: TradeQuoteRequest, sources: V3TradeSources) {
     if (this.networkId !== 'robinhood-mainnet') throw new ChainQuoteError('no_route', 'Indexed routes require chain 4663');
     const start = performance.now();
@@ -127,6 +178,14 @@ export class UniswapV3Adapter implements ExecutionAdapter {
     finally { metrics.observe('quote.latency_ms', performance.now() - start, { mode: 'live' }); }
   }
 
+  /**
+   * Quote supported configured fee tiers and construct unsigned swap/approval legs, recording wallet
+   * balance/allowance/simulation warnings when an account is supplied. Caller owns
+   * authentication/admission. Invalid amount, missing route/liquidity or provider failures reject;
+   * warnings are consumed by order admission.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async quote(input: VenueQuoteInput): Promise<Quote> {
     const t0 = performance.now();
     const net = this.network;
@@ -294,7 +353,13 @@ export class UniswapV3Adapter implements ExecutionAdapter {
 
   /**
    * Parse a confirmed swap receipt into actual amounts using the pool's Swap event.
-   * Returns null if no Swap log from a known pool is present.
+   * Returns null if no decodable Swap log is present; emitter authentication is not performed here.
+   * @remarks
+   * Parse the first decodable Swap log into quantities using configured token order/decimals; it
+   * does not authenticate the log emitter against a known pool. Caller must validate the transaction
+   * separately. Unknown route or no decodable log returns null.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
    */
   parseSwap(receipt: TransactionReceipt, market: string): { baseQty: number; quoteQty: number; price: number } | null {
     const route = this.route(market);
@@ -320,6 +385,12 @@ export class UniswapV3Adapter implements ExecutionAdapter {
     return null;
   }
 
+  /**
+   * Read a transaction receipt through the configured network client. Public chain read, no wallet
+   * authentication; any provider/not-found failure returns null.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async receipt(hash: Hex): Promise<TransactionReceipt | null> {
     try {
       return await this.chains.get(this.networkId).getTransactionReceipt({ hash });
@@ -328,6 +399,12 @@ export class UniswapV3Adapter implements ExecutionAdapter {
     }
   }
 
+  /**
+   * Read a transaction through the configured network client. Public chain read, no wallet
+   * authentication; any provider/not-found failure returns null.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async transaction(hash: Hex) {
     try {
       return await this.chains.get(this.networkId).getTransaction({ hash });

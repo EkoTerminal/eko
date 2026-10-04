@@ -5,6 +5,13 @@ import type { GuardRegistryReader, ReceiptBatch, ReceiptCommitAttempt, ReceiptCo
 import registryAbi from '../../../../packages/chain/abi/eko/ReceiptsRegistry.json' with { type: 'json' };
 
 export const receiptsAbi = registryAbi as Abi;
+/**
+ * Encode only registry commit(root,item count) calldata from the supplied batch. Receipts-role
+ * preparation, no wallet auth or signing; ABI/argument errors throw. Leaf correctness is verified
+ * by separate batch checks.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export const commitData = (batch: ReceiptBatch) => encodeFunctionData({abi:receiptsAbi,functionName:'commit',args:[batch.root,batch.items.length]});
 type ReceiptTx = Awaited<ReturnType<GuardRegistryReader['getTransactionReceipt']>>;
 export interface ReceiptChain {
@@ -19,7 +26,15 @@ export type ReceiptLog = (event: string, fields?: Record<string, unknown>) => vo
 
 /** Validate the persisted envelope before *every* broadcast, including recovery.
  * This hot signer is restricted to commit calldata, zero value, configured registry
- * and chain. No user transaction or owner rotation action enters the adapter. */
+ * and chain. No user transaction or owner rotation action enters the adapter.
+ * @remarks
+ * Parse/recover the signed envelope and bind hash, off-chain batch id, registry/target, signer,
+ * chain 4663, zero value, nonce and exact commit calldata. Receipts role only;
+ * malformed/mismatched envelopes reject before any broadcast. This does not prove current on-chain
+ * committer authority.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export async function validateCommitAttempt(attempt: ReceiptCommitAttempt, batch: ReceiptBatch, registry: Address) {
   const tx = parseTransaction(attempt.raw_transaction);
   const signer = await recoverTransactionAddress({serializedTransaction:attempt.raw_transaction as TransactionSerialized});
@@ -29,6 +44,14 @@ export async function validateCommitAttempt(attempt: ReceiptCommitAttempt, batch
     || (tx.value ?? 0n) !== 0n || String(tx.nonce) !== attempt.nonce || tx.data !== commitData(batch))
     throw new Error('Receipt commit envelope mismatch');
 }
+/**
+ * Require successful transaction/hash and exactly one nonremoved registry BatchCommitted log
+ * matching root/count/signer and representable positive id. Receipts role only; mismatch/malformed
+ * evidence throws. Caller separately checks chain and canonical block; this function alone does
+ * not make RPC reads.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
 export function authenticateCommit(tx: ReceiptTx, attempt: ReceiptCommitAttempt, batch: ReceiptBatch): ReceiptCommitAnchor {
   if (tx.status !== 'success' || tx.transactionHash !== attempt.tx_hash) throw new Error('Receipt transaction mismatch');
   const matches: ReceiptCommitAnchor[] = [];
@@ -52,8 +75,21 @@ export class ReceiptWorker {
   private stopped = false;
   private wake?: () => void;
   private ticking = false;
+  /**
+   * Wire the receipts-owned journal, restricted chain/signing adapter, configured registry and
+   * clocks/logger. Host construction only; no lease, signing or broadcast starts until tick/run and
+   * dependencies are not authenticated here.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   constructor(readonly journal: ReceiptCommitJournal, readonly chain: ReceiptChain, readonly registry: Address,
     readonly log: ReceiptLog = () => {}, readonly now: () => number = Date.now) {}
+  /**
+   * Request stop and wake its poll delay. Receipts operator only; an already dispatched persisted
+   * transaction may still land and remains subject to recovery.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   stop() { this.stopped = true; this.wake?.(); }
   private async refresh() {
     const anchors = await this.journal.unfinalized();
@@ -80,6 +116,15 @@ export class ReceiptWorker {
     if (await this.chain.broadcast(attempt.raw_transaction) !== attempt.tx_hash) throw new Error('Broadcast hash mismatch');
     this.log('receipt_pending',{txHash:attempt.tx_hash});
   }
+  /**
+   * Acquire the DB lease, require chain 4663, refresh anchors, recover bounded publications and
+   * validate every retained signed envelope before broadcast or canonical event anchoring. Receipts
+   * operator supplies restricted signer/provider. Concurrent/stopped tick does nothing;
+   * lease/provider/integrity failures reject. Missing receipts reuse identical stored bytes; only
+   * finalized reverts permit a new attempt.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async tick() {
     if (this.stopped || this.ticking) return;
     this.ticking = true;
@@ -122,6 +167,13 @@ export class ReceiptWorker {
       } else await this.rebroadcast(attempt);
     } finally { this.ticking = false; }
   }
+  /**
+   * Poll until stop, report bounded tick errors and heartbeat absence, and release the worker lease
+   * in finally. Receipts operator only; no user signing authority. Tick errors are logged for
+   * retained-attempt recovery; health/lease-release SQL failures can reject the loop.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+   */
   async run(pollMs = 10000) {
     try {
       while (!this.stopped) {

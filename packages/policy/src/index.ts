@@ -7,3 +7,5 @@ export { evaluate } from './preflight.js';
 export type { Deps, Evaluation } from './preflight.js';
 export { resolveRepeat } from './repeat.js';
 export type { StoredPreflight } from './repeat.js';
+
+export * from './actual-order.js';

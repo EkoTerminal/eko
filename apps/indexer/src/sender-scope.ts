@@ -5,7 +5,7 @@ import type { Address } from 'viem';
 import { lower, native } from './clients.js';
 import type { TokenRow } from './decode.js';
 import type { PoolMetadata, RpcLog } from './types.js';
-export interface PoolRow { id: Uint8Array; venue: string; currency0: Uint8Array; currency1: Uint8Array; fee: number; tick_spacing: number; hooks: Uint8Array | null }
+export interface PoolRow { id: Uint8Array; venue: string; currency0: Uint8Array; currency1: Uint8Array; fee: number; tick_spacing: number; hooks: Uint8Array | null; creation_verified: boolean; created_block: string }
 export interface SenderScope { tokens: Set<string>; curves: Map<string,Address>; pools: Map<string,PoolMetadata>; tokenRows: TokenRow[]; poolRows: PoolRow[] }
 export async function loadSenderScope(db: ChainDb): Promise<SenderScope> {
   const [tokens,pools]=await Promise.all([

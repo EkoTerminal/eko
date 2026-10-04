@@ -120,13 +120,17 @@ describe('092 private journal: offline PGlite, synthetic keys, HTTP injection on
     const a=await owner(),b=await owner();await optIn(a.cookie);await optIn(b.cookie);
     const key=await built.ctx.harness.createKey(a.id,a.agent.id),otherKey=await built.ctx.harness.createKey(b.id,b.agent.id);
     const entry=await built.ctx.journal.append(a.id,a.agent.id,input('private-deleted-note',true));
-    // Future OAuth tables exercised as adapter fixtures, without enabling OAuth.
-    await built.ctx.dbh.chain.sql.query('CREATE TABLE oauth_grants(id uuid PRIMARY KEY,account_id uuid,revoked_at timestamptz)');
-    await built.ctx.dbh.chain.sql.query('CREATE TABLE oauth_tokens(grant_id uuid)');
-    await built.ctx.dbh.chain.sql.query('CREATE TABLE oauth_codes(account_id uuid)');
-    await built.ctx.dbh.chain.sql.query('INSERT INTO oauth_grants VALUES($1,$2,NULL)',[a.agent.id,a.id]);
-    await built.ctx.dbh.chain.sql.query('INSERT INTO oauth_tokens VALUES($1)',[a.agent.id]);
-    await built.ctx.dbh.chain.sql.query('INSERT INTO oauth_codes VALUES($1)',[a.id]);
+    // Real consent and token lifecycle tables, without enabling OAuth.
+    await built.ctx.dbh.db.insert(schema.oauthGrants).values({ id:a.agent.id, accountId:a.id, agentId:a.agent.id,
+      clientId:'sample-client', wallet:'0x1111111111111111111111111111111111111111',
+      scopes:['senses:read','preflight','journal'], resource:'https://mcp.eko.example/mcp' });
+    await built.ctx.dbh.db.insert(schema.oauthTokens).values({ grantId:a.agent.id, accessPrefix:'sample-access', accessHash:'a'.repeat(64),
+      refreshPrefix:'sample-refresh', refreshHash:'b'.repeat(64), accessExpiresAt:new Date(Date.now()+3600_000), refreshExpiresAt:new Date(Date.now()+86400_000) });
+    await built.ctx.dbh.db.insert(schema.oauthCodes).values({ requestId:a.agent.id, grantId:a.agent.id, accountId:a.id,
+      clientId:'sample-client', hash:'a'.repeat(64), redirectUri:'https://connector.example/callback', codeChallenge:'A'.repeat(43),
+      codeChallengeMethod:'S256', resource:'https://mcp.eko.example/mcp', scopes:['senses:read','preflight','journal'], expiresAt:new Date(Date.now()+60_000) });
+    const [oauthKey]=await built.ctx.dbh.db.insert(agentKeys).values({agentId:a.agent.id,kind:'oauth',oauthGrantId:a.agent.id,
+      prefix:'sample-oauth-prefix',hash:'b'.repeat(64)}).returning();
     const failing=new JournalService(built.ctx.dbh.chain,new FileJournalDestructionLedger(path),{kek,id:kekId},undefined,
       {async cleanup(tx,accountId){expect((await tx.sql.query<{wrapped_dek:unknown}>('SELECT wrapped_dek FROM user_keys WHERE account_id=$1',[accountId])).rows[0]!.wrapped_dek).toBeNull();throw new Error('cleanup fixture crash');}});
     await expect(failing.deleteData(a.id)).rejects.toMatchObject({code:'internal_error'});
@@ -139,6 +143,7 @@ describe('092 private journal: offline PGlite, synthetic keys, HTTP injection on
     expect(state.wrapped_dek).toBeNull();expect(new Date(state.destroyed_at).toISOString()).toBe(first.json().deletedAt);
     expect(await built.ctx.dbh.db.select().from(agents).where(eq(agents.accountId,a.id))).toEqual([]);
     expect(await built.ctx.dbh.db.select().from(agentKeys).where(eq(agentKeys.id,key.keyId))).toEqual([]);
+    expect(await built.ctx.dbh.db.select().from(agentKeys).where(eq(agentKeys.id,oauthKey!.id))).toEqual([]);
     expect((await built.ctx.dbh.chain.sql.query('SELECT * FROM harness_journal WHERE account_id=$1',[a.id])).rows).toEqual([]);
     for(const table of ['oauth_grants','oauth_tokens','oauth_codes'])expect((await built.ctx.dbh.chain.sql.query(`SELECT * FROM ${table}`)).rows).toEqual([]);
     expect(await built.ctx.harness.authenticate(otherKey.secret)).toMatchObject({accountId:b.id});

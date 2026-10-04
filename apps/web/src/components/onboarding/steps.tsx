@@ -1,112 +1,52 @@
 import type { ReactNode } from 'react';
-import { PAPER_STARTING_CASH } from '@eko/shared';
 import type { ChecklistStep, TourAnchor } from '../../store/onboarding';
 import { useUi, type MobileSheet } from '../../store/ui';
-import { Term } from './Term';
 
-/** Phones: the chart, Markets or Positions fill the top; the Trade column is always docked below. */
 export function openMobile(sheet: MobileSheet) {
   useUi.getState().set({ mobileSheet: sheet });
 }
-
 export interface TourStep {
   anchor: TourAnchor;
   title: string;
   body: ReactNode;
-  /** Phone layout: what the top of the screen shows for this step. */
   mobileSheet: MobileSheet;
-  /** Preferred side for the coach mark (desktop). */
   placement?: 'right' | 'left' | 'top' | 'bottom';
 }
-
-const cash = `$${PAPER_STARTING_CASH.toLocaleString('en-US')}`;
-
-/** The guided tour: one idea per stop, in the order the Trade screen reads. */
+const step = (anchor: TourAnchor, title: string, body: string): TourStep => ({ anchor, title, body, mobileSheet: 'none' });
 export const TOUR_STEPS: TourStep[] = [
-  {
-    anchor: 'markets',
-    title: 'Pick a market',
-    body: 'Live prices. Tap a coin to chart it.',
-    mobileSheet: 'markets',
-    placement: 'right',
-  },
-  {
-    anchor: 'chart',
-    title: 'Read the chart',
-    body: 'Candles show market activity. Review the observations and evidence before trading.',
-    mobileSheet: 'none',
-    placement: 'bottom',
-  },
-  {
-    anchor: 'amount',
-    title: 'Pick an amount',
-    body: 'Buy and Sell trade this many dollars.',
-    mobileSheet: 'none',
-    placement: 'left',
-  },
-  {
-    anchor: 'trade',
-    title: 'One tap trades',
-    body: 'Tap Buy or Sell to trade the amount above instantly. Paper fills at once; on Live your wallet asks you to sign.',
-    mobileSheet: 'none',
-    placement: 'left',
-  },
-  {
-    anchor: 'positions',
-    title: 'What you hold',
-    body: 'Your positions and activity. Close sells all of a position in one tap.',
-    mobileSheet: 'positions',
-    placement: 'top',
-  },
-  {
-    anchor: 'mode-switch',
-    title: 'Paper first',
-    body: (
-      <>
-        You start with {cash} of <Term id="paper">paper money</Term>. <Term id="live">Live</Term> uses your own wallet — switching walks you through it first.
-      </>
-    ),
-    mobileSheet: 'none',
-    placement: 'bottom',
-  },
+  step('scan', 'Scan a coin', 'Paste a contract address or ticker to request a scan.'),
+  step('verdict', 'Read the verdict', 'Review the observations, missing checks and freshness. A verdict is not a recommendation.'),
+  step('playbooks', 'Open the evidence', 'Named playbook matches link to the observations behind them.'),
+  step('flow-markers', 'Read the flow markers', 'Markers describe indexed trading activity. Wallet labels are estimates, not a reason to buy.'),
+  step('coin-card', 'Review the coin card', 'Inspect liquidity, supply, control and measured exit costs when available.'),
+  step('fee-lines', 'Review costs', 'Review terminal fees, taxes, network fees and exit costs for this quote.'),
+  step('trade', 'Trade with the guard', 'Review the guard checks and warnings. Your wallet signs any trade; EKO never holds funds.'),
+  step('mode', 'Choose a risk mode', 'The risk mode changes guard thresholds. Refusals remain visible.'),
+  step('mission', 'Connect an agent', 'Open Mission Control to connect your own agent and review its limits and journal.'),
+  step('wallet', 'Your wallet', 'Connect and sign in when you want to scan your bags or consider a trade.'),
 ];
-
-/** "Show me" targets for checklist steps. */
-export const POINTERS: Record<ChecklistStep, { anchor: TourAnchor; title: string; body: string; mobileSheet: MobileSheet }> = {
-  paper_trade: {
-    anchor: 'trade',
-    title: 'Make a paper trade',
-    body: 'Pick an amount, then tap Buy. It fills at once — with paper money.',
-    mobileSheet: 'none',
-  },
-  close_position: {
-    anchor: 'positions',
-    title: 'Close a position',
-    body: 'Tap Close on a position to sell all of it at once.',
-    mobileSheet: 'positions',
-  },
-  go_live: {
-    anchor: 'mode-switch',
-    title: 'Go live when you’re ready',
-    body: 'Flip this to start the Live setup. It explains what changes and checks your wallet before anything is real.',
-    mobileSheet: 'none',
-  },
+export const POINTERS: Record<ChecklistStep, { anchor: TourAnchor; title: string; body: ReactNode; mobileSheet: MobileSheet }> = {
+  scan_coin: step('scan', 'Scan a coin', 'Paste a contract address or ticker.' ),
+  open_evidence: step('verdict', 'Open the evidence', 'Open verdict evidence or a playbook’s evidence disclosure.'),
+  scan_bags: step('wallet', 'Scan my bags', 'Sign in with your wallet to review indexed holdings.'),
+  guarded_trade: step('trade', 'First guarded trade', 'Review checks and costs. Completion requires a confirmed trade, not a quote or signature.'),
+  connect_agent: step('mission', 'Connect an agent', 'Follow the pack instructions and test the connection. Completion requires a received harness call.'),
 };
-
 export const CHECKLIST_COPY: Record<ChecklistStep, { label: string; hint: string }> = {
-  paper_trade: { label: 'Make your first paper trade', hint: 'Pick an amount, tap Buy' },
-  close_position: { label: 'Close a position', hint: 'Close sells all of it' },
-  go_live: { label: 'Go live when you’re ready', hint: 'Optional — your wallet, real funds' },
+  scan_coin: { label: 'Scan a coin', hint: 'Render a completed scan result' },
+  open_evidence: { label: 'Open the evidence', hint: 'Review the observations behind a verdict' },
+  scan_bags: { label: 'Scan my bags', hint: 'Read your indexed holdings' },
+  guarded_trade: { label: 'A first guarded trade', hint: 'Your wallet signs; wait for confirmation' },
+  connect_agent: { label: 'Connect an agent', hint: 'Test a received harness call' },
 };
 
-/** First visible element for an anchor (several can exist, e.g. desktop + menu copies). */
+/** Only implemented, visible controls can be stops; hidden sheets and gates are skipped. */
 export function findAnchor(anchor: TourAnchor): HTMLElement | null {
-  return (
-    [...document.querySelectorAll<HTMLElement>(`[data-tour="${anchor}"]`)].find((el) => {
-      const r = el.getBoundingClientRect();
-      if (r.width < 2 || r.height < 2) return false;
-      const cs = getComputedStyle(el);
-      return cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0.05;
-    }) ?? null
-  );
+  return [...document.querySelectorAll<HTMLElement>(`[data-tour="${anchor}"]`)].find(el => {
+    if (el.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return r.width >= 2 && r.height >= 2 && cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0.05;
+  }) ?? null;
 }
+export function availableTourSteps() { return TOUR_STEPS.filter(s => findAnchor(s.anchor)); }

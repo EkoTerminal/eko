@@ -2107,7 +2107,7 @@
     ]
   },
   "OAuthRequest": {
-    "id": "fixture",
+    "id": "00000000-0000-4000-8000-000000000098",
     "clientName": {
       "text": "fixture",
       "truncated": false,
@@ -2117,14 +2117,21 @@
     },
     "redirectUri": "https://example.invalid/callback",
     "scopes": [
-      "senses:read"
-    ]
+      "senses:read",
+      "preflight",
+      "journal"
+    ],
+    "redirectHost": "example.invalid",
+    "resource": "https://mcp.example.invalid/mcp",
+    "expiresAt": "2026-10-03T12:00:00Z"
   },
   "OAuthConsent": {
-    "requestId": "fixture",
-    "agentId": "fixture",
+    "requestId": "00000000-0000-4000-8000-000000000098",
+    "agentId": "00000000-0000-4000-8000-000000000090",
     "scopes": [
-      "senses:read"
+      "senses:read",
+      "preflight",
+      "journal"
     ],
     "decision": "approve"
   },
@@ -3053,5 +3060,58 @@
   },
   "JournalConsent": {
     "optedIn": true
+  },
+  "BagShareRequest": {
+    "includeValues": false,
+    "includeWallet": false
+  },
+  "BagShareResponse": {
+    "id": "00000000-0000-4000-8000-000000000109",
+    "shareUrl": "/bags/r/00000000-0000-4000-8000-000000000109"
+  },
+  "PublicBagReport": {
+    "asOfBlock": 1,
+    "holdings": [
+      {
+        "coin": {
+          "address": "0xabababababababababababababababababababab",
+          "name": {
+            "text": "fixture",
+            "truncated": false,
+            "flags": [
+              "agent_bait"
+            ]
+          },
+          "symbol": {
+            "text": "fixture",
+            "truncated": false,
+            "flags": [
+              "agent_bait"
+            ]
+          },
+          "launchpad": "pons",
+          "stage": "curve",
+          "curvePct": 1,
+          "change1hPct": 1,
+          "verdict": "clear",
+          "topPlaybook": "honeypot",
+          "ageSec": 1
+        },
+        "balance": "fixture",
+        "playbooks": [
+          "honeypot"
+        ],
+        "exitCost1kPct": 1
+      }
+    ],
+    "summary": {
+      "coins": 1,
+      "flagged": 1,
+      "danger": 1
+    },
+    "shareUrl": "fixture"
+  },
+  "OAuthConsentResult": {
+    "redirect": "https://example.invalid/callback?code=fixture&state=fixture"
   }
 }

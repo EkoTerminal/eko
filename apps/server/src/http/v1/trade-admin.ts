@@ -8,6 +8,14 @@ import type { AccountServices } from './account.js';
 import { list, parse, sendError } from './helpers.js';
 
 // TODO(spec): Admin maintenance URLs/response shape are unspecified; use the existing v1 conventions.
+/**
+ * Register allowlist read/upsert/delete and durable trading stop/resume with audit writes. Require
+ * a wallet-session admin role; refuse demos and require allowed Origin for mutations. Caps may
+ * only lower the configured role ceiling; enabling above the host ceiling refuses.
+ * Validation/auth/SQL failures reject.
+ * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function tradeAdminRoutes(app: FastifyInstance, cfg: Config, { auth, db }: AccountServices) {
   app.addHook('onRequest', async (_req, reply) => { reply.header('Cache-Control', 'private, no-store'); });
   const admin = async (req: FastifyRequest) => {

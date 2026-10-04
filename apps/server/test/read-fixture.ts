@@ -12,7 +12,7 @@ export async function seedReadFixture(db:ChainDb,now=Date.now()) {
   const n=BigInt(block.number);
   const client:ChainClient={chainId:async()=>4663,head:async()=>n,block:async()=>block,receipts:async()=>receipts,code:async()=> '0x',
     tokenMetadata:async()=>({name:'Fixture coin',symbol:'FIX',decimals:18,totalSupply:10n**27n,supplyBlock:n}),
-    v3Pool:async()=>null,logs:async()=>[],ethUsdRate:async()=>({value:2000,block:n})};
+    v3Pool:async()=>null,logs:async()=>[],ethUsdRate:async()=>({value:2000,block:n,source:{address:sampleAddress(9000),venue:'uniswap_v3',fee:3000}})};
   const decoder=new BlockDecoder(client,loadRegistry(),undefined,()=>{});
   const prepared=await decoder.prepare(db,block,receipts,{ponsOnly:true});
   await db.tx(async tx=>{

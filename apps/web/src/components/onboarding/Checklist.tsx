@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useApp } from '../../store/app';
-import { CHECKLIST_STEPS, ONBOARDING_VERSION, REQUIRED_STEPS, useOnboarding } from '../../store/onboarding';
+import { CHECKLIST_STEPS, REQUIRED_STEPS, useOnboarding } from '../../store/onboarding';
 import { IconChevron, IconClose } from '../icons';
 import { StatusDot } from './art';
-import { CHECKLIST_COPY } from './steps';
+import { CHECKLIST_COPY, POINTERS, findAnchor } from './steps';
+import { navigate } from '../../lib/router';
 
 function Ring({ done, total, size = 22 }: { done: number; total: number; size?: number }) {
   const r = size / 2 - 2.5;
@@ -40,7 +41,9 @@ export function ChecklistSteps({ onShow }: { onShow?: () => void }) {
                 className="btn sm ob-cl-show"
                 onClick={() => {
                   onShow?.();
-                  showMe(step);
+                  const target = { scan_coin: '/scan', open_evidence: '/radar', scan_bags: '/bags', guarded_trade: '/radar', connect_agent: '/mission/connect' }[step];
+                  if (findAnchor(POINTERS[step].anchor) && step !== 'scan_bags' && step !== 'connect_agent') showMe(step);
+                  else navigate(target);
                 }}
                 aria-label={`Show me: ${copy.label}`}
               >
@@ -87,66 +90,20 @@ export default function Checklist() {
   const open = useOnboarding((s) => s.checklistOpen);
   const setOpen = useOnboarding((s) => s.setChecklistOpen);
   const dismiss = useOnboarding((s) => s.dismissChecklist);
-  const welcomeDone = useOnboarding((s) => s.welcomeDone);
-  const version = useOnboarding((s) => s.version);
-  const acknowledgeVersion = useOnboarding((s) => s.acknowledgeVersion);
-  const startTour = useOnboarding((s) => s.startTour);
   const toast = useApp((s) => s.toast);
   const { done, total, complete } = useChecklistProgress();
   const lift = useToastLift();
   const liftStyle = { '--ob-lift': `${lift}px` } as React.CSSProperties;
-
-  // A short celebration the moment the last required step lands (not on reload).
-  const [celebrate, setCelebrate] = useState(false);
-  const prev = useRef(complete);
-  useEffect(() => {
-    if (complete && !prev.current) {
-      setCelebrate(true);
-      setOpen(true);
-      const t = window.setTimeout(() => setCelebrate(false), 2600);
-      prev.current = complete;
-      return () => clearTimeout(t);
-    }
-    prev.current = complete;
-  }, [complete, setOpen]);
-
-  // A little pulse on the pill whenever a step is ticked while collapsed.
-  const [bump, setBump] = useState(0);
-  const lastDone = useRef(done);
-  useEffect(() => {
-    if (done > lastDone.current) setBump((b) => b + 1);
-    lastDone.current = done;
-  }, [done]);
 
   const hide = () => {
     dismiss();
     toast({ kind: 'info', title: 'Checklist hidden', body: 'Bring it back any time from Help.' });
   };
 
-  // The guide changed since this user last saw it: offer the new tour once.
-  if (welcomeDone && version < ONBOARDING_VERSION)
-    return (
-      <aside className="ob-root ob-cl ob-cl--nudge" aria-label="Tour updated" style={liftStyle}>
-        <div className="ob-cl-head">
-          <strong>Trading is one tap now</strong>
-        </div>
-        <p className="ob-cl-sub">Take the 30-second tour to see how it works.</p>
-        <div className="ob-cl-foot">
-          <button className="btn ghost sm" onClick={acknowledgeVersion}>
-            Not now
-          </button>
-          <button className="btn primary sm" onClick={startTour}>
-            Take the tour
-          </button>
-        </div>
-      </aside>
-    );
-
   if (!open)
     return (
       <button
-        key={bump}
-        className={`ob-root ob-cl-pill ${bump ? 'is-bump' : ''} ${complete ? 'is-complete' : ''}`}
+        className={`ob-root ob-cl-pill ${complete ? 'is-complete' : ''}`}
         onClick={() => setOpen(true)}
         aria-expanded={false}
         aria-label={`Getting started: ${done} of ${total} done. Show checklist`}
@@ -163,20 +120,13 @@ export default function Checklist() {
     );
 
   return (
-    <aside className={`ob-root ob-cl ${complete ? 'is-complete' : ''} ${celebrate ? 'is-celebrating' : ''}`} aria-label="Getting started" data-testid="checklist" style={liftStyle}>
-      {celebrate ? (
-        <span className="ob-burst" aria-hidden>
-          {Array.from({ length: 12 }, (_, i) => (
-            <span key={i} style={{ '--i': i } as React.CSSProperties} />
-          ))}
-        </span>
-      ) : null}
+    <aside className={`ob-root ob-cl ${complete ? 'is-complete' : ''}`} aria-label="Getting started" data-testid="checklist" style={liftStyle}>
       <div className="ob-cl-head">
         <Ring done={done} total={total} size={26} />
         <div className="ob-cl-titles">
           <strong>{complete ? 'You’ve got the loop' : 'Getting started'}</strong>
           <span className="ob-cl-sub" aria-live="polite">
-            {complete ? 'Ask, read, trade, close — on paper. Live is there when you want it.' : `${done} of ${total} done · on paper, no real money`}
+            {complete ? 'Scan, review evidence, check bags, trade and connect an agent.' : `${done} of ${total} done`}
           </span>
         </div>
         <button className="icon-btn" onClick={() => setOpen(false)} aria-label="Collapse checklist" aria-expanded data-tip="Collapse">

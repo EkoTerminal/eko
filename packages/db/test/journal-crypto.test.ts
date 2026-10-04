@@ -25,6 +25,11 @@ describe('private journal envelope crypto (synthetic keys only)', () => {
     }
     expect(() => openEntry(dek,id,agent,{...first,commitment:keccak256(Buffer.from('wrong'))})).toThrow('authentication');
     expect(() => openEntry(dek,id,agent,{...first,saltCt:second.saltCt})).toThrow('authentication');
+    // The GCM tag is pinned to 16 bytes: a shortened ciphertext or salt envelope (truncated tag) never opens.
+    for (const cut of [1,4,12]) {
+      expect(() => openEntry(dek,id,agent,{...first,ciphertext:first.ciphertext.subarray(0,-cut)})).toThrow('authentication');
+      expect(() => openEntry(dek,id,agent,{...first,saltCt:first.saltCt.subarray(0,-cut)})).toThrow('authentication');
+    }
     opened.salt.fill(0); other.salt.fill(0); dek.fill(0);
   });
   it('authenticates the KEK, account, version and KEK id of a wrapped random 256-bit DEK', () => {

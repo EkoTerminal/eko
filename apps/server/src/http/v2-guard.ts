@@ -6,6 +6,14 @@ import { AddressSchema, Bytes32Schema, FeedItemSchema } from '@eko/shared';
 import type { GuardReadStore } from '../read/guard-store.js';
 import { InputError, parse, sendError } from './v1/helpers.js';
 
+/**
+ * Register public v2 negotiated Guard/card/evidence/read APIs with strict input parsing. No wallet
+ * session required. Missing indexed records/evidence returns not_found; input errors return
+ * bad_request, other failures are logged and return internal_error. Stored source availability
+ * controls the read projection.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function guardReadRoutes(app:FastifyInstance,store:GuardReadStore, services?:ReadServices) {
   await app.register(async v2=>{
     v2.setErrorHandler((err,_req,reply)=>{

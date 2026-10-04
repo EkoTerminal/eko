@@ -11,6 +11,7 @@ import {
   type Quote,
   type QuoteRequest,
   type TradingMode,
+  type TradeQuoteRequest,
 } from '@eko/shared';
 import type { Db } from '../db/client.js';
 import { auditLog, fills, orders, paperBalances } from '../db/schema.js';
@@ -22,6 +23,7 @@ import type { ExecutionAdapter } from './types.js';
 import { applyFillToPosition, type PortfolioService } from './portfolio.js';
 import type { QuoteStore } from './quotes.js';
 import { ScreeningError, type SanctionsService } from '../sanctions/service.js';
+import { TradeService, type TradeOwner, type TradeOrderInput } from './trades.js';
 import { TradeAccessError, type TradeAccessService } from './trade-access.js';
 
 export class ExecError extends Error {
@@ -89,26 +91,92 @@ const PAPER_QUOTE_TTL_MS = 15_000;
 export class ExecutionService {
   private timer: NodeJS.Timeout | null = null;
 
+  /**
+   * Wire storage, market/portfolio/cache, unsigned adapters, access/sanctions configuration, hooks
+   * and clock. Host-only construction; no caller auth, signing or reconciliation starts until
+   * methods run.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   constructor(
     private db: Db,
     private market: MarketDataService,
     private portfolio: PortfolioService,
     private quotes: QuoteStore,
     private chain: { testnet: ExecutionAdapter; live: ExecutionAdapter },
-    private cfg: { liveEnabled: boolean; paperFeeBps: number; tradeAccess?: TradeAccessService; sanctions?: Pick<SanctionsService, 'assertWallet'> },
+    private cfg: { liveEnabled: boolean; paperFeeBps: number; tradeAccess?: TradeAccessService; sanctions?: Pick<SanctionsService, 'assertWallet'>; trades?: TradeService },
     private hooks: ExecHooks,
     private now: () => number = Date.now,
   ) {}
 
+  /**
+   * Delegate quote acquisition to the installed TradeService; throw sim_unavailable if absent.
+   * Caller supplies the authenticated owner; this wrapper does not authenticate.
+   */
+  async tradeQuote(owner: TradeOwner, input: TradeQuoteRequest) {
+    if (!this.cfg.trades) throw new ExecError('sim_unavailable', 'Trade acquisition unavailable', 503);
+    return this.cfg.trades.quote(owner, input);
+  }
+  /**
+   * Delegate owner-scoped unsigned order preparation; throw sim_unavailable if TradeService is
+   * absent. Caller authenticates the wallet; TradeService rechecks admission and retained
+   * evidence.
+   */
+  async tradeOrder(owner: TradeOwner, input: TradeOrderInput) {
+    if (!this.cfg.trades) throw new ExecError('sim_unavailable', 'Trade acquisition unavailable', 503);
+    return this.cfg.trades.order(owner, input);
+  }
+
+  /**
+   * Delegate an owner-bound transaction-hash report to TradeService. Caller authenticates owner
+   * and installs the service; the report does not confirm a fill.
+   */
+  async tradeSubmitted(owner: TradeOwner, id: string, hash: string) { return this.cfg.trades!.submitted(owner, id, hash); }
+  /**
+   * Delegate the finite wallet rejection/signing outcome to the installed TradeService. Caller
+   * supplies authenticated owner; only awaiting-signature orders can change.
+   */
+  async tradeRejected(owner: TradeOwner, id: string, code: 'user_rejected' | 'signing_failed') { return this.cfg.trades!.rejected(owner, id, code); }
+  /**
+   * Read paginated orders through the installed TradeService for the authenticated owner supplied
+   * by the caller. Storage/cursor ownership failures propagate.
+   */
+  async tradeHistory(owner: TradeOwner, limit: number, cursor?: string) { return this.cfg.trades!.history(owner, limit, cursor); }
+  /**
+   * Read one owned order through the installed TradeService. Caller supplies authenticated owner;
+   * absent or foreign orders reject as not_found.
+   */
+  async tradeDetail(owner: TradeOwner, id: string) { return this.cfg.trades!.detail(owner, id); }
+
+  /**
+   * Schedule reconciliation every 1.5 seconds and report asynchronous failures through the error
+   * reporter. Host worker call, no wallet authentication; repeated calls create additional timers.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   start() {
     this.timer = setInterval(() => void this.reconcile().catch((err) => reportError(err, { where: 'reconcile' })), 1500);
   }
+  /**
+   * Clear the retained reconciliation timer. Host lifecycle call, no wallet authentication; an in-
+   * flight reconciliation is not cancelled or awaited.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   stop() {
     if (this.timer) clearInterval(this.timer);
   }
 
   // ───────────────────────── quotes ─────────────────────────
 
+  /**
+   * Prepare an account-attributed paper or unsigned chain quote; live quotes require sanctions data
+   * and remove transaction bytes when admission refuses. Caller authenticates account/wallet.
+   * Unknown market, bad amount, missing screening/route, provider and database failures reject;
+   * quote creation is not order authorization.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async quote(accountId: string, req: QuoteRequest): Promise<Quote> {
     const def = getMarket(req.market);
     if (!def) throw new ExecError('unknown_market', 'Unknown market', 404);
@@ -139,6 +207,7 @@ export class ExecutionService {
       if (req.mode === 'live') {
         const refusal = await this.liveRefusal(q.account, q);
         if (refusal) return { ...q, tx: undefined, warnings: [`${refusal.code}: ${refusal.message}. Quotes are informational.`, ...q.warnings] };
+        return { ...q, tx: undefined, warnings: ['guard_refused: Request a guarded v1 trade quote.', ...q.warnings] };
       }
       return q;
     } catch (err) {
@@ -236,6 +305,11 @@ export class ExecutionService {
     if (quote.account && quote.account.toLowerCase() !== wallet?.toLowerCase()) await this.assertScreened(quote.account);
     const refusal = await this.liveRefusal(wallet, quote);
     if (refusal) throw new ExecError(refusal.code, refusal.message, refusal.code === 'not_allowlisted' ? 403 : 422);
+    if (!wallet) throw new ExecError('wallet_auth_required', 'Wallet sign-in required', 401);
+    if (!quote.account || quote.account.toLowerCase() !== wallet.toLowerCase())
+      throw new ExecError('wallet_mismatch', 'Quote wallet differs from the signed-in wallet', 409);
+    // Heritage quotes have no actual-account binding or per-quote warning acknowledgements.
+    throw new ExecError('guard_refused', 'Request a guarded v1 trade quote before placing a live order.', 422);
   }
 
   private async recordRejected(accountId: string, quote: Quote, key: string, code: string, message: string, status: OrderStatus = 'rejected') {
@@ -271,6 +345,15 @@ export class ExecutionService {
     return order;
   }
 
+  /**
+   * Resolve account-scoped idempotency or a retained owned unconsumed unexpired quote. Live retries
+   * recheck screening/access/wallet and awaiting-signature expiry; new live orders also require
+   * route, simulation and no pending approval. Caller supplies authenticated identity. ExecError
+   * reports refusal; storage failures reject. Paper mode fills simulated balances; chain mode
+   * returns unsigned bytes.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async place(
     accountId: string,
     wallet: string | null,
@@ -298,6 +381,7 @@ export class ExecutionService {
     }
     if (input.clientLatency?.clickToSubmitMs !== undefined) metrics.observe('ui.click_to_submit_ms', input.clientLatency.clickToSubmitMs, { mode: quote.mode });
 
+    if (quote.mode === 'live') await this.assertLiveOrder(wallet, quote);
     this.quotes.consume(quote.id);
     const result = quote.mode === 'paper' ? await this.fillPaper(accountId, quote, input.idempotencyKey, input.clientLatency) : await this.createChainOrder(accountId, wallet, quote, input.idempotencyKey, input.clientLatency);
     metrics.observe('order.submit_server_ms', performance.now() - t0, { mode: quote.mode });
@@ -459,6 +543,12 @@ export class ExecutionService {
    * data, balance, idempotency). Buys spend `amountUsd` of
    * paper cash. Sells convert it to the base asset at the live bid, capped at the holding: a
    * holding worth less than that (or `all`) is sold in full. Idempotent per key.
+   * @remarks
+   * Prepare and place an idempotent paper trade; sell size is capped by recorded holdings and buys
+   * use supplied USD size. Caller authenticates the account; missing/stale price, invalid
+   * market/size, balance, slippage or storage failures reject. No real transaction is produced.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
    */
   async instantPaper(
     accountId: string,
@@ -501,7 +591,14 @@ export class ExecutionService {
     return r;
   }
 
-  /** Wallet returned a hash. Recorded as SUBMITTED — never as confirmed until the receipt says so. */
+  /** Wallet returned a hash. Recorded as SUBMITTED — never as confirmed until the receipt says so.
+   * @remarks
+   * Store a syntactically valid reported hash on an owned awaiting/submitted order, allowing recent
+   * expired orders within the one-hour grace period. Caller authenticates account; conflicting hash
+   * or state rejects. This records submission, not confirmation; SQL failures reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async markSubmitted(accountId: string, orderId: string, txHash: string, clientMs?: number) {
     if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new ExecError('bad_hash', 'Invalid transaction hash', 400);
     const r = await this.own(accountId, orderId);
@@ -519,6 +616,13 @@ export class ExecutionService {
     return o;
   }
 
+  /**
+   * Update an owned awaiting-signature order to rejected/failed with bounded code/message; return
+   * other states unchanged. Caller authenticates account; unknown/nonowned order and SQL failures
+   * reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async markRejected(accountId: string, orderId: string, code: string, message: string) {
     const r = await this.own(accountId, orderId);
     if (r.status !== 'awaiting_signature') return rowToOrder(r);
@@ -533,6 +637,12 @@ export class ExecutionService {
     return o;
   }
 
+  /**
+   * List account-scoped orders newest first with optional mode and supplied limit. Caller
+   * authenticates account; database failures reject; no additional limit validation occurs here.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async list(accountId: string, mode: TradingMode | undefined, limit = 200): Promise<Order[]> {
     const rows = await this.db
       .select()
@@ -546,10 +656,19 @@ export class ExecutionService {
   // ───────────────────────── reconciliation ─────────────────────────
 
   private reconciling = false;
+  /**
+   * Serialize reconciliation, expire stale unsigned orders and check submitted transactions against
+   * retained sender/router/calldata/value before recording receipt-based fills. Host worker only;
+   * database/adapter errors reject. Missing Swap amounts use explicitly marked quote estimates; no
+   * finality depth is enforced here.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   async reconcile() {
     if (this.reconciling) return;
     this.reconciling = true;
     try {
+      await this.cfg.trades?.reconcile();
       const now = this.now();
       // Unsigned orders whose quote lapsed long ago.
       const stale = await this.db
@@ -635,6 +754,12 @@ export class ExecutionService {
     if (row) this.hooks.onOrder(row.accountId, rowToOrder(row));
   }
 
+  /**
+   * Return the configured network id for live/testnet mode. Pure mapping with no authentication, RPC
+   * or admission decision; assumes a typed mode.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
+   */
   modeNetwork(mode: 'testnet' | 'live') {
     return NETWORK_FOR_MODE[mode];
   }

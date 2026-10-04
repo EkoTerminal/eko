@@ -112,7 +112,15 @@ describe('v1 indexed read routes',()=>{
       const events=socket.messages.flatMap(m=>{const parsed=WsServerSchema.parse(m);return parsed.t==='ev' ? [parsed] : [];});
       expect(events.filter(e=>e.kind==='card')).toHaveLength(2);expect(events.filter(e=>e.kind==='tick')).toHaveLength(1);expect(events.filter(e=>e.kind==='rerank')).toHaveLength(1);
       const seq=events.filter(e=>e.ch==='radar').map(e=>e.seq);expect(seq).toEqual(seq.map((_,i)=>i+1));
+      const sent=socket.messages.length;
       socket.bufferedAmount=3*1024*1024;hub.publish<'radar','rerank'>('radar','rerank',{order:[]});hub.publish<'radar','rerank'>('radar','rerank',{order:[]});
+      // Every reply obeys MAX_BUFFER, including resync; deliver the notification after draining.
+      expect(socket.messages).toHaveLength(sent);
+      socket.bufferedAmount=0;hub.publish<'radar','rerank'>('radar','rerank',{order:[]});
+      expect(socket.messages.filter(m=>(m as {t:string}).t==='resync')).toHaveLength(1);
+      expect(socket.messages).toHaveLength(sent+1);
+      hub.publish<'radar','rerank'>('radar','rerank',{order:[]});
+      expect(socket.messages.at(-1)).toMatchObject({t:'ev',ch:'radar',kind:'rerank'});
       expect(socket.messages.filter(m=>(m as {t:string}).t==='resync')).toHaveLength(1);
     } finally {await live.close();hub.closeAll();}
   });

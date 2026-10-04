@@ -63,9 +63,19 @@ export function policyErrors(policy: import('@eko/shared').Policy) {
     .map(([key]) => key);
 }
 export function packAvailable(pack: import('@eko/shared').Pack, flags: Partial<Flags>, phase: 'launch_week' | 'token_live' | 'tiers') {
+  // OAuth connector metadata stays pending until 099 promotes the accepted pack.
+  if (pack.platform === 'claude_connector' && pack.stage === 'D0') return false;
   if (pack.stage === 'D0' && phase === 'launch_week') return false;
   return !['chatgpt', 'openclaw'].includes(pack.platform) || !!flags.packs_chatgpt_openclaw;
 }
 export function fillPack(template: string, key: string, mcpUrl = import.meta.env.VITE_MCP_URL ?? '') {
   return template.replaceAll('{{API_KEY}}', key).replaceAll('{{MCP_URL}}', mcpUrl || '{{MCP_URL}}');
+}
+
+// TODO(spec): MCP and API currently have no cross-process agents WS event for
+// journal writes. Verify the persisted owner-only journal on WS hints and while
+// waiting, until that event is available. Authentication alone is not a check-in.
+export async function connectionReceived(id: string, signal?: AbortSignal) {
+  const page = await fetchParsed(`/agents/${encodeURIComponent(id)}/journal?limit=1`, JournalResponse, { signal });
+  return page.rows.length > 0;
 }

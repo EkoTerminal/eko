@@ -1,6 +1,8 @@
 // Read-only deployment smoke; --self-test is entirely offline. No signing or chain calls.
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
+import { sha256, canonicalJson, validateIdentity } from './lib/staging-identity.mjs';
+import contract from '../apps/server/src/build-identity-contract.json' with { type: 'json' };
 
 export async function smoke(origin, request, socketProbe) {
   const url = new URL(origin);
@@ -15,6 +17,9 @@ export async function smoke(origin, request, socketProbe) {
   const health = await (await get('/v1/health')).json();
   assert.equal(health.ok, true);
   assert.equal(typeof health.rpc.sessionUnits, 'number');
+  const identity = await (await get('/v1/build')).json();
+  validateIdentity(identity);
+  assert.equal(identity.role, 'api');
   const config = await (await get('/v1/config')).json();
   assert.equal(config.trading.liveEnabled, false, 'Staging trading must be paused');
   assert.ok(config.trading.maxTradeUsd <= 25, 'Staging ceiling must stay bounded');
@@ -24,7 +29,7 @@ export async function smoke(origin, request, socketProbe) {
   assert.match(await page.text(), /<html[\s>]/i);
   const ws = new URL('/v1/ws', origin); ws.protocol = 'wss:';
   await socketProbe(ws);
-  return { health: 'ok', trading: 'paused', flags: 'off', spa: 'html', websocket: 'radar-ack' };
+  return { health: 'ok', identity: 'present', trading: 'paused', flags: 'off', spa: 'html', websocket: 'radar-ack' };
 }
 
 export async function probeWebSocket(url, Socket = WebSocket) {
@@ -48,9 +53,13 @@ export async function probeWebSocket(url, Socket = WebSocket) {
 }
 
 async function selfTest() {
+  const bundles = Object.fromEntries(contract.bundleFiles.map(file => [file, 'a'.repeat(64)]));
+  const identity = { role: 'api', configVersion: 1, configDigest: 'b'.repeat(64),
+    build: { formatVersion: 1, sourceRevision: 'c'.repeat(40), bundles, bundleDigest: sha256(canonicalJson(bundles)) } };
   const healthy = { trading: { liveEnabled: false, maxTradeUsd: 25 }, flags: { approvals: false } };
-  const fixture = (config = healthy) => async url => {
+  const fixture = (config = healthy, build = identity) => async url => {
     if (url.pathname === '/v1/health') return Response.json({ ok: true, rpc: { sessionUnits: 0 } });
+    if (url.pathname === '/v1/build') return Response.json(build);
     if (url.pathname === '/v1/config') return Response.json(config);
     if (url.pathname === '/mission/connect') return new Response('<html><title>EKO</title></html>', { headers: { 'content-type': 'text/html' } });
     throw new Error('Unexpected fixture route');
@@ -63,6 +72,18 @@ async function selfTest() {
   await assert.rejects(() => smoke('https://staging.example.invalid', fixture({ ...healthy, trading: { liveEnabled: true, maxTradeUsd: 25 } }), socket));
   await assert.rejects(() => smoke('https://staging.example.invalid', fixture({ ...healthy, flags: { approvals: true } }), socket));
   await assert.rejects(() => smoke('https://staging.example.invalid', async () => new Response('', { status: 503 }), socket));
+  for (const change of [
+    value => { value.build = null; },
+    value => { value.build.sourceRevision = null; },
+    value => { delete value.build.bundles['index.js']; },
+    value => { value.build.bundleDigest = 'd'.repeat(64); },
+    value => { value.configDigest = 'invalid'; },
+    value => { value.role = 'worker'; },
+    value => { value.secret = 'fixture-secret'; },
+  ]) {
+    const changed = structuredClone(identity); change(changed);
+    await assert.rejects(() => smoke('https://staging.example.invalid', fixture(healthy, changed), socket));
+  }
   class FixtureSocket extends EventTarget {
     constructor() { super(); queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: '{"t":"hello"}' }))); }
     send(value) {

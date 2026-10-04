@@ -38,7 +38,7 @@ function fixtureClient(logs: RpcLog[], end = 20): ChainClient {
       (f.topicFilters ? f.topicFilters.every((t,i) => t==null || (Array.isArray(t) ? t.includes(l.topics[i]) : t===l.topics[i])) : f.topics.includes(l.topics[0]))),
     tokenMetadata: async () => ({ name: 'Sample token', symbol: 'DEMO', decimals: 18, totalSupply: 1000n*10n**18n }),
     tokenMetadataBatch: async (addresses,n) => addresses.map(() => ({ name: 'Sample token', symbol: 'DEMO', decimals: 18, totalSupply: 1000n*10n**18n, supplyBlock: n })),
-    code: async () => '0x', v3Pool: async () => null, ethUsdRate: async n => ({ value: 3000, block: n }) };
+    code: async () => '0x', v3Pool: async () => null, ethUsdRate: async n => ({ value: 3000, block: n, source: { address: registry.requireAddress('uniswapV3.quoterV2'), venue: 'uniswap_v3' as const, fee: 3000 } }) };
 }
 function worker(db: ChainDb, client: ChainClient) { return new PonsBackfill(client,db,new BlockDecoder(client,registry,new Metrics(quiet),quiet),{ workers: 2, logRange: 2000, logger: quiet }); }
 async function token(db: ChainDb, launchpad: string | null = null) { await db.insert('tokens', { address: binary(coin), decimals: 2, total_supply: '100000', supply_block: '1', first_block: '0', block: '0', launchpad }); }

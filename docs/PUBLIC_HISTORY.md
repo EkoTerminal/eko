@@ -32,6 +32,13 @@ records may identify the authenticated account. Unknown identifiers and secrets 
 patterns still require care. GitHub Actions runs after publication and cannot prevent an initial upload.
 For future contributions, extend the fingerprints privately before publishing new identity-bearing content.
 
+## Updates after the reconstruction
+
+From October 3, 2026, the public tree is updated by syncing it to a newer source revision. Each sync is a
+genuine commit with its real date, a truthful message naming the source revision, and the neutral public
+identity. Source revisions and their public commits are listed in `docs/EXPORT.md`. The original private
+history is still not imported.
+
 Maintainer prerequisite: `EKO_PUBLIC_GUARD_KEY` must hold the private 64-character hex key, or a local
 checkout must have it in `.git/info/public-guard-key`. CI receives it from the `PUBLIC_GUARD_KEY`
 repository Actions secret. Never put the key in the source tree, a commit, a log or a public message.

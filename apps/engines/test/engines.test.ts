@@ -75,16 +75,50 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   await worker.processBlock(1);expect(await count(db,'verdicts')).toBe(1);expect(await count(db,'receipt_publications')).toBe(1);
   expect(await new ReceiptOutbox(db).recover()).toBe(1);await off();
  });
- it('builds no card while swap or pool liquidity senders are pending, including cached replay',async()=>{
+ it('updates a card with pending actors and names gaps in cached and uncached sources',async()=>{
   const db=await setup();await pair(db);await swap(db,1,1);
   await db.sql.query('UPDATE swaps SET trader=NULL,tx_from=NULL,tx_to=NULL,senders_pending=true');
-  const worker=new EngineWorker(db,{client:client()});await worker.replay(1,1);expect(await count(db,'coin_cards')).toBe(0);
-  const cache=new ReplayCache(db,1,new Map());await cache.initialize();expect(await loadSources(db,coin,1,client(),undefined,cache)).toBeNull();
+  const worker=new EngineWorker(db,{client:client()});await worker.replay(1,1);expect(await count(db,'coin_cards')).toBeGreaterThan(0);
+  const cache=new ReplayCache(db,1,new Map());await cache.initialize();
+  const cached=await loadSources(db,coin,1,client(),undefined,cache),uncached=await loadSources(db,coin,1,client());
+  expect(cached!.attributionCoverage).toEqual(uncached!.attributionCoverage);
+  expect(cached!.trade.actors.size).toBe(0);expect(cached!.trade.volumeUsd1h).toBe(10);
+  expect((await latest(db)).meta!.flow!.coverageGaps!.wallet_flow).toMatchObject({status:'incomplete',reason:'unattributed_swaps',unattributedCount:1});
   await db.sql.query('UPDATE swaps SET trader=$1,tx_from=$1,tx_to=$1,senders_pending=false',[binary(actor)]);
   await lp(db,1,actor,100);await db.sql.query('UPDATE liquidity_events SET actor=NULL,senders_pending=true');
-  expect(await loadSources(db,coin,1,client())).toBeNull();
+  const incomplete=await loadSources(db,coin,1,client());
+  expect(incomplete).not.toBeNull();expect(incomplete!.liquidity).toBeUndefined();
+  expect(incomplete!.attributionCoverage!.liquidity_ownership).toMatchObject({status:'incomplete',unattributedCount:1});
   await db.sql.query('UPDATE liquidity_events SET actor=$1,senders_pending=false',[binary(actor)]);
-  expect(await loadSources(db,coin,1,client())).not.toBeNull();
+  expect((await loadSources(db,coin,1,client()))!.liquidity).toBeDefined();
+ });
+ it('updates through head after one early missing actor and re-evaluates enrichment at unchanged head',async()=>{
+  const db=await setup(false);await swap(db,1,1,100,10);await db.sql.query('UPDATE swaps SET trader=NULL,senders_pending=true');
+  await block(db,2);await swap(db,2,1,100,30,actor,coin,2,'uniswap_v3',3);
+  const worker=new EngineWorker(db,{now:()=>epoch+10});expect(await worker.poll()).toBeGreaterThan(0);
+  const before=await latest(db);expect(before.verdict.asOfBlock).toBe(2);expect(before.verdict.reasons.join(' ')).toContain('Not fully checked');
+  expect((await db.sql.query<{price:number}>('SELECT price FROM engine_runs WHERE coin=$1 AND block=2',[binary(coin)])).rows[0].price).toBe(3);
+  expect(await worker.poll()).toBe(0);
+  await db.sql.query('UPDATE swaps SET trader=$1,senders_pending=false WHERE block=1',[binary(actor)]);
+  expect(await worker.poll()).toBe(1);const after=await latest(db);
+  expect(after.verdict.asOfBlock).toBe(2);expect(after.meta!.flow!.coverageGaps!.wallet_flow.unattributedCount).toBe(0);
+  expect(after.verdict.receipt.id).not.toBe(before.verdict.receipt.id);
+  expect(after.verdict.reasons.join(' ')).not.toContain('Not fully checked');expect(await worker.poll()).toBe(0);
+ });
+ it('retains small named gaps and uses attributed actors only while price and volume include every trade',async()=>{
+  const db=await setup(false);for(let i=0;i<25;i++)await swap(db,1,1,100,10,address(100+i));
+  await db.sql.query('UPDATE swaps SET trader=NULL,senders_pending=true WHERE tx_hash=(SELECT tx_hash FROM swaps ORDER BY tx_hash LIMIT 1)');
+  await new EngineWorker(db).processBlock(1);const s=(await loadSources(db,coin,1))!;
+  expect(s.trade.actors.size).toBe(24);expect(s.trade.volumeUsd1h).toBe(250);expect(s.wash).toBeDefined();
+  const gap=(await latest(db)).meta!.flow!.coverageGaps!.wallet_flow;
+  expect(gap).toMatchObject({status:'complete',reason:'unattributed_swaps',unattributedCount:1,unattributedVolumeUsd:10,countShare:0.04,volumeShare:0.04,threshold:0.05});
+  expect((await latest(db)).meta!.flow!.missing).toContain('wallet_flow:unattributed');
+ });
+ it('records unavailable-card attempts with a fixed reason on the coin',async()=>{
+  const db=await setup(false);await db.sql.query('UPDATE tokens SET name=NULL');
+  const worker=new EngineWorker(db);await worker.processBlock(1);
+  expect((await db.sql.query('SELECT attempts,last_block,reason FROM engine_card_failures WHERE coin=$1',[binary(coin)])).rows[0]).toMatchObject({attempts:1,last_block:1,reason:'missing_launch_identity'});
+  expect(worker.telemetry().cardFailures).toBe(1);expect(await count(db,'coin_cards')).toBe(0);
  });
  it('normalizes launch observations without promoting getters to effective charges or templates',async()=>{
   const db=await database();

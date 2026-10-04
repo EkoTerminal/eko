@@ -8,6 +8,14 @@ import { phaseAt } from '../harness/entitlements.js';
 import { sendError } from './v1/helpers.js';
 
 // TODO(spec): Measurement ingestion and individual status-check URLs are not specified; use v1 conventions.
+/**
+ * Register public metrics/status reads and incident/measurement mutations. Mutations require a
+ * wallet session explicitly in the configured admin wallet allowlist, allowed Origin and no demo
+ * session; a stored admin role alone is insufficient. Invalid measurements/kinds reject; status
+ * collection failure yields unavailable/503. Durable incident stop precedes delivery.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export async function launchMonitoringRoutes(app: FastifyInstance, ctx: Ctx) {
   const { monitoring, incidents, auth, cfg, flags } = ctx;
   const admin = async (req: FastifyRequest) => {

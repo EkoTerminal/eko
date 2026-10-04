@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SignalOS · Cover Story</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..900;1,6..96,400..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --mag:#FF1F8F; --ult:#2B2BFF; --grn:#0B4A34; --tan:#FF7A00;
+  --ink:#0B0B0D; --wht:#FFFFFF; --long:#00B374; --short:#FF3B30;
+  --line:rgba(255,255,255,.12);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:#C9C9CE;padding:40px;display:flex;flex-direction:column;align-items:center;gap:40px;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}
+.board{width:1600px;height:900px;overflow:hidden;position:relative;flex:none;font-family:'Archivo',sans-serif;color:var(--ink)}
+.bod{font-family:'Bodoni Moda',serif;font-style:italic;font-weight:900}
+.bodr{font-family:'Bodoni Moda',serif;font-style:italic;font-weight:500}
+.cond{font-family:'Archivo',sans-serif;font-weight:900;font-stretch:62%;text-transform:uppercase;letter-spacing:-.005em}
+.mono{font-family:'IBM Plex Mono',monospace}
+.abs{position:absolute}
+.up{color:var(--long)} .dn{color:var(--short)}
+.slab-b{background:var(--long);color:var(--ink);white-space:nowrap}
+.slab-s{background:var(--short);color:#fff;white-space:nowrap}
+.tr{font-size:.7em;vertical-align:.1em;margin-right:.14em;font-stretch:100%}
+
+/* masthead */
+.mast{font-family:'Bodoni Moda',serif;font-style:italic;font-weight:900;white-space:nowrap;line-height:1;letter-spacing:-.012em;display:inline-block}
+.mast .o{display:inline-block;height:.75em;width:.66em;vertical-align:-.012em;margin:0 .012em 0 .02em;position:relative}
+.mast .o svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+
+/* ============ BOARD 1 ============ */
+.b1{background:#fff}
+.b1 .nav{position:absolute;inset:0 0 auto 0;height:56px;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 32px;border-bottom:1px solid var(--ink);z-index:5}
+.b1 .nav .links{display:flex;gap:26px;font-weight:700;font-size:12.5px;letter-spacing:.16em;text-transform:uppercase}
+.b1 .nav .links b{font-weight:700;border-bottom:2px solid var(--mag);padding-bottom:3px}
+.b1 .nav .logo{position:absolute;left:50%;top:50%;transform:translate(-50%,-52%);font-size:36px}
+.b1 .nav .right{display:flex;align-items:center;gap:18px;font-size:12.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.b1 .nav .chain{font-family:'IBM Plex Mono';font-weight:500;letter-spacing:.06em;font-size:12px;color:#555}
+.b1 .nav .btn{background:var(--ink);color:#fff;padding:11px 16px 10px;display:flex;gap:10px;align-items:center}
+.cover{position:absolute;left:0;top:56px;width:1600px;height:780px;overflow:hidden;background:#1a000d;color:#fff}
+.cover .bgp{position:absolute;inset:0;background:
+  radial-gradient(900px 760px at 50% 68%, #ff5cb0 0%, #FF1F8F 30%, #e0107c 54%, #a3025a 78%, #4d0029 100%)}
+.cover .shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,11,13,.62) 0%,rgba(11,11,13,.18) 34%,rgba(11,11,13,0) 52%,rgba(11,11,13,0) 80%,rgba(11,11,13,.35) 100%)}
+.cover svg.layer{position:absolute;left:0;top:0}
+.cover .toprow{position:absolute;left:44px;right:44px;top:16px;display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.92);z-index:3}
+.cover .toprow i{font-style:normal;color:#fff;background:rgba(11,11,13,.55);padding:2px 7px;margin-right:8px}
+.cover .masthead{position:absolute;left:38px;top:4px;font-size:318px;color:#fff;z-index:2;filter:drop-shadow(0 14px 18px rgba(40,0,20,.35))}
+.cover .lead{position:absolute;left:48px;top:350px;width:600px;z-index:4}
+.cover .kick{display:flex;align-items:center;gap:12px;font-weight:800;font-size:13px;letter-spacing:.24em;text-transform:uppercase}
+.cover .kick span{display:inline-block;width:38px;height:2px;background:#fff}
+.cover h1{margin:8px 0 0;font-size:88px;line-height:.86;color:#fff}
+.cover h2{margin:6px 0 0;font-size:48px;line-height:1;color:var(--ink);font-weight:900;letter-spacing:-.01em}
+.cover .sub{margin:8px 0 0;font-size:16px;line-height:1.42;width:560px;color:#fff;font-weight:500}
+.cover .cta{margin-top:12px;display:flex;align-items:stretch;gap:0;width:max-content}
+.cover .cta .go{background:#fff;color:var(--ink);padding:11px 18px 9px;display:flex;flex-direction:column;justify-content:center}
+.cover .cta .go b{font-size:28px;line-height:1;display:flex;gap:14px;align-items:center}
+.cover .cta .go small{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-top:5px;color:#333}
+.cover .cta .alt{border:2px solid #fff;border-left:none;padding:0 18px;display:flex;align-items:center;font-weight:800;font-size:12.5px;letter-spacing:.16em;text-transform:uppercase}
+.cover .lines{position:absolute;right:44px;top:318px;width:520px;text-align:right;z-index:4}
+.cover .cl{margin-bottom:10px}
+.cover .cl .t{font-size:36px;line-height:.9;display:block;white-space:nowrap}
+.cover .cl .d{display:block;font-size:16px;margin-top:3px}
+.cover .call .t{font-size:57px;color:#fff}
+.cover .call .row{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:6px}
+.cover .call .row .slab{font-size:46px;line-height:1;padding:6px 14px 3px}
+.cover .call .row .meta{font-family:'IBM Plex Mono';font-size:12px;text-align:left;line-height:1.35;letter-spacing:.04em;background:var(--ink);color:#fff;padding:6px 9px}
+.cover .knock{background:var(--ink);color:#fff;padding:3px 7px 0;margin-left:2px;display:inline-block;line-height:.9}
+.cover .grain{position:absolute;inset:0;z-index:3;mix-blend-mode:overlay;opacity:.22;pointer-events:none}
+.cover .rule{height:2px;background:#fff;opacity:.9;width:120px;margin:4px 0 14px auto}
+.cover .flash{position:absolute;left:1436px;top:166px;width:142px;height:142px;border-radius:50%;background:#fff;color:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;transform:rotate(9deg);z-index:6;box-shadow:0 10px 30px rgba(60,0,30,.35)}
+.cover .flash .k{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.12em;font-weight:600}
+.cover .flash .p{font-size:22px;line-height:1;margin:4px 0 3px}
+.cover .flash .n{font-family:'IBM Plex Mono';font-size:11px;line-height:1.2;color:#444;width:100px}
+.cover .credit{position:absolute;left:652px;bottom:18px;width:300px;text-align:center;font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.92);z-index:4}
+.cover .credit b{color:#fff}
+.cover .fine{position:absolute;left:48px;bottom:14px;width:560px;font-family:'IBM Plex Mono';font-size:11px;line-height:1.4;color:rgba(255,255,255,.9);z-index:4}
+.cover .code{position:absolute;right:44px;bottom:16px;background:#fff;color:var(--ink);padding:7px 10px 6px;z-index:4;display:flex;gap:12px;align-items:flex-end}
+.cover .code .meta{font-family:'IBM Plex Mono';font-size:11px;line-height:1.3;text-transform:uppercase;letter-spacing:.04em}
+.cover .code .meta b{display:block;font-family:'Bodoni Moda';font-style:italic;font-weight:900;font-size:22px;letter-spacing:0;text-transform:none;line-height:1}
+.inside{position:absolute;left:0;top:836px;width:1600px;height:64px;background:#fff;display:flex;align-items:center;padding:0 32px;gap:0;border-top:1px solid var(--ink)}
+.inside .lbl{font-size:26px;width:178px;flex:none;line-height:1}
+.inside .lbl small{display:block;font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-size:11px;letter-spacing:.14em;margin-top:3px;color:#555}
+.inside .it{flex:1;display:flex;align-items:center;gap:10px;border-left:1px solid #d5d5da;padding:0 16px;height:40px;white-space:nowrap}
+.inside .it .pg{font-size:32px;color:var(--mag);line-height:1;width:40px;flex:none}
+.inside .it .tt{font-size:19px;line-height:1}
+.inside .it .dd{font-size:13px;color:#555;margin-top:3px;font-family:'Archivo';font-weight:500}
+
+/* ============ BOARD 2 ============ */
+.b2{background:var(--ink);color:#fff}
+.b2 .top{position:absolute;left:0;top:0;width:1600px;height:60px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 20px;gap:18px}
+.b2 .top .logo{font-size:30px;color:#fff;margin-right:6px}
+.b2 .vr{width:1px;height:28px;background:var(--line)}
+.b2 .issues{display:flex;gap:4px;height:60px}
+.b2 .iss{display:flex;align-items:center;gap:7px;padding:0 10px;white-space:nowrap;font-weight:700;font-size:13px;letter-spacing:.06em;color:rgba(255,255,255,.62);position:relative}
+.b2 .iss i{width:9px;height:9px;border-radius:50%;display:inline-block}
+.b2 .iss small{font-family:'IBM Plex Mono';font-weight:500;font-size:11px;letter-spacing:.04em;color:rgba(255,255,255,.5)}
+.b2 .iss.on{color:#fff}
+.b2 .iss.on:after{content:'';position:absolute;left:10px;right:10px;bottom:-1px;height:3px;background:var(--mag)}
+.b2 .tf{display:flex;gap:2px;font-family:'IBM Plex Mono';font-size:12px}
+.b2 .tf span{padding:5px 8px;color:rgba(255,255,255,.6)}
+.b2 .tf span.on{background:#fff;color:var(--ink);font-weight:600}
+.b2 .modes{display:flex;border:1px solid rgba(255,255,255,.35);margin-left:auto}
+.b2 .modes span{white-space:nowrap;padding:7px 12px 6px;font-weight:800;font-size:12px;letter-spacing:.14em;color:rgba(255,255,255,.7);display:flex;align-items:center;gap:7px}
+.b2 .modes span.on{background:#fff;color:var(--ink)}
+.b2 .modes span small{font-family:'IBM Plex Mono';font-weight:500;font-size:11px;letter-spacing:.02em;color:rgba(255,255,255,.5)}
+.b2 .wal{font-family:'IBM Plex Mono';font-size:12px;color:rgba(255,255,255,.75);display:flex;align-items:center;gap:8px;white-space:nowrap}
+.b2 .wal i{width:8px;height:8px;border:1.5px solid rgba(255,255,255,.6);border-radius:50%}
+/* left rail */
+.b2 .rail{position:absolute;left:0;top:60px;width:240px;height:840px;border-right:1px solid var(--line);padding:18px 16px 0}
+.b2 .rail h3{margin:0;font-size:34px;line-height:.9}
+.b2 .rail .rs{font-size:14px;color:rgba(255,255,255,.66);margin:4px 0 10px}
+.b2 .grp{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.14em;color:rgba(255,255,255,.5);margin:10px 0 4px;display:flex;justify-content:space-between}
+.b2 .bot{display:flex;align-items:center;gap:10px;height:40px;padding:0 6px;margin:0 -6px;position:relative}
+.b2 .bot .pt{width:32px;height:32px;flex:none;overflow:hidden}
+.b2 .bot .pt svg{display:block}
+.b2 .bot .nm{font-weight:700;font-size:15px;line-height:1.05}
+.b2 .bot .nm small{display:block;font-family:'Bodoni Moda';font-style:italic;font-weight:500;font-size:12px;color:rgba(255,255,255,.6);letter-spacing:0}
+.b2 .bot .st{margin-left:auto;font-family:'IBM Plex Mono';font-size:11px;color:rgba(255,255,255,.45)}
+.b2 .bot.on{background:rgba(255,31,143,.14)}
+.b2 .bot.on:before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--mag)}
+.b2 .shop{margin-top:14px;border:1px dashed rgba(255,255,255,.3);padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.b2 .shop .cond{font-size:18px;line-height:1}
+.b2 .shop span:last-child{font-family:'Bodoni Moda';font-style:italic;font-size:13px;color:rgba(255,255,255,.65)}
+.b2 .pos{position:absolute;left:16px;right:16px;bottom:18px;border-top:1px solid var(--line);padding-top:10px}
+.b2 .pos .h{display:flex;justify-content:space-between;align-items:baseline}
+.b2 .pos .h b{font-size:19px}
+.b2 .pos .row{display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:11.5px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.08);color:rgba(255,255,255,.85)}
+/* center */
+.b2 .ph{position:absolute;left:264px;top:72px;width:912px;height:104px}
+.b2 .ph .pair{font-weight:800;font-size:13px;letter-spacing:.16em;display:flex;align-items:center;gap:10px}
+.b2 .ph .pair .tag{background:var(--mag);color:#fff;padding:3px 7px 2px;font-size:11px;letter-spacing:.14em}
+.b2 .ph .big{font-size:98px;line-height:.92;margin-top:4px;letter-spacing:-.01em}
+.b2 .ph .big small{font-size:48px;color:var(--mag)}
+.b2 .ph .stats{position:absolute;right:0;top:4px;display:grid;grid-template-columns:repeat(4,auto);gap:4px 26px;font-family:'IBM Plex Mono';font-size:12px;text-align:right}
+.b2 .ph .stats span{color:rgba(255,255,255,.5);font-size:11px;letter-spacing:.1em}
+.b2 .ph .illo{position:absolute;right:0;bottom:6px;font-family:'IBM Plex Mono';font-size:11px;color:rgba(255,255,255,.62);letter-spacing:.06em}
+.b2 .chartwrap{position:absolute;left:252px;top:182px;width:936px;height:420px}
+.b2 #chart{position:absolute;left:0;top:0}
+.b2 #ov{position:absolute;left:0;top:0;pointer-events:none}
+.b2 .axis{position:absolute;font-family:'IBM Plex Mono';font-size:11px;color:rgba(255,255,255,.5)}
+.pq{position:absolute;width:300px;color:#fff}
+.pq .q{font-size:29px;line-height:1.06;font-weight:600;position:relative}
+.pq .by{display:flex;align-items:center;gap:8px;margin-top:8px}
+.pq .by .who{font-size:20px;line-height:1}
+.pq .by .ch{font-size:18px;line-height:1;padding:4px 7px 2px}
+.pq .by .tm{font-family:'IBM Plex Mono';font-size:11.5px;color:rgba(255,255,255,.8)}
+.pq .by .pt{width:30px;height:30px;overflow:hidden}
+.pq .rl{width:54px;height:3px;background:var(--mag);margin-bottom:12px}
+.pq.old{opacity:.8}
+.pq.old .rl{background:rgba(255,255,255,.5)}
+.b2 .slabs{position:absolute;left:264px;top:614px;width:912px;height:58px;display:flex;gap:10px}
+.b2 .slabs div{flex:1;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:relative}
+.b2 .slabs b{font-size:38px;line-height:1}
+.b2 .slabs > div > span{font-family:'IBM Plex Mono';font-size:12px;text-align:right;line-height:1.3;font-weight:500}
+.b2 .slabs .sel{box-shadow:0 0 0 2px var(--ink),0 0 0 4px #fff}
+.b2 .slabs .dim{background:transparent;color:var(--long);border:2px solid var(--long)}
+.b2 .feed{position:absolute;left:264px;top:686px;width:912px;height:200px}
+.b2 .feed .h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.b2 .feed .h b{font-size:20px}
+.b2 .feed .h span{font-family:'IBM Plex Mono';font-size:11px;color:rgba(255,255,255,.55);letter-spacing:.06em}
+.b2 .feed .row{display:flex;gap:12px}
+/* mini cover */
+.mc{position:relative;overflow:hidden;flex:none;color:#fff}
+.mc svg.bgs{position:absolute;left:0;top:0}
+.mc .mm{position:absolute;left:0;right:0;top:6px;text-align:center}
+.mc .no{position:absolute;right:7px;top:5px;font-family:'IBM Plex Mono';font-size:11px}
+.mc .cl{position:absolute;left:8px;right:8px;bottom:8px}
+.mc .cl .n{font-size:22px;line-height:.9;display:block}
+.mc .cl .c{display:inline-block;font-size:16px;line-height:1;padding:3px 5px 1px;margin-top:3px}
+.mc .cl .c.nc{background:#fff;color:var(--ink)}
+.mc .cl .m{display:block;font-family:'IBM Plex Mono';font-size:11px;margin-top:4px;line-height:1.2}
+.mc.live{box-shadow:0 0 0 2px var(--ink),0 0 0 4px var(--mag)}
+/* sidebar */
+.b2 .side{position:absolute;left:1200px;top:60px;width:400px;height:840px;border-left:1px solid var(--line);background:#101013;padding:20px 24px}
+.b2 .side .k{display:flex;justify-content:space-between;align-items:center;font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.16em;color:rgba(255,255,255,.62)}
+.b2 .side .stamp{border:1.5px solid #fff;color:#fff;padding:3px 8px 2px;font-weight:600;letter-spacing:.2em;transform:rotate(-4deg)}
+.b2 .side h4{margin:10px 0 0;font-size:44px;line-height:1;font-weight:900}
+.b2 .side .dir{margin-top:12px;height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+.b2 .side .dir b{font-size:40px;line-height:1}
+.b2 .side .dir > span{font-family:'IBM Plex Mono';font-size:12px;text-align:right;line-height:1.3}
+.b2 .side .byl{font-size:15px;color:rgba(255,255,255,.78);margin:12px 0 0;line-height:1.35}
+.b2 .side .byl b{color:#fff;font-family:'Archivo';font-style:normal;font-weight:800;font-size:13px;letter-spacing:.12em}
+.b2 .tbl{margin-top:14px;border-top:2px solid #fff}
+.b2 .tbl .tr{display:flex;align-items:baseline;justify-content:space-between;padding:8px 0 7px;border-bottom:1px solid rgba(255,255,255,.12)}
+.b2 .tbl .tr .l{font-size:16px;display:flex;align-items:baseline;gap:9px}
+.b2 .tbl .tr .l i{font-family:'IBM Plex Mono';font-style:normal;font-size:11px;color:rgba(255,255,255,.45);width:14px}
+.b2 .tbl .tr .v{font-family:'IBM Plex Mono';font-size:15px;font-weight:500}
+.b2 .tbl .tr .v small{font-size:11px;color:rgba(255,255,255,.5);margin-left:6px}
+.b2 .tbl.cost{border-top:1px solid rgba(255,255,255,.35);margin-top:12px}
+.b2 .tbl.cost .tr{padding:5px 0}
+.b2 .tbl.cost .l{font-family:'IBM Plex Mono';font-size:12px;color:rgba(255,255,255,.7)}
+.b2 .tbl.cost .v{font-size:12.5px}
+.b2 .amt{margin-top:14px;display:flex;align-items:flex-end;justify-content:space-between}
+.b2 .amt .lab{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.16em;color:rgba(255,255,255,.55)}
+.b2 .amt .n{font-size:52px;line-height:.95}
+.b2 .amt .n small{font-size:22px;font-family:'Archivo';font-style:normal;font-weight:800;margin-left:6px}
+.b2 .amt .eq{font-family:'IBM Plex Mono';font-size:12px;color:rgba(255,255,255,.7);text-align:right;line-height:1.5}
+.b2 .chips{display:flex;gap:6px;margin-top:8px}
+.b2 .chips span{flex:1;text-align:center;border:1px solid rgba(255,255,255,.3);padding:5px 0 4px;font-family:'IBM Plex Mono';font-size:11.5px}
+.b2 .chips span.on{background:#fff;color:var(--ink);border-color:#fff}
+.b2 .act{margin-top:14px;height:62px;display:flex;align-items:center;justify-content:center;gap:12px}
+.b2 .act b{font-size:34px;line-height:1}
+.b2 .note{margin-top:10px;font-size:14px;line-height:1.4;color:rgba(255,255,255,.75)}
+.b2 .note b{color:#fff}
+.b2 .side .foot{position:absolute;left:24px;right:24px;bottom:14px;font-family:'IBM Plex Mono';font-size:11px;color:rgba(255,255,255,.55);display:flex;justify-content:space-between}
+
+/* ============ BOARD 3 ============ */
+.b3{background:#fff}
+.b3 .left{position:absolute;left:0;top:0;width:880px;height:900px;padding:26px 40px 0 40px}
+.b3 .right{position:absolute;left:880px;top:0;width:720px;height:900px;background:var(--ink);color:#fff;padding:26px 36px 0}
+.b3 .hd{display:flex;justify-content:space-between;align-items:baseline;font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#555;border-bottom:1px solid var(--ink);padding-bottom:7px}
+.b3 .hd b{color:var(--ink);font-weight:600}
+.b3 .logo-row{position:relative;height:214px;margin-top:10px}
+.b3 .lockup .mast{font-size:150px;color:var(--ink);position:absolute;left:-6px;top:-10px}
+.b3 .lockup .tag{position:absolute;left:0;top:168px;font-size:25px;line-height:1}
+.b3 .lockup .note{position:absolute;left:0;top:199px;font-family:'IBM Plex Mono';font-size:11px;color:#555;letter-spacing:.03em}
+.b3 .icons{position:absolute;right:0;top:12px;display:flex;flex-direction:column;align-items:center}
+.icon{width:98px;height:98px;border-radius:23px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;flex:none}
+.icon .s{font-family:'Bodoni Moda';font-style:italic;font-weight:900;font-size:84px;line-height:1;color:#fff;position:absolute;left:14px;top:-2px}
+.icon .sl{position:absolute;width:8px;height:78px;transform:rotate(22deg);left:62px;top:10px;border-radius:1px}
+.b3 .icons .cap{font-family:'IBM Plex Mono';font-size:11px;color:#555;margin-top:6px;text-align:center}
+.b3 .icons .mini{display:flex;gap:6px;margin-top:10px}
+.b3 .icons .mini .icon{width:26px;height:26px;border-radius:7px}
+.b3 .icons .mini .icon .s{font-size:22px;left:4px;top:-1px}
+.b3 .icons .mini .icon .sl{width:2.5px;height:21px;left:16px;top:3px}
+.b3 .ometer{position:absolute;left:486px;top:150px;display:flex;gap:14px;align-items:flex-end}
+.b3 .ometer .mast{font-size:48px;color:var(--ink)}
+.b3 .ometer .oo{display:flex;flex-direction:column;align-items:center}
+.b3 .ometer .oo span{font-family:'IBM Plex Mono';font-size:11px;color:#555;margin-top:2px}
+.b3 .ometer .oi{width:31px;height:36px;display:block}
+.b3 .ometer .oi svg{width:100%;height:100%;overflow:visible}
+.b3 .sec{display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;margin-bottom:7px}
+.b3 .sec b{font-size:22px;line-height:1}
+.b3 .sec span{font-family:'IBM Plex Mono';font-size:11px;color:#555;letter-spacing:.05em}
+.sheet{background:#141416;padding:10px 12px 7px;position:relative}
+.sheet .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px 10px}
+.sheet .fr{position:relative}
+.sheet .fr .img{width:100%;height:86px;overflow:hidden;position:relative}
+.sheet .fr .cap{display:flex;justify-content:space-between;align-items:baseline;font-family:'IBM Plex Mono';font-size:11px;color:#f2f2f2;margin-top:3px;letter-spacing:.03em}
+.sheet .fr .cap b{font-family:'Archivo';font-weight:900;font-stretch:62%;font-size:15px;letter-spacing:.02em;text-transform:uppercase}
+.sheet .fr .cap span{color:#9a9aa3}
+.sheet .edge{display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:11px;color:#c8a24a;letter-spacing:.2em;margin-top:5px}
+.sheet .grease{position:absolute;pointer-events:none}
+.b3 .pal{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px}
+.sw{height:80px;padding:7px 8px;display:flex;flex-direction:column;justify-content:space-between}
+.sw b{font-family:'Archivo';font-weight:900;font-stretch:62%;font-size:16px;text-transform:uppercase;line-height:.95}
+.sw .hx{font-family:'IBM Plex Mono';font-size:11px;font-weight:600}
+.sw .jb{font-family:'IBM Plex Mono';font-size:11px;line-height:1.2;white-space:nowrap}
+.b3 .bottom{display:flex;gap:22px;margin-top:14px}
+.b3 .type{width:340px;flex:none}
+.spec{display:flex;align-items:center;gap:12px;border-top:1px solid var(--ink);padding:6px 0 6px;height:58px}
+.spec .a{width:70px;line-height:1;flex:none}
+.spec .m b{display:block;font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.05em;font-weight:600}
+.spec .m span{display:block;font-family:'IBM Plex Mono';font-size:11px;color:#555;margin-top:2px}
+.b3 .motifs{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.motif{border-top:1px solid var(--ink);padding-top:6px;position:relative}
+.motif .lb{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.05em;color:#555}
+/* storyboard */
+.b3 .film-hd{display:flex;justify-content:space-between;align-items:flex-end;margin-top:12px}
+.b3 .film-hd .t{font-size:78px;line-height:.82;letter-spacing:-.01em}
+.b3 .film-hd .meta{font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.12em;text-align:right;line-height:1.5;color:rgba(255,255,255,.75);padding-bottom:6px}
+.b3 .logline{font-size:17px;line-height:1.3;margin:10px 0 14px;color:rgba(255,255,255,.92)}
+.b3 .frames{display:grid;grid-template-columns:300px 300px;gap:10px 48px}
+.frm .scr{width:300px;height:169px;position:relative;overflow:hidden;background:#000}
+.frm .cp{margin-top:6px;font-size:13px;line-height:1.3;color:rgba(255,255,255,.86);height:34px}
+.frm .cp .ts{font-family:'IBM Plex Mono';font-size:11px;color:var(--ink);background:#fff;padding:1px 5px;margin-right:6px}
+.frm .cp b{font-family:'Archivo';font-weight:800;font-size:12px;letter-spacing:.1em;color:#fff}
+.beat{display:flex;gap:3px;margin-top:5px;height:5px}
+.beat i{flex:1;background:rgba(255,255,255,.14)}
+.beat i.k{background:rgba(255,255,255,.75)}
+.beat i.c{background:var(--mag)}
+</style>
+</head>
+<body>
+
+<!-- ================= BOARD 1 · LANDING HERO ================= -->
+<section class="board b1">
+  <nav class="nav">
+    <div class="links"><b>Issues</b><span>The Cast</span><span>Quant Lab</span><span>Receipts</span><span>Bot Shop</span></div>
+    <div class="logo"><span class="mast" data-fill="#FF1F8F">Signal</span></div>
+    <div class="right"><span class="chain">on Robinhood Chain · L2</span><span>Open app</span><span class="btn">Start paper trading <span>→</span></span></div>
+  </nav>
+
+  <div class="cover">
+    <div class="bgp"></div>
+    <svg class="layer" id="heroBack" width="1600" height="780" style="z-index:0"></svg>
+    <div class="shade"></div>
+    <div class="toprow"><span><i>Nº 01</i>The Four Prices Issue · September 2026</span><span>ETH/USD edition · 15m · Paper / Testnet / Live</span></div>
+    <div class="masthead"><span class="mast" data-fill="#FF1F8F" data-gloss="1">Signal</span></div>
+    <svg class="layer" id="heroFig" width="1600" height="780" style="z-index:1"></svg>
+
+    <div class="flash"><div class="k">ETH/USD</div><div class="p bod">2,418.60</div><div class="n">Chart last. Illustration · made-up prices</div></div>
+
+    <div class="lead">
+      <div class="kick"><span></span>Cover story</div>
+      <h1 class="cond">Bots make<br>the cover.</h1>
+      <h2 class="bod">You make the call.</h2>
+      <p class="sub">Eleven bots publish buy and sell calls pinned to the exact candle. Check the four prices, then trade it yourself: on paper, or signed in your own wallet.</p>
+      <div class="cta">
+        <div class="go"><b class="cond">Start paper trading <span>→</span></b><small>No wallet needed · Testnet &amp; Live are opt-in</small></div>
+        <div class="alt">Meet the cast</div>
+      </div>
+    </div>
+
+    <div class="lines">
+      <div class="cl call">
+        <span class="t cond">Kinetic calls ETH:</span>
+        <div class="row"><span class="meta">MOMENTUM · 15M<br>04:12 LEFT</span><span class="slab slab-s cond">▼ Sell</span></div>
+      </div>
+      <div class="rule"></div>
+      <div class="cl"><span class="t cond">The four prices issue</span><span class="d bodr">Signal ref, chart last, quote and fill. All on the ticket.</span></div>
+      <div class="cl"><span class="t cond">Paper trading is <span class="knock">the new black</span></span></div>
+      <div class="cl"><span class="t cond">11 bots, zero psychics</span></div>
+      <div class="cl"><span class="t cond">Your keys, your call</span><span class="d bodr">Non-custodial. Nothing trades without your signature.</span></div>
+    </div>
+
+    <svg class="grain" width="1600" height="780"><filter id="grn"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" stitchTiles="stitch" seed="7"/><feColorMatrix type="saturate" values="0"/></filter><rect width="1600" height="780" filter="url(#grn)"/></svg>
+    <div class="credit">On the cover: <b>Kinetic</b>, momentum.<br>Lacquer and pearls. ETH/USD, 15m.</div>
+    <div class="fine"><b>Not investment advice.</b> Illustration · made-up prices. Signals are software opinions. Paper trades are simulated. Live is opt-in: ETH ⇄ USDG, Uniswap v3.</div>
+    <div class="code"><div id="bc"></div><div class="meta"><b>Nº 01</b>28·09·2026<br>SOS-01-280926<br>Illustrative code</div></div>
+  </div>
+
+  <div class="inside">
+    <div class="lbl bod">Inside Nº 01<small>NEXT: THE CONTENTS</small></div>
+    <div class="it"><span class="pg bod">04</span><div><div class="tt cond">The four prices</div><div class="dd">signal, last, quote, fill</div></div></div>
+    <div class="it"><span class="pg bod">11</span><div><div class="tt cond">The cast of eleven</div><div class="dd">rules · AI analysts · ensembles</div></div></div>
+    <div class="it"><span class="pg bod">22</span><div><div class="tt cond">Paper, Testnet, Live</div><div class="dd">Live is opt-in: ETH ⇄ USDG</div></div></div>
+    <div class="it"><span class="pg bod">30</span><div><div class="tt cond">Quant Lab</div><div class="dd">backtests, fees, slippage</div></div></div>
+    <div class="it"><span class="pg bod">36</span><div><div class="tt cond">Receipts</div><div class="dd">append-only signal history</div></div></div>
+  </div>
+</section>
+
+<!-- ================= BOARD 2 · TRADING WORKSPACE ================= -->
+<section class="board b2">
+  <div class="top">
+    <span class="mast logo" data-fill="#FF1F8F">Signal</span>
+    <div class="vr"></div>
+    <div class="issues">
+      <div class="iss on"><i style="background:var(--mag)"></i>ETH/USD <small>Nº01</small></div>
+      <div class="iss"><i style="background:var(--ult)"></i>BTC/USD <small>Nº02 · PAPER</small></div>
+      <div class="iss"><i style="background:#0B4A34;box-shadow:0 0 0 1.5px #5a9c82"></i>SOL/USD <small>Nº03 · PAPER</small></div>
+      <div class="iss"><i style="background:var(--tan)"></i>ARB/USD <small>Nº04 · PAPER</small></div>
+    </div>
+    <div class="vr"></div>
+    <div class="tf"><span>1m</span><span>5m</span><span class="on">15m</span><span>1h</span><span>4h</span><span>1D</span></div>
+    <div class="modes"><span class="on">Paper</span><span>Testnet</span><span>Live <small>opt-in</small></span></div>
+    <div class="wal"><i></i>No wallet</div>
+  </div>
+
+  <aside class="rail">
+    <h3 class="cond">The cast</h3>
+    <div class="rs bodr">Pick this issue's cover star.</div>
+    <div id="cast"></div>
+    <div class="shop"><span class="cond">+ Bot shop</span><span>community bots, moderated</span></div>
+    <div class="pos">
+      <div class="h"><b class="cond">Paper positions</b><span class="mono" style="font-size:11px;color:rgba(255,255,255,.5)">PAPER</span></div>
+      <div class="row"><span><span class="up">▲ BUY</span> 0.25 ETH</span><span>@ 2,398.10</span></div>
+      <div class="row"><span><span class="dn">▼ SELL</span> 0.10 ETH</span><span>@ 2,441.75</span></div>
+      <div class="row" style="border:none;color:rgba(255,255,255,.5)"><span>2 receipts</span><span>view all →</span></div>
+    </div>
+  </aside>
+
+  <div class="ph">
+    <div class="pair">ETH / USD <span class="tag">ISSUE Nº 01</span><span class="mono" style="font-weight:500;letter-spacing:.08em;font-size:11px;color:rgba(255,255,255,.6)">CHART LAST · UNISWAP V3 · ROBINHOOD CHAIN</span></div>
+    <div class="big bod">2,418<small>.60</small></div>
+    <div class="stats">
+      <span>24H HIGH</span><span>24H LOW</span><span>SPREAD</span><span>LIVE PAIR</span>
+      <b>2,466.10</b><b>2,371.80</b><b>0.65</b><b>ETH ⇄ USDG</b>
+    </div>
+    <div class="illo">Illustration · made-up prices</div>
+  </div>
+
+  <div class="chartwrap" id="cw">
+    <div id="chart"></div>
+    <svg id="ov" width="936" height="404"></svg>
+  </div>
+
+  <div class="slabs">
+    <div class="slab-b dim"><b class="cond">▲ Buy ETH</b><span>quote<br>2,419.25</span></div>
+    <div class="slab-s sel"><b class="cond">▼ Sell ETH</b><span>quote<br>2,417.95</span></div>
+  </div>
+
+  <div class="feed">
+    <div class="h"><b class="cond">The newsstand · latest calls</b><span>EVERY CALL IS AN ISSUE · APPEND-ONLY RECEIPTS</span></div>
+    <div class="row" id="feed"></div>
+  </div>
+
+  <aside class="side">
+    <div class="k"><span>SIDEBAR · THE TRADE</span><span class="stamp">PAPER</span></div>
+    <h4 class="bod">Sell, if you agree.</h4>
+    <div class="dir slab-s"><b class="cond">▼ Sell ETH</b><span>following KINETIC<br>04:12 left</span></div>
+    <p class="byl bodr">Kinetic flagged momentum rolling over on the 14:15 candle. The call is its opinion; the click is yours.</p>
+    <div class="tbl">
+      <div class="tr"><span class="l bodr"><i>01</i>Signal reference</span><span class="v" id="sigref">2,421.30</span></div>
+      <div class="tr"><span class="l bodr"><i>02</i>Chart last</span><span class="v">2,418.60</span></div>
+      <div class="tr"><span class="l bodr"><i>03</i>Executable quote</span><span class="v">2,417.95</span></div>
+      <div class="tr"><span class="l bodr"><i>04</i>Fill</span><span class="v" style="color:rgba(255,255,255,.55)">—<small>after your click</small></span></div>
+    </div>
+    <div class="tbl cost">
+      <div class="tr"><span class="l">Fees 0.30%</span><span class="v">3.63 USDG</span></div>
+      <div class="tr"><span class="l">Price impact</span><span class="v">0.02%</span></div>
+      <div class="tr"><span class="l">Slippage limit</span><span class="v">0.50% · min 1,202.93</span></div>
+    </div>
+    <div class="amt">
+      <div><div class="lab">AMOUNT</div><div class="n bod">0.50<small>ETH</small></div></div>
+      <div class="eq">≈ 1,208.98 USDG<br>paper balance 4.00 ETH</div>
+    </div>
+    <div class="chips"><span>10%</span><span>25%</span><span class="on">0.50</span><span>50%</span><span>MAX</span></div>
+    <div class="act slab-s"><b class="cond">▼ Place paper sell</b></div>
+    <p class="note">Paper fills at the executable quote. In <b>Live</b> you sign in your own wallet; nothing trades without that signature.</p>
+    <div class="foot"><span>Not investment advice</span><span>Illustration · made-up prices</span></div>
+  </aside>
+</section>
+
+<!-- ================= BOARD 3 · BRAND SHEET + FILM ================= -->
+<section class="board b3">
+  <div class="left">
+    <div class="hd"><span><b>SignalOS · Cover Story</b> · brand book Nº 00</span><span>Concept 05 · fashion meets finance</span></div>
+    <div class="logo-row">
+      <div class="lockup">
+        <span class="mast" data-fill="#FF1F8F" data-gloss="1">Signal</span>
+        <div class="tag bod">Bots make the cover. <span style="font-weight:500">You make the call.</span></div>
+        <div class="note">Bodoni Moda Black Italic · the O takes the live issue colour</div>
+      </div>
+      <div class="ometer" id="ometer"></div>
+      <div class="icons">
+        <div class="icon" style="background:var(--ink)"><span class="s">S</span><span class="sl" style="background:var(--mag)"></span></div>
+        <div class="cap">APP ICON · S/</div>
+        <div class="mini">
+          <div class="icon" style="background:#FF1F8F"><span class="s">S</span><span class="sl" style="background:#0B0B0D"></span></div>
+          <div class="icon" style="background:#2B2BFF"><span class="s">S</span><span class="sl" style="background:#fff"></span></div>
+          <div class="icon" style="background:#0B4A34"><span class="s">S</span><span class="sl" style="background:#fff"></span></div>
+          <div class="icon" style="background:#FF7A00"><span class="s">S</span><span class="sl" style="background:#0B0B0D"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec"><b class="cond">The cast · contact sheet</b><span>EACH BOT SITS FOR A PORTRAIT: GLYPH SCULPTED, LIT, SHOT ON AN ISSUE COLOUR</span></div>
+    <div class="sheet" id="sheet"><div class="grid" id="grid"></div><div class="edge"><span>SOS 400 · 11A</span><span>▸ 12</span><span>▸ 13</span><span>▸ 14</span><span>SOS 400</span></div></div>
+
+    <div class="sec"><b class="cond">Palette</b><span>ISSUE COLOURS ROTATE PER MARKET · LONG / SHORT MEAN DIRECTION, NOTHING ELSE</span></div>
+    <div class="pal">
+      <div class="sw" style="background:#FF1F8F;color:#fff"><b>Magenta</b><div><div class="hx">#FF1F8F</div><div class="jb">Nº01 · ETH</div></div></div>
+      <div class="sw" style="background:#2B2BFF;color:#fff"><b>Ultramarine</b><div><div class="hx">#2B2BFF</div><div class="jb">Nº02 · BTC</div></div></div>
+      <div class="sw" style="background:#0B4A34;color:#fff"><b>Racing green</b><div><div class="hx">#0B4A34</div><div class="jb">Nº03 · SOL</div></div></div>
+      <div class="sw" style="background:#FF7A00;color:var(--ink)"><b>Tangerine</b><div><div class="hx">#FF7A00</div><div class="jb">Nº04 · ARB</div></div></div>
+      <div class="sw" style="background:#0B0B0D;color:#fff"><b>Ink</b><div><div class="hx">#0B0B0D</div><div class="jb">App, type</div></div></div>
+      <div class="sw" style="background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1px #0B0B0D"><b>White</b><div><div class="hx">#FFFFFF</div><div class="jb">Paper/flash</div></div></div>
+      <div class="sw" style="background:#00B374;color:var(--ink)"><b>Long</b><div><div class="hx">#00B374</div><div class="jb">▲ BUY only</div></div></div>
+      <div class="sw" style="background:#FF3B30;color:#fff"><b>Short</b><div><div class="hx">#FF3B30</div><div class="jb">▼ SELL only</div></div></div>
+    </div>
+
+    <div class="bottom">
+      <div class="type">
+        <div class="spec"><span class="a bod" style="font-size:54px">Aa</span><div class="m"><b>BODONI MODA · BLACK ITALIC</b><span>Masthead, price numerals, pull quotes</span></div></div>
+        <div class="spec"><span class="a cond" style="font-size:56px">Aa</span><div class="m"><b>ARCHIVO · EXTRACONDENSED BLACK</b><span>wdth 62 · cover lines, slabs, labels</span></div></div>
+        <div class="spec"><span class="a mono" style="font-size:36px;font-weight:600">0.5</span><div class="m"><b>IBM PLEX MONO · 400–600</b><span>Prices, times, receipts, fine print</span></div></div>
+      </div>
+      <div class="motifs">
+        <div class="motif"><div class="lb">MOTIF 1 · THE COVER LINE</div>
+          <div style="margin-top:8px;background:#FF7A00;padding:11px 12px 12px;color:#0B0B0D;height:130px;position:relative;overflow:hidden">
+            <div class="mono" style="font-size:11px;letter-spacing:.1em">Nº04 · ARB/USD</div>
+            <div class="cond" style="font-size:34px;line-height:.88;margin-top:6px">Recoil calls<br>ARB:</div>
+            <div style="display:flex;gap:6px;align-items:center;margin-top:8px"><span class="cond slab-s" style="font-size:26px;padding:3px 8px 1px;line-height:1">▼ Sell</span><span class="mono" style="font-size:11px;background:var(--ink);color:#fff;padding:3px 6px">02:40 LEFT</span></div>
+          </div>
+        </div>
+        <div class="motif"><div class="lb">MOTIF 2 · THE PULL QUOTE</div>
+          <div style="margin-top:8px;position:relative;height:130px;background:#0B0B0D;overflow:hidden" id="pqMotif"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="hd" style="color:rgba(255,255,255,.6);border-color:rgba(255,255,255,.4)"><b style="color:#fff">Launch film</b><span>0:20 · cut to 120 BPM · 16:9 and 9:16</span></div>
+    <div class="film-hd">
+      <div class="t bod">Newsstand</div>
+      <div class="meta">A KINETIC COVER-FLIP FILM<br>ONE KICK = ONE ISSUE</div>
+    </div>
+    <p class="logline bodr">A newsstand rack flips through the bots' calls on every kick drum, until the last issue is a mirror and you are the cover star.</p>
+    <div class="frames" id="frames"></div>
+  </div>
+</section>
+
+<script src="../shared/chart.js"></script>
+<script>
+/* ---------------------------------------------------------------- glyphs */
+const GLYPHS = {
+  wave: '<path d="M2 10c1.6 0 1.6-4 3.2-4s1.6 4 3.2 4 1.6-4 3.2-4 1.6 4 2.4 4" />',
+  bolt: '<path d="M9.4 2 4.5 9h3.6l-1 5L12 7H8.4l1-5Z" />',
+  spring: '<path d="M3 12.5 5.2 3.5 7.4 12.5 9.6 3.5 11.8 12.5 13 7.5" />',
+  gate: '<path d="M4 3v10M12 3v10" /><path d="M2 8h8.5M8.5 5.5 11 8l-2.5 2.5" />',
+  hex: '<path d="M8 2.2 13 5v6l-5 2.8L3 11V5l5-2.8Z" /><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none" />',
+  orbit: '<circle cx="8" cy="8" r="2.4" /><ellipse cx="8" cy="8" rx="6" ry="3.2" transform="rotate(-24 8 8)" /><circle cx="13.2" cy="5.6" r="1.1" fill="currentColor" stroke="none" />',
+  prism: '<path d="M8 2.5 13.5 12.5h-11L8 2.5Z" /><path d="M8 2.5v10" />',
+  compass: '<circle cx="8" cy="8" r="5.6" /><path d="m10.4 5.6-1.6 3.2-3.2 1.6 1.6-3.2 3.2-1.6Z" fill="currentColor" />',
+  flare: '<path d="M8 2v3M8 11v3M2 8h3M11 8h3M3.8 3.8l2 2M10.2 10.2l2 2M12.2 3.8l-2 2M5.8 10.2l-2 2" />',
+  delta: '<path d="M8 3 13.5 13h-11L8 3Z" /><path d="M5.5 10h5" />',
+  ring: '<circle cx="8" cy="8" r="5.6" /><circle cx="8" cy="8" r="2.8" /><circle cx="8" cy="2.4" r="1" fill="currentColor" stroke="none" />',
+};
+const BOTS = {
+  Tideline:['wave','trend','Rules'], Kinetic:['bolt','momentum','Rules'], Recoil:['spring','mean reversion','Rules'], Breakline:['gate','breakout','Rules'],
+  Meridian:['orbit','AI analyst','AI'], Vector:['prism','AI analyst','AI'], Lumen:['flare','AI analyst','AI'], Halcyon:['compass','AI analyst','AI'], 'Deep Current':['delta','AI analyst','AI'],
+  Quorum:['hex','ensemble','Ens'], Council:['ring','ensemble','Ens'],
+};
+let UID = 0;
+const PAL = {
+  mag:{bg:['#ff6ab6','#FF1F8F','#b1005f','#43001f'], rim:'#ff4fa8'},
+  ult:{bg:['#7070ff','#2B2BFF','#1717a0','#06063a'], rim:'#6a6aff'},
+  grn:{bg:['#23855f','#0B4A34','#05301f','#010f09'], rim:'#bfe9d6'},
+  tan:{bg:['#ffae5e','#FF7A00','#bf5400','#4f2000'], rim:'#ff9a3c'},
+  ink:{bg:['#34343c','#18181c','#0B0B0D','#050506'], rim:'#b9b9c6'},
+  wht:{bg:['#ffffff','#f3f3f6','#dadae0','#b4b4bd'], rim:'#ffffff'},
+};
+const MAT = {
+  ink:{stops:[[0,'#5a5a66'],[.3,'#1d1d23'],[.7,'#0a0a0c'],[1,'#000']], side:['#000000','#24242b'], mid:'#1d1d23'},
+  chrome:{stops:[[0,'#ffffff'],[.25,'#a2a2ae'],[.48,'#f8f8fb'],[.7,'#5a5a66'],[1,'#d6d6de']], side:['#1c1c22','#63636e'], mid:'#d0d0d8'},
+  porcelain:{stops:[[0,'#ffffff'],[.55,'#f0eef1'],[1,'#aeabb4']], side:['#5f5c66','#a09da7'], mid:'#ecebee'},
+  mag:{stops:[[0,'#ffa6d3'],[.4,'#FF1F8F'],[1,'#6e003a']], side:['#330018','#8c0049'], mid:'#FF1F8F'},
+  ult:{stops:[[0,'#a4a4ff'],[.4,'#2B2BFF'],[1,'#0a0a66']], side:['#050533','#1b1ba8'], mid:'#2B2BFF'},
+  tan:{stops:[[0,'#ffcf99'],[.4,'#FF7A00'],[1,'#7e3500']], side:['#401a00','#a54a00'], mid:'#FF7A00'},
+};
+const mix = (a, b, t) => { const p = (h) => [1,3,5].map((i) => parseInt(h.slice(i, i + 2), 16)); const A = p(a), B = p(b); return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, '0')).join(''); };
+const stops = (arr) => arr.map(([o, c]) => `<stop offset="${o}" stop-color="${c}"/>`).join('');
+
+/* A studio backdrop: seamless sweep with a light pool. */
+function studio(w, h, bg, id, cy = .42) {
+  const p = PAL[bg];
+  return `<defs><radialGradient id="bg${id}" cx="50%" cy="${cy * 100}%" r="78%" fx="46%" fy="${cy * 100 - 6}%"><stop offset="0" stop-color="${p.bg[0]}"/><stop offset=".38" stop-color="${p.bg[1]}"/><stop offset=".78" stop-color="${p.bg[2]}"/><stop offset="1" stop-color="${p.bg[3]}"/></radialGradient>
+  <linearGradient id="fl${id}" x1="0" x2="0" y1="0" y2="1"><stop offset=".64" stop-color="#000" stop-opacity="0"/><stop offset=".78" stop-color="#fff" stop-opacity=".06"/><stop offset="1" stop-color="#000" stop-opacity=".28"/></linearGradient></defs>
+  <rect width="${w}" height="${h}" fill="url(#bg${id})"/><rect width="${w}" height="${h}" fill="url(#fl${id})"/>`;
+}
+
+/* Sculpt a stroke glyph as a lacquered tube, fashion-lit. Returns an SVG string. */
+function sculpt(o) {
+  const { glyph, w, h, bg = 'mag', mat = 'ink', size = .66, rot = -8, cx = .5, cy = .47, depth = 11, W = 2.3, back = true, floor = true } = o;
+  const id = 'sc' + (UID++);
+  const s = Math.min(w, h) * size / 12;
+  const X = w * cx, Y = h * cy;
+  const T = `translate(${X} ${Y}) rotate(${rot}) scale(${s}) translate(-8 -8)`;
+  const M = MAT[mat], rim = o.rim || PAL[bg].rim;
+  const px = W * s;
+  let out = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`;
+  out += `<defs><g id="${id}g" transform="${T}" stroke-linecap="round" stroke-linejoin="round" fill="none">${GLYPHS[glyph]}</g>
+  <linearGradient id="${id}f" gradientUnits="userSpaceOnUse" x1="${X - 6 * s}" y1="${Y - 6.5 * s}" x2="${X + 5 * s}" y2="${Y + 6.5 * s}">${stops(M.stops)}</linearGradient>
+  <filter id="${id}b1" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${(px * .07).toFixed(2)}"/></filter>
+  <filter id="${id}b2" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="${(px * .28).toFixed(2)}"/></filter>
+  <filter id="${id}b3" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="${(px * .85).toFixed(2)}"/></filter>
+  <mask id="${id}m" maskUnits="userSpaceOnUse" x="0" y="0" width="${w}" height="${h}"><use href="#${id}g" stroke="#fff" color="#fff" stroke-width="${W}"/></mask></defs>`;
+  if (back) out += studio(w, h, bg, id);
+  if (floor) out += `<ellipse cx="${X + px * .6}" cy="${Y + 6.6 * s}" rx="${5.2 * s}" ry="${.75 * s}" fill="#000" opacity=".42" filter="url(#${id}b3)"/>`;
+  out += `<use href="#${id}g" stroke="#000" color="#000" stroke-width="${W}" opacity=".32" transform="translate(${px * 1.5} ${px * .8})" filter="url(#${id}b3)"/>`;
+  for (let k = depth; k >= 1; k--) {
+    const c = mix(M.side[1], M.side[0], k / depth);
+    out += `<use href="#${id}g" stroke="${c}" color="${c}" stroke-width="${W}" transform="translate(${(k * px * .06).toFixed(2)} ${(k * px * .045).toFixed(2)})"/>`;
+  }
+  out += `<use href="#${id}g" stroke="url(#${id}f)" color="${M.mid}" stroke-width="${W}"/>`;
+  out += `<g mask="url(#${id}m)">
+    <use href="#${id}g" stroke="#000" color="#000" stroke-width="${W * .75}" opacity=".5" transform="translate(${px * .32} ${px * .34})" filter="url(#${id}b2)"/>
+    <use href="#${id}g" stroke="${rim}" color="${rim}" stroke-width="${W * .4}" opacity=".95" transform="translate(${px * .42} ${px * .4})" filter="url(#${id}b1)"/>
+    <use href="#${id}g" stroke="#fff" color="#fff" stroke-width="${W * .22}" opacity=".92" transform="translate(${-px * .2} ${-px * .23})" filter="url(#${id}b1)"/>
+  </g>`;
+  return out + '</svg>';
+}
+
+/* ------------------------------------------------------------ masthead O */
+function oSVG(fill, ring, gloss) {
+  return `<svg viewBox="4 -2 82 104" preserveAspectRatio="none">
+    <ellipse cx="45" cy="50" rx="38.5" ry="52" transform="rotate(13 45 50)" fill="${ring || 'currentColor'}"/>
+    <ellipse cx="45" cy="50" rx="19" ry="44" transform="rotate(20 45 50)" fill="${fill}"/>
+    ${gloss ? `<ellipse cx="39" cy="30" rx="5" ry="13" transform="rotate(20 39 30)" fill="#fff" opacity=".42"/>` : ''}
+  </svg>`;
+}
+document.querySelectorAll('.mast').forEach((el) => {
+  el.innerHTML = `Signal<span class="o">${oSVG(el.dataset.fill || '#FF1F8F', el.dataset.ring, el.dataset.gloss)}</span>S`;
+});
+
+/* -------------------------------------------------------------- barcode */
+function barcode(w, h, seed) {
+  const r = SOS.rng(seed);
+  let x = 0, s = '', black = true;
+  const bars = [];
+  while (x < w - 4) { const bw = 1 + Math.floor(r() * 3.2); if (black) bars.push([x, bw]); x += bw + (black ? 0 : 0); black = !black; }
+  const guards = [0, 2, Math.floor(w / 2) - 1, Math.floor(w / 2) + 1, w - 5, w - 3];
+  bars.forEach(([bx, bw]) => (s += `<rect x="${bx}" y="0" width="${bw}" height="${h - 8}" fill="#0B0B0D"/>`));
+  guards.forEach((g) => (s += `<rect x="${g}" y="0" width="1.4" height="${h}" fill="#0B0B0D"/>`));
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+}
+document.getElementById('bc').innerHTML = barcode(112, 46, 280926);
+
+/* ------------------------------------------------------- hero cover star */
+(function hero() {
+  const back = document.getElementById('heroBack');
+  const fig = document.getElementById('heroFig');
+  const tip = [792, 694];
+  const T = `translate(${tip[0]} ${tip[1]}) rotate(-5) scale(41 44) translate(-7.1 -14)`;
+  const P = 'M9.4 2 4.5 9h3.6l-1 5L12 7H8.4l1-5Z';
+  const full = 'maskUnits="userSpaceOnUse" x="0" y="0" width="1600" height="780"';
+  const defs = `<defs>
+    <g id="shp"><path d="${P}" transform="${T}" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/></g>
+    <linearGradient id="lac" gradientUnits="userSpaceOnUse" x1="600" y1="160" x2="960" y2="700">
+      <stop offset="0" stop-color="#2a2a31"/><stop offset=".3" stop-color="#101014"/><stop offset=".6" stop-color="#060608"/><stop offset="1" stop-color="#000"/></linearGradient>
+    <filter id="hb1" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.4"/></filter>
+    <filter id="hb15" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="4"/></filter>
+    <filter id="hb2" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="11"/></filter>
+    <filter id="hb3" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="24"/></filter>
+    <filter id="hb4" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="46"/></filter>
+    <mask id="shapeM" ${full}><use href="#shp" fill="#fff" stroke="#fff"/></mask>
+    <mask id="crTL" ${full}><use href="#shp" fill="#fff" stroke="#fff"/><use href="#shp" fill="#000" stroke="#000" transform="translate(5 4)"/></mask>
+    <mask id="crTL2" ${full}><use href="#shp" fill="#fff" stroke="#fff"/><use href="#shp" fill="#000" stroke="#000" transform="translate(30 22)"/></mask>
+    <mask id="crBR" ${full}><use href="#shp" fill="#fff" stroke="#fff"/><use href="#shp" fill="#000" stroke="#000" transform="translate(-6 -4)"/></mask>
+    <mask id="crBR2" ${full}><use href="#shp" fill="#fff" stroke="#fff"/><use href="#shp" fill="#000" stroke="#000" transform="translate(-38 -26)"/></mask>
+    <linearGradient id="plS" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#050506"/><stop offset=".16" stop-color="#26262d"/><stop offset=".24" stop-color="#9a9aa6"/><stop offset=".29" stop-color="#1b1b20"/><stop offset=".7" stop-color="#08080a"/><stop offset=".88" stop-color="#6a0b3c"/><stop offset="1" stop-color="#1a000d"/></linearGradient>
+    <linearGradient id="plT" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#3a3a44"/><stop offset=".55" stop-color="#141418"/><stop offset="1" stop-color="#4a0a2a"/></linearGradient>
+    <radialGradient id="prl" cx="38%" cy="32%" r="70%"><stop offset="0" stop-color="#ffffff"/><stop offset=".45" stop-color="#f3e9ee"/><stop offset=".8" stop-color="#c9a9b8"/><stop offset="1" stop-color="#8d5f75"/></radialGradient>
+  </defs>`;
+  // backdrop: halo, wall shadow, floor pool (sits under the masthead)
+  back.innerHTML = defs.replace(/id="/g, 'id="bk-').replace(/url\(#/g, 'url(#bk-').replace(/href="#/g, 'href="#bk-') + `
+    <ellipse cx="800" cy="430" rx="330" ry="330" fill="#ff78bd" opacity=".35" filter="url(#bk-hb4)"/>
+    <ellipse cx="820" cy="770" rx="560" ry="70" fill="#ff7cc0" opacity=".3" filter="url(#bk-hb4)"/>
+    <use href="#bk-shp" fill="#2a0016" stroke="#2a0016" opacity=".5" transform="translate(170 26) skewX(-10)" filter="url(#bk-hb3)"/>
+    <ellipse cx="840" cy="774" rx="250" ry="24" fill="#1a000d" opacity=".8" filter="url(#bk-hb2)"/>`;
+  let f = defs;
+  // plinth
+  f += `<rect x="652" y="700" width="296" height="90" fill="url(#plS)"/>
+        <ellipse cx="800" cy="700" rx="148" ry="19" fill="url(#plT)"/>
+        <ellipse cx="800" cy="700" rx="148" ry="19" fill="none" stroke="#ff8ac4" stroke-opacity=".6" stroke-width="1.5"/>
+        <ellipse cx="808" cy="703" rx="46" ry="6" fill="#000" opacity=".9" filter="url(#hb1)"/>`;
+  // extrusion (depth), tinted by the magenta bounce
+  const N = 18;
+  for (let k = N; k >= 1; k--) {
+    const c = mix('#8a0c4b', '#070004', k / N);
+    f += `<use href="#shp" fill="${c}" stroke="${c}" transform="translate(${(k * 1.2).toFixed(2)} ${(k * .85).toFixed(2)})"/>`;
+  }
+  // front lacquer
+  f += `<use href="#shp" fill="url(#lac)" stroke="url(#lac)"/>`;
+  // lighting, clipped to the silhouette (mask first, blur after)
+  f += `<g mask="url(#shapeM)">
+    <g transform="rotate(-5 800 420)" filter="url(#hb2)">
+      <rect x="676" y="60" width="30" height="720" fill="#fff" opacity=".42"/>
+      <rect x="866" y="60" width="46" height="720" fill="#FF1F8F" opacity=".55"/>
+    </g>
+    <g transform="rotate(-5 800 420)" filter="url(#hb15)"><rect x="716" y="60" width="7" height="720" fill="#fff" opacity=".28"/></g>
+    <g filter="url(#hb2)"><rect width="1600" height="780" fill="#fff" opacity=".3" mask="url(#crTL2)"/></g>
+    <g filter="url(#hb2)"><rect width="1600" height="780" fill="#FF1F8F" mask="url(#crBR2)"/></g>
+    <g filter="url(#hb1)"><rect width="1600" height="780" fill="#ffb3d8" opacity=".85" mask="url(#crBR)"/></g>
+    <g filter="url(#hb1)"><rect width="1600" height="780" fill="#fff" opacity=".95" mask="url(#crTL)"/></g>
+    <g filter="url(#hb1)" fill="#fff">
+      <ellipse cx="760" cy="226" rx="20" ry="5" opacity=".95" transform="rotate(-52 760 226)"/>
+      <ellipse cx="664" cy="446" rx="22" ry="4" opacity=".85"/>
+      <ellipse cx="872" cy="424" rx="16" ry="3" opacity=".7"/>
+    </g>
+  </g>`;
+  // a strand of pearls, slung across the bolt like a sash
+  const pearls = [];
+  const P0 = [650, 470], P1 = [770, 560], P2 = [900, 400];
+  for (let t = 0; t <= 1.0001; t += 1 / 19) {
+    const x = (1 - t) * (1 - t) * P0[0] + 2 * (1 - t) * t * P1[0] + t * t * P2[0];
+    const y = (1 - t) * (1 - t) * P0[1] + 2 * (1 - t) * t * P1[1] + t * t * P2[1];
+    pearls.push([x, y]);
+  }
+  f += `<g filter="url(#hb15)" opacity=".55">${pearls.map(([x, y]) => `<circle cx="${x + 6}" cy="${y + 8}" r="9" fill="#2a0016"/>`).join('')}</g>`;
+  f += pearls.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="9.5" fill="url(#prl)"/><ellipse cx="${x - 3}" cy="${y - 3.5}" rx="3" ry="2" fill="#fff" opacity=".95"/><path d="M${x - 7} ${y + 4} a9 9 0 0 0 13 1" fill="none" stroke="#FF1F8F" stroke-width="1.6" opacity=".55"/>`).join('');
+  fig.innerHTML = f;
+})();
+
+/* ------------------------------------------------------------- board 2 */
+(function workspace() {
+  // cast rail
+  const cast = document.getElementById('cast');
+  const groups = [['RULES', ['Tideline', 'Kinetic', 'Recoil', 'Breakline']], ['AI ANALYSTS', ['Meridian', 'Vector', 'Lumen', 'Halcyon', 'Deep Current']], ['ENSEMBLES', ['Quorum', 'Council']]];
+  const bgs = ['grn', 'mag', 'tan', 'ult', 'ink', 'mag', 'tan', 'grn', 'ult', 'ink', 'ult'];
+  const mats = ['porcelain', 'ink', 'chrome', 'porcelain', 'chrome', 'ink', 'porcelain', 'chrome', 'porcelain', 'chrome', 'chrome'];
+  const status = { Kinetic: '<span class="dn">▼ SELL</span>', Tideline: 'watching', Recoil: 'watching', Breakline: 'watching', Meridian: 'watching', Vector: 'watching', Lumen: 'watching', Halcyon: 'watching', 'Deep Current': 'watching', Quorum: 'quiet', Council: 'no consensus' };
+  let i = 0, html = '';
+  groups.forEach(([g, list]) => {
+    html += `<div class="grp"><span>${g}</span><span>${list.length}</span></div>`;
+    list.forEach((n) => {
+      const [gl, role] = BOTS[n];
+      html += `<div class="bot ${n === 'Kinetic' ? 'on' : ''}"><div class="pt">${sculpt({ glyph: gl, w: 32, h: 32, bg: bgs[i], mat: mats[i], size: .78, depth: 5, W: 2.4, floor: false })}</div><div class="nm">${n}<small>${role}</small></div><span class="st">${status[n]}</span></div>`;
+      i++;
+    });
+  });
+  cast.innerHTML = html;
+
+  // chart
+  const CW = 876, CH = 400;
+  const C = SOS.candlesSVG({ w: CW, h: CH, n: 58, seed: 22154, up: '#EDEDF0', down: '#6f6f7b', style: 'hollow', grid: 'rgba(255,255,255,.06)', volume: true, pad: 30, strokeW: 1.3, radius: .8 });
+  document.getElementById('chart').innerHTML = C.svg.replace(/opacity=".28"/g, 'opacity=".1"');
+  const d = C.data, n = d.length, last = d[n - 1].c;
+  const P = (v) => 2418.60 + (v - last) * 8.2;
+  const V = (p) => (p - 2418.60) / 8.2 + last;
+  const fmt = (p) => p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // pick candles
+  let si = n - 12; for (let k = n - 12; k < n - 2; k++) if (d[k].h > d[si].h) si = k;
+  let bi = 10; for (let k = 10; k < n - 14; k++) if (d[k].l < d[bi].l) bi = k;
+  document.getElementById('sigref').textContent = fmt(P(d[si].c));
+  const ov = document.getElementById('ov');
+  const cw = document.getElementById('cw');
+  // axis
+  const hi = Math.max(...d.map((k) => k.h)), lo = Math.min(...d.map((k) => k.l));
+  let ax = '';
+  const pHi = P(hi), pLo = P(lo);
+  for (let p = Math.ceil(pLo / 20) * 20; p <= pHi; p += 20) {
+    const y = C.pt(0, V(p))[1];
+    ax += `<div class="axis" style="left:${CW + 8}px;top:${y - 7}px">${fmt(p)}</div>`;
+  }
+  const times = (k) => { const m = 15 * 60 - (n - 1 - k) * 15; return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+  for (let k = 1; k < n; k += 8) ax += `<div class="axis" style="left:${C.pt(k, 0)[0] - 16}px;top:${CH + 3}px">${times(k)}</div>`;
+  // last price line + tag
+  const ly = C.pt(n - 1, last)[1];
+  let s = `<line x1="0" x2="${CW}" y1="${ly}" y2="${ly}" stroke="#FF1F8F" stroke-width="1" stroke-dasharray="3 4" opacity=".9"/>`;
+  ax += `<div class="axis" style="left:${CW + 2}px;top:${ly - 9}px;background:#FF1F8F;color:#fff;padding:2px 5px;font-weight:600">2,418.60</div>`;
+  // SELL marker (Kinetic) above candle high
+  const [sx, sy0] = C.pt(si, d[si].h);
+  const sy = sy0 - 16;
+  s += `<line x1="${sx}" x2="${sx}" y1="${sy0 - 4}" y2="${sy + 9}" stroke="#fff" stroke-width="1"/>
+        <circle cx="${sx}" cy="${sy}" r="10" fill="#0B0B0D" stroke="#FF3B30" stroke-width="2"/>
+        <path d="M${sx - 5} ${sy - 3} h10 l-5 8z" fill="#FF3B30"/>`;
+  // BUY marker (Tideline) under candle low
+  const [bx, by0] = C.pt(bi, d[bi].l);
+  const by = by0 + 16;
+  s += `<line x1="${bx}" x2="${bx}" y1="${by0 + 4}" y2="${by - 9}" stroke="#fff" stroke-width="1" opacity=".7"/>
+        <circle cx="${bx}" cy="${by}" r="10" fill="#0B0B0D" stroke="#00B374" stroke-width="2"/>
+        <path d="M${bx - 5} ${by + 3} h10 l-5 -8z" fill="#00B374"/>`;
+  // candle highlight bands
+  s = `<rect x="${sx - C.step / 2}" y="0" width="${C.step}" height="${CH}" fill="#FF1F8F" opacity=".10"/>` + s;
+  // pull quotes
+  const q1 = document.createElement('div');
+  q1.className = 'pq';
+  q1.style.left = (sx - 372) + 'px'; q1.style.top = '14px'; q1.style.width = '300px';
+  q1.innerHTML = `<div class="rl"></div><div class="q bodr">“Momentum just rolled over on this candle.”</div>
+    <div class="by"><div class="pt">${sculpt({ glyph: 'bolt', w: 30, h: 30, bg: 'mag', mat: 'ink', size: .8, depth: 4, floor: false })}</div><span class="who cond">Kinetic</span><span class="ch cond slab-s">▼ Sell</span><span class="tm">14:15 · 04:12 LEFT</span></div>`;
+  const q2 = document.createElement('div');
+  q2.className = 'pq old';
+  q2.style.left = (bx - 372) + 'px'; q2.style.top = (by - 58) + 'px'; q2.style.width = '310px';
+  q2.innerHTML = `<div class="rl"></div><div class="q bodr" style="font-size:23px">“The tide turned here.”</div>
+    <div class="by"><div class="pt">${sculpt({ glyph: 'wave', w: 30, h: 30, bg: 'grn', mat: 'porcelain', size: .8, depth: 4, floor: false })}</div><span class="who cond">Tideline</span><span class="ch cond slab-b">▲ Buy</span><span class="tm">${times(bi)} · RECEIPT</span></div>`;
+  cw.append(q1, q2);
+  cw.insertAdjacentHTML('beforeend', ax);
+  // leader lines (after layout)
+  const cr = cw.getBoundingClientRect();
+  const r1 = q1.getBoundingClientRect(), r2 = q2.getBoundingClientRect();
+  const a1 = [r1.right - cr.left + 8, r1.top - cr.top + 40];
+  s += `<polyline points="${a1[0]},${a1[1]} ${a1[0] + 18},${a1[1]} ${sx - 11},${sy - 3}" fill="none" stroke="#fff" stroke-width="1"/><circle cx="${a1[0]}" cy="${a1[1]}" r="2.5" fill="#fff"/>`;
+  const a2 = [r2.right - cr.left + 8, r2.top - cr.top + 30];
+  s += `<polyline points="${a2[0]},${a2[1]} ${a2[0] + 16},${a2[1]} ${bx - 11},${by}" fill="none" stroke="#fff" stroke-width="1" opacity=".7"/><circle cx="${a2[0]}" cy="${a2[1]}" r="2.5" fill="#fff" opacity=".7"/>`;
+  ov.innerHTML = s;
+
+  // feed of mini covers
+  const feed = [
+    { bot: 'Kinetic', bg: 'mag', mat: 'ink', dir: 's', m: 'ETH · 04:12 left', live: 1, no: 'Nº01' },
+    { bot: 'Council', bg: 'mag', mat: 'chrome', dir: 'n', m: 'ETH · 14:00', no: 'Nº01' },
+    { bot: 'Meridian', bg: 'ult', mat: 'chrome', dir: 'b', m: 'BTC · 13:45', no: 'Nº02' },
+    { bot: 'Recoil', bg: 'grn', mat: 'porcelain', dir: 's', m: 'SOL · 13:30', no: 'Nº03' },
+    { bot: 'Tideline', bg: 'mag', mat: 'porcelain', dir: 'b', m: 'ETH · receipt', no: 'Nº01' },
+    { bot: 'Lumen', bg: 'tan', mat: 'ink', dir: 'b', m: 'ARB · 12:30', no: 'Nº04' },
+  ];
+  document.getElementById('feed').innerHTML = feed.map((f) => miniCover({ ...f, w: 142, h: 172 })).join('');
+})();
+
+function miniCover({ bot, bg, mat, dir, m, live, no, w, h, mast = 21 }) {
+  const [gl] = BOTS[bot];
+  const chip = dir === 'b' ? '<span class="c cond slab-b">▲ Buy</span>' : dir === 's' ? '<span class="c cond slab-s">▼ Sell</span>' : '<span class="c cond nc">No consensus</span>';
+  const fills = { mag: '#FF1F8F', ult: '#2B2BFF', grn: '#0B4A34', tan: '#FF7A00', ink: '#0B0B0D' };
+  return `<div class="mc ${live ? 'live' : ''}" style="width:${w}px;height:${h}px">
+        <div style="position:absolute;inset:0">${sculpt({ glyph: gl, w, h, bg, mat, size: .5, cy: .45, depth: 7 })}</div>
+    <div class="mm"><span class="mast" style="font-size:${mast}px;color:#fff">Signal<span class="o">${oSVG(bg === 'ink' ? '#FF1F8F' : '#0B0B0D')}</span>S</span></div>
+    
+    <div class="cl"><span class="n cond">${bot}</span>${chip}<span class="m">${no} · ${m}</span></div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------- board 3 */
+(function sheet() {
+  // the O takes each issue's colour
+  const issues = [['#FF1F8F', 'Nº01'], ['#2B2BFF', 'Nº02'], ['#0B4A34', 'Nº03'], ['#FF7A00', 'Nº04']];
+  document.getElementById('ometer').innerHTML = issues.map(([c, l]) => `<div class="oo"><span class="oi" style="color:#0B0B0D">${oSVG(c, null, 1)}</span><span>${l}</span></div>`).join('');
+
+  const cast = [
+    ['Kinetic', 'mag', 'ink', -6], ['Tideline', 'grn', 'porcelain', -4], ['Recoil', 'tan', 'chrome', 6], ['Breakline', 'ult', 'porcelain', -8],
+    ['Meridian', 'ink', 'mag', 10], ['Halcyon', 'wht', 'ink', -10], ['Quorum', 'ult', 'chrome', 4], ['Council', 'mag', 'porcelain', 0],
+  ];
+  const g = document.getElementById('grid');
+  g.innerHTML = cast.map(([n, bg, mat, rot], i) => `<div class="fr"><div class="img">${sculpt({ glyph: BOTS[n][0], w: 187, h: 86, bg, mat, rot, size: .76, cy: .47, depth: 8 })}</div>
+    <div class="cap"><b>${n}</b><span>${BOTS[n][1]} · ${String(12 + i).padStart(2, '0')}A</span></div></div>`).join('');
+  // grease-pencil selection around the Nº01 cover frame
+  const sh = document.getElementById('sheet');
+  sh.insertAdjacentHTML('beforeend', `<svg class="grease" style="left:4px;top:2px" width="206" height="128"><path d="M14 6 C 70 0, 150 2, 198 7 C 203 44, 203 90, 198 121 C 140 126, 60 125, 9 119 C 4 84, 5 34, 16 4" fill="none" stroke="#FF7A00" stroke-width="3" stroke-linecap="round" opacity=".95"/></svg>
+  <div class="grease bod" style="left:146px;top:56px;color:#FF7A00;font-size:22px;transform:rotate(-8deg)">Nº01</div>`);
+
+  // motif 2: pull quote pinned to a candle
+  document.getElementById('pqMotif').innerHTML = `<div style="position:absolute;left:12px;top:12px;width:124px;color:#fff">
+    <div style="width:30px;height:2px;background:#2B2BFF;margin-bottom:7px"></div>
+    <div class="bodr" style="font-size:17px;line-height:1.08;font-weight:600">“Trend’s intact on this candle.”</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-top:8px"><span class="cond" style="font-size:17px">Tideline</span><span class="cond slab-b" style="font-size:15px;padding:2px 5px 0;line-height:1">▲ Buy</span></div>
+    <div class="mono" style="font-size:11px;margin-top:5px;opacity:.85">BTC · 09:58 LEFT</div></div>
+    <svg style="position:absolute;right:0;top:0" width="76" height="130">
+      <g stroke="#fff" stroke-width="1.2" fill="none">
+        <line x1="4" y1="30" x2="16" y2="30"/><line x1="16" y1="30" x2="40" y2="100"/>
+        <line x1="26" y1="22" x2="26" y2="62"/><rect x="22" y="30" width="8" height="22" fill="#6f6f7b" stroke="none"/>
+        <line x1="44" y1="44" x2="44" y2="96"/><rect x="40" y="52" width="8" height="28"/>
+        <line x1="62" y1="30" x2="62" y2="74"/><rect x="58" y="36" width="8" height="26"/>
+      </g>
+      <circle cx="4" cy="30" r="2.5" fill="#fff"/>
+      <circle cx="44" cy="110" r="8" fill="#0B0B0D" stroke="#00B374" stroke-width="2"/><path d="M40 112.5 h8 l-4 -6.5z" fill="#00B374"/>
+    </svg>`;
+
+  // storyboard frames
+  const W = 300, H = 169;
+  const F = [
+    { ts: '00:00', t: 'COLD OPEN.', beat: 'Black. A kick drum. The newsstand rack lights up, one shelf per beat.', html: rack(W, H) },
+    { ts: '00:02', t: 'FLIP 1.', beat: 'On the kick, a cover flips open: TIDELINE ▲ BUY, racing-green issue.', html: flipFrame(W, H, 'Tideline', 'grn', 'porcelain', 'b', 'Tideline calls ETH:') },
+    { ts: '00:05', t: 'FLIP 2.', beat: 'Snare hit. RECOIL ▼ SELL slams in at full width, tangerine issue.', html: slamFrame(W, H) },
+    { ts: '00:08', t: 'DROP.', beat: 'Music cuts. COUNCIL: NO CONSENSUS. No agreement, no call.', html: councilFrame(W, H) },
+    { ts: '00:11', t: 'PUSH IN.', beat: 'Dolly into the last issue, YOUR CALL. The cover is a mirror: you are the star.', html: mirrorFrame(W, H) },
+    { ts: '00:16', t: 'END CARD.', beat: 'The O fills magenta. Start paper trading. Not investment advice.', html: endFrame(W, H), c: 1 },
+  ];
+  document.getElementById('frames').innerHTML = F.map((f) => `<div class="frm"><div class="scr">${f.html}</div>
+    <div class="beat">${Array.from({ length: 16 }, (_, j) => `<i class="${f.c && j > 11 ? 'c' : j % 4 === 0 ? 'k' : ''}"></i>`).join('')}</div>
+    <div class="cp"><span class="ts">${f.ts}</span><b>${f.t}</b> ${f.beat}</div></div>`).join('');
+})();
+
+function rack(W, H) {
+  const cols = [['mag', 'Kinetic', 'ink'], ['grn', 'Tideline', 'porcelain'], ['tan', 'Recoil', 'chrome'], ['ult', 'Council', 'porcelain'], ['mag', 'Meridian', 'chrome'], ['ink', 'Vector', 'porcelain']];
+  let s = `<div style="position:absolute;inset:0;background:radial-gradient(200px 120px at 50% 0%, #2a2a31, #050506 80%)"></div>`;
+  s += `<div style="position:absolute;left:40px;right:40px;top:0;height:8px;background:linear-gradient(#fff,#bbb);box-shadow:0 0 40px 12px rgba(255,255,255,.35)"></div>`;
+  const cw = 62, ch = 62;
+  cols.forEach((c, i) => {
+    const col = i % 3, row = Math.floor(i / 3);
+    const x = 50 + col * (cw + 22), y = 18 + row * (ch + 14);
+    const lit = row === 0 ? 1 : .45;
+    s += `<div style="position:absolute;left:${x}px;top:${y}px;width:${cw}px;height:${ch}px;opacity:${lit}">${miniCoverTiny(c[1], c[0], c[2], cw, ch)}</div>`;
+  });
+  for (let r = 0; r < 2; r++) s += `<div style="position:absolute;left:40px;right:40px;top:${18 + ch + r * (ch + 14) + 1}px;height:3px;background:#777"></div>`;
+  s += `<div style="position:absolute;left:40px;top:12px;width:2px;height:160px;background:#777"></div><div style="position:absolute;right:40px;top:12px;width:2px;height:160px;background:#777"></div>`;
+  s += ``;
+  return s;
+}
+function miniCoverTiny(bot, bg, mat, w, h) {
+  return `<div style="position:relative;width:${w}px;height:${h}px;overflow:hidden">${sculpt({ glyph: BOTS[bot][0], w, h, bg, mat, size: .52, cy: .55, depth: 5 })}
+  <div style="position:absolute;left:0;right:0;top:2px;text-align:center"><span class="mast" style="font-size:11px;color:#fff">Signal<span class="o">${oSVG('#0B0B0D')}</span>S</span></div></div>`;
+}
+function flipFrame(W, H, bot, bg, mat, dir, line) {
+  let s = `<div style="position:absolute;inset:0;background:#0B0B0D"></div>`;
+  s += `<div style="position:absolute;left:80px;top:8px;width:140px;height:153px;overflow:hidden">${sculpt({ glyph: BOTS[bot][0], w: 140, h: 153, bg, mat, size: .5, cy: .37, rot: -6 })}
+    <div style="position:absolute;left:0;right:0;top:4px;text-align:center"><span class="mast" style="font-size:24px;color:#fff">Signal<span class="o">${oSVG('#FF1F8F')}</span>S</span></div>
+    <div style="position:absolute;left:8px;bottom:9px;color:#fff"><div class="cond" style="font-size:18px;line-height:.9">${line}</div><span class="cond slab-b" style="font-size:22px;padding:2px 6px 0;display:inline-block;margin-top:3px;line-height:1">▲ Buy</span></div></div>`;
+  // page mid-flip
+  s += `<div style="position:absolute;left:220px;top:8px;width:66px;height:153px;background:linear-gradient(90deg,#FF1F8F,#b1005f 70%,#43001f);transform:skewY(-9deg);transform-origin:left top;box-shadow:-6px 0 18px rgba(0,0,0,.5)"></div>`;
+  s += `<div style="position:absolute;left:14px;top:34px;width:50px;height:112px;background:linear-gradient(90deg,#2B2BFF33,#2B2BFF);transform:skewY(10deg);opacity:.5"></div>`;
+  s += `<svg style="position:absolute;left:228px;top:16px" width="70" height="40"><path d="M6 30 Q 30 0 62 14" fill="none" stroke="#fff" stroke-width="2"/><path d="M54 6 l9 8 -11 4" fill="none" stroke="#fff" stroke-width="2"/></svg>`;
+  return s;
+}
+function slamFrame(W, H) {
+  let s = `<div style="position:absolute;inset:0">${sculpt({ glyph: 'spring', w: W, h: H, bg: 'tan', mat: 'chrome', size: .78, cx: .72, cy: .5, rot: 8 })}</div>`;
+  s += `<div class="cond" style="position:absolute;left:12px;top:6px;font-size:112px;line-height:.82;color:#fff;letter-spacing:-.01em">Recoil</div>`;
+  s += `<div style="position:absolute;left:14px;top:104px;display:flex;gap:6px;align-items:center"><span class="cond slab-s" style="font-size:40px;padding:4px 10px 1px;line-height:1">▼ Sell</span><span class="mono" style="font-size:11px;background:#0B0B0D;color:#fff;padding:3px 6px;line-height:1.3">SOL · PAPER<br>02:40 LEFT</span></div>`;
+  s += `<div style="position:absolute;right:8px;top:8px"><span class="mast" style="font-size:20px;color:#0B0B0D">Signal<span class="o">${oSVG('#FF7A00')}</span>S</span></div>`;
+  s += `<div style="position:absolute;left:0;right:0;bottom:0;height:8px;background:repeating-linear-gradient(90deg,#fff 0 3px,transparent 3px 9px);opacity:.5"></div>`;
+  return s;
+}
+function councilFrame(W, H) {
+  let s = `<div style="position:absolute;inset:0">${sculpt({ glyph: 'ring', w: W, h: H, bg: 'ult', mat: 'porcelain', size: .62, cx: .66, cy: .5, rot: 0 })}</div>`;
+  s += `<div style="position:absolute;left:14px;top:12px"><span class="mast" style="font-size:22px;color:#fff">Signal<span class="o">${oSVG('#0B0B0D')}</span>S</span></div>`;
+  s += `<div style="position:absolute;left:14px;bottom:14px;color:#fff"><div class="cond" style="font-size:34px;line-height:.86">Council:</div><span class="cond" style="font-size:22px;background:#fff;color:#0B0B0D;padding:3px 6px 1px;display:inline-block;margin-top:4px;line-height:1">No consensus</span><div class="mono" style="font-size:11px;margin-top:5px">no call is a call too</div></div>`;
+  s += `<div class="mono" style="position:absolute;right:10px;top:12px;font-size:11px;color:#fff;letter-spacing:.1em">(SILENCE)</div>`;
+  return s;
+}
+function mirrorFrame(W, H) {
+  let s = `<div style="position:absolute;inset:0;background:#050506"></div>`;
+  // push-in frames
+  [0, 1, 2].forEach((k) => (s += `<div style="position:absolute;left:${30 + k * 14}px;right:${30 + k * 14}px;top:${8 + k * 5}px;bottom:${8 + k * 5}px;border:1px solid rgba(255,255,255,${.12 + k * .08})"></div>`));
+  s += `<div style="position:absolute;left:92px;top:12px;width:120px;height:146px;background:linear-gradient(125deg,#f4f4f7 0%,#9c9ca8 28%,#e9e9ee 44%,#6d6d78 64%,#d9d9e0 82%,#8a8a95 100%);box-shadow:0 0 0 3px #0B0B0D,0 0 0 4px #777,0 16px 36px rgba(0,0,0,.6);overflow:hidden">
+    <svg width="120" height="146" style="position:absolute;left:0;top:0"><defs><filter id="mb"><feGaussianBlur stdDeviation="3"/></filter></defs><g opacity=".62" filter="url(#mb)"><ellipse cx="60" cy="74" rx="19" ry="24" fill="#23232b"/><path d="M8 150 C 12 114, 36 102, 60 102 C 84 102, 108 114, 112 150Z" fill="#23232b"/></g>
+    <path d="M-10 60 L 60 -10 L 80 -10 L -10 80Z" fill="#fff" opacity=".35"/><path d="M40 160 L 140 60 L 140 72 L 52 160Z" fill="#fff" opacity=".25"/></svg>
+    <div style="position:absolute;left:0;right:0;top:3px;text-align:center"><span class="mast" style="font-size:20px;color:#0B0B0D">Signal<span class="o">${oSVG('#FF1F8F')}</span>S</span></div>
+    <div class="cond" style="position:absolute;left:7px;bottom:7px;font-size:26px;line-height:.85;color:#0B0B0D">Your<br>call</div>
+    <div style="position:absolute;right:6px;bottom:8px;display:flex;flex-direction:column;gap:3px;align-items:flex-end"><span class="cond slab-b" style="font-size:12px;padding:2px 4px 0;line-height:1">▲ Buy</span><span class="cond slab-s" style="font-size:12px;padding:2px 4px 0;line-height:1">▼ Sell</span></div>
+  </div>`;
+  s += `<div class="mono" style="position:absolute;left:8px;bottom:6px;font-size:11px;color:rgba(255,255,255,.75)">DOLLY IN ▸</div>`;
+  return s;
+}
+function endFrame(W, H) {
+  let s = `<div style="position:absolute;inset:0;background:radial-gradient(260px 180px at 50% 58%, #ff4fa8, #FF1F8F 45%, #9e0055 100%)"></div>`;
+  s += `<div style="position:absolute;left:0;right:0;top:22px;text-align:center"><span class="mast" style="font-size:60px;color:#fff">Signal<span class="o">${oSVG('#0B0B0D', null, 1)}</span>S</span></div>`;
+  s += `<div class="bod" style="position:absolute;left:0;right:0;top:92px;text-align:center;font-size:15px;color:#0B0B0D">Bots make the cover. <span style="font-weight:500">You make the call.</span></div>`;
+  s += `<div style="position:absolute;left:50%;top:116px;transform:translateX(-50%);background:#fff;color:#0B0B0D;padding:6px 10px 4px" class="cond"><span style="font-size:17px">Start paper trading →</span></div>`;
+  s += `<div class="mono" style="position:absolute;left:0;right:0;bottom:5px;text-align:center;font-size:11px;color:#fff;opacity:.9">Not investment advice</div>`;
+  return s;
+}
+
+/* ▲/▼ glyphs: size them to sit with the condensed caps */
+(function tri() {
+  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  while (w.nextNode()) { const t = w.currentNode; if (/[▲▼]/.test(t.nodeValue) && t.parentElement.closest('.cond')) hits.push(t); }
+  hits.forEach((t) => { const tmp = document.createElement('span'); tmp.innerHTML = t.nodeValue.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/([▲▼])\s?/g, '<span class="tr">$1</span>'); t.replaceWith(...tmp.childNodes); });
+})();
+</script>
+</body>
+</html>

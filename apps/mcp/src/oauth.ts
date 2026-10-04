@@ -49,6 +49,13 @@ const publicHttps = (value: string) => {
 export class OAuthDiscovery {
   readonly config: OAuthDiscoveryConfig;
   private documents = new Map<string, z.infer<typeof registration>>();
+  /**
+   * Validate credential-free HTTPS resource/issuer/web origins, bounded exact redirect allowlist and
+   * operator-verified metadata snapshots. Host construction only; invalid/mismatched
+   * URLs/profile/duplicates throw before registration. No caller-provided URL is fetched.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   constructor(private db: DbHandle['chain'], private pepper: string, config: OAuthDiscoveryConfig) {
     const resource = publicHttps(config.publicUrl), issuer = publicHttps(config.issuer), web = publicHttps(config.webOrigin);
     if (resource.pathname !== '/mcp' || config.issuer !== resource.origin || config.webOrigin !== web.origin || issuer.pathname !== '/') {
@@ -73,10 +80,23 @@ export class OAuthDiscovery {
       this.documents.set(doc.client_id, parsed);
     }
   }
+  /**
+   * Return configured public resource/discovery metadata without issuing or validating tokens.
+   * Public read without authentication; runtime omits discovery until connector acceptance.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   protectedResource() {
     return { resource: this.config.publicUrl, authorization_servers: [this.config.issuer],
       scopes_supported: OAUTH_SCOPES, bearer_methods_supported: ['header'] };
   }
+  /**
+   * Return prepared issuer/endpoint/PKCE metadata. Public read without authentication; advertising
+   * this object does not implement consent, token issuance or revocation endpoints and runtime omits
+   * it.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   authorizationServer() {
     const issuer = this.config.issuer;
     return { issuer, authorization_endpoint: `${issuer}/oauth/authorize`, token_endpoint: `${issuer}/oauth/token`,
@@ -93,7 +113,13 @@ export class OAuthDiscovery {
     }
     return parsed.data;
   }
-  /** A sliding hour, atomic across replicas; only IP HMACs and at most ten timestamps persist. */
+  /** A sliding hour, atomic across replicas; only IP HMACs and at most ten timestamps persist.
+   * @remarks
+   * Atomically enforce ten accepted registration attempts per sliding hour using IP HMACs and return
+   * retry time. Anonymous callers are throttled by transport; SQL failures reject rather than allow.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async registrationLimit(ip: string) {
     const subject = createHmac('sha256', this.pepper).update(`oauth-register:${ip}`).digest('hex');
     const { rows } = await this.db.sql.query<{ allowed: boolean; retry: number }>(`
@@ -108,6 +134,13 @@ export class OAuthDiscovery {
     `, [subject]);
     return { allowed: rows[0]!.allowed, retryAfterSec: rows[0]!.retry };
   }
+  /**
+   * Validate exact allowlisted redirect URIs/client metadata, store a generated public client id
+   * with Untrusted name and append registration audit state. Anonymous registration; transport must
+   * apply limits first. Invalid metadata/redirect or SQL failures reject; no tokens are issued.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async register(input: unknown) {
     const metadata = this.validateRegistration(input), id = randomUUID();
     const name = toUntrusted(metadata.client_name, 64);
@@ -120,6 +153,15 @@ export class OAuthDiscovery {
     // RFC 7591 echoes client_name as a string; all stored/consent-facing names are Untrusted.
     return { ...metadata, client_name: name.text, client_id: id, client_id_issued_at: Math.floor(Date.now() / 1000) };
   }
+  /**
+   * Validate registered/live or locally verified snapshot clients, exact redirects, required scopes,
+   * state, S256 PKCE and resource; persist a ten-minute request and return consent URL. Anonymous
+   * discovery request, not user consent. Invalid requests reject with OAuthDiscoveryError; redirects
+   * are attached only after validation, and SQL failures reject. No caller URL is fetched and no
+   * authorization code is issued.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async authorize(query: unknown) {
     const q = query as Record<string, unknown>;
     if (!q || typeof q !== 'object' || Array.isArray(q) || !bounded.safeParse(q.client_id).success) {
@@ -169,18 +211,38 @@ export class OAuthDiscovery {
     });
     return `${this.config.webOrigin}/oauth/consent?request=${id}`;
   }
-  /** Internal consent integration boundary; expired requests are never returned, even before cleanup. */
+  /** Internal consent integration boundary; expired requests are never returned, even before cleanup.
+   * @remarks
+   * Read only a valid UUID's unexpired consent request joined with client name, or null. Internal
+   * consent integration must authenticate the owner separately; SQL failures reject. This read does
+   * not consent or issue tokens.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async request(id: string): Promise<StoredOAuthRequest | null> {
     if (!z.uuid().safeParse(id).success) return null;
     return (await this.db.sql.query<StoredOAuthRequest>(`SELECT r.*, c.client_name FROM oauth_requests r
       JOIN oauth_clients c ON c.id=r.client_id WHERE r.id=$1 AND r.expires_at > now()`, [id])).rows[0] ?? null;
   }
+  /**
+   * Invoke transactional expiry cleanup for requests, inactive clients and registration limits. Host
+   * housekeeping only; SQL failures reject.
+   * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+   */
   async prune() {
     await pruneOAuthDiscovery(this.db);
   }
 }
 
-/** Housekeeping also runs while the hosted connector is disabled. */
+/** Housekeeping also runs while the hosted connector is disabled.
+ * @remarks
+ * Transactionally remove expired requests, clients inactive thirty days and expired registration
+ * counters even when hosted connector is disabled. Host housekeeping only; SQL failures reject; it
+ * does not revoke implemented access tokens.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | SIWE and session invariants}
+ */
 export async function pruneOAuthDiscovery(db: DbHandle['chain']) {
   await db.tx(async tx => {
     await tx.sql.query('DELETE FROM oauth_requests WHERE expires_at <= now()');

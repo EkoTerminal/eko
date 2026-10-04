@@ -5,6 +5,7 @@ import { APP_NAME, SHELL_COPY as C, RISK_OPTIONS } from '../../copy/shell';
 import { fetchParsed, MOCKS } from '../../lib/api';
 import { Link } from '../../lib/Link';
 import { navigate, usePath } from '../../lib/router';
+import { onHeaderBackgroundClick } from '../../lib/mainFocus';
 import { isCurrent, resolveRoute } from '../../routes';
 import { useApp } from '../../store/app';
 import { useShell } from '../../store/shell';
@@ -31,7 +32,7 @@ export function ScanBox({ focus = false, onDone }: { focus?: boolean; onDone?: (
     };
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   }, []);
-  return <form className="scanbox" onSubmit={async (e) => {
+  return <form data-tour="scan" className="scanbox" onSubmit={async (e) => {
     e.preventDefault(); if (!query.trim() || busy) return; setBusy(true);
     try { const result = await fetchParsed(MOCKS ? '/scan' : `/scan?q=${encodeURIComponent(query.trim())}`, ScanResultSchema, MOCKS ? { body: { query: query.trim() } } : undefined); navigate(`/scan/${encodeURIComponent(result.id)}`); setQuery(''); onDone?.(); }
     catch (err) { useApp.getState().toast({ kind: 'error', title: 'Scan failed', body: (err as Error).message }); }
@@ -52,7 +53,7 @@ export function PlanChip({ compact = false }: { compact?: boolean }) {
 }
 export function LegalLine() {
   const flags = useShell((s) => s.config?.flags);
-  return <div className="side-legal"><p>{flags?.burn_board && <><Link to="/burn">Burn Board</Link> · </>}<Link to="/drops">Drops</Link> · <Link to="/settings">Settings</Link> · <Link to="/legal/terms">Legal</Link></p><PolicyLinks /><p>{BUILT_ON}</p><p>{NON_AFFILIATION}</p><p>{DYOR}</p></div>;
+  return <div className="side-legal"><p>{flags?.burn_board && <><Link to="/burn">Burn Board</Link> · </>}<Link to="/drops">Drops</Link> · <Link to="/settings">Settings</Link> · <Link to="/legal/terms">Legal</Link> · <Link to="/official">Official project links</Link> · <Link to="/transparency">Transparency</Link></p><PolicyLinks /><p>{BUILT_ON}</p><p>{NON_AFFILIATION}</p><p>{DYOR}</p></div>;
 }
 function Navigation({ onDone }: { onDone?: () => void }) {
   const path = usePath(), flags = useShell((s) => s.config?.flags), approvals = useShell((s) => s.approvalIds.length);
@@ -65,20 +66,20 @@ function Navigation({ onDone }: { onDone?: () => void }) {
     place(); const observer = new ResizeObserver(place); if (ref.current) observer.observe(ref.current); return () => observer.disconnect();
   }, [path, flags]);
   return <nav className="side-nav" aria-label="Main" ref={ref}><i className="side-ind" style={indicator} aria-hidden="true" />{NAV_GROUPS.map(([group, items], index) => <div className="side-group" key={group}><span className="side-gt"><span className="num">0{index + 1}</span> / {group}</span>
-    {items.filter(([to]) => resolveRoute(to, flags)).map(([to, label]) => { const Icon = NAV_ICONS[to]; return <Link to={to} key={to} className="side-item" onClick={onDone} aria-current={isCurrent(to, path) ? 'page' : undefined}><Icon size={16} />{label}{to === '/mission/approvals' && approvals > 0 && <b className="side-badge" aria-label={`${approvals} waiting`}>{approvals}</b>}</Link>; })}
+    {items.filter(([to]) => resolveRoute(to, flags)).map(([to, label]) => { const Icon = NAV_ICONS[to]; return <Link data-tour={to === "/mission" ? "mission" : undefined} to={to} key={to} className="side-item" onClick={onDone} aria-current={isCurrent(to, path) ? 'page' : undefined}><Icon size={16} />{label}{to === '/mission/approvals' && approvals > 0 && <b className="side-badge" aria-label={`${approvals} waiting`}>{approvals}</b>}</Link>; })}
   </div>)}</nav>;
 }
 export function Sidebar() {
   const risk = useUi((s) => s.riskMode), setUi = useUi((s) => s.set);
-  return <aside className="side"><ScanBox /><Navigation /><div className="side-foot"><PlanChip /><div className="side-risk"><span className="side-label">{C.risk}</span><Seg options={RISK_OPTIONS} value={risk} onChange={(value) => setUi({ riskMode: value as typeof risk })} label={C.risk} /></div><WalletButton /><LegalLine /></div></aside>;
+  return <aside className="side"><ScanBox /><Navigation /><div className="side-foot"><PlanChip /><div data-tour="mode" className="side-risk"><span className="side-label">{C.risk}</span><Seg options={RISK_OPTIONS} value={risk} onChange={(value) => setUi({ riskMode: value as typeof risk })} label={C.risk} /></div><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-alerts'))}>Alerts</button><WalletButton /><LegalLine /></div></aside>;
 }
 export function Header() {
   const path = usePath(), config = useShell((s) => s.config), state = useShell((s) => s.wsState), block = useShell((s) => s.headBlock), delay = useShell((s) => s.delayedSec), now = useNow();
   const trail = breadcrumbTrail(path, config?.flags);
   const status = state === 'open' ? delay ? `Delayed ~${delay} s` : C.live : state === 'closed' ? C.offline : state === 'connecting' ? C.connecting : C.reconnecting;
-  return <header className="apphdr"><BrandLink /><nav className="apphdr-crumb" aria-label="Breadcrumb">{trail.map((label, i) => <span key={`${i}-${label}`} aria-current={i === trail.length - 1 ? 'page' : undefined}>{label}</span>)}</nav><span className="apphdr-live" data-testid="stream-status"><span className="apphdr-status"><i className={`live-dot ${state}`} />{status}</span><span className="apphdr-sep" />{C.block} <span className="num apphdr-block">{block?.toLocaleString() ?? '—'}</span><span className="apphdr-sep" /><span className="num" aria-hidden="true">{new Date(now).toISOString().slice(11, 19)} UTC</span></span></header>;
+  return <header className="apphdr" onClick={onHeaderBackgroundClick}><BrandLink /><nav className="apphdr-crumb" aria-label="Breadcrumb">{trail.map((label, i) => <span key={`${i}-${label}`} aria-current={i === trail.length - 1 ? 'page' : undefined}>{label}</span>)}</nav><span className="apphdr-live" data-testid="stream-status"><span className="apphdr-status"><i className={`live-dot ${state}`} />{status}</span><span className="apphdr-sep" />{C.block} <span className="num apphdr-block">{block?.toLocaleString() ?? '—'}</span><span className="apphdr-sep" /><span className="num" aria-hidden="true">{new Date(now).toISOString().slice(11, 19)} UTC</span></span></header>;
 }
-export function MobileBar() { return <header className="mbar"><BrandLink /><div className="mbar-r"><PlanChip compact /><WalletButton /></div></header>; }
+export function MobileBar() { return <header className="mbar" onClick={onHeaderBackgroundClick}><BrandLink /><div className="mbar-r"><PlanChip compact /><WalletButton /></div></header>; }
 function Sheet({ title, children, close }: { title: string; children: ReactNode; close: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = ref.current!; dialog.showModal(); return () => dialog.close(); }, []);
@@ -93,6 +94,6 @@ export function MobileTabs() {
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   }, []);
   return <><nav className="mtab" aria-label="Mobile navigation"><Link to="/radar" aria-current={isCurrent('/radar', path) ? 'page' : undefined}><IconRadar size={18} /><span>Radar</span></Link><Link to="/pairs" aria-current={isCurrent('/pairs', path) ? 'page' : undefined}><IconPairs size={18} /><span>Pairs</span></Link><button onClick={() => setSheet('scan')} aria-expanded={sheet === 'scan'}><IconSearch size={18} /><span>{C.scan}</span></button><Link to="/mission" aria-current={isCurrent('/mission', path) ? 'page' : undefined}><span className="mtab-icon"><IconAgent size={18} />{approvals > 0 && <b className="side-badge" aria-label={`${approvals} waiting`}>{approvals}</b>}</span><span>Mission</span></Link><button onClick={() => setSheet('more')} aria-expanded={sheet === 'more'}><IconMenu size={18} /><span>{C.more}</span></button></nav>
-    {sheet && <Sheet title={sheet === 'scan' ? C.scan : C.more} close={close}>{sheet === 'scan' ? <ScanBox focus onDone={close} /> : <><Navigation onDone={close} /><LegalLine /></>}</Sheet>}
+    {sheet && <Sheet title={sheet === 'scan' ? C.scan : C.more} close={close}>{sheet === 'scan' ? <ScanBox focus onDone={close} /> : <><Navigation onDone={close} /><button className="btn" onClick={() => { close(); requestAnimationFrame(() => window.dispatchEvent(new Event('eko:open-alerts'))); }}>Alerts</button><LegalLine /></>}</Sheet>}
   </>;
 }

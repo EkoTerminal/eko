@@ -17,7 +17,7 @@ for(const enabled of [false,true]) {
   if(!enabled)for(const table of ['tokens','pools','swaps','bars_1m'])await db.sql.query(`ALTER TABLE ${table} DISABLE TRIGGER USER`);
   const blocks=[structuredClone(fixture.v3PoolCreated),structuredClone(fixture.ponsLaunch),structuredClone(fixture.ponsSell)];
   const client:ChainClient={chainId:async()=>4663,head:async()=>0n,block:async n=>blocks.find(b=>BigInt(b.block.number)===n)!.block,receipts:async n=>blocks.find(b=>BigInt(b.block.number)===n)!.receipts,
-   code:async()=> '0x',logs:async()=>[],v3Pool:async()=>null,tokenMetadata:async(_a,n)=>({name:'Sample coin',symbol:'DEMO',decimals:18,totalSupply:10n**27n,supplyBlock:n}),ethUsdRate:async n=>({value:2000,block:n})};
+   code:async()=> '0x',logs:async()=>[],v3Pool:async()=>null,tokenMetadata:async(_a,n)=>({name:'Sample coin',symbol:'DEMO',decimals:18,totalSupply:10n**27n,supplyBlock:n}),ethUsdRate:async n=>({value:2000,block:n,source:{address:address(9000),venue:'uniswap_v3',fee:3000}})};
   const decoder=new BlockDecoder(client,loadRegistry(),undefined,()=>{});
   let writes=0;const fixtureStart=performance.now();
   for(const [i,{block,receipts}] of blocks.entries()) {

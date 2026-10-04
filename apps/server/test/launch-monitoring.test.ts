@@ -61,6 +61,23 @@ describe('launch monitoring (offline migrated database, fake delivery)', () => {
     await built.ctx.monitoring.collect();
     expect((await built.ctx.monitoring.checks(false)).receipts.state).toBe('unavailable');
   });
+  it('exports collector observations and marks missing or expired security inputs unavailable', async () => {
+    let now = Date.now(); const monitor = new LaunchMonitor(built.ctx.dbh.chain.sql, () => now);
+    const names = ['registry_ownership_started_timestamp_s', 'registry_ownership_transferred_timestamp_s',
+      'registry_committer_changed_timestamp_s', 'reference_price_timestamp_s', 'receipt_committer_balance_eth'] as const;
+    for (const metric of names) {
+      expect(await monitor.prometheus(false)).toContain(`eko_measurement_available{metric="${metric}"} 0`);
+      await monitor.record({ metric, value: metric.endsWith('_eth') ? .005 : now / 1000 });
+      expect(await monitor.prometheus(false)).toContain(`eko_measurement_available{metric="${metric}"} 1`);
+    }
+    now += 300001;
+    const expired = await monitor.prometheus(false);
+    for (const metric of names) {
+      expect(expired).toContain(`eko_measurement_available{metric="${metric}"} 0`);
+      expect(expired).not.toContain(`eko_launch_value{metric="${metric}"}`);
+    }
+    for (const metric of names) await built.ctx.dbh.chain.sql.query('DELETE FROM launch_measurements WHERE metric=$1', [metric]);
+  });
   it('bounds names/labels and distinguishes queue completion from complete verdict latency', async () => {
     for (const payload of [{ metric: wallet, value: 1 }, { metric: 'quote_ms', value: -1 }, { metric: 'role_guard', value: .5 },
       { metric: 'quote_ms', value: 1, labels: { wallet } }])
@@ -117,6 +134,22 @@ describe('launch monitoring (offline migrated database, fake delivery)', () => {
     expect(rows.rows[0]!.n).toBe(512);
     expect(metricNames.length).toBeLessThan(40);
   });
+  it('exports durable trading stops, switch changes and incidents without private labels', async () => {
+    const scrape = () => built.ctx.monitoring.prometheus(false);
+    const counter = (body: string, name: string) => Number(body.match(new RegExp(`^${name} (\\d+)$`, 'm'))![1]);
+    const before = await scrape();
+    for (const enabled of [true, false]) {
+      expect((await built.app.inject({ method: 'PUT', url: '/v1/admin/trading/live', payload: { enabled }, headers: { cookie, origin } })).statusCode).toBe(200);
+      expect(await scrape()).toContain(`eko_trading_live ${enabled ? 1 : 0}\n`);
+    }
+    expect((await post('/admin/incident', { kind: 'rpc_outage' })).statusCode).toBe(200);
+    const after = await scrape();
+    expect(counter(after, 'eko_trading_live_changes_total') - counter(before, 'eko_trading_live_changes_total')).toBe(2);
+    expect(counter(after, 'eko_incidents_total') - counter(before, 'eko_incidents_total')).toBe(1);
+    expect(after).toContain('eko_trading_live 0\n');
+    expect(after).not.toContain(wallet); expect(after).not.toContain('rpc_outage');
+  });
+
 });
 
 describe('prepared delivery and operational definitions', () => {
@@ -159,7 +192,7 @@ describe('prepared delivery and operational definitions', () => {
       expect(send).toHaveBeenCalledTimes(2);
     } finally { vi.unstubAllGlobals(); initErrorReporting(undefined, 'test'); }
   });
-  it('loads severity thresholds, disabled Kuma checks and empty external receivers', async () => {
+  it('loads severity thresholds, disabled Kuma checks and environment receiver wiring', async () => {
     const readJson = async (name: string) => JSON.parse(await readFile(new URL(`../../../infra/monitoring/${name}.json`, import.meta.url), 'utf8'));
     const alerts = (await readJson('launch-alerts')).groups[0].rules as { alert: string; expr: string; labels: { severity: string }; for?: string }[];
     expect(alerts.find(r => r.alert === 'SimulationFailures')).toMatchObject({ expr: 'eko_launch_value{metric="simulation_failure"} > 0.05', for: '5m', labels: { severity: '2' } });
@@ -167,7 +200,27 @@ describe('prepared delivery and operational definitions', () => {
     expect(alerts.find(r => r.alert === 'PreflightLatency')!.labels.severity).toBe('3');
     const kuma = await readJson('uptime-kuma-checks');
     expect(kuma.checks.filter((c: { active: boolean }) => !c.active).map((c: { name: string }) => c.name)).toEqual(['x', 'farcaster', 'daily_burn']);
-    expect((await readJson('alertmanager')).receivers.every((r: object) => Object.keys(r).length === 1)).toBe(true);
+    const config = await readJson('alertmanager');
+    expect(config.route.receiver).toBe('ops-and-oncall');
+    expect(config.receivers.find((r: { name: string }) => r.name === 'ops-and-oncall').webhook_configs.map((w: { url: string }) => w.url))
+      .toEqual(['${OPS_ALERT_WEBHOOK_URL}', '${ONCALL_ALERT_WEBHOOK_URL}']);
+    for (const name of ['RegistryOwnershipTransferStarted', 'RegistryOwnershipTransferred', 'RegistryCommitterChanged',
+      'TradingLiveChanged', 'TradingPaused', 'IncidentRecorded', 'ReferencePriceStale', 'ReceiptCommitterGasLow', 'SecurityCollectorUnavailable'])
+      expect(alerts.find(r => r.alert === name)).toBeDefined();
+    expect(alerts.find(r => r.alert === 'BurnUnexpectedOutflow')!.expr).not.toContain('daily_burn');
+  });
+  it('renders receiver URLs from the environment and refuses unresolved or insecure delivery', async () => {
+    // @ts-expect-error Repo-local operational script has no TypeScript declaration.
+    const { renderAlertmanager } = await import('../../../infra/monitoring/render-alertmanager.mjs');
+    const config = JSON.parse(await readFile(new URL('../../../infra/monitoring/alertmanager.json', import.meta.url), 'utf8'));
+    const env = { OPS_ALERT_WEBHOOK_URL: 'https://ops.eko.example/webhook', ONCALL_ALERT_WEBHOOK_URL: 'https://oncall.eko.example/webhook' };
+    const rendered = renderAlertmanager(config, env);
+    expect(rendered.receivers[1].webhook_configs.map((w: { url: string }) => w.url)).toEqual(Object.values(env));
+    expect(JSON.stringify(config)).toContain('${OPS_ALERT_WEBHOOK_URL}');
+    expect(() => renderAlertmanager(config, {})).toThrow('OPS_ALERT_WEBHOOK_URL');
+    for (const url of ['http://ops.eko.example', 'https://fixture:credential@ops.eko.example', 'invalid'])
+      expect(() => renderAlertmanager(config, { ...env, OPS_ALERT_WEBHOOK_URL: url })).toThrow('OPS_ALERT_WEBHOOK_URL');
+    expect(() => renderAlertmanager(config, { ...env, ONCALL_ALERT_WEBHOOK_URL: '' })).toThrow('ONCALL_ALERT_WEBHOOK_URL');
   });
   it('prepares ops commands by default and tests authenticated dispatch with a fake sink', async () => {
     // @ts-expect-error Repo-local operational script has no TypeScript declaration.

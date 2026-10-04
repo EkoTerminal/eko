@@ -1,0 +1,73 @@
+{
+  "environment": "Offline in-memory PGlite, indexer decoder fixture replay and BlockRows.flush synthetic range. Single sample per workload/mode.",
+  "shape": {
+    "fixture": [
+      "v3PoolCreated",
+      "ponsLaunch",
+      "ponsSell"
+    ],
+    "syntheticSwaps": 100000,
+    "syntheticBlocks": 200,
+    "coins": 100,
+    "sendersPendingSwaps": 50000,
+    "pricingPendingSwaps": 25000,
+    "chunks": 10,
+    "swapsPerChunk": 10000
+  },
+  "before": [
+    {
+      "kind": "fixture",
+      "enabled": false,
+      "ingestMs": 77.85308299999997,
+      "writeMs": 35.25279199999977
+    },
+    {
+      "kind": "100k swaps",
+      "enabled": false,
+      "ingestMs": 5518.828042,
+      "writeMs": 5383.081582999999
+    },
+    {
+      "kind": "fixture",
+      "enabled": true,
+      "ingestMs": 74.94320799999969,
+      "writeMs": 36.18016700000044
+    },
+    {
+      "kind": "100k swaps",
+      "enabled": true,
+      "ingestMs": 7538.295292,
+      "writeMs": 7400.2232920000015
+    }
+  ],
+  "after": [
+    {
+      "kind": "fixture",
+      "enabled": false,
+      "ingestMs": 93.915708,
+      "writeMs": 43.54783300000008,
+      "refreshMs": 0.42604199999982484
+    },
+    {
+      "kind": "100k swaps",
+      "enabled": false,
+      "ingestMs": 5727.157916,
+      "writeMs": 5581.725959000001,
+      "refreshMs": 0.24362500000006548
+    },
+    {
+      "kind": "fixture",
+      "enabled": true,
+      "ingestMs": 66.95745799999986,
+      "writeMs": 28.661667999999736,
+      "refreshMs": 6.887917000000016
+    },
+    {
+      "kind": "100k swaps",
+      "enabled": true,
+      "ingestMs": 5817.2699170000005,
+      "writeMs": 5678.6556230000015,
+      "refreshMs": 67.57616599999892
+    }
+  ]
+}

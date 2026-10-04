@@ -1,0 +1,1030 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SignalOS · LOW-RES</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sixtyfour:BLED,SCAN@0..100,-53..100&family=Silkscreen:wght@400;700&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0A0A0A; --paper:#F0F0F0; --g3:#3A3A3A; --g7:#7A7A7A;
+  --sig:#FF6B00; --long:#00DFA2; --short:#FF3355;
+  --display:'Sixtyfour', monospace; --mono:'JetBrains Mono', ui-monospace, monospace; --pix:'Silkscreen', monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#262626}
+body{padding:40px 0;display:flex;flex-direction:column;align-items:center;gap:40px;font-family:var(--mono);color:var(--paper);-webkit-font-smoothing:antialiased}
+.board{width:1600px;height:900px;overflow:hidden;position:relative;flex:none;background:var(--ink)}
+.abs{position:absolute}
+svg{display:block}
+.pix{font-family:var(--pix)}
+.disp{font-family:var(--display)}
+.up{color:var(--long)} .dn{color:var(--short)} .sig{color:var(--sig)} .dim{color:var(--g7)}
+kbd{font-family:var(--pix);font-size:11px;display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 5px;border:1px solid var(--g7);border-bottom-width:3px;color:var(--paper);background:var(--ink);line-height:1}
+/* pixel-notched corners */
+.pxc{clip-path:polygon(0 6px,3px 6px,3px 3px,6px 3px,6px 0,calc(100% - 6px) 0,calc(100% - 6px) 3px,calc(100% - 3px) 3px,calc(100% - 3px) 6px,100% 6px,100% calc(100% - 6px),calc(100% - 3px) calc(100% - 6px),calc(100% - 3px) calc(100% - 3px),calc(100% - 6px) calc(100% - 3px),calc(100% - 6px) 100%,6px 100%,6px calc(100% - 3px),3px calc(100% - 3px),3px calc(100% - 6px),0 calc(100% - 6px))}
+.pxc-s{clip-path:polygon(0 3px,3px 3px,3px 0,calc(100% - 3px) 0,calc(100% - 3px) 3px,100% 3px,100% calc(100% - 3px),calc(100% - 3px) calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,3px calc(100% - 3px),0 calc(100% - 3px))}
+.cursor{display:inline-block;background:var(--sig);animation:blink 1.06s steps(1) infinite}
+@keyframes blink{0%,62%{opacity:1}63%,100%{opacity:0}}
+.still *{animation:none!important}
+/* dither-stripe PAPER badge */
+.paperbadge{display:inline-flex;align-items:center;padding:3px;background:var(--pat-stripe);}
+.paperbadge b{font-family:var(--pix);font-weight:400;font-size:11px;letter-spacing:.06em;background:var(--ink);color:var(--paper);padding:3px 7px;line-height:1}
+.paperbadge.lg b{font-size:13px;padding:5px 10px}
+.paperbadge.inv{background:var(--pat-stripe-ink)}
+.paperbadge.inv b{background:var(--paper);color:var(--ink)}
+.cta{display:inline-flex;align-items:center;gap:14px;background:var(--sig);color:var(--ink);font-family:var(--pix);font-size:17px;letter-spacing:.04em;padding:0 22px;height:56px;text-decoration:none;white-space:nowrap}
+.cta .k{font-family:var(--pix);font-size:11px;border:1px solid var(--ink);border-bottom-width:3px;padding:3px 6px 2px;line-height:1}
+.tri{font-family:var(--mono)}
+
+/* ============================ BOARD 1 ============================ */
+.b1{background:var(--ink)}
+.b1 .grid{inset:0;background:var(--pat-dotgrid)}
+.b1 nav{left:0;top:0;width:1600px;height:64px;border-bottom:1px solid var(--g3);display:flex;align-items:center;padding:0 40px;gap:40px;background:var(--ink);z-index:5}
+.brand{display:flex;align-items:center;gap:14px}
+.wordmark{font-family:var(--display);font-size:19px;letter-spacing:0;line-height:1;padding-top:2px}
+.b1 nav ul{list-style:none;margin:0 0 0 18px;padding:0;display:flex;gap:28px;font-size:13px;font-weight:500;letter-spacing:.06em}
+.b1 nav li b{font-family:var(--pix);font-weight:400;color:var(--g7);margin-right:6px;font-size:11px}
+.navr{margin-left:auto;display:flex;align-items:center;gap:18px;font-size:12px}
+.chainpill{display:flex;align-items:center;gap:8px;color:var(--g7);letter-spacing:.06em}
+.chainpill i{width:8px;height:8px;background:var(--paper);display:inline-block;animation:blink 1.6s steps(1) infinite}
+.ghost{border:1px solid var(--paper);padding:9px 14px;font-family:var(--pix);font-size:12px;letter-spacing:.04em;color:var(--paper)}
+
+.kicker{left:56px;top:92px;font-size:13px;letter-spacing:.08em;color:var(--g7);display:flex;gap:10px;align-items:center;z-index:3}
+.kicker .tag{font-family:var(--pix);font-size:11px;color:var(--ink);background:var(--paper);padding:3px 6px;letter-spacing:.04em}
+.h1{margin:0;left:52px;top:122px;font-family:var(--display);font-weight:400;font-size:96px;line-height:96px;letter-spacing:0;z-index:3;white-space:nowrap}
+.h1 span{display:block}
+.h1 .l1{color:var(--g7);font-variation-settings:"SCAN" 0,"BLED" 0}
+.h1 .l2,.h1 .l3{color:var(--paper);font-variation-settings:"SCAN" 60,"BLED" 0}
+.h1 .cursor{width:58px;height:84px;vertical-align:-6px;margin-left:10px}
+.lede{left:1066px;top:236px;width:484px;z-index:3}
+.lede p{margin:0 0 20px;font-size:16px;line-height:1.5;color:var(--paper)}
+.lede p em{font-style:normal;color:var(--g7)}
+.lede .row{display:flex;align-items:center;gap:16px}
+.lede .note{font-size:11px;color:var(--g7);line-height:1.6;letter-spacing:.04em;white-space:nowrap}
+.keys{margin-top:14px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--g7);letter-spacing:.02em}
+.keys kbd{margin:0 2px}
+
+.chartwrap{left:0;top:432px;width:1600px;height:368px}
+#heroCanvas{position:absolute;left:0;top:0;width:1600px;height:368px;image-rendering:pixelated}
+.axis-l{position:absolute;right:10px;font-family:var(--pix);font-size:11px;color:var(--g7);transform:translateY(-50%);background:var(--ink);padding:2px 4px}
+.pricetag{position:absolute;right:0;transform:translateY(-50%);background:var(--paper);color:var(--ink);font-family:var(--pix);font-size:12px;padding:4px 8px 4px 10px;z-index:2}
+.illus{position:absolute;font-family:var(--pix);font-size:11px;color:var(--g7);letter-spacing:.04em;background:var(--ink);padding:3px 6px;white-space:nowrap}
+.nowtag{position:absolute;font-family:var(--pix);font-size:11px;color:var(--paper);transform:translateX(-50%);white-space:nowrap}
+
+/* flags */
+.flag{position:absolute;left:0;top:0;z-index:4}
+.flag .pole{position:absolute;width:4px;background:var(--paper)}
+.flag .cloth{position:absolute;display:flex;align-items:center;gap:10px;padding:8px 12px 8px 8px;background:var(--ink);white-space:nowrap}
+.flag .cloth::before{content:"";position:absolute;inset:0;border:2px solid var(--paper);pointer-events:none}
+.flag.focus .cloth::before{border-color:var(--sig)}
+.flag .nm{font-family:var(--pix);font-size:12px;letter-spacing:.04em;line-height:1.1}
+.flag .cl{font-family:var(--mono);font-weight:800;font-size:15px;line-height:1.2}
+.flag .tl{font-family:var(--pix);font-size:11px;color:var(--g7);line-height:1.2}
+.flag .spr{flex:none}
+
+/* call board */
+.callboard{left:40px;top:452px;width:516px;height:334px;background:var(--ink);border:1px solid var(--g7);z-index:4}
+.callboard::after{content:"";position:absolute;left:8px;top:8px;width:100%;height:100%;background:var(--pat-check-g3);z-index:-1}
+.cb-head{height:32px;border-bottom:1px solid var(--g3);display:flex;align-items:center;padding:0 12px;gap:10px;font-family:var(--pix);font-size:12px;letter-spacing:.05em;background:var(--ink)}
+.cb-head .live{display:inline-flex;align-items:center;gap:6px;color:var(--paper)}
+.cb-head .live i{width:8px;height:8px;background:var(--short);display:inline-block}
+.cb-head .r{margin-left:auto;color:var(--g7)}
+.cb-grid{display:grid;grid-template-columns:repeat(4,1fr);background:var(--ink)}
+.tile{position:relative;height:150px;border-right:1px solid var(--g3);border-bottom:1px solid var(--g3);padding:8px 8px 0;text-align:center;background:var(--ink)}
+.tile:nth-child(4n){border-right:0}
+.tile:nth-child(n+5){border-bottom:0}
+.tile .ix{position:absolute;left:7px;top:6px;font-family:var(--pix);font-size:11px;color:var(--g7)}
+.tile .ty{position:absolute;right:7px;top:6px;font-family:var(--pix);font-size:11px;color:var(--g7)}
+.tile .spr{margin:10px auto 6px;width:64px;height:64px}
+.tile .nm{font-family:var(--pix);font-size:12px;letter-spacing:.03em;white-space:nowrap}
+.tile .cl{font-weight:800;font-size:14px;margin-top:4px;white-space:nowrap}
+.tile .tl{font-family:var(--pix);font-size:11px;color:var(--g7);margin-top:1px;white-space:nowrap}
+.tile .cl.idle{color:var(--g7);font-weight:500;font-size:12px;margin-top:6px}
+.tile.focus{outline:2px solid var(--sig);outline-offset:-3px}
+.tile.focus .ix{color:var(--sig)}
+
+/* bottom strip */
+.strip{left:0;top:800px;width:1600px;height:100px;border-top:1px solid var(--g3);background:var(--ink);z-index:5;display:grid;grid-template-columns:600px 1fr 290px}
+.boot{padding:14px 0 0 40px;font-size:11px;line-height:15px;color:var(--g7);white-space:pre;letter-spacing:.01em}
+.boot b{color:var(--paper);font-weight:500}
+.boot .ok{color:var(--paper)}
+.boot .cur{display:inline-block;width:7px;height:12px;background:var(--sig);vertical-align:-2px}
+.teaser{border-left:1px solid var(--g3);padding:16px 26px 0;display:flex;flex-direction:column;gap:10px}
+.teaser .t1{display:flex;align-items:center;gap:12px;font-family:var(--pix);font-size:12px;letter-spacing:.05em}
+.teaser .t1 .n{background:var(--paper);color:var(--ink);padding:2px 6px}
+.teaser .t1 .d{color:var(--g7)}
+.teaser .roster{display:flex;gap:10px;align-items:flex-end}
+.teaser .roster .sep{width:1px;height:26px;background:var(--g3);margin:0 4px}
+.disc{border-left:1px solid var(--g3);padding:16px 40px 0 22px;font-size:11px;line-height:1.55;color:var(--g7)}
+.disc b{color:var(--paper);font-weight:700;font-family:var(--pix);font-size:12px;font-weight:400;letter-spacing:.04em;display:block;margin-bottom:4px}
+
+/* ============================ BOARD 2 ============================ */
+.b2{font-size:12px}
+.b2 .line-b{border-bottom:1px solid var(--g3)}
+.top{left:0;top:0;width:1600px;height:48px;border-bottom:1px solid var(--g3);display:flex;align-items:center;padding:0 0 0 16px;gap:0}
+.top .brand{gap:10px;padding-right:18px;border-right:1px solid var(--g3);height:100%}
+.top .wordmark{font-size:14px}
+.mkt{display:flex;align-items:center;gap:12px;padding:0 18px;height:100%;border-right:1px solid var(--g3)}
+.mkt .pair{font-weight:800;font-size:15px;letter-spacing:.02em}
+.mkt .pair small{font-family:var(--pix);font-size:11px;color:var(--g7);font-weight:400;margin-left:4px}
+.mkt .last{font-size:15px;font-weight:700}
+.mkt .meta{display:flex;flex-direction:column;font-size:11px;color:var(--g7);line-height:1.25}
+.mkt .meta b{color:var(--paper);font-weight:500}
+.tfs{display:flex;height:100%;align-items:center;gap:2px;padding:0 14px;border-right:1px solid var(--g3)}
+.tfs span{font-family:var(--pix);font-size:11px;padding:6px 8px;color:var(--g7)}
+.tfs span.on{background:var(--paper);color:var(--ink)}
+.cmdk{margin-left:18px;width:260px;white-space:nowrap;height:30px;border:1px solid var(--g3);display:flex;align-items:center;gap:10px;padding:0 10px;color:var(--g7);font-size:12px}
+.cmdk .c{width:7px;height:14px;background:var(--sig)}
+.cmdk kbd{margin-left:auto;height:18px;min-width:18px;font-size:11px;border-bottom-width:2px}
+.modes{margin-left:auto;display:flex;align-items:center;height:100%;padding:0 16px;gap:10px;border-left:1px solid var(--g3)}
+.modes .lbl{font-family:var(--pix);font-size:11px;color:var(--g7)}
+.seg{display:flex;border:1px solid var(--g7)}
+.seg span{font-family:var(--pix);font-size:12px;padding:0 12px;height:28px;display:flex;align-items:center;color:var(--g7);border-right:1px solid var(--g7)}
+.seg span:last-child{border-right:0}
+.seg span.on{background:var(--pat-stripe);padding:0 3px}
+.seg span.on b{background:var(--ink);color:var(--paper);font-weight:400;padding:4px 8px}
+.seg span .lk{margin-left:7px;display:inline-flex}
+.wallet{display:flex;align-items:center;gap:12px;height:100%;padding:0 16px;white-space:nowrap;border-left:1px solid var(--g3);font-size:11px;color:var(--g7);line-height:1.3}
+.wallet .ghost{font-size:11px;padding:7px 10px}
+
+.rail{left:0;top:48px;width:232px;height:828px;border-right:1px solid var(--g3)}
+.rail .hd{height:36px;display:flex;align-items:center;padding:0 12px;font-family:var(--pix);font-size:12px;letter-spacing:.04em;border-bottom:1px solid var(--g3)}
+.rail .hd .r{margin-left:auto;color:var(--g7);font-size:11px}
+.grp{height:24px;display:flex;align-items:center;padding:0 12px;font-family:var(--pix);font-size:11px;color:var(--g7);letter-spacing:.04em;border-bottom:1px solid var(--g3);background:linear-gradient(var(--ink),var(--ink))}
+.grp .r{margin-left:auto}
+.bot{height:40px;display:flex;align-items:center;gap:9px;padding:0 10px 0 12px;border-bottom:1px solid #1c1c1c;position:relative}
+.bot .ck{width:12px;height:12px;border:1px solid var(--g7);flex:none}
+.bot .ck{display:none}
+.bot .nm{font-family:var(--pix);font-size:12px;letter-spacing:.02em;line-height:1.1;white-space:nowrap}
+.bot .tx{min-width:0;flex:1}
+.bot .sub{font-size:11px;color:var(--g7);line-height:1.2;white-space:nowrap}
+.bot .st{margin-left:4px;flex:none;text-align:right;font-size:11px;line-height:1.2;white-space:nowrap}
+.bot .st b{font-weight:800;font-size:12px}
+.bot .st small{display:block;font-family:var(--pix);font-size:11px;color:var(--g7)}
+.bot.focus{background:#141414}
+.bot.focus::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--sig)}
+.bot.off .nm{color:var(--g7)}
+.bot .eye{width:8px;height:8px;flex:none;border:1px solid var(--g7)}
+.bot.on .eye{background:var(--paper);border-color:var(--paper)}
+.detail{margin:12px;border:1px solid var(--g3);padding:10px 12px;font-size:11px;line-height:1.55;color:var(--g7)}
+.detail .t{font-family:var(--pix);font-size:12px;color:var(--paper);margin-bottom:6px;display:flex;justify-content:space-between}
+.detail .kv{display:flex;justify-content:space-between}
+.detail .kv b{color:var(--paper);font-weight:500}
+.detail .lnk{margin-top:8px;color:var(--paper);font-family:var(--pix);font-size:11px;border-top:1px solid var(--g3);padding-top:8px}
+.shop{position:absolute;left:12px;right:12px;bottom:12px;display:flex;flex-direction:column;gap:6px}
+.shop div{border:1px dashed var(--g7);padding:8px 10px;font-family:var(--pix);font-size:11px;display:flex;justify-content:space-between;color:var(--paper)}
+.shop div span{color:var(--g7)}
+
+.cpanel{left:232px;top:48px;width:840px;height:564px;border-right:1px solid var(--g3)}
+.chead{height:32px;display:flex;align-items:center;gap:16px;padding:0 12px;border-bottom:1px solid var(--g3);font-size:11px;color:var(--g7);white-space:nowrap}
+.chead b{color:var(--paper);font-weight:500}
+.chead .p{font-family:var(--pix);font-size:12px;color:var(--paper)}
+.chead .r{margin-left:auto}
+#tradeChart{position:absolute;left:0;top:32px;width:840px;height:532px}
+.b2flag{position:absolute;left:0;top:0;z-index:3}
+.b2flag .pole{position:absolute;width:2px;background:var(--paper)}
+.b2flag .cloth{position:absolute;display:flex;align-items:center;gap:8px;padding:5px 10px 5px 5px;background:var(--ink);white-space:nowrap;border:1px solid var(--paper)}
+.b2flag.focus .cloth{border:2px solid var(--sig);padding:4px 9px 4px 4px}
+.b2flag .nm{font-family:var(--pix);font-size:11px;line-height:1.15}
+.b2flag .cl{font-weight:800;font-size:12px;line-height:1.2}
+.b2flag .tl{font-family:var(--pix);font-size:11px;color:var(--g7)}
+.b2flag.exp .cloth{border-color:var(--g3);color:var(--g7)}
+.b2flag.exp .pole{background:var(--g7)}
+.tag2{position:absolute;right:0;transform:translateY(-50%);font-family:var(--pix);font-size:11px;padding:3px 6px;background:var(--paper);color:var(--ink);white-space:nowrap}
+.tag2.x{background:var(--g3);color:var(--paper)}
+.ax2{position:absolute;right:8px;transform:translateY(-50%);font-family:var(--pix);font-size:11px;color:var(--g7)}
+.tx2{position:absolute;bottom:4px;transform:translateX(-50%);font-family:var(--pix);font-size:11px;color:var(--g7)}
+
+.depth{left:1072px;top:48px;width:200px;height:564px;border-right:1px solid var(--g3)}
+.dh{height:32px;display:flex;align-items:center;padding:0 10px;font-family:var(--pix);font-size:12px;border-bottom:1px solid var(--g3)}
+.dh .r{margin-left:auto;font-size:11px;color:var(--g7)}
+.dcols{display:flex;justify-content:space-between;padding:6px 10px 4px;font-size:11px;color:var(--g7);border-bottom:1px solid var(--g3)}
+.dside{padding:4px 10px;font-family:var(--pix);font-size:11px;display:flex;justify-content:space-between}
+.drow{position:relative;height:20px;display:flex;justify-content:space-between;align-items:center;padding:0 10px;font-size:11px;font-variant-numeric:tabular-nums}
+.drow .bar{position:absolute;right:0;top:2px;bottom:2px}
+.drow.a .bar{background:var(--pat-check-g3)}
+.drow.b .bar{background:var(--g3)}
+.drow span{position:relative}
+.drow .sz{color:var(--g7)}
+.spread{height:30px;border-top:1px solid var(--g3);border-bottom:1px solid var(--g3);display:flex;align-items:center;justify-content:space-between;padding:0 10px;margin:4px 0}
+.spread b{font-size:14px;font-weight:800}
+.spread span{font-size:11px;color:var(--g7)}
+.dfoot{position:absolute;bottom:8px;left:10px;right:10px;font-family:var(--pix);font-size:11px;color:var(--g7);line-height:1.4}
+
+.bpanel{left:232px;top:612px;width:1040px;height:264px}
+.tabs{height:34px;display:flex;border-bottom:1px solid var(--g3)}
+.tabs span{font-family:var(--pix);font-size:12px;padding:0 16px;display:flex;align-items:center;gap:8px;color:var(--g7);border-right:1px solid var(--g3)}
+.tabs span.on{color:var(--paper);box-shadow:inset 0 -3px 0 var(--paper)}
+.tabs span i{font-style:normal;background:var(--g3);color:var(--paper);padding:1px 5px;font-size:11px}
+.tabs .r{margin-left:auto;border-right:0;border-left:1px solid var(--g3)}
+.bgrid{display:grid;grid-template-columns:600px 1fr;height:230px}
+table.pos{width:100%;border-collapse:collapse;font-size:11px;table-layout:auto}
+.pos th{font-weight:400;color:var(--g7);text-align:left;padding:8px 7px 6px;border-bottom:1px solid var(--g3);white-space:nowrap}
+.pos td{padding:0 7px;height:38px;border-bottom:1px solid #1c1c1c;white-space:nowrap;font-variant-numeric:tabular-nums}
+.pos td.b{font-weight:700;font-size:12px}
+.pos .mini{display:inline-flex;align-items:center;gap:6px;vertical-align:middle}
+.pos .x{border:1px solid var(--g7);padding:3px 7px;font-family:var(--pix);font-size:11px}
+.feed{border-left:1px solid var(--g3);padding:0}
+.feed .fh{display:flex;justify-content:space-between;padding:8px 12px 6px;font-size:11px;color:var(--g7);border-bottom:1px solid var(--g3)}
+.frow{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-bottom:1px solid #1c1c1c;font-size:11px;white-space:nowrap}
+.frow .t{color:var(--g7);width:58px}
+.frow .n{font-family:var(--pix);font-size:11px;width:92px}
+.frow b{font-weight:800;font-size:12px;width:58px}
+.frow .m{color:var(--g7)}
+.frow .l{margin-left:auto;font-family:var(--pix);font-size:11px}
+.frow.ex{color:var(--g7)}
+
+.ticket{left:1272px;top:48px;width:328px;height:828px;padding:0}
+.tk-h{height:44px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--g3)}
+.tk-h .t{font-family:var(--pix);font-size:13px;letter-spacing:.04em}
+.tk-h .x{margin-left:auto;font-size:11px;color:var(--g7)}
+.src{display:flex;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--g3)}
+.src .nm{font-family:var(--pix);font-size:13px}
+.src .ty{font-size:11px;color:var(--g7);margin-top:2px}
+.src .call{margin-left:auto;text-align:right}
+.src .call b{display:block;font-size:20px;font-weight:800;line-height:1;white-space:nowrap}
+.src .call small{font-family:var(--pix);font-size:11px;color:var(--g7)}
+.side{display:grid;grid-template-columns:1fr 1fr;gap:0;margin:12px 14px 0;border:1px solid var(--g7)}
+.side span{height:38px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:800;font-size:14px;color:var(--g7)}
+.side span kbd{height:18px;min-width:18px;font-size:11px;border-bottom-width:2px}
+.side span.on{background:var(--pat-check-short);color:var(--paper);position:relative}
+.side span.on em{font-style:normal;background:var(--short);color:var(--ink);padding:4px 8px}
+.prices{margin:14px 14px 0;border:1px solid var(--g3)}
+.prices .ph{display:flex;justify-content:space-between;padding:7px 10px;font-family:var(--pix);font-size:11px;color:var(--g7);border-bottom:1px solid var(--g3)}
+.pr{display:grid;grid-template-columns:22px 1fr auto;align-items:start;padding:7px 10px 7px;border-bottom:1px solid #1c1c1c;column-gap:6px}
+.pr:last-child{border-bottom:0}
+.pr .n{font-family:var(--pix);font-size:11px;color:var(--ink);background:var(--g7);width:16px;height:16px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+.pr .k{font-size:12px;font-weight:700;letter-spacing:.02em}
+.pr .k small{display:block;font-weight:400;font-size:11px;color:var(--g7);letter-spacing:0;margin-top:1px}
+.pr .v{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
+.pr .v small{display:block;font-size:11px;color:var(--g7);font-weight:400}
+.pr.fill .n{background:var(--paper)}
+.pr.fill .v{color:var(--g7)}
+.amt{margin:14px 14px 0}
+.amt .lb{display:flex;justify-content:space-between;font-family:var(--pix);font-size:11px;color:var(--g7);margin-bottom:6px}
+.amt .box{height:44px;border:1px solid var(--paper);display:flex;align-items:center;padding:0 12px;gap:8px}
+.amt .box b{font-size:20px;font-weight:800}
+.amt .box span{color:var(--g7);font-size:12px}
+.amt .box .cur{width:3px;height:22px;background:var(--sig);margin-left:-4px}
+.amt .box .usd{margin-left:auto}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+.chips span{border:1px solid var(--g3);text-align:center;font-family:var(--pix);font-size:11px;padding:5px 0;color:var(--g7)}
+.chips span.on{border-color:var(--paper);color:var(--paper)}
+.costs{margin:12px 14px 0;font-size:11px;color:var(--g7);line-height:1}
+.costs div{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dotted var(--g3)}
+.costs b{color:var(--paper);font-weight:500}
+.go{margin:14px 14px 0;width:300px;height:54px;justify-content:space-between;font-size:15px;padding:0 14px 0 18px}
+.go .k{font-size:11px}
+.fine{margin:10px 14px 0;font-size:11px;line-height:1.5;color:var(--g7)}
+.fine b{color:var(--paper);font-weight:500}
+.after{margin:12px 14px 0;border-top:1px dashed var(--g3);padding-top:10px;font-size:11px;color:var(--g7);line-height:1.5;display:flex;flex-direction:column;gap:3px}
+.after .pix{color:var(--paper);font-size:11px}
+.after b{color:var(--paper);font-weight:500}
+.auto{position:absolute;left:14px;right:14px;bottom:12px;border:1px solid var(--g3);padding:8px 10px;font-family:var(--pix);font-size:11px;display:flex;justify-content:space-between;color:var(--g7)}
+.auto b{color:var(--paper);font-weight:400}
+
+.status{left:0;top:876px;width:1600px;height:24px;border-top:1px solid var(--g3);display:flex;align-items:center;gap:18px;padding:0 12px;font-size:11px;color:var(--g7);white-space:nowrap}
+.status b{color:var(--paper);font-weight:500}
+.status .r{margin-left:auto}
+.status .sq{width:7px;height:7px;background:var(--paper);display:inline-block;margin-right:6px}
+
+/* ============================ BOARD 3 ============================ */
+.b3{background:var(--paper);color:var(--ink)}
+.sheet{left:0;top:0;width:880px;height:900px;padding:30px 40px}
+.sh-head{display:flex;justify-content:space-between;font-family:var(--pix);font-size:12px;letter-spacing:.05em;border-bottom:2px solid var(--ink);padding-bottom:8px}
+.sh-head span:last-child{color:var(--g7)}
+.lab{font-family:var(--pix);font-size:11px;letter-spacing:.05em;color:var(--g7);margin-bottom:8px;display:flex;gap:8px;align-items:center}
+.lab b{color:var(--ink);font-weight:400}
+.rowA{position:absolute;left:40px;top:66px;width:800px;height:270px;display:flex;gap:22px}
+.marktile{width:270px;height:270px;background:var(--ink);position:relative;flex:none}
+.marktile .cap{position:absolute;left:12px;bottom:10px;font-family:var(--pix);font-size:11px;color:var(--g7)}
+.marktile .cap2{position:absolute;right:12px;bottom:10px;font-family:var(--pix);font-size:11px;color:var(--sig)}
+.markside{flex:1;display:flex;flex-direction:column;gap:12px}
+.lockup{display:flex;align-items:center;gap:18px;height:96px;border-bottom:1px solid var(--g3);padding-bottom:12px}
+.lockup .wm{font-family:var(--display);font-size:44px;line-height:1;font-variation-settings:"SCAN" 60}
+.lockup .tagl{font-family:var(--pix);font-size:12px;color:var(--g7);margin-top:10px;letter-spacing:.06em}
+.constr{display:flex;gap:18px;align-items:flex-start}
+.constr .txt{font-size:12px;line-height:1.5;color:#2a2a2a;width:210px}
+.constr .txt b{font-family:var(--pix);font-weight:400;font-size:12px;display:block;margin-bottom:4px;color:var(--ink)}
+.favs{display:flex;align-items:flex-end;gap:12px}
+.fav{background:var(--ink);display:flex;align-items:center;justify-content:center}
+.favs .cap{font-family:var(--pix);font-size:11px;color:var(--g7);text-align:center;margin-top:5px}
+.browser{border:1px solid var(--ink);height:62px;background:#dcdcdc;position:relative}
+.browser .tab{position:absolute;left:10px;top:8px;width:200px;height:26px;z-index:1;background:var(--paper);border:1px solid var(--ink);border-bottom:0;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:12px}
+.browser .tab .x{margin-left:auto;color:var(--g7)}
+.browser .tab.t2{left:214px;width:150px;background:#dcdcdc;border-color:#9a9a9a;color:var(--g7)}
+.browser .bar{position:absolute;left:0;right:0;top:34px;bottom:0;background:var(--paper);border-top:1px solid var(--ink);display:flex;align-items:center;padding:0 10px;font-size:11px;color:var(--g7)}
+
+.rowB{position:absolute;left:40px;top:352px;width:800px}
+.swatches{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+.sw .chip{height:48px;border:1px solid var(--ink);position:relative}
+.sw .hx{font-family:var(--pix);font-size:12px;margin-top:7px}
+.sw .nm{font-size:11px;font-weight:700;margin-top:2px;letter-spacing:.03em}
+.sw .job{font-size:11px;color:#3a3a3a;line-height:1.35;margin-top:3px}
+
+.rowC{position:absolute;left:40px;top:492px;width:800px;display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:0;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink)}
+.spec{padding:10px 14px 12px 0;border-right:1px solid var(--g3)}
+.spec + .spec{padding-left:14px}
+.spec:last-child{border-right:0}
+.spec .fn{font-family:var(--pix);font-size:11px;color:var(--g7);display:flex;justify-content:space-between}
+.spec .big{margin-top:8px;line-height:1}
+.spec .use{font-size:11px;color:#3a3a3a;margin-top:8px;line-height:1.4}
+
+.rowD{position:absolute;left:40px;top:622px;width:800px}
+.roster3{display:flex;gap:16px}
+.rg{display:flex;flex-direction:column}
+.rg .ms{display:flex;gap:4px}
+.rg .gl{border-top:2px solid var(--ink);margin-top:8px;padding-top:5px;font-family:var(--pix);font-size:11px;color:var(--g7);display:flex;justify-content:space-between}
+.rg .gl b{color:var(--ink);font-weight:400}
+.r3{text-align:center;width:66px}
+.r3 .spr{margin:0 auto}
+.r3 .nm{font-family:var(--pix);font-size:11px;margin-top:6px;line-height:1.15;height:26px;letter-spacing:-.02em}
+
+.rowE{position:absolute;left:40px;top:770px;width:800px;display:grid;grid-template-columns:230px 250px 1fr;gap:22px;align-items:start}
+.motif .mt{font-family:var(--pix);font-size:11px;color:var(--g7);margin-bottom:6px}
+
+/* storyboard */
+.film{left:880px;top:0;width:720px;height:900px;background:var(--ink);color:var(--paper);padding:30px 32px}
+.film .fl{font-family:var(--pix);font-size:12px;letter-spacing:.05em;color:var(--g7);display:flex;justify-content:space-between;border-bottom:1px solid var(--g3);padding-bottom:8px}
+.film .fl .rec{color:var(--paper);display:flex;gap:8px;align-items:center}
+.film .fl .rec i{width:9px;height:9px;background:var(--sig);display:inline-block}
+.film h2{margin:14px 0 0;font-family:var(--display);font-weight:400;font-size:38px;line-height:1;font-variation-settings:"SCAN" 60}
+.film .logline{margin-top:12px;font-size:13px;line-height:1.5;color:var(--paper);max-width:656px}
+.film .logline em{font-style:normal;color:var(--g7)}
+.frames{position:absolute;left:32px;top:212px;width:656px;display:grid;grid-template-columns:320px 320px;column-gap:16px;row-gap:8px}
+.fr .scr{width:320px;height:180px;border:1px solid var(--g7);position:relative;background:var(--ink);overflow:hidden}
+.fr .cap{display:flex;gap:10px;margin-top:7px;font-size:11px;line-height:1.4;color:var(--g7);height:31px}
+.fr .cap .ts{font-family:var(--pix);color:var(--paper);font-size:12px;flex:none;border:1px solid var(--g7);padding:1px 5px;height:18px;line-height:14px}
+.fr .cap b{color:var(--paper);font-weight:500}
+.tline{position:absolute;left:32px;right:32px;top:166px;height:34px}
+</style>
+</head>
+<body>
+
+<!-- ======================================================= BOARD 1 · LANDING HERO -->
+<section class="board b1" id="b1">
+  <div class="abs grid"></div>
+
+  <div class="abs chartwrap" id="heroWrap"><canvas id="heroCanvas"></canvas></div>
+
+  <nav class="abs">
+    <div class="brand"><span data-logo="4"></span><span class="wordmark">SIGNALOS</span></div>
+    <ul>
+      <li><b>1</b>SIGNALS</li><li><b>2</b>BOTS</li><li><b>3</b>QUANT LAB</li><li><b>4</b>RECEIPTS</li><li><b>5</b>SHOP</li><li><b>6</b>DOCS</li>
+    </ul>
+    <div class="navr">
+      <span class="chainpill"><i></i>ROBINHOOD CHAIN · ARBITRUM L2</span>
+      <span class="paperbadge"><b>PAPER</b></span>
+      <span class="ghost">OPEN APP ↵</span>
+    </div>
+  </nav>
+
+  <div class="abs kicker"><span class="tag">11 BOTS ONLINE</span><span>NON-CUSTODIAL TRADING WORKSPACE · SIGNALS PINNED TO THE EXACT CANDLE</span></div>
+
+  <h1 class="abs h1"><span class="l1">BOTS CALL IT.</span><span class="l2">YOU MAKE</span><span class="l3">THE CALL.<i class="cursor"></i></span></h1>
+
+  <div class="abs lede">
+    <p>Eleven pixel bots pin <span class="up">▲ BUY</span> and <span class="dn">▼ SELL</span> flags to the live candle. You read four prices, click, and sign in <em>your own wallet.</em></p>
+    <div class="row">
+      <span class="cta pxc">▶ START PAPER TRADING <span class="k">↵</span></span>
+      <span class="note pix">PAPER BY DEFAULT<br>NO WALLET NEEDED</span>
+    </div>
+    <div class="keys">press <kbd>B</kbd> to buy · <kbd>S</kbd> to sell · <kbd>/</kbd> for commands</div>
+  </div>
+
+  <div class="abs callboard">
+    <div class="cb-head"><span class="live"><i></i>CALL BOARD</span><span class="dim">ETH/USD · 15M</span><span class="r">8 OF 11 ON SCREEN</span></div>
+    <div class="cb-grid" id="callGrid"></div>
+  </div>
+
+  <div class="abs strip">
+    <div class="boot" id="boot"></div>
+    <div class="teaser">
+      <div class="t1"><span class="n">02</span><span>MEET THE ROSTER</span><span class="d">4 RULES · 5 AI ANALYSTS · 2 ENSEMBLES ↓</span></div>
+      <div class="roster" id="teaserRoster"></div>
+    </div>
+    <div class="disc"><b>NOT INVESTMENT ADVICE.</b>Illustration · made-up prices. Paper trades are simulated. Live is opt-in: ETH ⇄ USDG, Uniswap v3.</div>
+  </div>
+</section>
+
+<!-- ======================================================= BOARD 2 · TRADING WORKSPACE -->
+<section class="board b2" id="b2">
+  <div class="abs top">
+    <div class="brand"><span data-logo="3"></span><span class="wordmark">SIGNALOS</span></div>
+    <div class="mkt">
+      <span class="pair">ETH/USD <small>▾</small></span>
+      <span class="last">3,412.40</span>
+      <span class="meta"><span>FEED</span><b>PAPER SIM</b></span>
+    </div>
+    <div class="tfs"><span>1M</span><span>5M</span><span class="on">15M</span><span>1H</span><span>4H</span><span>1D</span></div>
+    <div class="cmdk"><span class="c"></span><span>buy 0.5 · bots · lab…</span><kbd>/</kbd></div>
+    <div class="modes"><span class="lbl">MODE</span>
+      <div class="seg"><span class="on"><b>PAPER</b></span><span>TESTNET</span><span>LIVE<span class="lk" data-lock></span></span></div>
+    </div>
+    <div class="wallet"><span>WALLET<br><b style="color:var(--paper);font-weight:500">NOT NEEDED</b></span><span class="ghost">CONNECT</span></div>
+  </div>
+
+  <aside class="abs rail">
+    <div class="hd">BOTS · 11 <span class="r">5 ON CHART</span></div>
+    <div id="railList"></div>
+    <div class="detail">
+      <div class="t"><span>KINETIC</span><span class="dim">RULES</span></div>
+      <div class="kv"><span>STRATEGY</span><b>MOMENTUM</b></div>
+      <div class="kv"><span>INPUTS</span><b>ROC 14 · VOL 28</b></div>
+      <div class="kv"><span>SIGNAL LIFE</span><b>15 MIN</b></div>
+      <div class="lnk">▸ BACKTEST IN QUANT LAB</div>
+    </div>
+    <div class="shop"><div>+ BOT SHOP <span>BROWSE</span></div><div>COMMUNITY <span>MODERATED</span></div></div>
+  </aside>
+
+  <div class="abs cpanel">
+    <div class="chead"><span class="p">ETH/USD · 15M</span>
+      <span>O <b id="oO">3,409.6</b></span><span>H <b id="oH">3,419.8</b></span><span>L <b id="oL">3,401.2</b></span><span>C <b id="oC">3,412.4</b></span>
+      <span>SIGNALS <b>ON</b></span><span>VOL <b>ON</b></span>
+      <span class="r pix">ILLUSTRATION · MADE-UP PRICES</span></div>
+    <div id="tradeChart"></div>
+  </div>
+
+  <div class="abs depth">
+    <div class="dh">DEPTH <span class="r">PAPER SIM</span></div>
+    <div class="dcols"><span>PRICE USD</span><span>SIZE ETH</span></div>
+    <div class="dside"><span class="dn">▼ SELL SIDE</span><span class="dim">ASKS</span></div>
+    <div id="asks"></div>
+    <div class="spread"><b>3,412.40</b><span>SPREAD 0.45</span></div>
+    <div id="bids"></div>
+    <div class="dside"><span class="up">▲ BUY SIDE</span><span class="dim">BIDS</span></div>
+    <div class="dfoot">ILLUSTRATION ·<br>MADE-UP PRICES</div>
+  </div>
+
+  <div class="abs bpanel">
+    <div class="tabs"><span class="on">POSITIONS <i>2</i></span><span>SIGNAL FEED</span><span>RECEIPTS</span><span>QUANT LAB</span><span class="r">ALL PAPER · NO AUTOMATION</span></div>
+    <div class="bgrid">
+      <div>
+        <table class="pos">
+          <tr><th style="padding-left:12px">MARKET</th><th>MODE</th><th>SIDE</th><th>SIZE</th><th>FILL</th><th>MARK</th><th>FROM</th><th></th></tr>
+          <tr><td class="b" style="padding-left:12px">ETH/USD</td><td><span class="paperbadge"><b>PAPER</b></span></td><td class="b up">▲ BUY</td><td>0.250 ETH</td><td>3,396.10</td><td>3,412.40</td><td><span class="mini" data-mini="Tideline"></span></td><td><span class="x">CLOSE</span></td></tr>
+          <tr><td class="b" style="padding-left:12px">SOL/USD</td><td><span class="paperbadge"><b>PAPER</b></span></td><td class="b dn">▼ SELL</td><td>4.00 SOL</td><td>171.84</td><td>172.10</td><td><span class="mini" data-mini="Recoil"></span></td><td><span class="x">CLOSE</span></td></tr>
+          <tr><td colspan="8" style="color:var(--g7);height:44px;padding-left:12px">Every row was a click. Receipts are append-only. <span style="color:var(--paper)">RECEIPTS ▸</span></td></tr>
+          <tr><td colspan="8" style="color:var(--g7);height:30px;padding-left:12px;border-bottom:0" class="pix">ILLUSTRATION · MADE-UP PRICES</td></tr>
+        </table>
+      </div>
+      <div class="feed">
+        <div class="fh"><span>SIGNAL FEED · ETH/USD · 15M</span><span>APPEND-ONLY</span></div>
+        <div id="feed"></div>
+      </div>
+    </div>
+  </div>
+
+  <aside class="abs ticket">
+    <div class="tk-h"><span class="t">TRADE CARD</span><span class="paperbadge"><b>PAPER</b></span><span class="x">ESC ✕</span></div>
+    <div class="src"><span data-spr="Kinetic" data-px="3"></span><div><div class="nm">KINETIC</div><div class="ty">Rules · momentum</div><div class="ty">pinned to 14:30 candle</div></div><div class="call"><b class="dn">▼ SELL</b><small>14:58 LEFT</small></div></div>
+    <div class="side"><span>▲ BUY <kbd>B</kbd></span><span class="on"><em>▼ SELL</em> <kbd>S</kbd></span></div>
+    <div class="prices">
+      <div class="ph"><span>FOUR PRICES</span><span>USD · ILLUSTRATION</span></div>
+      <div class="pr"><span class="n">1</span><span class="k">SIGNAL REFERENCE<small>price at Kinetic's call</small></span><span class="v">3,414.70</span></div>
+      <div class="pr"><span class="n">2</span><span class="k">CHART LAST<small>last price on your chart</small></span><span class="v">3,412.40</span></div>
+      <div class="pr"><span class="n">3</span><span class="k">EXECUTABLE QUOTE<small>what 0.500 ETH gets now</small></span><span class="v">3,411.95</span></div>
+      <div class="pr fill"><span class="n">4</span><span class="k">FILL<small>set only after you click</small></span><span class="v">— —</span></div>
+    </div>
+    <div class="amt">
+      <div class="lb"><span>AMOUNT</span><span>PAPER BALANCE 10,000 USD</span></div>
+      <div class="box"><b>0.500</b><span class="cur"></span><span>ETH</span><span class="usd">≈ 1,705.98 USD</span></div>
+      <div class="chips"><span>10%</span><span class="on">25%</span><span>50%</span><span>MAX</span></div>
+    </div>
+    <div class="costs">
+      <div><span>FEE (SIM 0.30%)</span><b>5.12 USD</b></div>
+      <div><span>PRICE IMPACT</span><b>0.01%</b></div>
+      <div><span>MAX SLIPPAGE</span><b>0.50% · EDIT</b></div>
+    </div>
+    <div class="cta pxc go"><span>▼ PLACE PAPER SELL</span><span class="k">↵ ENTER</span></div>
+    <div class="fine"><b>Paper:</b> simulated fill, no wallet. On Testnet or Live you sign in <b>your own wallet</b>. Nothing trades without that signature.</div>
+    <div class="after"><span class="pix">AFTER YOU CLICK</span><span>Fill is set · receipt <b>#0413</b> appended · <b>PAPER</b></span></div>
+    <div class="auto"><span>AUTOMATION</span><b>OFF · EVERY TRADE IS A CLICK</b></div>
+  </aside>
+
+  <div class="abs status">
+    <span><span class="sq"></span><b>FEED OK</b></span><span>ROBINHOOD CHAIN · ARBITRUM L2</span><span>MODE <b>PAPER</b></span><span>SIGNALS <b>11 BOTS · 5 ON CHART</b></span>
+    <span class="r"><kbd style="height:16px;min-width:16px;border-bottom-width:2px">B</kbd> BUY &nbsp;<kbd style="height:16px;min-width:16px;border-bottom-width:2px">S</kbd> SELL &nbsp;<kbd style="height:16px;min-width:16px;border-bottom-width:2px">/</kbd> COMMANDS &nbsp;·&nbsp; NOT INVESTMENT ADVICE</span>
+  </div>
+</section>
+
+<!-- ======================================================= BOARD 3 · BRAND SHEET + FILM -->
+<section class="board b3" id="b3">
+  <div class="abs sheet">
+    <div class="sh-head"><span>SIGNALOS · LOW-RES · BRAND SHEET</span><span>1-BIT SYSTEM · V1</span></div>
+  </div>
+
+  <div class="rowA">
+    <div class="marktile" id="bigMark"><span class="cap">MARK · 7×7 GRID</span><span class="cap2">#FF6B00</span></div>
+    <div class="markside">
+      <div class="lockup"><span data-logo="7"></span><div><div class="wm">SIGNALOS</div><div class="tagl">BOTS CALL IT. YOU MAKE THE CALL.</div></div></div>
+      <div class="constr">
+        <div id="constr"></div>
+        <div class="txt"><b>READ IT AS A CHART</b>The top edge of the S is a pixel sparkline: it steps up, tops out, steps down. A letter and a price turning.</div>
+        <div>
+          <div class="favs">
+            <div><div class="fav" style="width:64px;height:64px"><span data-logo="7"></span></div><div class="cap">64</div></div>
+            <div><div class="fav" style="width:32px;height:32px"><span data-logo="3"></span></div><div class="cap">32</div></div>
+            <div><div class="fav" style="width:16px;height:16px"><span data-logo="2"></span></div><div class="cap">16</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="browser"><div class="tab"><span style="background:var(--ink);width:16px;height:16px;display:flex;align-items:center;justify-content:center;flex:none"><span data-logo="2"></span></span><span style="white-space:nowrap">SignalOS · PAPER</span><span class="x">✕</span></div><div class="tab t2"><span style="white-space:nowrap">Quant Lab</span><span class="x">✕</span></div><div class="bar">▸ app / trade / ETH-USD · 15M</div></div>
+    </div>
+  </div>
+
+  <div class="rowB">
+    <div class="lab"><b>PALETTE</b> ONE BRAND COLOUR. DIRECTION COLOURS ONLY MEAN DIRECTION.</div>
+    <div class="swatches" id="swatches"></div>
+  </div>
+
+  <div class="rowC">
+    <div class="spec"><div class="fn"><span>SIXTYFOUR · DISPLAY</span><span>SCAN · BLED AXES</span></div>
+      <div style="display:flex;gap:18px;align-items:baseline;margin-top:8px"><div class="disp" style="font-size:28px;line-height:1;font-variation-settings:'SCAN' 0;color:var(--g7)">BOTS</div><div class="disp" style="font-size:28px;line-height:1;font-variation-settings:'SCAN' 60">YOU</div></div>
+      <div class="use">Headlines only. SCAN 0 = the machine talking. SCAN 60 = you.</div></div>
+    <div class="spec"><div class="fn"><span>JETBRAINS MONO · UI</span><span>400–800</span></div>
+      <div class="big" style="font-size:22px;font-weight:800;margin-top:8px">3,412.40</div>
+      <div style="font-size:12px;margin-top:5px"><span class="dn" style="font-weight:800">▼ SELL</span> 0.500 ETH</div>
+      <div class="use">Every number, label and table.</div></div>
+    <div class="spec"><div class="fn"><span>SILKSCREEN · COUNTERS</span><span>400</span></div>
+      <div class="big pix" style="font-size:30px;margin-top:8px">14:58 <span style="font-size:12px">LEFT</span></div>
+      <div class="use">Timers, tags, bot names.</div></div>
+  </div>
+
+  <div class="rowD">
+    <div class="lab"><b>THE ROSTER · 11 SPRITES, 16×16</b> BODY SHAPE TELLS YOU THE KIND OF BOT</div>
+    <div class="roster3" id="roster3"></div>
+  </div>
+
+  <div class="rowE">
+    <div class="motif"><div class="mt">MOTIF 01 · BAYER RAMP (4 TONES)</div><div id="bayer"></div></div>
+    <div class="motif"><div class="mt">MOTIF 02 · SIGNAL FLAG</div><div id="flagDemo" style="position:relative;height:98px"></div></div>
+    <div class="motif"><div class="mt">MOTIF 03 · CONTROLS</div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <span class="cta pxc" style="height:40px;font-size:13px;padding:0 14px">▶ START PAPER</span>
+        <span class="paperbadge inv lg"><b>PAPER</b></span>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;align-items:center;font-size:11px;color:#3a3a3a"><kbd style="background:var(--paper);color:var(--ink);border-color:var(--ink)">B</kbd><kbd style="background:var(--paper);color:var(--ink);border-color:var(--ink)">S</kbd><kbd style="background:var(--paper);color:var(--ink);border-color:var(--ink)">/</kbd> keycaps, 3px base</div>
+    </div>
+  </div>
+
+  <div class="abs film">
+    <div class="fl"><span class="rec"><i></i>LAUNCH FILM · 0:30 · ONE TAKE · REAL TIME</span><span>16:9 + 9:16 · MADE-UP PRICES</span></div>
+    <h2>THIRTY SECONDS</h2>
+    <div class="logline">One locked-off, real-time take of a single 30-second candle. Two bots disagree, the Council abstains, four prices unfold and the cursor walks away from BUY.</div>
+    <div class="frames" id="frames"></div>
+    <div class="tline" id="tline"></div>
+  </div>
+</section>
+
+<script src="../shared/chart.js"></script>
+<script>
+(function(){
+if (navigator.webdriver) document.documentElement.classList.add('still');
+const C = { ink:'#0A0A0A', paper:'#F0F0F0', g3:'#3A3A3A', g7:'#7A7A7A', sig:'#FF6B00', long:'#00DFA2', short:'#FF3355' };
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+const fmt = (v, d=2) => v.toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d});
+
+/* ---------- pattern tiles as data URIs ---------- */
+function patURI(rows, map, cell=1){
+  const w = rows[0].length, h = rows.length; let r = '';
+  rows.forEach((row,y)=>[...row].forEach((c,x)=>{ if(map[c]) r += `<rect x='${x}' y='${y}' width='1' height='1' fill='${map[c]}'/>`; }));
+  return `url('data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${w*cell}' height='${h*cell}' viewBox='0 0 ${w} ${h}' shape-rendering='crispEdges'>${r}</svg>`).replace(/'/g,'%27')}')`;
+}
+const root = document.documentElement.style;
+root.setProperty('--pat-stripe', patURI(['#...','...#','..#.','.#..'].map(r=>r), {'#':C.paper,'.':C.ink}, 2));
+root.setProperty('--pat-stripe-ink', patURI(['#...','...#','..#.','.#..'], {'#':C.ink,'.':C.paper}, 2));
+root.setProperty('--pat-check-g3', patURI(['#.','.#'], {'#':C.g3,'.':C.ink}, 2));
+root.setProperty('--pat-check-short', patURI(['#.','.#'], {'#':C.short,'.':C.ink}, 2));
+root.setProperty('--pat-dotgrid', patURI(['#'+'.'.repeat(15)].concat(Array(15).fill('.'.repeat(16))), {'#':'#262626'}, 1));
+
+/* ---------- sprites ---------- */
+const SPR = {
+Tideline:["................","................","....##......##..","...#..#....#..#.","..#....#..#.....","........##......","..############..","..############..","..##kk####kk##..","..##kk####kk##..","..############..","..############..","..dddddddddddd..","...##......##...","...##......##...","................"],
+Kinetic:[".........###....","........###.....",".......######...","..........###...",".........###....","........##......","..############..","..############..","g.####kk###kk#..","..####kk###kk#..","g.############..","..############..","..dddddddddddd..","..##......##....",".##........##...","................"],
+Recoil:["................","................",".....g....g.....","................",".....g....g.....","................",".....g....g.....","................",".##############.",".##############.",".###kk####kk###.",".##############.",".##############.",".dddddddddddddd.","..##........##..","................"],
+Breakline:["................","................","..############..","..##kk####kk##..","..##kk####kk##..","..############..","..############..","..############..","..dddddddddddd..","...##......##...","..##........##..","....g......g....","gggg........gggg","...g........g...","................","................"],
+Meridian:["................",".............##.",".....######..##.","...##......##...",".....######.....","................","....########....","...##########...","..##k######k##..","..##k######k#d..","..###########d..","..##########dd..","...#########d...","....########....","................",".....hhhhhh....."],
+Vector:[".......##.......","......####......",".....##dd##.....","....##dddd##....","...##########...","................","....########....","...##########...","..##k######k##..","..##k######k#d..","..###########d..","..##########dd..","...#########d...","....########....","................",".....hhhhhh....."],
+Lumen:[".......##.......","..#....##....#..","...#........#...","................","#..............#","................","....########....","...##########...","..##k######k##..","..##k######k#d..","..###########d..","..##########dd..","...#########d...","....########....","................",".....hhhhhh....."],
+Halcyon:["................","................","................","....##..........","...###..........","..#####.........","....########....","...##########...","..#######kk###..","..#######kk#####","..dd###########.","..ddd#########..","...dd#######....","....dddddddd....","................",".....hhhhhh....."],
+"Deep Current":["...........##...","..........#.....",".........#......",".....######.....","...##########...","..############..","..##kk####kk##..","..##kk####kk##..","..############..","..dddddddddddd..","...#..#..#..#...","..#..#..#..#....","...#..#..#..#...","..#..#..#..#....","...#..#..#..#...","................"],
+Quorum:["................","......####......",".....######.....",".....#k##k#.....",".....######.....",".....######.....","................","................","..####....####..",".######..######.",".#k##k#..#k##k#.",".######..######.",".######..######.","................","gggggggggggggggg","................"],
+Council:["......####......",".....######.....",".....#k##k#.....",".....######.....",".....######.....",".####......####.","######.gg.######","#k##k#g..g#k##k#","######g..g######","######.gg.######","................","......####......",".....######.....",".....#k##k#.....",".....######.....",".....######....."]
+};
+const BOTS = [
+  ['Tideline','RULES','trend'],['Kinetic','RULES','momentum'],['Recoil','RULES','mean reversion'],['Breakline','RULES','breakout'],
+  ['Meridian','AI','analyst'],['Vector','AI','analyst'],['Lumen','AI','analyst'],['Halcyon','AI','analyst'],['Deep Current','AI','analyst'],
+  ['Quorum','ENSEMBLE','agree-only'],['Council','ENSEMBLE','agree-only']
+];
+function sprite(name, px, fg=C.paper, eye=C.ink, grey=C.g7){
+  const m = SPR[name]; let r = '';
+  m.forEach((row,y)=>{
+    let x = 0;
+    while (x < 16){
+      const c = row[x];
+      let f = null;
+      if (c==='#') f = fg; else if (c==='k') f = eye; else if (c==='g') f = grey;
+      if (f){ let x2 = x; while (x2+1<16 && row[x2+1]===c) x2++; r += `<rect x="${x}" y="${y}" width="${x2-x+1}" height="1" fill="${f}"/>`; x = x2+1; continue; }
+      if (c==='d' && (x+y)%2===0) r += `<rect x="${x}" y="${y}" width="1" height="1" fill="${fg}"/>`;
+      if (c==='h' && (x+y)%2===0) r += `<rect x="${x}" y="${y}" width="1" height="1" fill="${grey}"/>`;
+      x++;
+    }
+  });
+  return `<svg class="spr" width="${16*px}" height="${16*px}" viewBox="0 0 16 16" shape-rendering="crispEdges">${r}</svg>`;
+}
+/* ---------- the mark: 7x7 S whose top edge is a sparkline ---------- */
+const MARK = ["..####.",".##..##","##.....",".#####.",".....##","##..##.",".####.."];
+function mark(px, col=C.sig, opts={}){
+  let r = '';
+  MARK.forEach((row,y)=>[...row].forEach((c,x)=>{
+    if (c==='#') r += `<rect x="${x}" y="${y}" width="1" height="1" fill="${col}"/>`;
+    else if (opts.off) r += `<rect x="${x+0.12}" y="${y+0.12}" width=".76" height=".76" fill="${opts.off}"/>`;
+  }));
+  return `<svg width="${7*px}" height="${7*px}" viewBox="0 0 7 7" shape-rendering="crispEdges">${r}</svg>`;
+}
+$$('[data-logo]').forEach(el => el.innerHTML = mark(+el.dataset.logo, C.sig));
+$$('[data-lock]').forEach(el => el.innerHTML = `<svg width="10" height="12" viewBox="0 0 5 6" shape-rendering="crispEdges"><path d="M1 0h3v1h1v2H4V1H1v2H0V1h1z" fill="${C.g7}"/><rect y="3" width="5" height="3" fill="${C.g7}"/></svg>`);
+$$('[data-spr]').forEach(el => el.innerHTML = sprite(el.dataset.spr, +el.dataset.px||2));
+$$('[data-mini]').forEach(el => el.innerHTML = sprite(el.dataset.mini, 1.5) + `<span class="pix" style="font-size:11px">${el.dataset.mini.toUpperCase()}</span>`);
+
+/* ================================================================ BOARD 1 */
+const BAYER = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+const CURSOR_PATHS = `<path d="M0 0h1v1h1v1h1v1h1v1h1v1h1v1h1v1h-3v1h1v2h1v2h-2v-2h-1v-2h-1v1h-1v1h-1z" fill="${C.sig}"/><path d="M1 2h1v1h1v1h1v1h1v1h1v1h-2v1h1v2h1v1h-1v-2h-1v-2h-1v1h-1z" fill="${C.ink}"/>`;
+const TONES = [C.ink, C.g3, C.g7, C.paper];
+function hexRGB(h){ return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]; }
+const TRGB = TONES.map(hexRGB);
+
+function heroSeries(){
+  const r = SOS.rng(90210); const out = []; let p = 3342;
+  const n = 46;
+  const drift = i => i<6? -3 : i<14? 4 : i<24? 9.5 : i<28? 1 : i<34? -7.5 : i<40? 1.5 : i<43? -2.5 : 1.2;
+  for (let i=0;i<n;i++){
+    const o = p; let c = o + drift(i) + (r()-0.5)*18;
+    if (i===44) c = o - 7.5;           // last closed: a red candle both bots are reading
+    if (i===45) c = o + 2.2;           // forming candle, just opened
+    const h = Math.max(o,c) + 2 + r()*7, l = Math.min(o,c) - 2 - r()*7;
+    out.push({o,c,h,l}); p = c;
+  }
+  const shift = 3412.40 - out[n-1].c; out.forEach(k=>{k.o+=shift;k.c+=shift;k.h+=shift;k.l+=shift;});
+  return out;
+}
+function drawHero(){
+  const S = 4, W = 400, H = 92;                 // 1600x368 css at 4px per pixel
+  const cv = $('#heroCanvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  const d = heroSeries(); const n = d.length;
+  const hi = Math.max(...d.map(k=>k.h)), lo = Math.min(...d.map(k=>k.l));
+  const top = 6, bot = 64;
+  const Y = v => Math.round(top + (hi - v) / (hi - lo) * (bot - top));
+  const X = i => 6 + i*8;                        // candle slot left edge (canvas px)
+  const img = ctx.createImageData(W, H); const px = img.data;
+  const put = (x,y,rgb)=>{ if(x<0||y<0||x>=W||y>=H) return; const i=(y*W+x)*4; px[i]=rgb[0];px[i+1]=rgb[1];px[i+2]=rgb[2];px[i+3]=255; };
+  // sky: transparent. price grid rows (dotted, g3)
+  for (let g=0; g<5; g++){ const gy = top + Math.round(g*(bot-top)/4); for (let x=0;x<W;x+=2) put(x, gy, TRGB[1]); }
+  // terrain ridge = smoothed close, dropped below the bodies
+  const ridge = [];
+  for (let x=0;x<W;x++){
+    const fi = Math.min(n-1, Math.max(0, (x-6-3)/8));
+    const i0 = Math.floor(fi), i1 = Math.min(n-1, i0+1), t = fi - i0;
+    let v = 0, wsum = 0;
+    for (let k=-2;k<=2;k++){ const j = Math.min(n-1, Math.max(0, i0+k)); const w = 3-Math.abs(k); v += (d[j].l*(1-t) + d[Math.min(n-1,j+1)].l*t)*w; wsum += w; }
+    ridge[x] = Y(v/wsum) + 5 + Math.round(Math.sin(x*0.21)*1.2);
+  }
+  for (let x=0;x<W;x++){
+    for (let y=ridge[x]; y<H; y++){
+      const depth = y - ridge[x];
+      let lv = depth===0 ? 2.45 : depth<3 ? 2.2 - depth*0.12 : 1.95 * Math.max(0, 1 - depth/34) ** 1.15;
+      const b = (BAYER[y%4][x%4] + 0.5)/16;
+      const base = Math.floor(lv), idx = Math.min(3, base + ((lv-base) > b ? 1 : 0));
+      if (idx>0) put(x, y, TRGB[idx]);
+      else put(x, y, TRGB[0]);
+    }
+  }
+  // future zone: sparse dither column after the forming candle
+  const fx = X(n)+2;
+  for (let x=fx; x<W-24; x++) for (let y=top; y<ridge[Math.min(W-1,x)]; y++) if ((x+y)%4===0 && (y%2===0)) put(x,y,TRGB[1]);
+  ctx.putImageData(img, 0, 0);
+  // candles (1px ink outline so they sit on top of the terrain)
+  d.forEach((k,i)=>{
+    if (X(i)*S < 600) return;            // hidden under the call board
+    const x = X(i), up = k.c >= k.o, col = up ? C.long : C.short;
+    const yt = Y(Math.max(k.o,k.c)), yb = Math.max(yt+1, Y(Math.min(k.o,k.c)));
+    const yh = Y(k.h), yl = Y(k.l);
+    ctx.fillStyle = C.ink; ctx.fillRect(x+1, yh-1, 3, yl-yh+3); ctx.fillRect(x-1, yt-1, 7, yb-yt+3);
+    if (i === n-1){ // forming candle: outline only
+      ctx.fillStyle = C.paper; ctx.fillRect(x+2, yh, 1, yl-yh+1);
+      ctx.fillStyle = C.ink; ctx.fillRect(x, yt, 5, yb-yt+1);
+      ctx.fillStyle = C.paper; ctx.fillRect(x, yt, 5, 1); ctx.fillRect(x, yb, 5, 1); ctx.fillRect(x, yt, 1, yb-yt+1); ctx.fillRect(x+4, yt, 1, yb-yt+1);
+      return;
+    }
+    ctx.fillStyle = col; ctx.fillRect(x+2, yh, 1, yl-yh+1);
+    if (up) ctx.fillRect(x, yt, 5, yb-yt+1);
+    else { // dithered down candle: outline + checker
+      for (let yy=yt; yy<=yb; yy++) for (let xx=x; xx<x+5; xx++){
+        const edge = yy===yt || yy===yb || xx===x || xx===x+4;
+        ctx.fillStyle = (edge || (xx+yy)%2===0) ? col : C.ink; ctx.fillRect(xx,yy,1,1);
+      }
+    }
+  });
+  // live price line (dotted paper) from last candle to axis
+  const lastY = Y(d[n-1].c);
+  ctx.fillStyle = C.paper; for (let x=X(n-1)+7; x<W-22; x+=2) ctx.fillRect(x, lastY, 1, 1);
+
+  // DOM overlays
+  const wrap = $('#heroWrap'); const T = 432;
+  const vals = [0,1,2,3,4].map(g => hi - g*(hi-lo)/4);
+  vals.forEach((v,g)=>{ if (Math.abs((top + g*(bot-top)/4) - lastY)*S < 22) return; const e = document.createElement('div'); e.className='axis-l'; e.style.top = ((top + g*(bot-top)/4)*S)+'px'; e.textContent = fmt(v,1); wrap.appendChild(e); });
+  const tag = document.createElement('div'); tag.className='pricetag'; tag.style.top = (lastY*S+2)+'px'; tag.textContent = fmt(d[n-1].c,2); wrap.appendChild(tag);
+  const il = document.createElement('div'); il.className='illus'; il.style.right='12px'; il.style.bottom='10px'; il.textContent='ETH/USD · 15M · ILLUSTRATION · MADE-UP PRICES'; wrap.appendChild(il);
+  const now = document.createElement('div'); now.className='nowtag'; now.style.left = ((X(n-1)+2.5)*S)+'px'; now.style.top = ((Y(d[n-1].h)-5)*S - 14)+'px'; now.innerHTML = 'NOW<br><span style="color:var(--g7)">14:58</span>'; now.style.textAlign='center'; now.style.lineHeight='1.25'; wrap.appendChild(now);
+
+  // flags pinned to exact candles
+  const flag = (i, name, dir, left, opts={}) => {
+    const k = d[i]; const cx = (X(i)+2)*S + 2; // pole centre on the wick
+    const f = document.createElement('div'); f.className = 'flag' + (opts.focus?' focus':'');
+    const upward = dir==='SELL';   // sell flags fly above the high, buy flags hang below the low
+    const anchor = upward ? (Y(k.h)-1)*S : (Y(k.l)+2)*S;
+    const len = opts.len || 70;
+    const pole = document.createElement('div'); pole.className='pole';
+    pole.style.left = (cx-2)+'px'; pole.style.top = (upward ? anchor-len : anchor)+'px'; pole.style.height = len+'px';
+    const cl = document.createElement('div'); cl.className='cloth';
+    cl.innerHTML = sprite(name, 2) + `<div><div class="nm">${name.toUpperCase()}</div><div class="cl ${dir==='BUY'?'up':'dn'}">${dir==='BUY'?'▲ BUY':'▼ SELL'}</div><div class="tl">${left}</div></div>`;
+    f.appendChild(pole); f.appendChild(cl); wrap.appendChild(f);
+    const w = cl.offsetWidth, h = cl.offsetHeight;
+    cl.style.left = (opts.side==='right' ? cx+2 : cx - w + 2) + 'px';
+    cl.style.top = (upward ? anchor-len-h+10 : anchor+len-10) + 'px';
+  };
+  flag(44, 'Kinetic', 'SELL', '14:58 LEFT', {len:64});
+  flag(44, 'Breakline', 'BUY', '14:58 LEFT', {len:40, focus:true});
+  flag(40, 'Recoil', 'SELL', '09:12 LEFT', {len:58});
+  const focusCloth = wrap.querySelector('.flag.focus .cloth');
+  const cx0 = parseFloat(focusCloth.style.left) + focusCloth.offsetWidth - 3, cy0 = parseFloat(focusCloth.style.top) + 16;
+  const cur = document.createElement('div'); cur.style.cssText = `position:absolute;left:${cx0}px;top:${cy0}px;z-index:6`;
+  cur.innerHTML = `<svg width="24" height="36" viewBox="0 0 8 12" shape-rendering="crispEdges">${CURSOR_PATHS}</svg>`;
+  wrap.appendChild(cur);
+}
+drawHero();
+
+// call board tiles
+const CALLS = [
+  ['Breakline','RULE','BUY','14:58 LEFT',true],
+  ['Kinetic','RULE','SELL','14:58 LEFT'],
+  ['Recoil','RULE','SELL','09:12 LEFT'],
+  ['Tideline','RULE',null,'WATCHING'],
+  ['Meridian','AI',null,'THINKING…'],
+  ['Halcyon','AI',null,'NO CALL'],
+  ['Deep Current','AI',null,'NO CALL'],
+  ['Council','ENS',null,'NO CONSENSUS'],
+];
+$('#callGrid').innerHTML = CALLS.map((c,i)=>`<div class="tile${c[4]?' focus':''}"><span class="ix">${String(i+1).padStart(2,'0')}</span><span class="ty">${c[1]}</span>${sprite(c[0],4)}<div class="nm">${c[0].toUpperCase()}</div>${c[2]?`<div class="cl ${c[2]==='BUY'?'up':'dn'}">${c[2]==='BUY'?'▲ BUY':'▼ SELL'}</div><div class="tl">${c[3]}</div>`:`<div class="cl idle">${c[3]}</div>`}</div>`).join('');
+
+$('#boot').innerHTML = [
+  `[00.00] <b>BOOT</b> SIGNALOS ......................... <span class="ok">OK</span>`,
+  `[00.14] <b>CHAIN</b> ROBINHOOD CHAIN · ARBITRUM L2 ...... <span class="ok">OK</span>`,
+  `[00.31] <b>LOAD</b> 11 BOTS · 4 RULES · 5 AI · 2 ENS ... <span class="ok">OK</span>`,
+  `[00.47] <b>MODE</b> PAPER (DEFAULT) · NO WALLET NEEDED .. <span class="ok">OK</span>`,
+  `[00.52] <b>AUTO</b> OFF · WAITING FOR YOUR CLICK <span class="cur"></span>`
+].join('\n');
+$('#teaserRoster').innerHTML = BOTS.map((b,i)=> sprite(b[0],2) + ((i===3||i===8)?'<span class="sep"></span>':'')).join('');
+
+/* ================================================================ BOARD 2 */
+function tradeSeries(){
+  const r = SOS.rng(4412); const out = []; let p = 3396;
+  const drift = i => i<18? 0.2 : i<32? 3.1 : i<46? -0.1 : i<56? -2.2 : 0.4;
+  for (let i=0;i<64;i++){
+    const o = p; let c = o + drift(i) + (r()-0.5)*9;
+    if (i===62){ c = o - 3.4; }
+    if (i===63){ c = o - 2.3; }
+    const h = Math.max(o,c) + 0.6 + r()*4, l = Math.min(o,c) - 0.6 - r()*4;
+    out.push({o,c,h,l,v:0.25+r()*0.75}); p = c;
+  }
+  // shift so the last close reads 3,412.40
+  const shift = 3412.40 - out[63].c;
+  out.forEach(k=>{k.o+=shift;k.c+=shift;k.h+=shift;k.l+=shift;});
+  return out;
+}
+function drawTrade(){
+  const host = $('#tradeChart'); const W = 840, H = 532;
+  const axisW = 66, volH = 64, padT = 22, padB = 30;
+  const d = tradeSeries(); const n = d.length;
+  const hi = Math.max(...d.map(k=>k.h)) + 3, lo = Math.min(...d.map(k=>k.l)) - 3;
+  const plotB = H - padB - volH - 8;
+  const Y = v => Math.round(padT + (hi - v)/(hi - lo) * (plotB - padT));
+  const step = 12, x0 = 6;
+  const X = i => x0 + i*step;
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" shape-rendering="crispEdges"><defs>
+    <pattern id="chkS" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${C.short}"/><rect x="1" y="1" width="1" height="1" fill="${C.short}"/></pattern>
+    <pattern id="chkG" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${C.g3}"/><rect x="1" y="1" width="1" height="1" fill="${C.g3}"/></pattern>
+    <pattern id="bd1" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${C.g3}"/></pattern>
+    <pattern id="bd2" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${C.g3}"/><rect x="2" y="2" width="1" height="1" fill="${C.g3}"/></pattern>
+    <pattern id="bd3" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${C.g3}"/></pattern>
+    <pattern id="chkP" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${C.g7}"/><rect x="1" y="1" width="1" height="1" fill="${C.g7}"/></pattern></defs>`;
+  // grid
+  const ticks = []; for (let v = Math.ceil(lo/10)*10; v <= hi; v += 10) ticks.push(v);
+  ticks.forEach(v => { const y = Y(v); for (let x=0;x<W-axisW;x+=4) s += `<rect x="${x}" y="${y}" width="1" height="1" fill="${C.g3}"/>`; });
+  for (let i=4;i<n;i+=8){ const x = X(i)+3; for (let y=0;y<H-padB;y+=4) s += `<rect x="${x}" y="${y}" width="1" height="1" fill="${C.g3}"/>`; }
+  // dithered terrain under the close line: three bands, sparser with depth
+  const cl = d.map((k,i)=>[X(i)+3, Y(k.c)]);
+  const band = (off0, off1) => cl.map(([x,y])=>`${x},${y+off0}`).join(' ') + ' ' + cl.slice().reverse().map(([x,y])=>`${x},${Math.min(plotB+6,y+off1)}`).join(' ');
+  s += `<polygon points="${band(4,26)}" fill="url(#bd1)"/><polygon points="${band(26,70)}" fill="url(#bd2)"/><polygon points="${band(70,400)}" fill="url(#bd3)"/>`;
+  // volume
+  d.forEach((k,i)=>{ const up = k.c>=k.o; const vh = Math.round(k.v*volH); const y = H - padB - vh; s += `<rect x="${X(i)}" y="${y}" width="7" height="${vh}" fill="${up?C.g3:'url(#chkP)'}"/>`; });
+  // candles
+  d.forEach((k,i)=>{
+    const up = k.c>=k.o, col = up?C.long:C.short, x = X(i);
+    const yt = Y(Math.max(k.o,k.c)), yb = Math.max(yt+1, Y(Math.min(k.o,k.c)));
+    if (i===n-1){
+      s += `<rect x="${x+3}" y="${Y(k.h)}" width="1" height="${Y(k.l)-Y(k.h)}" fill="${C.paper}"/>`;
+      s += `<rect x="${x}" y="${yt}" width="7" height="${yb-yt}" fill="${C.ink}" stroke="${C.paper}" stroke-width="1" stroke-dasharray="2 1"/>`;
+      return;
+    }
+    s += `<rect x="${x+3}" y="${Y(k.h)}" width="1" height="${Y(k.l)-Y(k.h)}" fill="${col}"/>`;
+    if (up) s += `<rect x="${x}" y="${yt}" width="7" height="${yb-yt}" fill="${col}"/>`;
+    else s += `<rect x="${x}" y="${yt}" width="7" height="${yb-yt}" fill="${C.ink}"/><rect x="${x}" y="${yt}" width="7" height="${yb-yt}" fill="url(#chkS)"/><rect x="${x+.5}" y="${yt+.5}" width="6" height="${yb-yt-1}" fill="none" stroke="${col}" stroke-width="1"/>`;
+  });
+  // last price line
+  const ly = Y(d[n-1].c); for (let x=X(n-1)+9; x<W-axisW; x+=3) s += `<rect x="${x}" y="${ly}" width="2" height="1" fill="${C.paper}"/>`;
+  // crosshair on the signal candle
+  const fi = 62, fx = X(fi)+3;
+  for (let y=0;y<H-padB;y+=3) s += `<rect x="${fx}" y="${y}" width="1" height="1" fill="${C.g7}"/>`;
+  // signal-zone band around candle 62 (dithered)
+  s += `<rect x="${X(fi)-2}" y="${padT-10}" width="11" height="${plotB-padT+10}" fill="url(#chkG)" opacity=".55"/>`;
+  // axis rule
+  s += `<rect x="${W-axisW}" y="0" width="1" height="${H-padB}" fill="${C.g3}"/><rect x="0" y="${H-padB}" width="${W}" height="1" fill="${C.g3}"/>`;
+  s += `</svg>`;
+  host.innerHTML = s;
+  ticks.forEach(v => { if (Math.abs(Y(v)-ly) < 14 || Math.abs(Y(v)-Math.min(Y(d[62].c), ly-20)) < 14) return; const e = document.createElement('div'); e.className='ax2'; e.style.top = Y(v)+'px'; e.textContent = fmt(v,1); host.appendChild(e); });
+  const tg = document.createElement('div'); tg.className='tag2'; tg.style.top = ly+'px'; tg.innerHTML = fmt(d[n-1].c,2); host.appendChild(tg);
+  const tg2 = document.createElement('div'); tg2.className='tag2 x'; let ry = Y(d[62].c); if (Math.abs(ry-ly) < 20) ry = ly - 20; tg2.style.top = ry+'px'; tg2.innerHTML = 'REF '+fmt(d[62].c,2); host.appendChild(tg2);
+  ['12:00','12:30','13:00','13:30','14:00','14:30'].forEach((t,j)=>{ const i = 4 + j*8 + 16; if (i>=n) return; const e = document.createElement('div'); e.className='tx2'; e.style.left = (X(i)+3)+'px'; e.textContent = t; host.appendChild(e); });
+  ['08:00','09:00','10:00','11:00'].forEach((t,j)=>{ const i = 4 + j*4; });
+  // time labels every 8 candles from 4
+  host.querySelectorAll('.tx2').forEach(e=>e.remove());
+  for (let i=4, h=10, m=0; i<n; i+=8){ const mins = (i - 62)*15 + 14*60+30; const hh = Math.floor(mins/60), mm = mins%60; const e = document.createElement('div'); e.className='tx2'; e.style.left = (X(i)+3)+'px'; e.textContent = String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0'); host.appendChild(e); }
+  // OHLC readout = signal candle
+  const k = d[fi]; $('#oO').textContent = fmt(k.o,1); $('#oH').textContent = fmt(k.h,1); $('#oL').textContent = fmt(k.l,1); $('#oC').textContent = fmt(k.c,1);
+  // countdown under forming candle
+  const cd = document.createElement('div'); cd.className='tx2'; cd.style.left=(X(63)+3)+'px'; cd.style.bottom='auto'; cd.style.top=(Y(d[63].l)+10)+'px'; cd.style.color='var(--paper)'; cd.textContent='14:58'; host.appendChild(cd);
+
+  const flag = (i, name, dir, left, o={}) => {
+    const k = d[i]; const cx = X(i)+3;
+    const upward = dir==='SELL';
+    const anchor = upward ? Y(k.h)-3 : Y(k.l)+3;
+    const len = o.len||40;
+    const f = document.createElement('div'); f.className='b2flag'+(o.focus?' focus':'')+(o.exp?' exp':'');
+    const pole = document.createElement('div'); pole.className='pole'; pole.style.left=cx+'px'; pole.style.top=(upward?anchor-len:anchor)+'px'; pole.style.height=len+'px';
+    const cl = document.createElement('div'); cl.className='cloth';
+    const dirTxt = dir==='BUY'?'▲ BUY':'▼ SELL';
+    cl.innerHTML = o.exp ? sprite(name,1.5,C.g7,C.ink,C.g3) + `<div><div class="nm">${name.toUpperCase()}</div><div class="tl">${dirTxt} · EXPIRED</div></div>`
+      : sprite(name,2) + `<div><div class="nm">${name.toUpperCase()}</div><div class="cl ${dir==='BUY'?'up':'dn'}">${dirTxt}</div><div class="tl">${left}</div></div>`;
+    f.appendChild(pole); f.appendChild(cl); host.appendChild(f);
+    const w = cl.offsetWidth, h = cl.offsetHeight;
+    cl.style.left = (o.side==='right' ? cx : cx - w + 2) + 'px';
+    cl.style.top = (upward ? anchor-len-h+8 : anchor+len-8) + 'px';
+  };
+  flag(62,'Kinetic','SELL','14:58 LEFT',{focus:true,len:54});
+  flag(62,'Breakline','BUY','14:58 LEFT',{len:44});
+  flag(40,'Meridian','BUY','',{exp:true,len:30});
+}
+drawTrade();
+
+// rail
+const RAIL = [
+  ['RULES',4,[['Tideline','trend',1,null,'WATCHING'],['Kinetic','momentum',1,'SELL','14:58',true],['Recoil','mean rev.',1,null,'EXPIRED'],['Breakline','breakout',1,'BUY','14:58']]],
+  ['AI ANALYSTS',5,[['Meridian','your provider',1,null,'EXPIRED'],['Vector','your provider',0,null,'—'],['Lumen','your provider',0,null,'—'],['Halcyon','your provider',0,null,'THINKING'],['Deep Current','your provider',0,null,'—']]],
+  ['ENSEMBLES',2,[['Quorum','ensemble',0,null,'—'],['Council','ensemble',0,null,'NO CONS.']]],
+];
+$('#railList').innerHTML = RAIL.map(([g,c,rows])=>`<div class="grp">${g}<span class="r">${c}</span></div>` + rows.map(([nm,sub,on,dir,st,focus])=>
+  `<div class="bot${on?' on':' off'}${focus?' focus':''}"><span class="eye"></span>${sprite(nm,2, on?C.paper:C.g7, C.ink, on?C.g7:C.g3)}<div class="tx"><div class="nm">${nm.toUpperCase()}</div><div class="sub">${sub}</div></div><div class="st">${dir?`<b class="${dir==='BUY'?'up':'dn'}">${dir==='BUY'?'▲ BUY':'▼ SELL'}</b><small>${st}</small>`:`<small>${st}</small>`}</div></div>`).join('')).join('');
+
+// depth ladder (monochrome; dithered asks, solid bids)
+(function(){
+  const r = SOS.rng(77); let a = '', b = '';
+  for (let i=8;i>=0;i--){ const p = 3412.85 + i*0.9; const sz = (0.4 + r()*6).toFixed(2); a += `<div class="drow a"><span class="bar" style="width:${Math.round(20 + (i+1)*14 + r()*22)}px"></span><span>${fmt(p,2)}</span><span class="sz">${sz}</span></div>`; }
+  for (let i=0;i<9;i++){ const p = 3412.40 - i*0.9; const sz = (0.4 + r()*6).toFixed(2); b += `<div class="drow b"><span class="bar" style="width:${Math.round(18 + (i+1)*12 + r()*20)}px"></span><span>${fmt(p,2)}</span><span class="sz">${sz}</span></div>`; }
+  $('#asks').innerHTML = a; $('#bids').innerHTML = b;
+})();
+
+// feed
+$('#feed').innerHTML = [
+  ['14:30:00','Kinetic','SELL','15M','14:58'],
+  ['14:30:00','Breakline','BUY','15M','14:58'],
+  ['14:30:00','Council',null,'15M','NO CONSENSUS'],
+  ['14:29:41','Halcyon',null,'15M','THINKING…'],
+  ['12:15:00','Recoil','SELL','15M','EXPIRED',1],
+].map(([t,nm,dir,tf,l,ex])=>`<div class="frow${ex?' ex':''}"><span class="t">${t}</span>${sprite(nm,1.5, ex?C.g7:C.paper, C.ink, ex?C.g3:C.g7)}<span class="n">${nm.toUpperCase()}</span>${dir?`<b class="${ex?'':(dir==='BUY'?'up':'dn')}">${dir==='BUY'?'▲ BUY':'▼ SELL'}</b>`:'<b style="color:var(--g7);font-weight:500">—</b>'}<span class="m">${tf}</span><span class="l">${l}</span></div>`).join('');
+
+/* ================================================================ BOARD 3 */
+// big mark: LED dot-matrix
+$('#bigMark').insertAdjacentHTML('afterbegin', `<div style="position:absolute;left:37px;top:30px">${mark(28, C.sig, {off:'#1b1b1b'})}</div>`);
+// construction: the S with its top edge traced as a sparkline
+(function(){
+  const cell = 14, pad = 6; let r = '';
+  MARK.forEach((row,y)=>[...row].forEach((c,x)=>{ r += `<rect x="${pad+x*cell+1}" y="${pad+y*cell+1}" width="${cell-2}" height="${cell-2}" fill="${c==='#'?C.ink:'none'}" stroke="${c==='#'?'none':'#cfcfcf'}"/>`; }));
+  // top-edge trace (centres of the top-most lit pixels per column, cols 0..6)
+  const tops = [2,1,0,0,0,0,1];
+  const pts = tops.map((t,x)=>`${pad+x*cell+cell/2},${pad+t*cell+cell/2}`).join(' ');
+  r += `<polyline points="${pts}" fill="none" stroke="${C.sig}" stroke-width="3" stroke-linejoin="miter"/>`;
+  tops.forEach((t,x)=>{ r += `<rect x="${pad+x*cell+cell/2-3}" y="${pad+t*cell+cell/2-3}" width="6" height="6" fill="${C.sig}"/>`; });
+  $('#constr').innerHTML = `<svg width="${pad*2+7*cell}" height="${pad*2+7*cell}" shape-rendering="crispEdges">${r}</svg>`;
+})();
+
+// swatches
+const SW = [
+  ['#0A0A0A','INK','Canvas. The screen is off.', 'solid'],
+  ['#F0F0F0','PAPER','Lit pixels: type, sprites.', 'solid'],
+  ['#3A3A3A','DITHER 1','Grids, 1px rules, depth.', 'dither'],
+  ['#7A7A7A','DITHER 2','Quiet type, terrain.', 'dither'],
+  ['#FF6B00','SIGNAL','Brand, focus, primary.', 'solid'],
+  ['#00DFA2','LONG','▲ BUY only. Solid.', 'solid'],
+  ['#FF3355','SHORT','▼ SELL only. Dithered.', 'short'],
+];
+$('#swatches').innerHTML = SW.map(([h,n,j,t])=>{
+  let bg = h;
+  if (t==='dither') bg = `${patURI(['#.','.#'],{'#':h,'.':(h==='#3A3A3A'?C.ink:C.paper)},3)} , ${h}`;
+  if (t==='short') bg = `${patURI(['#.','.#'],{'#':h,'.':C.ink},3)}`;
+  const chip = t==='dither' ? `<div class="chip" style="background:${h}"><div style="position:absolute;right:0;top:0;bottom:0;width:50%;background:${patURI(['#.','.#'],{'#':h,'.':(h==='#3A3A3A'?C.ink:C.paper)},3)}"></div></div>`
+    : t==='short' ? `<div class="chip" style="background:${h}"><div style="position:absolute;right:0;top:0;bottom:0;width:50%;background:${bg}"></div></div>`
+    : `<div class="chip" style="background:${h}"></div>`;
+  return `<div class="sw">${chip}<div class="hx">${h}</div><div class="nm">${n}</div><div class="job">${j}</div></div>`;
+}).join('');
+
+// roster
+const grp = (label, sub, list) => `<div class="rg"><div class="ms">${list.map(b=>`<div class="r3">${sprite(b[0],3,C.ink,C.paper,C.g7)}<div class="nm">${b[0].toUpperCase().replace(' ','<br>')}</div></div>`).join('')}</div><div class="gl"><b>${label}</b><span>${sub}</span></div></div>`;
+$('#roster3').innerHTML = grp('RULES','4 · STAND', BOTS.slice(0,4)) + grp('AI ANALYSTS','5 · FLOAT · YOUR PROVIDER', BOTS.slice(4,9)) + grp('ENSEMBLES','2', BOTS.slice(9));
+(function(){ return;
+  const w = (800 - 68)/10; // spacing between centres
+  const seg = (a,b,l)=>`<span style="width:${(b-a)*w + 68 - 8}px;margin-right:${8 + (b<10? (w-68) : 0)}px">${l}</span>`;
+  $('#grpline').innerHTML = `<span style="width:${3*w+68-6}px;margin-right:${w-68+6}px">RULES · 4</span><span style="width:${4*w+68-6}px;margin-right:${w-68+6}px">AI ANALYSTS · 5 · RUN ON YOUR PROVIDER</span><span style="width:${1*w+68}px">ENSEMBLES · 2</span>`;
+})();
+
+// bayer ramp
+(function(){
+  const cols = 17, cell = 3, h = 16; let r='';
+  for (let lv=0; lv<cols; lv++){
+    const L = lv/16*3;
+    for (let y=0;y<h;y++) for (let x=0;x<4;x++){
+      const b = (BAYER[y%4][x%4]+0.5)/16; const base = Math.floor(L); const idx = Math.min(3, base + ((L-base)>b?1:0));
+      r += `<rect x="${(lv*4+x)*cell}" y="${y*cell}" width="${cell}" height="${cell}" fill="${TONES[idx]}"/>`;
+    }
+  }
+  $('#bayer').innerHTML = `<svg width="${cols*4*cell}" height="${h*cell}" shape-rendering="crispEdges" style="border:1px solid ${C.ink}">${r}</svg><div style="display:flex;justify-content:space-between;font-family:var(--pix);font-size:11px;color:#3a3a3a;margin-top:5px;width:${cols*4*cell}px"><span>0</span><span>4×4 BAYER · 17 LEVELS</span><span>16</span></div>`;
+})();
+// flag demo
+(function(){
+  let r = `<defs><pattern id="fdchk" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2" fill="${C.short}"/><rect x="2" y="2" width="2" height="2" fill="${C.short}"/></pattern></defs>`;
+  r += `<rect x="11" y="0" width="2" height="62" fill="${C.ink}"/>`;                 // pole
+  r += `<rect x="11" y="64" width="2" height="34" fill="${C.short}"/>`;              // wick
+  r += `<rect x="4" y="70" width="16" height="20" fill="${C.ink}"/><rect x="5" y="71" width="14" height="18" fill="url(#fdchk)" stroke="${C.short}" stroke-width="2"/>`;
+  $('#flagDemo').innerHTML = `<svg width="24" height="98" style="position:absolute;left:0;top:0" shape-rendering="crispEdges">${r}</svg>
+  <div class="b2flag" style="position:absolute;left:13px;top:0"><div class="cloth" style="position:relative;border:2px solid ${C.ink};background:${C.ink};color:${C.paper}">${sprite('Kinetic',2)}<div><div class="nm">KINETIC</div><div class="cl dn">▼ SELL</div><div class="tl">14:58 LEFT</div></div></div></div>
+  <div style="position:absolute;left:32px;top:74px;font-family:var(--pix);font-size:11px;color:#3a3a3a;line-height:1.45">← PINNED TO THE<br>&nbsp;&nbsp;&nbsp;EXACT CANDLE</div>`;
+})();
+
+/* ---------- storyboard frames (160x90 pixel grid, drawn at 2x) ---------- */
+function frame(fn){ return `<svg width="320" height="180" viewBox="0 0 160 90" shape-rendering="crispEdges">${fn()}</svg>`; }
+const px = (x,y,w,h,f)=>`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${f}"/>`;
+const txt = (x,y,s,t,f=C.paper,fam='Silkscreen',anchor='start',extra='')=>`<text x="${x}" y="${y}" font-family="${fam}" font-size="${s}" fill="${f}" text-anchor="${anchor}" ${extra}>${t}</text>`;
+const spr = (name,x,y,scale=1,fg=C.paper)=>`<g transform="translate(${x} ${y}) scale(${scale})">${sprite(name,1,fg).replace(/^<svg[^>]*>/,'').replace(/<\/svg>$/,'')}</g>`;
+function candleAt(o,c,h,l,{x=76,w=9,dim=false}={}){ // o,c,h,l in frame y units
+  const up = c<=o; const col = dim?C.g3:(up?C.long:C.short); let r='';
+  r += px(x+4,h,1,l-h+1,col);
+  const yt = Math.min(o,c), yb = Math.max(o,c);
+  if (up) r += px(x,yt,w,Math.max(1,yb-yt),col);
+  else { for (let y=yt;y<yb;y++) for (let xx=x;xx<x+w;xx++) if (y===yt||y===yb-1||xx===x||xx===x+w-1||(xx+y)%2===0) r+=px(xx,y,1,1,col); }
+  return r;
+}
+function base(sec, opts={}){
+  let r = px(0,0,160,90,C.ink);
+  for (let y=16;y<80;y+=12) for (let x=4;x<156;x+=3) r += px(x,y,1,1,'#262626');
+  r += txt(5,10,5.5,'ETH/USD · 30S',C.g7);
+  r += txt(155,12,11,String(sec).padStart(2,'0'),opts.secCol||C.paper,'Silkscreen','end');
+  r += px(0,86,160,4,'#1c1c1c') + px(0,86,Math.round(160*(30-sec)/30),4,C.g7);
+  return r;
+}
+const CUR = (x,y)=>`<path transform="translate(${x} ${y})" d="M0 0h1v1h1v1h1v1h1v1h1v1h1v1h1v1h-3v1h1v2h1v2h-2v-2h-1v-2h-1v1h-1v1h-1z" fill="${C.sig}"/><path transform="translate(${x} ${y})" d="M1 2h1v1h1v1h1v1h1v1h1v1h-2v1h1v2h1v1h-1v-2h-1v-2h-1v1h-1z" fill="${C.ink}"/>`;
+const tagBox = (x,y,w,h,col)=> px(x,y,w,h,C.ink) + `<rect x="${x+.5}" y="${y+.5}" width="${w-1}" height="${h-1}" fill="none" stroke="${col}"/>`;
+const FR = [
+  ['00:00','<b>Open.</b> Black. One tick. A 30-second candle opens as a single pixel line.', ()=> base(30) + px(76,46,9,1,C.paper) + txt(90,48,5.5,'OPEN 3,412.40',C.g7) + px(131,70,4,7,C.sig) + txt(5,80,5.5,'ILLUSTRATION · MADE-UP PRICES',C.g7)],
+  ['00:07','<b>Breakline</b> walks in and plants a flag on the candle: <span class="up">▲ BUY</span>.', ()=> base(23) + candleAt(46,36,30,50) + spr('Breakline',14,52,1) + px(29,40,1,14,C.paper) + tagBox(29,32,42,18,C.paper) + txt(32,39.5,5.5,'BREAKLINE') + txt(32,47.5,6,'▲ BUY',C.long,'JetBrains Mono','start','font-weight="800"')],
+  ['00:12','<b>Recoil</b> answers from above: <span class="dn">▼ SELL</span>. The wick jerks down.', ()=> base(18) + candleAt(46,44,28,64) + spr('Breakline',14,52,1,C.g7) + txt(32,62,5.5,'▲ BUY',C.long) + spr('Recoil',128,50,1) + px(135,36,1,14,C.paper) + tagBox(96,18,40,18,C.paper) + txt(99,25.5,5.5,'RECOIL') + txt(99,33.5,6,'▼ SELL',C.short,'JetBrains Mono','start','font-weight="800"')],
+  ['00:17','<b>Council</b> weighs both flags and stays out: <b>NO CONSENSUS</b>.', ()=> base(13) + candleAt(46,42,28,64) + spr('Breakline',14,52,1,C.g7) + txt(32,62,5.5,'▲ BUY',C.long) + spr('Recoil',128,50,1,C.g7) + txt(124,48,5.5,'▼ SELL',C.short,'Silkscreen','end') + tagBox(16,15,126,18,C.paper) + spr('Council',19,16,1) + txt(38,26.5,5.5,'COUNCIL: NO CONSENSUS',C.paper)],
+  ['00:23','<b>Four prices unfold</b> line by line. The cursor drifts onto ▲ BUY and hovers.', ()=> base(7) + candleAt(46,41,28,64) + spr('Breakline',14,52,1,C.g7) + tagBox(92,16,64,66,C.paper) + txt(95,24,5.5,'SIGNAL 3,418.20') + txt(95,32,5.5,'CHART  3,413.10') + txt(95,40,5.5,'QUOTE  3,412.85') + txt(95,48,5.5,'FILL   — —',C.g7) + px(95,58,31,12,C.long) + txt(105,66.5,6,'▲ BUY',C.ink,'JetBrains Mono','middle','font-weight="800"') + `<rect x="128.5" y="58.5" width="24" height="11" fill="none" stroke="${C.g7}"/>` + txt(140.5,66.5,6,'▼ SELL',C.g7,'JetBrains Mono','middle','font-weight="800"') + CUR(118,62)],
+  ['00:30','<b>The candle closes. Nobody clicked.</b> Cursor gone. NO TRADE IS A CALL TOO.', ()=> { let r = base(0,{secCol:C.sig}); r += candleAt(46,43,28,64,{dim:true}); r += `<defs><pattern id="f6" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="${C.ink}"/><rect x="1" y="1" width="1" height="1" fill="${C.ink}"/></pattern></defs>` + `<rect x="20" y="24" width="120" height="44" fill="url(#f6)"/>` + px(24,33,112,26,C.ink); r += txt(80,43,7.4,'NO TRADE IS',C.paper,'Sixtyfour','middle'); r += txt(80,56,7.4,'A CALL TOO.',C.paper,'Sixtyfour','middle'); r += `<g transform="translate(46 67)">${mark(1).replace(/^<svg[^>]*>/,'').replace(/<\/svg>$/,'')}</g>` + txt(56,73,5.5,'SIGNALOS · PAPER',C.paper) + txt(80,82,5.5,'NOT INVESTMENT ADVICE',C.g7,'Silkscreen','middle') + CUR(150,72); return r; }],
+];
+$('#frames').innerHTML = FR.map(([ts,beat,fn])=>`<div class="fr"><div class="scr">${frame(fn)}</div><div class="cap"><span class="ts">${ts}</span><span>${beat}</span></div></div>`).join('');
+// timeline
+(function(){
+  const W = 656; let r = '';
+  for (let s=0;s<=30;s++){ const x = Math.round(s/30*(W-2)); r += px(x, s%5===0?4:8, 2, s%5===0?10:6, s%5===0?C.g7:C.g3); }
+  [0,7,12,17,23,30].forEach((s,i)=>{ const x = Math.round(s/30*(W-2)); r += px(x-4,0,10,4,C.paper); });
+  $('#tline').innerHTML = `<svg width="${W}" height="16" shape-rendering="crispEdges">${r}</svg><div style="display:flex;justify-content:space-between;font-family:var(--pix);font-size:11px;color:var(--g7);margin-top:3px"><span>0S · NO CUTS</span><span>SOUND: ONE SQUARE-WAVE TICK PER SECOND, THEN SILENCE</span><span>30S</span></div>`;
+})();
+})();
+</script>
+</body>
+</html>

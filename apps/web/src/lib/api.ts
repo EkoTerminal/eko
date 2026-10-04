@@ -1,5 +1,6 @@
 import { ApiErrorSchema, type ErrorCode } from '@eko/shared';
 import type { z } from 'zod';
+import { setApiUnavailable } from './connection';
 
 export const API_BASE = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE || '/v1').replace(/\/$/, '');
 export const MOCKS = import.meta.env.VITE_MOCKS === '1';
@@ -30,12 +31,14 @@ export function createApi(base = API_BASE, transport: FetchTransport = (url, ini
         method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
         headers: opts.body !== undefined ? { 'content-type': 'application/json' } : undefined,
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-        credentials: 'include', signal: opts.signal,
+        credentials: 'include', cache: 'no-store', signal: opts.signal,
       });
     } catch (err) {
       if ((err as Error).name === 'AbortError') throw err;
+      setApiUnavailable(true);
       throw new ApiError(0, legacy ? 'network' : 'internal_error', 'Cannot reach the EKO server. Check your connection.');
     }
+    setApiUnavailable(res.status >= 500);
     let body: unknown;
     try { const text = await res.text(); body = text ? JSON.parse(text) : {}; }
     catch { throw new ApiError(res.status, res.ok ? 'internal_error' : statusCode(res.status), 'Invalid server response.'); }
@@ -57,7 +60,7 @@ export function createApi(base = API_BASE, transport: FetchTransport = (url, ini
     },
   };
 }
-const client = createApi(API_BASE, async (url, init) => MOCKS
+const client = createApi(API_BASE, async (url, init) => (import.meta.env.DEV ? MOCKS : import.meta.env.VITE_MOCKS === '1')
   ? (await import('../mocks/transport')).mockFetch(url, init)
   : fetch(url, init));
 export const fetchParsed = client.parse;

@@ -2,6 +2,12 @@ import { FLAG_STAGES, FlagNameSchema, FlagsSchema, OpsSwitchSchema, type FlagNam
 import type { Db } from '../db/client.js';
 import { featureFlags } from '../db/schema.js';
 
+/**
+ * Parse product flag overrides and expand d0; reject unknown names including ops switches. Host
+ * configuration only, no account authentication; invalid names throw.
+ * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+ */
 export function parseFlagOverride(value: string): Set<FlagName> {
   const flags = new Set<FlagName>();
   for (const name of value.split(',').map((s) => s.trim()).filter(Boolean)) {
@@ -28,6 +34,12 @@ export class FlagService {
   private snapshot?: { flags: Record<FlagName, boolean>; ops: Record<OpsSwitch, boolean>; at: number };
   private pending?: Promise<void>;
 
+  /**
+   * Retain flag reader/clock and parse product-only host overrides. Host-only construction; invalid
+   * override throws and no database read starts until projection.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   constructor(
     private readonly read: () => Promise<FlagRow[]>,
     override = '',
@@ -36,6 +48,12 @@ export class FlagService {
     this.overrides = parseFlagOverride(override);
   }
 
+  /**
+   * Construct a flag reader over the supplied database and parse the host override string. Host-only
+   * wiring; invalid overrides throw, database reads occur later.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   static fromDb(db: Db, override: string): FlagService {
     return new FlagService(() => db.select().from(featureFlags), override);
   }
@@ -68,16 +86,37 @@ export class FlagService {
     await this.pending;
   }
 
+  /**
+   * Return a copy of public product flags with host overrides and a ten-second cache. No account
+   * authentication. Failed refresh retains an existing snapshot; without one, read errors reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async all(): Promise<Record<FlagName, boolean>> {
     await this.refresh();
     return { ...this.snapshot!.flags };
   }
 
+  /**
+   * Read a product flag through the shared cached snapshot. No account authentication or mutation;
+   * initial read errors reject, existing snapshots survive refresh failure.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async isOn(flag: FlagName): Promise<boolean> {
     return (await this.all())[flag];
   }
 
+  /**
+   * Read trading_live directly on every call, returning false on missing rows/read failure.
+   * Swarm ranking always returns false pending acceptance; other ops switches use the cache. Host product overrides cannot enable ops switches.
+   * No caller authentication; initial cached reads for other switches may reject.
+   * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
+   * @see {@link ../../../../docs/security/INVARIANTS.md | Implemented core invariants}
+   */
   async isOpsOn(op: OpsSwitch): Promise<boolean> {
+    // TODO(spec): §8.7 does not define an acceptance authority/publication record. Keep ranking off until that reviewed integration exists.
+    if (op === 'swarm_ranking') return false;
     if (op === 'trading_live') {
       // Read the durable execution stop without refreshing/extending the product flag cache.
       try {

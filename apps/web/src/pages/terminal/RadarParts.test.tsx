@@ -1,9 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRadarRows } from '../../mocks/demo/radar';
-import { DisabledTradePanel, FlowBar, HotStrip, RadarRowView } from './RadarParts';
+import { TradePanel } from '../../components/trade/TradePanel';
+import { CoinInspector, FlowBar, HotStrip, RadarRowView } from './RadarParts';
 import partsSource from './RadarParts.tsx?raw';
 import radarSource from './Radar.tsx?raw';
+vi.mock('../../lib/useMedia',()=>({useMedia:()=>false}));
 describe('Radar contract-driven row and trade slots', () => {
   const row=createRadarRows()[0];
   const renderRow=(c= row)=>renderToStaticMarkup(<table><tbody><RadarRowView c={c} selected={false} select={()=>undefined} trade={()=>undefined} pulse={0}/></tbody></table>);
@@ -28,8 +30,13 @@ describe('Radar contract-driven row and trade slots', () => {
     const html=renderToStaticMarkup(<HotStrip coins={[row]} selected={null} select={()=>undefined}/>);
     expect(html.match(/>Beta</g)).toHaveLength(1); expect(html).not.toContain('confidence');
   });
-  it('disables the whole trade fieldset and never emits a fabricated quote',()=>{
-    const html=renderToStaticMarkup(<DisabledTradePanel row={row}/>); expect(html).toContain('<fieldset disabled=""'); expect(html).toContain('Trading opens with the guarded panel'); expect(html).toContain('Sell simulation'); expect(html).not.toContain('≈');
+  it('keeps trading unavailable without configuration and never emits a fabricated quote',()=>{
+    const html=renderToStaticMarkup(<TradePanel coin={row.address} priceUsd={row.priceUsd}/>); expect(html).toContain('Trading configuration unavailable.'); expect(html).toContain('disabled=""'); expect(html).not.toContain('Expected received'); expect(html).not.toContain('≈');
+  });
+  it('preserves the Watch section beside the shared guarded trade panel',()=>{
+    const html=renderToStaticMarkup(<CoinInspector row={row} close={()=>undefined} onCard={()=>undefined}/>);
+    expect(html).toContain('<h3>Watch</h3>');expect(html).toContain('>Watch</button>');
+    expect(html).toContain('<h3>Trade</h3>');expect(html).toContain('Custom trade amount');
   });
   it('calls the signal "Signal · five readings", never agents, with one Beta marker in the column header (BACKEND §7.7)',()=>{
     expect(partsSource).toContain('Signal · five readings'); expect(partsSource).not.toMatch(/five[- ]agent/i);

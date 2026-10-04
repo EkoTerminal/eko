@@ -177,6 +177,6 @@ export function websocketUrl() {
   return url.href;
 }
 export async function createRealtime(): Promise<Realtime> {
-  const transport = MOCKS ? new (await import('../mocks/socket')).MockChannelSocket() : new ChannelSocket(websocketUrl);
+  const transport = (import.meta.env.DEV ? MOCKS : import.meta.env.VITE_MOCKS === '1') ? new (await import('../mocks/socket')).MockChannelSocket() : new ChannelSocket(websocketUrl);
   return new Realtime(transport);
 }

@@ -7,8 +7,8 @@ import { binary, hex, type Hex } from './types.js';
 import { rebuildBalances, rebuildBars } from './market.js';
 import { GuardBusEventSchema } from '@eko/shared';
 export interface SqlClient { query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> }
-export const chainTables = ['chain_blocks', 'tokens', 'pools', 'swaps', 'liquidity_events', 'token_transfers', 'pons_events', 'pons_exemptions', 'wallets', 'pending_pool_events', 'userops', 'delegations_7702', 'wallet_protocol_coverage'] as const;
-export interface BusMessage { topic: 'chain_block' | 'chain_reorg' | 'swap' | 'pair_created' | 'liquidity' | 'pons_exempt' | 'card_updated' | 'verdict_created' | 'guard_evidence_created' | 'guard_coverage_created' | 'guard_role_created' | 'guard_verdict_created' | 'guard_revision_invalidated'; ids: Record<string, string | number> }
+export const chainTables = ['chain_blocks', 'tokens', 'pools', 'swaps', 'liquidity_events', 'token_transfers', 'pons_events', 'pons_exemptions', 'wallets', 'pending_pool_events', 'userops', 'delegations_7702', 'wallet_protocol_coverage', 'agent_registry_events', 'agent_registry', 'agent_registry_checkpoints', 'eth_usd_reference_sources'] as const;
+export interface BusMessage { topic: 'chain_block' | 'chain_reorg' | 'swap' | 'pair_created' | 'liquidity' | 'pons_exempt' | 'flow_updated' | 'card_updated' | 'verdict_created' | 'guard_evidence_created' | 'guard_coverage_created' | 'guard_role_created' | 'guard_verdict_created' | 'guard_revision_invalidated'; ids: Record<string, string | number> }
 export class ChainDb {
   constructor(readonly sql: SqlClient, private transaction: <T>(fn: (client: SqlClient) => Promise<T>) => Promise<T>, readonly close: () => Promise<void> = async () => {}, private partitions = new Set<string>(), private pendingPartitions: Set<string> | null = null, readonly bus = new InProcessBus(), private pendingMessages: BusMessage[] | null = null) {}
   async tx<T>(fn: (db: ChainDb) => Promise<T>): Promise<T> {
@@ -121,7 +121,7 @@ export async function openDb(options: { databaseUrl?: string; pgliteDir?: string
   } catch (error) { await release(); throw error; }
 }
 export async function migrate(db: ChainDb) {
-  const migrations = await Promise.all(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol'].map(async id => ({ id, sql: await readFile(new URL(`${import.meta.url.includes('/dist/') ? './chain-drizzle/' : '../drizzle/'}${id}.sql`, import.meta.url), 'utf8') })));
+  const migrations = await Promise.all(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources'].map(async id => ({ id, sql: await readFile(new URL(`${import.meta.url.includes('/dist/') ? './chain-drizzle/' : '../drizzle/'}${id}.sql`, import.meta.url), 'utf8') })));
   await db.sql.query('CREATE TABLE IF NOT EXISTS eko_indexer_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
   await db.tx(async tx => {
     await tx.sql.query('LOCK TABLE eko_indexer_migrations IN EXCLUSIVE MODE');

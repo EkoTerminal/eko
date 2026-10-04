@@ -39,6 +39,17 @@ export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
     flow: { confidence: 0, asOfBlock: s.asOfBlock, unavailable: true, missing: ['agentPct', 'crewPct', 'humanPct'] },
     playbooks: { confidence: evaluatedPlaybooks(s).length / 13, asOfBlock: s.asOfBlock, missing: (Object.keys(rules) as PlaybookId[]).filter(id => !evaluatedPlaybooks(s).includes(id)) },
   };
+  const coverage=s.attributionCoverage ?? {};
+  const attach=(section:keyof typeof meta,keys:string[])=>{
+    const gaps=Object.fromEntries(keys.filter(key=>coverage[key]).map(key=>[key,coverage[key]]));
+    const m=meta[section]!;m.coverageGaps=gaps;
+    m.missing=[...new Set([...(m.missing ?? []),...Object.entries(gaps).filter(([,gap])=>gap.unattributedCount>0).map(([key])=>`${key}:unattributed`)])];
+    if(Object.values(gaps).some(gap=>gap.status==='incomplete'))m.flags=[...(m.flags ?? []),'attribution_incomplete'];
+  };
+  attach('supply',['holder_concentration','bundles','fresh_wallet_share']);
+  attach('flow',['wallet_flow','wash_trading']);
+  attach('liquidity',['liquidity_ownership']);
+  attach('playbooks',['insider_sells','deployer_sells','exempt_insiders','wash_trading']);
   // TODO(spec): legacy CoinCard requires numeric/boolean fields for unavailable checks.
   // Structural zero/false values below are masked by meta, never supplied to a rule or claimed as observations.
   const card: CoinCard = {
@@ -53,7 +64,7 @@ export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
       exemptWalletsHeldPct:(s.pons?.heldShare ?? 0)*100, freshWalletsPct:0, burnedPct:pct(Number(s.supply?.burned ?? 0n)),
       circulating: s.supply && s.token.decimals != null ? units(s.supply.circulating,s.token.decimals) : '' },
     control: { canChangeTax:false,canBlacklist:false,canPause:false,canMint:false,upgradeable:false },
-    flow: { window:'1h',agentPct:0,crewPct:0,humanPct:0,washEstPct:s.wash?.washEstPct ?? 0 },
+    flow: { window:'1h',agentPct:0,crewPct:0,humanPct:0,washEstPct:s.wash?.washEstPct ?? 0,beta:true,confidence:0 },
     playbooks:verdict.playbooks,verdict,meta,
     freshness: { block:Math.min(...Object.values(meta).filter(m => !m.unavailable).map(m => m.asOfBlock)), ageSec:0 },
   };
