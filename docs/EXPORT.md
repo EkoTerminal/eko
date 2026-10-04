@@ -29,7 +29,9 @@ revision maps to a public commit:
 | --- | --- | --- |
 | `2997466a96d4a62ffd5ac6b9e93f8f8ce343e1ed` | end of the reconstructed history | 2026-10-02 |
 | `4641564ea803184b5e6d6705bb066c16762c285c` | `c27e406d4053c76c0423e3d69725fad02e5866a4` | 2026-10-03 |
-| `d817eece93a75acbb40559e8151fb30b39dcbdd3` | the commit titled "Sync public tree with source d817eec" | 2026-10-04 |
+| `d817eece93a75acbb40559e8151fb30b39dcbdd3` | `1755c39d3726f039119c2d14ae749014945037d6` | 2026-10-04 |
+| `fe333be47aa94ffb19197386de35190a8cbbfec5` | `8b119d8f5f6ef983ed89145ac613a4da5e3ca862` | 2026-10-04 |
+| `025d99339a17cc6d1a7f7c3921854a52c4c170bf` | the commit titled "Sync public tree with source 025d993" | 2026-10-04 |
 
 ## Original export (October 2, 2026)
 

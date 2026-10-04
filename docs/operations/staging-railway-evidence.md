@@ -217,3 +217,26 @@ To re-verify from the public repository: `git clone https://github.com/EkoTermin
 24422c89a1874c66f6ebd65547587b577023a8bd`, install, then run `node scripts/verify-staging-identity.mjs
 https://app.staging.ekoterminal.com --revision 24422c89a1874c66f6ebd65547587b577023a8bd` (add `--expected-config`
 and `--worker-identity` when you hold the reviewed config and the worker's ready line).
+
+### Moved to the Pro workspace, root domain added, redeployed and re-verified: 2026-10-04T04:06Z
+
+The `eko-staging` project moved (Railway project transfer, nothing recreated) from the trial workspace to the owner's
+Pro workspace. `ekoterminal.com` and `www.ekoterminal.com` now serve the same api service alongside
+`app.staging.ekoterminal.com` (Porkbun ALIAS/CNAME plus `_railway-verify` TXT records; certificates valid).
+`PUBLIC_ORIGIN` lists all three origins with `https://ekoterminal.com` first, and `SESSION_COOKIE_DOMAIN` is
+`ekoterminal.com`. `OFAC_SDN_URL` now names Treasury's Sanctions List Service export.
+
+Staging runs public `8b119d8f5f6ef983ed89145ac613a4da5e3ca862` (the sync of source `fe333be`, which follows Treasury's
+SDN redirects). Same rollout and verifier from a clean public checkout: api **matched**, worker **matched**; smoke all
+green. The worker's first sanctions refresh with the configured source runs on its daily schedule, 24 hours after
+the last recorded attempt (made while no source was configured).
+
+| Field | Value |
+|---|---|
+| api deployment | `243b9960-ce8d-4433-bc43-1f382252492a` |
+| worker deployment | `9eb5785a-067b-40b8-add9-81c6c041929c` |
+| Bundle digest (both roles) | `b2bac56f996bf4b1429259259ad1eb5bd1a1ef43248546802a78b9ce9c5c8b0e` |
+| Config digest | `7ca370e811f16532011401076686c92970d1f62ac9af9d14886524061529c029` |
+
+Indexer and engines services exist (logs-first indexer, `RPC_PAID_DAILY_BUDGET=600000`, no session cap) and start once
+the paid RPC endpoint is configured on them.
