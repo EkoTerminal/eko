@@ -18,8 +18,9 @@ non-sensitive public review questions target 24 hours. Specs remain read-only.
 - [ ] Owner explicitly authorizes creation/publication of the three repositories;
   release operator enables 2FA, protected main/eval gate, secret scanning/push
   protection, self-hosted runner and signed tags. Record actual URLs and evidence.
-- [ ] Disclosure coordinator confirms forwarding for the role mailbox and tests
-  private advisories in each repository without exposing report contents.
+- [x] Owner confirmed forwarding for the role mailbox (2026-10-04).
+- [ ] Disclosure coordinator enables and tests private advisories in each
+  repository without exposing report contents.
 - [ ] Funding owner approves final tiers/payment terms and launch float, records
   funding evidence separately; no payout or funding is performed by this task.
 - [ ] Release operator replaces security.txt URL placeholders, sets future expiry,

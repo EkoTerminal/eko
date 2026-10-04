@@ -1,6 +1,7 @@
 # Vulnerability reporting (draft)
 
-This policy is a draft until reporting channels and bounty funding are live.
+This policy is a draft until private advisories and bounty funding are live. The
+`security@ekoterminal.com` role mailbox is live (owner-confirmed forwarding, 2026-10-04).
 EKO uses AI-assisted and automated review, not a professional audit.
 
 ## Scope
@@ -31,8 +32,8 @@ WebSocket work accumulation and unverified ETH/USD reference accounting) are
 marked fixed in the ledger; this is historical evidence, not acceptance of this
 launch candidate. Their status and remediation evidence belong in the
 [findings ledger](.audit-grade/findings.tsv); this policy does not close them.
-Disclosure channels, bounty funding and monitoring delivery remain pending
-operational setup, not accepted vulnerability findings.
+Private advisories, bounty funding and monitoring delivery remain pending
+operational setup (the role mailbox is live), not accepted vulnerability findings.
 
 The [implemented invariant inventory](docs/security/INVARIANTS.md) links each
 covered invariant to exact checking tests and separately lists missing tests.

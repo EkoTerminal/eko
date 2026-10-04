@@ -29,7 +29,7 @@ professional audit. Raw run artifacts are intentionally ignored.
 | 2. Static analysis | Run Slither and Aderyn on every PR touching `contracts/`; archive output and triage it in the findings log. | No untriaged finding and no open High/Medium. |
 | 3. Foundry tests | Unit, 1,000-run fuzz, handler invariants and pinned chain-4663 fork tests, plus coverage and gas reports from the same candidate. | 100% of the ReceiptsRegistry §14.6 row; attach coverage. A skipped fork is still pending. |
 | 4. Public code-review window | Publish the frozen commit hash, findings and test reports in a GitHub release and announcement; accept public issues for 72 hours. | No open High/Medium at close; a High/Medium fix restarts the full 72-hour window. |
-| 5. Bug bounty | Finalize the root `SECURITY.md` draft, enable GitHub private advisories and confirm forwarding for `security@ekoterminal.com`. Up to $500, paid from creator fees; disclose payouts. | Planned live at T, October 13, 13:00 UTC; channels, terms and funding must be evidenced first. |
+| 5. Bug bounty | Finalize the root `SECURITY.md` draft, enable GitHub private advisories (`security@ekoterminal.com` forwarding was confirmed on 2026-10-04). Up to $500, paid from creator fees; disclose payouts. | Planned live at T, October 13, 13:00 UTC; channels, terms and funding must be evidenced first. |
 
 Run from `contracts/` with the installed tools (no dependency installation):
 

@@ -6,3 +6,5 @@ date	commit	mode	rubric	grade	cap_applied	crit	high	med	low	A	B	C	D	E	F	G	policy
 2026-10-03	8678676187efa9854830e34f5af823a9ec4af951	rescore	v2	9.4	none	0	0	0	0	10.0	10.0	7.0	9.0	10.0	9.5	10.0	5/8
 2026-10-03	0de26eb7112d196a5a9928fe5dbb5a902e791e20	rescore	v2	9.6	none	0	0	0	0	10.0	10.0	8.5	9.0	10.0	9.5	10.0	5/8
 2026-10-03	51f0ebd5eb640f16c5ca225817f04476ff1e49ea	rescore	v2	9.6	none	0	0	0	0	10.0	10.0	8.5	9.0	10.0	9.5	10.0	5/8
+2026-10-04	30e70d416e166089b4f7534fc699a40c1edc9b5d	quick	v2	7.0	7.0-live-roles-unverified	0	0	1	3	10.0	7.9	8.5	7.5	10.0	9.5	10.0	4/8
+2026-10-04	68bd26f4229ce22c573fc100da44191918f83790	rescore	v2	9.6	none	0	0	0	0	10.0	10.0	8.5	9.0	10.0	10.0	10.0	5/8

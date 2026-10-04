@@ -7,7 +7,7 @@ owner. Planned activation: October 13, 2026, 13:00 UTC. No bounty is live here.
 
 ## Reporting
 
-Role mailbox: `security@ekoterminal.com` (forwarding pending owner confirmation).
+Role mailbox: `security@ekoterminal.com` (forwarding confirmed by the owner on 2026-10-04).
 Private reporting: GitHub Security → Report a vulnerability in the affected
 public repository (repository URL and enabled advisory channel pending).
 Neither route has been verified by this preparation. Do not assume delivery

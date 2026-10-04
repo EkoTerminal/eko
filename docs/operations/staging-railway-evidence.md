@@ -240,3 +240,23 @@ the last recorded attempt (made while no source was configured).
 
 Indexer and engines services exist (logs-first indexer, `RPC_PAID_DAILY_BUDGET=600000`, no session cap) and start once
 the paid RPC endpoint is configured on them.
+
+### All four live roles attested: 2026-10-04T21:05Z
+
+Staging runs public `78cab1c2306908f196ae3fc582e04972dc3458db` (the sync of source `68bd26f`). Indexer and engines now
+print an `EKO role identity` line at start (`apps/server/src/roles.ts`), so every live role is compared with the
+reviewed build. From a clean public checkout, `verify-staging-identity.mjs` with the reviewed config and the current
+deployments' identity lines: api **matched**, worker **matched**, indexer **matched**, engines **matched**. Smoke: health,
+identity, paused trading, flags off, SPA and WebSocket radar ack all green.
+
+| Role | Deployment | Ready / identity line (UTC) | Config digest |
+|---|---|---|---|
+| api | `f671d15b-0e05-42ef-9fd5-bcfd3a198e71` | `/v1/build` | `7ca370e811f16532011401076686c92970d1f62ac9af9d14886524061529c029` |
+| worker | `e6aef21f-350b-4869-8e9c-0f14a3398474` | 2026-10-04T21:01:24Z | `8d3de63879750b59783a6200a8117980b5cd26a955350ea725ff71c8a7126714` |
+| indexer | `03927c41-42bd-4eea-8371-6618fc6734de` | 2026-10-04T21:03:15Z | `6dcc7dd3ce7075cb44e68aea9fb63419ab6448833a2b7346a8cab87d10c2e019` |
+| engines | `a5567b78-5623-49e9-b4fc-d6f83aae1497` | 2026-10-04T21:05:40Z | `2fed94cb36ea66225d7a4fe6b3f1545d69ac710130c0d6c33f14635dcbd607db` |
+
+Bundle digest (all roles): `7305173795791af9642c37a0dbfd3ee02f0e456b5d5596932190d22a5a653634`. Each identity line was
+read from that deployment's own logs (`railway logs --service <role> --filter '"<message>"'`), not from an earlier file.
+Indexer and engines run on the owner-approved paid RPC budget (600,000 requests per UTC day each, no session budget);
+every other role keeps a zero paid budget, enforced by `scripts/check-staging-railway.mjs`.
