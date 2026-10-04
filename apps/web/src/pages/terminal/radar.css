@@ -254,7 +254,8 @@
 .rt-pick,.rt-top{max-width:100%;min-width:0}.rt-sym{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.rt-top .heat-tag{flex:none}
 :is(.rt-sym,.pr-sym,.fr-sym,.coin-id h1,.insp-id h2) :is(.radar-decode,.untrusted,.untrusted-value){display:inline;white-space:nowrap;overflow-wrap:normal}
 :is(.pr-sym,.fr-sym,.coin-id h1,.insp-id h2){min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-@container(max-width:740px){.rt .c-coin{width:auto}}
+/* Fixed layout: a 100% column takes whatever the fixed columns leave (auto collapsed it to its minimum). */
+@container(max-width:740px){.rt .c-coin{width:100%}}
 @container(max-width:600px){.rt .c-1h,.rt .c-sig{display:none}.rt .c-guard{width:148px}.rt .c-exit{width:72px}}
 @container(max-width:380px){.rt .c-guard{width:134px}.rt .c-exit{width:60px}.rt .rt-sym{font-size:17px}.rt th,.rt td{padding:0 6px}.rt th:first-child,.rt td:first-child{padding-left:6px}.rt th:last-child,.rt td:last-child{padding-right:6px}.rt-top .heat-tag{display:none}}
 .radar .head-stats{display:flex;flex-wrap:wrap;gap:16px 24px}.radar .head-stats small{font:12px var(--sans);letter-spacing:0}.radar .head-stats dt{font-size:10px}
