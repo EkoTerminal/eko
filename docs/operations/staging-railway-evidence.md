@@ -260,3 +260,18 @@ Bundle digest (all roles): `7305173795791af9642c37a0dbfd3ee02f0e456b5d5596932190
 read from that deployment's own logs (`railway logs --service <role> --filter '"<message>"'`), not from an earlier file.
 Indexer and engines run on the owner-approved paid RPC budget (600,000 requests per UTC day each, no session budget);
 every other role keeps a zero paid budget, enforced by `scripts/check-staging-railway.mjs`.
+
+### Wallet-protocol storage paused: 2026-10-04T22:35Z
+
+Staging runs public `7d472e8bbaa7155e7cf65347727d2311bf370dda` (the sync of source `4f9fd6a`), with the indexer's
+`INDEX_WALLET_PROTOCOL=off` (owner-approved pause of wallet tracking on staging). Verifier from a clean public checkout:
+api, worker, indexer and engines **matched**; smoke green. Deployments: api `9a0b8326-5322-4c9e-b6c9-5dbb6acb41ea`,
+worker `2c41987d-cf02-40bf-b6f9-33ee0c1918e6` (ready 22:29:28Z), indexer `d39a46db-0b71-4f3a-8bf7-27f22edee033`
+(identity 22:31:11Z), engines `eb0a7ac9-80d7-4c89-8f2a-0d11fcbe0bdc` (identity 22:32:51Z); bundle digest
+`008b0a74f2399bed0dd25519d4b750e2305e39cfcbe205189b5361fd9979b810`, per-role config digests unchanged.
+`INDEX_*` settings are indexer CLI settings outside the server identity configuration, so the switch does not change
+the indexer's config digest; it is recorded here and in `infra/railway/staging.json`.
+
+After the redeploy, a one-off read-only service truncated `wallet_protocol_coverage`, `userops` and `delegations_7702`
+(last coverage row 22:29:12Z, written by the previous indexer). Database size went from 6.82 GB to 4.25 GB; WAL 1.07 GB.
+Before the pause the database grew about 0.5 GB an hour, a third of it wallet-protocol coverage.
