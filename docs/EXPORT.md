@@ -36,7 +36,8 @@ revision maps to a public commit:
 | `1ee00b6fe903747ac0ba42269da6b5875deb1753` | `0349f4c6c67e8191918a46383e10f8c2568ae62b` | 2026-10-04 |
 | `67f660b9e574089d2ce8e751ff322ccfff3482d1` | `a3ffca5561dfe8b8b5662d2b54106144252820e6` | 2026-10-04 |
 | `f62f6d3443f3e4e41504bddbcab8015543f3e9f4` | `587f602d0f07accddd808870fe09d75fdd3f8863` | 2026-10-04 |
-| `185a75991f24b23407fee2aa33b798e7179ce15d` | the commit titled "Sync public tree with source 185a759" | 2026-10-04 |
+| `185a75991f24b23407fee2aa33b798e7179ce15d` | `49f2b69273765e843c37beea8d7d91c519e190d7` | 2026-10-04 |
+| `30e70d416e166089b4f7534fc699a40c1edc9b5d` | the commit titled "Sync public tree with source 30e70d4" | 2026-10-04 |
 
 ## Original export (October 2, 2026)
 

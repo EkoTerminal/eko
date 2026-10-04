@@ -1,3 +1,5 @@
+import { TRADING_PAUSED_TITLE } from '../../copy/availability';
+import { useShell } from '../../store/shell';
 import { WatchButton } from '../../components/WatchButton';
 import { useGuardCoin } from './useGuardCoin';
 import { antiSnipeDeadline } from '../../components/trade/tradePanelModel';
@@ -33,6 +35,7 @@ export function HeatLegend() {
   return <div className="heat-legend" aria-label="How rows are marked">{['Hot', 'Normal', 'Fading', 'Danger'].map((word, i) => <span key={word}><i className={`sw ${['hot', 'normal', 'fading', 'avoid'][i]}`} />{word}</span>)}<Info label="How rows are marked">A blue-white shimmer grows from warming (3%+ in an hour, agents 25%+, signal 60+) to Hot (signal 70+, rising, agents 30%+) to surging (10%+, agents 40%+). A dark ember marks falling activity (down 8%+, signal under 65), Danger, and red flags (honeypot, 75%+ exit cost, or a Danger match at 97%+ confidence). Danger always wins. Without signal, only price and flow predicates apply. The marks describe activity; they are not a reason to buy.</Info></div>;
 }
 export const RadarRowView = memo(function RadarRowView({ c, selected, select, trade, pulse, confidence, scanDelayed = false }: { c: RadarRow; selected: boolean; select: (c: RadarRow, el: HTMLElement) => void; trade: (c: RadarRow, el: HTMLElement) => void; pulse: number; confidence?: number; scanDelayed?: boolean }) {
+  const tradingLive = useShell((st) => st.config?.trading.liveEnabled !== false);
   const el = useRef<HTMLTableRowElement>(null);
   useEffect(() => { const row = el.current; if (!pulse || !row) return; row.classList.remove('pulse'); void row.offsetWidth; row.classList.add('pulse'); }, [pulse]);
   return <tr ref={el} data-address={c.address} className={`h-${heatOf(c)} ${markClass(marking(c))}${selected ? ' sel' : ''}`} onClick={(e) => select(c, e.currentTarget.querySelector<HTMLButtonElement>('[data-pick]')!)}>
@@ -45,7 +48,7 @@ export const RadarRowView = memo(function RadarRowView({ c, selected, select, tr
     <td className="c-spark">{c.unavailable?.includes('spark') ? <UnavailableValue /> : c.spark8h && <div className="rt-spark"><Spark series={c.spark8h} height={28} /></div>}</td>
     <td className="c-flow">{c.unavailable?.includes('flow') ? <UnavailableValue /> : <div className="rt-flow"><FlowBar flow={c.flow} /><span className="num">{Math.round(c.flow.agentPct)}%</span></div>}</td>
     <td className="c-liq r num">{c.unavailable?.includes('liquidity') ? <UnavailableValue /> : usd(c.liquidityUsd)}</td><td className={`c-exit r num${!c.unavailable?.includes('exitCost') && c.exitCost1kPct > 15 ? ' bad' : ''}`}>{c.unavailable?.includes('exitCost') ? <UnavailableValue /> : exitText(c.exitCost1kPct)}</td>
-    <td className="c-act r"><button className={`btn btn-sm${c.verdict === 'danger' ? '' : ' btn-primary'}`} disabled={c.verdictPending || c.verdict === 'danger'} aria-label={c.verdict === 'danger' ? 'Refused by the guard' : `Trade $${c.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(c, e.currentTarget); }}>{c.verdict === 'danger' ? 'Refused' : 'Trade'}</button></td>
+    <td className="c-act r"><button className={`btn btn-sm${c.verdict === 'danger' || !tradingLive ? '' : ' btn-primary'}`} disabled={c.verdictPending || c.verdict === 'danger' || !tradingLive} title={!tradingLive && c.verdict !== 'danger' ? TRADING_PAUSED_TITLE : undefined} aria-label={c.verdict === 'danger' ? 'Refused by the guard' : !tradingLive ? `Trade $${c.symbol.text}: ${TRADING_PAUSED_TITLE}` : `Trade $${c.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(c, e.currentTarget); }}>{c.verdict === 'danger' ? 'Refused' : 'Trade'}</button></td>
   </tr>;
 });
 export function HotStrip({ coins, selected, select }: { coins: RadarRow[]; selected: string | null; select: (c: RadarRow, el: HTMLElement) => void }) {
@@ -78,7 +81,7 @@ export function CoinInspector({ row, close, onCard, formatRowAge = age, stale = 
     {guard.assessment && <GuardCompact verdict={{version:2,assessment:guard.assessment}} />}
     {error ? <div role="status">Could not load coin details. <button className="btn" onClick={() => setRetry((n) => n + 1)}>Retry</button></div> : !card ? <div className="skel" aria-label="Loading coin details" style={{ height: 100 }} /> : <>
       <InspectorGuard card={card} href={fullTo} mark={mk?.kind === 'ember' ? markClass(mk) : ''} />
-      <Section title="Can you get out?"><dl className="insp-kv">{[['Exit cost at $100', card.meta?.tradeability?.unavailable ? NOT_CHECKED : exitText(card.tradeability.exitCostPct.usd100)], ['Exit cost at $1K', card.meta?.tradeability?.unavailable ? NOT_CHECKED : exitText(card.tradeability.exitCostPct.usd1k)], ['Liquidity', row.unavailable?.includes('liquidity') ? NOT_CHECKED : usd(row.liquidityUsd)], ...(row.marketCapUsd === undefined ? [] : [['Market cap', usd(row.marketCapUsd)]])].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className={label.startsWith('Exit') && card.tradeability.exitCostPct.usd1k > 15 ? 'num bad' : 'num'}>{value}</dd></div>)}</dl></Section>
+      <Section title="Can you get out?"><dl className="insp-kv">{[['Exit cost at $100', card.meta?.tradeability?.unavailable ? NOT_CHECKED : exitText(card.tradeability.exitCostPct.usd100)], ['Exit cost at $1K', card.meta?.tradeability?.unavailable ? NOT_CHECKED : exitText(card.tradeability.exitCostPct.usd1k)], ['Liquidity', row.unavailable?.includes('liquidity') ? NOT_CHECKED : usd(row.liquidityUsd)], ...(row.marketCapUsd === undefined ? [] : [['FDV', usd(row.marketCapUsd)]])].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className={label.startsWith('Exit') && card.tradeability.exitCostPct.usd1k > 15 ? 'num bad' : 'num'}>{value}</dd></div>)}</dl></Section>
       {signal && <Section title="Signal · five readings" figure={<b className="num">{signal.composite} <span className="tag">Beta</span></b>}><div className="insp-roles">{ROLES.map((role) => <div key={role}><span>{role[0].toUpperCase() + role.slice(1)}</span><i><i style={{ width: `${signal.readings[role]}%` }} /></i><b className="num">{signal.readings[role]}</b></div>)}</div></Section>}
       {row.unavailable?.includes('flow') ? <Section title="Who’s buying">{NOT_CHECKED}</Section> : flow && <Section title="Who’s buying" figure={<b className="num">{Math.round(flow.agentPct)}% agents</b>}><FlowBar flow={flow} legend /></Section>}
     </>}

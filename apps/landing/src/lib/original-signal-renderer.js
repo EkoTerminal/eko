@@ -1392,4 +1392,4 @@ const weights = [0.3, 0.25, 0.2, 0.15, 0.1],
     },
   };
 
-export { SignalRenderer, scrollToClock, SCROLL_VIEWS, DURATION };
+export { SignalRenderer, scrollToClock, SCROLL_VIEWS, DURATION, chapters };

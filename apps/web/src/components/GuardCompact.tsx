@@ -11,8 +11,14 @@ export function CompactVerdictChip({ level, guard, pending = false, failed = fal
   const detailText = guard && `Block ${guard.cursor.blockNumber} · $100 / $1,000 · EOA / smart account`;
   const details = snapshot && (linked ? <Link to={snapshot.evidencePath!} title={snapshot.snapshot}>{detailText} · {GUARD_COPY.allReasons}</Link> : <span title={snapshot.snapshot}>{detailText}</span>);
   if (guard?.mode === 'active') return <><VerdictChip level={level} guard={guard} />{details}{failed && <span>{GUARD_REFRESH_FAILED}</span>}</>;
+  // No Guard 2 result: one compact disclosure beside the legacy grade; the full wording stays in its tooltip and accessible name.
+  if (guard === null) {
+    const disclosure = `Legacy assessment · rules 1.0.x: ${LEGACY_TITLE} ${GUARD_UNAVAILABLE}: ${GUARD2_UNAVAILABLE_TITLE}`;
+    return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}<VerdictChip level={level} verdictPending={pending} {...context} />
+      <span className="tag guard-disclosure" title={disclosure} aria-label={disclosure}>Legacy grade · Guard 2 pending</span></>;
+  }
   return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}{guard !== undefined && <span className="tag" title={LEGACY_TITLE}>Legacy assessment · rules 1.0.x</span>}<VerdictChip level={level} verdictPending={pending} {...context} />
-    {guard ? <VerdictChip level={level} guard={guard} /> : guard === null ? <span className="tag" title={GUARD2_UNAVAILABLE_TITLE}>{GUARD_UNAVAILABLE}</span> : null}{details}</>;
+    {guard ? <VerdictChip level={level} guard={guard} /> : null}{details}</>;
 }
 /** Lists that show the legacy grade beside a missing or shadow Guard 2 result explain both labels once, above the rows. */
 export function GuardLegend({ rows }: { rows: { guardV2?: GuardAssessmentV2 | null }[] }) {

@@ -17,7 +17,7 @@ for (const [width,height] of [[1512,982],[1440,900],[1280,800],[390,844]]) test(
   else await expect(inspector).toHaveCount(0);
   const row=page.locator('[data-pick]').first(); await row.click(); await expect(inspector).toBeVisible();
   await expect(inspector.getByText('Signal · five readings')).toBeVisible();
-  await expect(inspector.getByText('Market cap', { exact: true })).toBeVisible();
+  await expect(inspector.getByText('FDV', { exact: true })).toBeVisible();
   await expect(inspector.locator('.tp-submit')).toBeDisabled();
   if(width<1480){await expect(inspector).toHaveAttribute('role','dialog');await expect(page.locator('.insp-scrim')).toBeVisible();await expect(page.locator('.radar')).toHaveAttribute('inert','');}
   await page.keyboard.press('Escape'); await expect(inspector).toHaveCount(0); await expect(row).toBeFocused();

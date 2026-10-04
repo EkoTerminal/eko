@@ -3,7 +3,7 @@ import { ScoreboardResponseSchema, type ScoreboardKind, type ScoreboardResponse,
 import { fetchParsed } from '../../lib/api';
 import { Link } from '../../lib/Link';
 import { DYOR } from '../../copy';
-import { availabilityMessage, counterText, gradeText, receiptPath, rowAnchor, safePostMortem, SCOREBOARD_TABS } from './scoreboardModel';
+import { availabilityMessage, collapsePendingCalls, counterText, gradeText, NOT_CHECKED, receiptPath, recordTime, RECORD_NOT_STARTED, rowAnchor, safePostMortem, SCOREBOARD_TABS, shortCoin } from './scoreboardModel';
 import './trust.css';
 
 function useScoreboard(kind: ScoreboardKind, revision: number) {
@@ -35,6 +35,12 @@ function useScoreboard(kind: ScoreboardKind, revision: number) {
   return { data, error, busy, more };
 }
 export function ScoreboardHeadlines({ data }: { data: ScoreboardResponse | null }) {
+  // Until either counter is measured, one explanation replaces two empty figures.
+  if (!data || (data.availability.refused.status !== 'observed' && data.availability.missed.status !== 'observed')) {
+    const status = data?.availability.refused;
+    return <section className="scoreboard-headlines" aria-label="The record"><div className="scoreboard-counter scoreboard-explainer"><h2>Honeypots refused and missed</h2>
+      <p>{RECORD_NOT_STARTED}</p>{status && <p className="muted">{availabilityMessage(status)}</p>}</div></section>;
+  }
   return <section className="scoreboard-headlines" aria-label="The record">{(['refused', 'missed'] as const).map(metric => {
     const status = data?.availability[metric];
     const since = status?.status === 'observed' ? status.since ?? data?.counters.since : null;
@@ -43,14 +49,15 @@ export function ScoreboardHeadlines({ data }: { data: ScoreboardResponse | null 
   })}</section>;
 }
 export function RecordRows({ rows }: { rows: ScoreboardRow[] }) {
-  const ordered = [...rows].sort((a, b) => Number(b.kind === 'calls' && b.grade === 'miss') - Number(a.kind === 'calls' && a.grade === 'miss'));
+  const collapsed = collapsePendingCalls(rows);
+  const ordered = [...collapsed.rows].sort((a, b) => Number(b.kind === 'calls' && b.grade === 'miss') - Number(a.kind === 'calls' && a.grade === 'miss'));
   return <ol className="scoreboard-records">{ordered.map(row => {
     // TODO(spec): CA-15 correctionOf may name a verdict or row, with no receipt lookup by revision.
     // Link receipts when their original is loaded; otherwise retain its identity as text.
     const original = rows.find(prior => prior.id === row.detail.correctionOf || prior.detail.revisionId === row.detail.correctionOf);
     const corrections = rows.filter(next => next.detail.correctionOf === row.id || (row.detail.revisionId !== undefined && next.detail.correctionOf === row.detail.revisionId));
-    return <li key={row.id} id={rowAnchor(row.id)}><div className="scoreboard-record-head"><time>{row.ts}</time>{row.coin && <Link to={`/coin/${row.coin}`}>{row.coin}</Link>}
-      {row.level && <b>{row.level}</b>}{row.kind === 'calls' && <span>Grade: {gradeText(row)}</span>}</div>
+    return <li key={row.id} id={rowAnchor(row.id)}><div className="scoreboard-record-head"><time dateTime={row.ts}>{recordTime(row.ts)}</time>{row.coin && <Link to={`/coin/${row.coin}`} title={row.coin}>{shortCoin(row.coin)}</Link>}
+      {row.level && <b>{row.level}</b>}{row.kind === 'calls' && <span>Grade: {gradeText(row)}</span>}{row.coin && collapsed.earlier.get(row.coin) ? <span className="muted">+{collapsed.earlier.get(row.coin)} earlier ungraded {collapsed.earlier.get(row.coin) === 1 ? 'call' : 'calls'}</span> : null}</div>
       {typeof row.detail.event === 'string' && <p>{row.detail.event.replaceAll('_', ' ')}</p>}
       {row.detail.counterEffect === 'retracted' && <p>Retracted from the counter: source block changed.</p>}
       <div className="scoreboard-links">{row.receiptId && <Link to={receiptPath(row.receiptId)}>{row.detail.correctionOf ? 'Correction receipt' : 'Original receipt'}</Link>}
@@ -66,8 +73,8 @@ export function CohortRows({ rows }: { rows: ScoreboardRow[] }) {
     const d = row.detail;
     return <article className="panel" key={row.id}><div className="panel-body"><h3>{d.week} · {d.group === 'clear' ? 'Clear cohort' : 'All launches'}</h3>
       <dl className="receipt-metadata"><dt>Eligible coins</dt><dd>{d.eligible}</dd><dt>Evaluated</dt><dd>{d.evaluated}</dd><dt>Immature</dt><dd>{d.immature}</dd><dt>Censored</dt><dd>{d.censored}</dd><dt>Ungraded</dt><dd>{d.ungraded}</dd>
-        <dt>Rug rate</dt><dd>{d.rugRateStatus === 'observed' && typeof d.rugRatePct === 'number' ? `${d.rugRatePct.toFixed(2)}%` : 'Unavailable'} · denominator {d.rugDenominator}</dd>
-        <dt>Median outcome</dt><dd>{d.medianStatus === 'observed' && typeof d.medianOutcomePct === 'number' ? `${d.medianOutcomePct.toFixed(2)}%` : 'Unavailable'} · denominator {d.medianDenominator}</dd>
+        <dt>Rug rate</dt><dd>{d.rugRateStatus === 'observed' && typeof d.rugRatePct === 'number' ? `${d.rugRatePct.toFixed(2)}%` : NOT_CHECKED} · denominator {d.rugDenominator}</dd>
+        <dt>Median outcome</dt><dd>{d.medianStatus === 'observed' && typeof d.medianOutcomePct === 'number' ? `${d.medianOutcomePct.toFixed(2)}%` : NOT_CHECKED} · denominator {d.medianDenominator}</dd>
         <dt>Horizon</dt><dd>{d.horizonSec} seconds</dd><dt>Membership hash</dt><dd className="num">{d.membershipHash}</dd><dt>Outcome version</dt><dd>{d.outcomeVersion}</dd><dt>Identity version</dt><dd>{d.identityVersion}</dd><dt>Cut block</dt><dd>{d.cutBlock}</dd>
       </dl><p>Measured cohorts. Immature, censored and ungraded coins are shown separately. Clear is not a recommendation.</p></div></article>;
   })}</div>;

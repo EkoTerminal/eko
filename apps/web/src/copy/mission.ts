@@ -1,5 +1,6 @@
 import { APP_NAME } from './shell';
 export const MISSION_COPY = {
+  connectToCreate: 'Connect and verify your wallet to create the agent and its key. Every step is here to read first.',
   overviewIntro: 'Your trading agents ask EKO before every order. You set their limits and answer anything above them.',
   approvalsIntro: 'Orders your agents want to place above your limits. You decide here on the web; unanswered approvals expire and the agent is told no.',
   connectIntro: `Add ${APP_NAME} next to your agent’s Robinhood connection. It gets Senses, Guardrails and a Flight Recorder; you supervise it in Mission Control.`,

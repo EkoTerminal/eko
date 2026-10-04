@@ -7,7 +7,7 @@ export function guardBuyText(guard: GuardAssessmentV2 | null, mode: 'safe' | 'ba
   if (!guard || guard.mode !== 'active') return 'Buys unavailable · no active Guard 2 assessment';
   if (guard.level === 'high') return 'Buys refused · High risk in every mode';
   if (guard.level === 'incomplete' || !guard.completeness.buyCriticalComplete) return 'Buys refused · unresolved buy-critical checks';
-  if (guard.level === 'elevated' && mode === 'safe') return 'Buys refused · Safe mode denies Elevated risk';
+  if (guard.level === 'elevated' && mode === 'safe') return 'Buys refused · Careful mode denies Elevated risk';
   return 'Continue through policy limits and actual-order checks';
 }
 
@@ -24,7 +24,7 @@ export const GUARD_COPY = {
   shadowInputs: 'shadow inputs', composite: 'Composite', high: 'High risk', block: 'block', points: 'points', spark: 'Last 8h', change: '24h change',
   eoa: 'EOA', smartAccount: 'Smart account', originalReceipt: 'Verify original receipt',
 };
-export const GUARD_POLICY_OPTIONS = [{ value: 'safe', label: 'Safe' }, { value: 'balanced', label: 'Balanced' }, { value: 'degen', label: 'Degen' }] as const;
+export const GUARD_POLICY_OPTIONS = [{ value: 'safe', label: 'Careful' }, { value: 'balanced', label: 'Balanced' }, { value: 'degen', label: 'Degen' }] as const;
 export const GUARD_METRIC_NAMES: Record<string, string> = {
   total: 'Outstanding supply (S)', circulating: 'Circulating supply (C)', holderFloat: 'Holder float (F)',
   raw: 'Raw units', liquid: 'Liquid units', locked: 'Locked units', supplyPct: '% of outstanding supply (S)', floatPct: '% of holder float (F)',

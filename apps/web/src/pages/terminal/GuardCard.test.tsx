@@ -1,3 +1,4 @@
+import { GUARD_POLICY_OPTIONS } from '../../copy/guard';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup as render } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -97,8 +98,8 @@ describe('packet 036 Guard card fixtures', () => {
   it.each(['safe', 'balanced', 'degen'] as const)('shows mandatory gates and actual-order checks for %s', mode => {
     useUi.setState({ riskMode: mode });
     const html = render(<GuardPolicyControls guard={views.elevated} mode={mode} onChange={() => {}} />);
-    expect(html).toContain(`aria-pressed="true">${mode[0].toUpperCase() + mode.slice(1)}`);
-    expect(html).toContain(mode === 'safe' ? 'Safe mode denies Elevated risk' : 'Continue through policy limits');
+    expect(html).toContain(`aria-pressed="true">${GUARD_POLICY_OPTIONS.find(option => option.value === mode)!.label}`);
+    expect(html).toContain(mode === 'safe' ? 'Careful mode denies Elevated risk' : 'Continue through policy limits');
     expect(guardBuyText(views.high, mode)).toContain('refused'); expect(guardBuyText(views.incomplete, mode)).toContain('refused');
     expect(guardBuyText(views.shadow, mode)).toContain('no active'); expect(guardBuyText(null, mode)).toContain('no active');
   });

@@ -43,6 +43,11 @@ describe('CA-34 pending verdict presentation', () => {
     const html = render(<ul><PairView row={pair} now={1000} at={1000} select={() => {}} trade={() => {}} stale={false} /></ul>);
     checking(html); expect(html).toContain('Not fully checked'); expect(html).not.toMatch(/<button[^>]*disabled=""/);
   });
+  it('disables the pair trade opener with the reason while live trading is paused', () => {
+    const pair = { ...createPairRows()[0], verdict: 'clear' as const, verdictPending: false };
+    expect(pairTradeDisabled(pair, false, true)).toBe(false);
+    expect(pairTradeDisabled(pair, false, false)).toBe(true);
+  });
   it('renders the coin head and card as checking when the API returns pending', () => {
     vi.spyOn(coinData, 'useCoin').mockReturnValue({ candlesUnavailable:false,candlesLoading:false,lastTradeTs:null,labelsUnavailable:true,card, verdict, bars: [], markers: [], flows: [], error: '', unknown: false, ageSec: 0, retry: () => {} });
     const html = render(<Coin params={{ address: row.address }} />);

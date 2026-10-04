@@ -22,4 +22,6 @@ export const SHELL_COPY = {
   connectGate: 'Give your trading agent EKO’s checks before each order, through Claude Code or another MCP client. You supervise it in Mission Control.',
   missionEyebrow: 'Mission Control', missionGate: 'Mission Control is where you connect a trading agent to EKO and review the checks it runs before each order.',
 };
-export const RISK_OPTIONS = [{ value: 'safe', label: 'Safe' }, { value: 'balanced', label: 'Balanced' }, { value: 'degen', label: 'Degen' }] as const;
+/** Display name for a risk mode or preset; the API keeps its `safe` / `Safe` values. */
+export const riskModeLabel = (name: string) => (name === 'Safe' || name === 'safe' ? 'Careful' : name);
+export const RISK_OPTIONS = [{ value: 'safe', label: 'Careful' }, { value: 'balanced', label: 'Balanced' }, { value: 'degen', label: 'Degen' }] as const;

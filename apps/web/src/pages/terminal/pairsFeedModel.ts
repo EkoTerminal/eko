@@ -32,7 +32,7 @@ export function antiSnipeTax(taxPct: number, endsInSec: number, receivedAt: numb
   if (endsInSec <= 0) return 0;
   return Math.max(0, Math.round(taxPct * Math.max(0, endsInSec - Math.max(0, now - receivedAt) / 1000) / endsInSec));
 }
-export const pairTradeDisabled = (row: PairRow, stale = false) => row.verdictPending || row.verdict === 'danger' || stale;
+export const pairTradeDisabled = (row: PairRow, stale = false, tradingLive = true) => row.verdictPending || row.verdict === 'danger' || stale || !tradingLive;
 export const FEED_RING = 500;
 export interface FeedBuffer { items: FeedItem[]; waiting: FeedItem[] }
 export function feedRing(rows: readonly FeedItem[]) {

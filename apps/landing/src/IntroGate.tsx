@@ -8,30 +8,51 @@ import {
 } from "react";
 import "./intro-gate.css";
 import OriginalHeroIntro from "./OriginalHeroIntro";
+import { INTRO_SEEN_KEY } from "./intro-captions";
+
+/** Return visitors and anyone who prefers reduced motion go straight to the landing. */
+function introAlreadySeen() {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return true;
+  try {
+    return localStorage.getItem(INTRO_SEEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function rememberIntroSeen() {
+  try {
+    localStorage.setItem(INTRO_SEEN_KEY, "1");
+  } catch {
+    // Storage can be unavailable (private mode); the intro then plays again next time.
+  }
+}
 
 type Phase = "opening" | "fading" | "ready";
 
 export default function IntroGate({ children }: { children: ReactNode }) {
-  const [phase, setPhase] = useState<Phase>("opening");
+  const [phase, setPhase] = useState<Phase>(() => (introAlreadySeen() ? "ready" : "opening"));
+  const showsIntro = useRef(phase === "opening");
   const content = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef(false);
-  const reveal = useCallback(
-    () => setPhase((current) => (current === "opening" ? "fading" : current)),
-    [],
-  );
+  const reveal = useCallback(() => {
+    rememberIntroSeen();
+    setPhase((current) => (current === "opening" ? "fading" : current));
+  }, []);
   const skip = useCallback(() => {
     restoreFocus.current = true;
     reveal();
   }, [reveal]);
 
   useLayoutEffect(() => {
+    // Without the intro, deep links and scroll restoration behave normally.
+    if (!showsIntro.current) return;
     const previousRestoration = history.scrollRestoration;
     history.scrollRestoration = "manual";
     // Every fresh landing entry starts here, including bookmarks to a section.
     history.replaceState(history.state, "", location.pathname + location.search);
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
     const onReturn = (event: PageTransitionEvent) => {
-      if (!event.persisted) return;
+      if (!event.persisted || introAlreadySeen()) return;
       history.replaceState(history.state, "", location.pathname + location.search);
       window.scrollTo({ top: 0, left: 0, behavior: "instant" });
       setPhase("opening");
@@ -44,8 +65,8 @@ export default function IntroGate({ children }: { children: ReactNode }) {
   }, []);
 
   useLayoutEffect(() => {
-    // Reset after the landing mounts as well as after the overlay releases it.
-    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    // Reset after the overlay releases the landing.
+    if (showsIntro.current) window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   }, [phase]);
 
   useEffect(() => {
@@ -79,16 +100,16 @@ export default function IntroGate({ children }: { children: ReactNode }) {
 
   return (
     <>
-      {phase !== "opening" && (
-        <div
-          ref={content}
-          className="eko-entry-content"
-          tabIndex={-1}
-          inert={phase !== "ready"}
-        >
-          {children}
-        </div>
-      )}
+      {/* The landing is mounted under the intro, so it is ready (and readable by crawlers) from the start. */}
+      <div
+        ref={content}
+        className="eko-entry-content"
+        tabIndex={-1}
+        inert={phase !== "ready"}
+        aria-hidden={phase !== "ready" || undefined}
+      >
+        {children}
+      </div>
       {phase !== "ready" && (
         <div
           className="eko-entry"

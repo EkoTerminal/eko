@@ -37,3 +37,5 @@ export function emptyTradeWindow(lastTradeTs:number|null,now=Date.now()/1000) {
  const elapsed=age>=3600 ? `${Math.trunc(age/3600)} h` : age>=60 ? `${Math.trunc(age/60)} m` : `${age} s`;
  return `No trades in this window · last trade ${elapsed} ago`;
 }
+/** Trade buttons while live trading is off: the reason, and where scans and quotes still work. */
+export const TRADING_PAUSED_TITLE = 'Live trading is paused. Open the coin for its scan and a quote.';

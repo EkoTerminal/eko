@@ -1,3 +1,4 @@
+import { RECORD_NOT_STARTED } from '../trust/scoreboardModel';
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { renderToStaticMarkup as render } from 'react-dom/server';
@@ -37,9 +38,12 @@ describe('landing and persisted Scan', () => {
     const measured = render(<ProofCounters counters={ScanCountersSchema.parse({ counters: { refused: 27, missed: 2, since: '2026-10-01T00:00:00Z' } }).counters} />);
     expect(measured).toContain('>27</strong>'); expect(measured).toContain('>2</strong>'); expect(measured).toContain(C.missed);
     expect(render(<ProofCounters counters={{ refused: 1, missed: 0, since: '2026-10-01T00:00:00Z' }} />)).toContain('>0</strong>');
-    for (const counters of [null, undefined, {}, { refused: 0, missed: 0 }, { since: '2026-10-01T00:00:00Z', refused: 2, missed: null }]) {
-      const html = render(<ProofCounters counters={counters} />); expect(html).toContain(C.unavailable); expect(html).not.toContain('>0</strong>');
+    // Never measured: one explanation and no figures. Measured with one counter missing: that counter says so.
+    for (const counters of [null, undefined, {}, { refused: 0, missed: 0 }]) {
+      const html = render(<ProofCounters counters={counters} />); expect(html).toContain(RECORD_NOT_STARTED); expect(html).not.toContain('</strong>');
     }
+    const partial = render(<ProofCounters counters={{ since: '2026-10-01T00:00:00Z', refused: 2, missed: null }} />);
+    expect(partial).toContain(C.unavailable); expect(partial).not.toContain('>0</strong>');
     const css = readFileSync('src/pages/scan/scan.css', 'utf8'); expect(css).toContain('grid-template-columns:repeat(2,minmax(0,1fr))');
   });
   it('shows six supplied preview cards with delay and named field gaps', () => {

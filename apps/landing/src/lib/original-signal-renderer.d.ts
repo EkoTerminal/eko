@@ -7,3 +7,4 @@ export class SignalRenderer {
 export function scrollToClock(progress: number): number;
 export const SCROLL_VIEWS: number;
 export const DURATION: number;
+export const chapters: readonly { start: number; end: number; name: string; slug: string; rest: number; runway: number }[];

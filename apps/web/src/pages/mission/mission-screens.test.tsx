@@ -1,3 +1,4 @@
+import { MISSION_COPY } from '../../copy/mission';
 import { renderToStaticMarkup as render } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentDetailSchema, ApiKeyCreatedSchema, ApprovalSchema, PackSchema, PolicySchema, type Flags } from '@eko/shared';
@@ -60,7 +61,7 @@ describe('remaining Mission Control screens', () => {
     for (const tab of ['Activity', 'Limits', 'Connection']) expect(screen(tab, {})).not.toMatch(/Pause agent|Resume agent|Disconnect…|Copy instructions|id="pol-|Save policy|on-chain enforcement/);
     expect(screen('Connection', {})).toContain('Revoke grant');
     expect(render(<Connection agent={demo.agents[0]} keys={demo.keys.scout} flags={{}} onKeys={() => {}} />)).toContain('>Revoke<');
-    expect(screen('Limits', {})).toMatch(/>Safe<.*>Balanced<.*>Degen</s);
+    expect(screen('Limits', {})).toMatch(/>Careful<.*>Balanced<.*>Degen</s);
     expect(render(<ApprovalsScreen approvals={demo.approvals} agents={Object.values(demo.details)} flags={{}} now={now} onUpdated={() => {}} />)).toBe('');
     const cards = render(<PackCards packs={demoPacks} flags={{}} phase="launch_week" selected="claude_code" select={() => {}} />);
     expect(cards).toContain('Claude Code'); expect(cards).toContain('Generic MCP'); expect(cards).toContain('Claude Desktop'); expect(cards).not.toMatch(/ChatGPT|OpenClaw|On-chain agent/);
@@ -131,6 +132,11 @@ describe('remaining Mission Control screens', () => {
     expect(html).not.toContain('synthetic-test-key'); expect(html).toContain('Reveal'); expect(html).toContain('Stored nowhere else');
     const connect = render(<ConnectScreen packs={demoPacks} presets={demoPresets} flags={{}} phase="launch_week" />);
     expect(connect).toContain('Customize → Connectors'); expect(connect).toContain(ADVISORY); expect(connect).not.toContain('Generate key');
+  });
+  it('shows signed-out visitors every Connect step and gates only the wallet actions', () => {
+    const connect = render(<ConnectScreen packs={demoPacks} presets={demoPresets} flags={{}} phase="launch_week" />);
+    expect(connect).toContain('Customize → Connectors');
+    expect(connect).toContain(`title="${MISSION_COPY.connectToCreate}"`);
   });
   it('builds copied configs exclusively from the pack template', () => {
     const command = fillPack(demoPacks[1].configTemplate, 'synthetic-test-key'); expect(command).toBe(demoPacks[1].configTemplate.replace('{{API_KEY}}', 'synthetic-test-key'));

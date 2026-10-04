@@ -11,11 +11,14 @@ import { FlowBar } from '../terminal/FlowBar';
 import { exitText, age } from '../terminal/radarModel';
 import { ScanCountersSchema, type ScanCounters } from './scanModel';
 import { launchpadLabel } from '../../copy/chain';
+import { RECORD_NOT_STARTED } from '../trust/scoreboardModel';
 import './scan.css';
 import '../terminal/radar.css';
 
 export function ProofCounters({ counters }: { counters: ScanCounters }) {
   const measured = !!counters?.since;
+  // Same wording as the Scoreboard: one explanation instead of two empty figures until counting starts.
+  if (!measured) return <section className="scan-proof" aria-label="Observation counters"><p>{RECORD_NOT_STARTED}</p><Link to="/scoreboard">Scoreboard</Link></section>;
   return <section className="scan-proof" aria-label="Observation counters"><div className="scan-counter-grid">{(['refused', 'missed'] as const).map(kind =>
     <div className="scan-counter" key={kind}><strong className="num">{measured && counters?.[kind] != null ? counters[kind].toLocaleString() : C.unavailable}</strong><span>{C[kind]}</span></div>)}</div>
     <p className="muted">{measured ? `${C.since} ${counters!.since}` : C.countersUnavailable}</p><Link to="/scoreboard">Scoreboard</Link></section>;

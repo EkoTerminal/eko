@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SignalRenderer } from "./lib/original-signal-renderer";
+import { INTRO_CAPTIONS, INTRO_SCREENS } from "./intro-captions";
 
 export default function OriginalHeroIntro({
   onComplete,
@@ -14,6 +15,7 @@ export default function OriginalHeroIntro({
   const canvas = useRef<HTMLCanvasElement>(null);
   const [ready, setReady] = useState(false);
   const [percent, setPercent] = useState(0);
+  const [chapter, setChapter] = useState(0);
 
   useEffect(() => {
     const scroller = viewport.current!;
@@ -44,7 +46,7 @@ export default function OriginalHeroIntro({
     let observer: ResizeObserver | undefined;
 
     import("./lib/original-signal-renderer")
-      .then(({ SignalRenderer, scrollToClock, SCROLL_VIEWS }) => {
+      .then(({ SignalRenderer, scrollToClock, chapters }) => {
         if (disposed) return;
         renderer = new SignalRenderer(element);
         renderProgress = () => {
@@ -54,10 +56,13 @@ export default function OriginalHeroIntro({
             distance > 0
               ? Math.min(1, Math.max(0, scroller.scrollTop / distance))
               : 0;
+          const clock = scrollToClock(progress);
+          const index = chapters.findIndex((c) => clock >= c.start && clock < c.end);
+          setChapter(index < 0 ? chapters.length - 1 : index);
           try {
             // Keep the opening and its scroll progress for everyone. Reduced
             // motion holds the original opening artwork instead of animating it.
-            renderer!.renderAt(scrollToClock(motionPreference.matches ? 0 : progress));
+            renderer!.renderAt(motionPreference.matches ? scrollToClock(0) : clock);
           } catch {
             onError();
             return;
@@ -71,10 +76,10 @@ export default function OriginalHeroIntro({
           }
         };
         observer = new ResizeObserver(() => {
-          // Original chapter proportions and shorter mobile runway are retained.
+          // The whole timeline over a few screens; chapter proportions are retained by scrollToClock.
           scroller.style.setProperty(
             "--eko-runway-screens",
-            String(SCROLL_VIEWS * (innerWidth < 700 ? 0.8 : 1)),
+            String(innerWidth < 700 ? INTRO_SCREENS.phone : INTRO_SCREENS.desktop),
           );
           renderer!.resize();
           scroller.scrollTop =
@@ -116,6 +121,17 @@ export default function OriginalHeroIntro({
       <div className="eko-intro-runway">
         <div className="eko-intro-stage">
           <canvas ref={canvas} aria-hidden="true" />
+          <div className="eko-intro-brand">
+            <span className="eko-intro-wordmark">EKO</span>
+            <span className="eko-intro-tagline">A trench terminal for Robinhood Chain</span>
+          </div>
+          <div className="eko-intro-caption" key={chapter} aria-live="polite">
+            <span className="eko-intro-eyebrow">
+              {String(chapter + 1).padStart(2, "0")} / {INTRO_CAPTIONS[chapter].eyebrow}
+            </span>
+            <p className="eko-intro-headline">{INTRO_CAPTIONS[chapter].headline}</p>
+            <p className="eko-intro-support">{INTRO_CAPTIONS[chapter].support}</p>
+          </div>
           <div className="eko-intro-hud">
             <span className="eko-intro-hint" aria-hidden="true">
               {percent === 100 ? "ENTERING" : "SCROLL ↓"}
@@ -137,9 +153,14 @@ export default function OriginalHeroIntro({
               </span>
             </div>
           </div>
-          <button type="button" className="eko-intro-skip" onClick={onSkip}>
-            Skip intro <span aria-hidden="true">↗</span>
-          </button>
+          <div className="eko-intro-actions">
+            <a className="eko-intro-open" href="/radar">
+              Open terminal <span aria-hidden="true">↗</span>
+            </a>
+            <button type="button" className="eko-intro-skip" onClick={onSkip}>
+              Skip intro <span aria-hidden="true">↓</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

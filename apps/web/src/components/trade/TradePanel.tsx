@@ -18,7 +18,7 @@ import { useTradeExecution } from './TradeContext';
 import './trade-panel.css';
 
 const dollars = (n: number) => `$${n.toLocaleString('en-US', { maximumFractionDigits: 20 })}`;
-const modes = { safe: 'Safe', balanced: 'Balanced', degen: 'Degen' };
+const modes = { safe: 'Careful', balanced: 'Balanced', degen: 'Degen' };
 export function FeeLines({ quote: q, tier, phase }: { quote: TradeQuote; tier?: Entitlements['tier']; phase?: PublicConfig['phase'] }) {
   // TODO(spec): CA-7 has raw quantities but no output asset/decimals. Label raw units explicitly rather than manufacture token amounts.
   const fee = `${q.fee.bps / 100}% (${dollars(q.fee.usd)})`;

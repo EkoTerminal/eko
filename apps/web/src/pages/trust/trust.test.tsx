@@ -7,7 +7,7 @@ import { ApiError, fetchParsed } from '../../lib/api';
 import current from '../../../../../packages/shared/test/fixtures/receipts/guard-v2.json';
 import Scoreboard, { CohortRows, RecordRows, ScoreboardHeadlines } from './Scoreboard';
 import Receipt, { lookupReceipt, ReceiptContents } from './Receipt';
-import { counterText, safePostMortem } from './scoreboardModel';
+import { collapsePendingCalls, counterText, NOT_CHECKED, recordTime, RECORD_NOT_STARTED, safePostMortem, shortCoin } from './scoreboardModel';
 vi.mock('../../lib/api', async original => ({ ...await original<typeof import('../../lib/api')>(), fetchParsed: vi.fn() }));
 const data = ScoreboardResponseSchema.parse({ rows: [], cursor: null, snapshot: '1', counters: { refused: null, missed: null, since: null }, availability: {
   refused: { status: 'unavailable', reason: 'monitoring_missing' }, missed: { status: 'unavailable', reason: 'coverage_gap' },
@@ -31,15 +31,18 @@ describe('Scoreboard and receipt UI', () => {
     expect(html).not.toContain('sample-receipt');
   });
   it('keeps equal headline classes and unknown counters separate from observed zero', () => {
+    // Unmeasured: one explanation instead of two empty figures; still never confused with an observed zero.
     let html = renderToStaticMarkup(<ScoreboardHeadlines data={data} />);
-    expect(html.match(/class="scoreboard-counter"/g)).toHaveLength(2);
-    expect(html.match(/class="scoreboard-figure num"/g)).toHaveLength(2);
-    expect(counterText(data, 'missed')).toBe('Unavailable');
+    expect(html.match(/class="scoreboard-counter scoreboard-explainer"/g)).toHaveLength(1);
+    expect(html).not.toContain('scoreboard-figure'); expect(html).toContain(RECORD_NOT_STARTED);
+    expect(counterText(data, 'missed')).toBe(NOT_CHECKED);
     expect(html).not.toContain('0 missed since');
     const observed = structuredClone(data);
     observed.counters = { refused: 5, missed: 0, since: '2026-10-01T00:00:00Z' };
     observed.availability.missed = observed.availability.refused = { status: 'observed', since: '2026-10-01T00:00:00Z', through: '2026-10-02T00:00:00Z' };
     html = renderToStaticMarkup(<ScoreboardHeadlines data={observed} />);
+    expect(html.match(/class="scoreboard-counter"/g)).toHaveLength(2);
+    expect(html.match(/class="scoreboard-figure num"/g)).toHaveLength(2);
     expect(html).toContain('0 missed since');
     expect(counterText(observed, 'refused')).toBe('5');
   });
@@ -54,6 +57,15 @@ describe('Scoreboard and receipt UI', () => {
     expect(html).not.toContain('<script>');
     for (const url of ['javascript:alert(1)', '//example.invalid', '/record/<script>', 'https://example.invalid']) expect(safePostMortem(url)).toBe(false);
   });
+  it('formats record times and coins, and collapses repeated ungraded calls per coin', () => {
+    const coin = `0x${'ab'.repeat(20)}` as const;
+    expect(recordTime('2026-10-04T13:22:29.051Z')).toBe('2026-10-04 13:22 UTC'); expect(recordTime('2026-10-02')).toBe('2026-10-02');
+    expect(shortCoin(coin)).toBe('0xabab…abab');
+    const rows: ScoreboardRow[] = [1, 2, 3].map(n => ({ kind: 'calls', id: `c${n}`, ts: '2026-10-04', coin, detail: {} }));
+    const collapsed = collapsePendingCalls(rows);
+    expect(collapsed.rows.map(row => row.id)).toEqual(['c1']); expect(collapsed.earlier.get(coin)).toBe(2);
+    expect(renderToStaticMarkup(<RecordRows rows={rows} />)).toContain('+2 earlier ungraded calls');
+  });
   it('puts wrong graded calls before other call records', () => {
     const html = renderToStaticMarkup(<RecordRows rows={[{ kind: 'calls', id: 'hit', ts: '2026-10-02', grade: 'hit', detail: {} }, { kind: 'calls', id: 'miss', ts: '2026-10-01', grade: 'miss', detail: {} }]} />);
     expect(html.indexOf('id="record-miss"')).toBeLessThan(html.indexOf('id="record-hit"'));
@@ -62,7 +74,7 @@ describe('Scoreboard and receipt UI', () => {
     const rows: ScoreboardRow[] = [{ id: 'week-clear', kind: 'cohort', ts: '2026-10-02', detail: { week: '2026-09-21', group: 'clear', eligible: 8, evaluated: 2, immature: 3, censored: 1, ungraded: 2, rugRateStatus: 'unavailable', medianStatus: 'unavailable', rugDenominator: 0, medianDenominator: 0, horizonSec: 86400 } }];
     const html = renderToStaticMarkup(<CohortRows rows={rows} />);
     expect(html).toContain('Clear cohort'); expect(html).toContain('86400 seconds');
-    expect(html).toContain('<dt>Immature</dt><dd>3</dd>'); expect(html).toContain('Unavailable · denominator 0');
+    expect(html).toContain('<dt>Immature</dt><dd>3</dd>'); expect(html).toContain(`${NOT_CHECKED} · denominator 0`);
     expect(html).not.toContain('48 h');
   });
   it('disables pending and unconfigured verification and never requests a private payload', () => {
