@@ -109,8 +109,10 @@ def run(mode):
     revisions = git('rev-list', '--all').splitlines()
     if not revisions:
         raise ValueError('Public history is empty')
-    if mode == 'release' and len(revisions) != 371:
-        raise ValueError('Release requires exactly 371 disclosed, nonempty commits')
+    # The 371 reconstructed imports come first; later genuine commits keep their real messages
+    # and dates (docs/PUBLIC_HISTORY.md), so a release needs at least the reconstructed set.
+    if mode == 'release' and len(revisions) < 371:
+        raise ValueError('Release requires the 371 disclosed, nonempty reconstructed commits')
     trees = set()
     reconstructed = set(git('rev-list', '--reverse', '--first-parent', 'HEAD').splitlines()[:371])
     for revision in revisions:
