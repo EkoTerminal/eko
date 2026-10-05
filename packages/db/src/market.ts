@@ -1,7 +1,7 @@
 import type { ChainDb } from './client.js';
 import { binary, hex, type Hex } from './types.js';
 
-// Recompute from event identities, never apply transfer deltas on replay. WETH's
+// Balances are a sum over event identities: a replayed event is never counted twice. WETH's
 // Deposit/Withdrawal are redundant with its Transfer events and are not counted twice.
 // Compacted history (retention.ts) survives as one net baseline per holder, so recomputed balances stay exact.
 const movements = `SELECT token,to_address AS holder,amount,block FROM token_transfers WHERE kind='Transfer'
@@ -24,6 +24,40 @@ export async function rebuildBalances(db: ChainDb, touched?: { token: Uint8Array
       INSERT INTO balances SELECT t.token,t.holder,coalesce(sum(m.amount),0),coalesce(max(m.block),0)
       FROM touched t LEFT JOIN (${movements}) m ON m.token=t.token AND m.holder=t.holder GROUP BY t.token,t.holder
       ON CONFLICT(token,holder) DO UPDATE SET amount=excluded.amount,last_block=excluded.last_block`, params);
+  }
+}
+
+/**
+ * Apply newly inserted transfers to stored balances exactly once. Callers pass only the rows the insert actually
+ * created (ON CONFLICT DO NOTHING RETURNING), in the same transaction, so a replayed transfer is never applied twice;
+ * a reorg still rebuilds affected balances from history. Recomputing every touched (token, holder) from its whole
+ * history made busy pool and router addresses cost their entire transfer count on every batch.
+ */
+export async function applyBalanceDeltas(db: ChainDb, inserted: readonly Record<string, unknown>[]) {
+  const deltas = new Map<string, { token: Uint8Array; holder: Uint8Array; amount: bigint; block: bigint }>();
+  for (const row of inserted) {
+    if ((row.kind ?? 'Transfer') !== 'Transfer') continue;
+    const amount = BigInt(String(row.amount)), block = BigInt(String(row.block));
+    for (const [holder, signed] of [[row.to_address, amount], [row.from_address, -amount]] as const) {
+      const key = `${hex(row.token as Uint8Array)}:${hex(holder as Uint8Array)}`;
+      const found = deltas.get(key);
+      if (found) { found.amount += signed; if (block > found.block) found.block = block; }
+      else deltas.set(key, { token: row.token as Uint8Array, holder: holder as Uint8Array, amount: signed, block });
+    }
+  }
+  if (!deltas.size) return;
+  // Same lock as a rebuild, so a reorg rebuild and a delta never interleave; sorted keys keep row-lock order stable.
+  await db.sql.query('LOCK TABLE balances IN EXCLUSIVE MODE');
+  const list = [...deltas.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, d]) => d);
+  for (let offset = 0; offset < list.length; offset += 250) {
+    const params: unknown[] = [];
+    const values = list.slice(offset, offset + 250).map(d => {
+      params.push(d.token, d.holder, d.amount.toString(), d.block.toString());
+      const i = params.length;
+      return `($${i - 3}::bytea,$${i - 2}::bytea,$${i - 1}::numeric,$${i}::bigint)`;
+    });
+    await db.sql.query(`INSERT INTO balances(token,holder,amount,last_block) VALUES ${values.join(',')}
+      ON CONFLICT(token,holder) DO UPDATE SET amount=balances.amount+excluded.amount,last_block=greatest(balances.last_block,excluded.last_block)`, params);
   }
 }
 

@@ -114,6 +114,7 @@
         "RUN_WORKER": "false",
         "SERVE_WEB": "false",
         "ENGINE_MODE": "live",
+        "SELL_CHECK_ENABLED": "true",
         "ENGINE_CONCURRENCY": "4",
         "ANVIL_FORK_URL": "http://sim.private.invalid:8545",
         "RPC_PAID_MAX_RPM": "400",

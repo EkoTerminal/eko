@@ -1,4 +1,4 @@
-import { binary, chainTables, hex, rebuildBalances, rebuildBars, refreshBars, type BusMessage, type ChainDb } from '@eko/db';
+import { binary, chainTables, hex, applyBalanceDeltas, rebuildBars, refreshBars, type BusMessage, type ChainDb } from '@eko/db';
 import type { Address, Hex } from 'viem';
 type Row = Record<string, unknown>;
 /** A block (or bounded backfill chunk) stages rows, then issues one multi-row insert per table. */
@@ -19,8 +19,10 @@ export class BlockRows {
   get(table: typeof chainTables[number]): readonly Row[] {return this.rows.get(table)??[];}
   async flush(db: ChainDb) {
     const notifications: BusMessage[] = [];
+    let insertedTransfers: Record<string, unknown>[] = [];
     for (const table of chainTables) {
       const rows = table === 'eth_usd_reference_sources' ? [] : await db.insertMany(table, this.rows.get(table) ?? []);
+      if (table === 'token_transfers') insertedTransfers = rows;
       if (table === 'eth_usd_reference_sources') {
         // Canonical replay may select a different source at the same pricing block.
         const sources = [...new Map((this.rows.get(table) ?? []).map(r => [r.block, r])).values()];
@@ -118,8 +120,8 @@ export class BlockRows {
         WHERE address=$1 AND (graduated_block IS NULL OR graduated_block > $3) RETURNING address`, [binary(g.token),binary(g.pool),g.block.toString()]);
       if (result.rows.length) changed.add(g.token);
     }
-    const transfers = this.rows.get('token_transfers') ?? [];
-    if (transfers.length) await rebuildBalances(db, transfers.flatMap(r => [r.from_address,r.to_address].map(holder => ({ token: r.token as Uint8Array, holder: holder as Uint8Array }))));
+    // Only rows this flush actually inserted move balances, so replaying a block never double-counts.
+    if (insertedTransfers.length) await applyBalanceDeltas(db, insertedTransfers);
     const swaps = this.rows.get('swaps') ?? [];
     if (swaps.length || changed.size) {
       for (const coin of changed) {

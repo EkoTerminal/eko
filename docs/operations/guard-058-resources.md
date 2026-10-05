@@ -18,3 +18,11 @@ The definition's `pricingEvidence` is the SHA-256 of this file as committed with
 
 Approval and pricing are recorded; no acquisition has run. The run starts with the 048 runner's bounded pilot once the
 cohort's first complete day (2026-10-04 UTC) is enumerated, as the task 058 report requires.
+
+## Usage
+
+| Date (UTC) | Run | Requests | Cost | Result |
+|---|---|---|---|---|
+| 2026-10-05 | Oct 4 launch enumeration (`launch-enumeration-cli.ts --measured --from 2026-10-04 --days 1`) | 64 (49 headers, 16 log pages) | $0.000384 | complete, no gaps: 3,957 Pons launches; other launchpads not enumerable yet (no verified factory) |
+
+Running total: **$0.000384** of the $10 cap. Outputs stay local under `.data/eko-058/` (git-ignored).
