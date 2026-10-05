@@ -6,9 +6,19 @@ export interface PolicyDraft {
   sections: readonly { title: string; paragraphs: readonly string[] }[];
 }
 
-// Approval is an external owner decision tied to this exact draft version, never inferred from a build.
+// Approval is an external owner decision tied to an exact version, never inferred from a build.
+// The owner approved Terms and Privacy on 2026-10-05, recorded in docs/public-launch/OWNER-DECISIONS.md (item 9).
+export const POLICY_APPROVAL = {
+  slugs: ['terms', 'privacy'],
+  version: '2026-10-05',
+  approvedAt: '2026-10-05',
+  evidenceRef: 'docs/public-launch/OWNER-DECISIONS.md',
+} as const;
+export const isApprovedPolicy = (slug: string) => (POLICY_APPROVAL.slugs as readonly string[]).includes(slug);
+
+// The other policies stay drafts until the owner approves them.
 export const POLICY_REVIEW = {
-  version: '2026-10-05-draft.2',
+  version: '2026-10-05-draft.3',
   draftedAt: '2026-10-05',
   effectiveAt: null,
   ownerApproval: { dueAt: '2026-10-05', approvedAt: null, evidenceRef: null },
@@ -18,6 +28,8 @@ export const LEGAL_COPY = {
   navigation: 'Launch policies',
   draft: 'Draft — pending owner approval',
   review: 'This is a draft for the owner to review. It is not approved and not in effect. A review by legal counsel is planned for a later phase.',
+  approved: 'Approved by the owner',
+  approvedNote: 'A review by legal counsel is planned for a later phase.',
   missing: 'Policy not found',
   choose: 'Choose a policy below.',
   version: 'Version',
@@ -26,11 +38,14 @@ export const LEGAL_COPY = {
   approvalDate: 'Owner approval date',
   approvalEvidence: 'Approval evidence',
   pending: 'Pending — not approved yet',
-  contact: 'Website: ekoterminal.com · Contact for questions about these policies: pending owner confirmation · Security reports: security@ekoterminal.com',
+  website: 'Website: ekoterminal.com',
+  questions: 'Questions about these policies: contact the official EKO X or Telegram account, listed on',
+  official: 'Official project links',
+  security: 'Security reports: security@ekoterminal.com',
 };
 
-// TODO(spec): The policy contact mailbox, server log and backup retention and the service-provider list are owner
-// decisions (docs/public-launch/OWNER-DECISIONS.md); they stay marked pending until confirmed.
+// TODO(spec): Server log and backup retention and the service-provider list are open owner decisions
+// (docs/public-launch/OWNER-DECISIONS.md); the privacy policy says they will be published once confirmed.
 // TODO(spec): Set the team blackout duration and exception-review procedure externally; no window is invented here.
 export const POLICY_DRAFTS: readonly PolicyDraft[] = [
   { slug: 'terms', title: 'Terms of service', sections: [
@@ -50,7 +65,7 @@ export const POLICY_DRAFTS: readonly PolicyDraft[] = [
     ] },
     { title: 'Fees', paragraphs: [
       'Terminal fee: 0% during launch week, until token day. Network, venue and token fees still apply.',
-      'Planned from token day: a 0.5% terminal fee on Uniswap-routed trades, lower with a tier, paid straight to the public burn wallet. The burn wallet’s balance is burned daily by hand, and every transaction is posted. Pons-curve trades carry no terminal fee at launch. Terminal fees never go to the dev wallet.',
+      'From token day, any terminal fee will be published before it starts. Pons-curve trades carry no terminal fee at launch.',
       'Planned tiers start the day after token day. EKO pays nothing to token holders.',
     ] },
     { title: 'Agents and guardrails', paragraphs: [
@@ -87,7 +102,7 @@ export const POLICY_DRAFTS: readonly PolicyDraft[] = [
       'Notifications: if you turn on browser notifications or link Telegram for alerts, EKO stores what it needs to send them.',
     ] },
     { title: 'Who else handles data', paragraphs: [
-      'EKO uses service providers to run: hosting and database, blockchain data (RPC) providers, AI model providers for analysis, and error reporting. Private journal entries stay out of logs, analytics and share images. The list of providers is pending owner confirmation.',
+      'EKO uses service providers to run: hosting and database, blockchain data (RPC) providers, AI model providers for analysis, and error reporting. Private journal entries stay out of logs, analytics and share images. The list of providers will be published here once it is confirmed.',
     ] },
     { title: 'Sharing', paragraphs: [
       'Your journal is private. A separate opt-in to share de-identified outcomes is planned and is not available yet. Outcomes you choose to share would be kept indefinitely and could not be recalled.',
@@ -98,10 +113,10 @@ export const POLICY_DRAFTS: readonly PolicyDraft[] = [
     ] },
     { title: 'How long EKO keeps data', paragraphs: [
       'Planned retention: sessions 90 days; usage and speed measurements 30 days; bot interactions one year; AI analysis detail 180 days; audit logs two years. Agent journal and check records stay until you delete them, or 30 days after account deletion. Public chain data and receipts are kept permanently so they stay checkable.',
-      'Server log and backup retention: pending owner confirmation.',
+      'Server log and backup retention periods will be published here once they are confirmed.',
     ] },
     { title: 'Changes and contact', paragraphs: [
-      'If this policy changes, the new version will be posted on this page with a new version number and date. The contact address for privacy questions is pending owner confirmation.',
+      'If this policy changes, the new version will be posted on this page with a new version number and date. For privacy questions, contact the official EKO X or Telegram account listed on the Official project links page (/official).',
     ] },
   ] },
   { slug: 'risk', title: 'Risk disclosure', sections: [
@@ -130,10 +145,10 @@ export const POLICY_DRAFTS: readonly PolicyDraft[] = [
   { slug: 'team-trading', title: 'Team trading policy', sections: [
     { title: 'Outputs before trades', paragraphs: [
       'No trading ahead of EKO outputs and no using unpublished research to trade. Publication schedules must not be timed to team trading. Team trading in an asset under pending analysis stays paused until a documented blackout window and exception-review procedure are approved. The duration is pending; this draft does not invent a window.',
-      'The team is anonymous. Project dev, burn and timelock wallets must be publicly disclosed before relevant activity. Wallet publication and transaction history are external release evidence, not supplied by these drafts. Any launch token purchases by the team must be disclosed and locked on the same public timelock; no claim of zero team holdings is made.',
+      'The team is anonymous. Project wallets must be publicly disclosed before relevant activity. Wallet publication and transaction history are external release evidence, not supplied by these drafts. Any launch token purchases by the team must be disclosed; no claim of zero team holdings is made.',
     ] },
-    { title: 'Separate wallet purposes', paragraphs: [
-      'The dev wallet pays operating costs from creator fees. Planned terminal fees go to the public burn wallet, never the dev wallet. Manual burn transactions and milestone locks remain staged and require their own published evidence. Trading exceptions, conflicts and breaches require a dated record without identifying team members.',
+    { title: 'Wallets and records', paragraphs: [
+      'The dev wallet pays operating costs from creator fees. Trading exceptions, conflicts and breaches require a dated record without identifying team members.',
     ] },
   ] },
   { slug: 'kol', title: 'KOL disclosure policy', sections: [

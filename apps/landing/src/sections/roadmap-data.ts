@@ -74,9 +74,8 @@ export const roadmapDrops = [
     scope: [
       ["EKO Score", "A planned reputation layer aligned with ERC-8004, connecting agent identity to an inspectable record."],
       ["Widget & partner API", "EKO Inside brings EKO readings into partner products through an embedded widget and API."],
-      ["Burn Engine", "Planned replacement for manual daily burns. The contract and its renounce step wait for review and release."],
     ],
-    gate: "The Burn Engine ships only after its contract review is complete; otherwise it moves to a later drop.",
+    gate: "The widget and partner API need a recorded demo and green evaluation checks before release.",
   },
   {
     title: "Base Expansion", category: "NETWORK / REACH",

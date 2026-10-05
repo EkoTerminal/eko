@@ -48,7 +48,7 @@ export const ROUTES: readonly RouteDef[] = [
   route('/mission/approvals', 'D0', 'mission', 'siwe', 'approvals'), route('/approve/:id', 'D0', 'mission', 'siwe', 'approvals'),
   route('/lab', 'D0', 'mission', 'siwe', 'loop_lab'), route('/lab/:loopId', 'D0', 'mission', 'siwe', 'loop_lab'),
   route('/research', 'D0', 'mission', 'siwe', 'deep_research'), route('/research/:id', 'D0', 'mission', 'siwe', 'deep_research'), route('/perps', 'D0', 'terminal', 'public', 'perps_panel'),
-  route('/burn', 'D0', 'trust', 'public', 'burn_board'), route('/swarm', 'D0', 'terminal', 'public', 'beat_the_swarm'),
+  route('/swarm', 'D0', 'terminal', 'public', 'beat_the_swarm'),
   route('/embed/clear/:address', 'D0', 'static', 'public', 'clear_badge'),
   route('/oauth/consent', 'T', 'static', 'siwe'),
   route('/settings', 'T', 'terminal'),

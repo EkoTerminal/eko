@@ -28,13 +28,12 @@ versions, denominators and candidates must be preserved when exporting evidence.
 | Transparency and project links | `/transparency`, `/official` | Prepared routes; project wallets/contracts and repository links unresolved, no placeholder address links |
 | Disclosure discovery | each export's `SECURITY.md` and `.well-known/security.txt` | Draft policy/template, no confirmed live reporting channel |
 | Receipt deployment verification | `packages/chain/addresses.4663.yaml`, `contracts/release/ReceiptsRegistry.build.json` | `ours.receiptsRegistry`, owner and committer remain TODO; local bytecode hashes are not live bytecode equality |
-| Public project wallets and histories | burn wallet, dev fee wallet, milestone timelock | No verified project identifiers supplied; no token at T; burns and milestone configuration remain staged |
-| Guard/harness/auth | guard, SIWE, harness keys, MCP OAuth, Roles configuration | Bounty scope proposed; implementation and acceptance owned by other packets; unavailable checks remain unavailable |
+| Public project wallets and histories | dev fee wallet | No verified project identifiers supplied; no token at T. The burn wallet and milestone timelock were dropped (owner decision 2026-10-05) |
+| Guard/harness/auth | guard, SIWE, harness keys, MCP OAuth, Roles configuration | Reporting scope proposed (no bug bounty); implementation and acceptance owned by other packets; unavailable checks remain unavailable |
 
 The prepared pages intentionally use no API/config-supplied wallet address as
 verified evidence. To add one, the owner must supply an accepted chain-4663 record
 with canonical block, source commit/build hashes, deployment transaction and
 explorer source verification; verify registry `owner()`, `pendingOwner()` and
 `committer()` and any Safe signers/threshold/modules separately. Publish only
-project-role wallets with accepted provenance. For daily burns, require both
-buy and burn transactions/history and reconciliation, not an asserted counter.
+project-role wallets with accepted provenance.

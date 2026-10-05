@@ -1,5 +1,7 @@
 # Canonical facts and shared contracts (source of truth for the handoff suite)
 
+> **Owner decisions 2026-10-05 override this sheet wherever they conflict:** no token burns, buybacks or milestone buys (no burn wallet, daily burn, launch buy-and-burn, Burn Board, Burn Engine or milestone timelock); no bug bounty; Terms and Privacy approved; policy and privacy questions go to the official X and Telegram accounts listed on `/official`; no closed beta (public launch Tue Oct 13). See the block at the top of `05-GO-PLAN.md`.
+
 > **v2.1, 2026-09-30: owner decisions applied, and the name is EKO** (§0–§1).
 > - **Fees:** 2% total = Pons 1% standard fee + 1% creator tax.
 > - **Burns:** manual daily burns from a public burn wallet at launch; the automated Burn Engine is a later Drop.

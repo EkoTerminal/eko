@@ -2,7 +2,8 @@
 
 Prepared from task 128 and GO-PLAN §§3.5, 6.2–6.4, 9, 16, OVERVIEW §12 and
 BACKEND §14.0. These files authorize no external action. Public repositories,
-release tags, deployment, bounty funding and outreach remain owner decisions.
+release tags, deployment and outreach remain owner decisions. There is no bug bounty
+(owner decision, 2026-10-05).
 
 ## Contents and candidate linkage
 
@@ -10,7 +11,7 @@ release tags, deployment, bounty funding and outreach remain owner decisions.
 bytes for three proposed public repositories: `contracts`, `playbooks` and
 `receipts-verifier`. Repository URLs remain `{{PUBLIC_REPOSITORY_URL}}`; the
 public domain remains `{{PUBLIC_DOMAIN}}`. Roles are release operator, disclosure
-coordinator, review coordinator and funding owner; no personal identity is needed.
+coordinator and review coordinator; no personal identity is needed.
 
 From the monorepo root, using only Node built-ins:
 
@@ -69,8 +70,7 @@ Some inherited evidence links refer to omitted runtime or ignored raw runs;
 [the evidence index](EVIDENCE.md) states that limitation explicitly. Reports retain
 their original candidates; no old result becomes a new-candidate approval.
 
-Missing planned artifacts stay unresolved: accepted milestone timelock parameters,
-reviewed Roles permission configuration, daily-burn script and its fork evidence,
+Missing planned artifacts stay unresolved: reviewed Roles permission configuration,
 three independent contract reviews, Slither/Aderyn output, completed window,
 final hash and deployment equality. None is replaced with a fabricated artifact.
 Use [CHECKLIST.md](CHECKLIST.md) for the owner handoff and findings table.

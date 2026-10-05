@@ -24,7 +24,7 @@ export const TRUST_COPY = {
   nav: 'Project evidence',
   official: 'Official project links',
   transparency: 'Transparency',
-  security: 'Security and bug bounty',
+  security: 'Security',
   scoreboard: 'Scoreboard',
   policies: 'Launch policies',
   warningTitle: 'No token yet',
@@ -51,8 +51,6 @@ export const OFFICIAL_COPY = {
     { label: 'Receipts registry contract', note: 'Robinhood Chain address.' },
     { label: 'Registry owner and committer wallets', note: 'Robinhood Chain addresses.' },
     { label: 'Dev fee wallet', note: 'Robinhood Chain address.' },
-    { label: 'Burn wallet', note: 'Robinhood Chain address.' },
-    { label: 'Milestone timelock', note: 'Robinhood Chain address.' },
     { label: 'X, Telegram and Farcaster accounts', note: 'Account names.' },
     { label: 'Status page', note: 'Web address.' },
   ],
@@ -65,14 +63,12 @@ export const TRANSPARENCY_COPY = {
     { label: 'Receipts registry', note: 'A contract on Robinhood Chain that records hashes of EKO’s published calls, so anyone can check them later. It holds no funds.' },
     { label: 'Registry owner', note: 'A cold wallet that can only change the registry’s settings, such as replacing the committer.' },
     { label: 'Registry committer', note: 'A hot wallet that posts new hashes to the registry. It holds gas only.' },
-    { label: 'Dev fee wallet', note: 'From token day, receives the creator fees. Pays running costs and bug bounty rewards. It never receives terminal fees.' },
-    { label: 'Burn wallet', note: 'From token day, receives terminal fees and paid API revenue, never dev fees. Planned: once a day, its balance buys the token and burns it, by hand, with every transaction posted.' },
-    { label: 'Milestone timelock', note: 'Planned for token day. Locks milestone buys and any team tokens for six months per deposit.' },
+    { label: 'Dev fee wallet', note: 'From token day, receives the creator fees and pays running costs.' },
   ],
   feesTitle: 'Fees',
   fees: [
     'Terminal fee: 0% during launch week. Network, venue and token fees still apply.',
-    'Planned from token day: 0.5% on Uniswap-routed trades, paid to the burn wallet, and 0% on Pons-curve trades.',
+    'From token day, any terminal fee will be published before it starts. Pons-curve trades carry no terminal fee at launch.',
   ],
   reviewTitle: 'Contract review',
   review: [
@@ -85,21 +81,21 @@ export const TRANSPARENCY_COPY = {
   tokenTitle: 'Token day',
   token: [
     NO_TOKEN,
-    'A token is planned for October 20, 2026, and only if every public gate passes: zero honeypot fills, evaluation gates green, the receipts registry review done, and the bug bounty live. If a gate fails, the token waits.',
+    'A token is planned for October 20, 2026, and only if every public gate passes: zero honeypot fills, evaluation gates green and the receipts registry review done. If a gate fails, the token waits.',
   ],
   checkTitle: 'Check it yourself',
   check: [
     'Once addresses are published, you can check them on the Robinhood Chain explorer: the registry’s owner and committer, the source commit, and that the deployed code matches the reviewed code.',
-    'Costs and bug bounty payouts are planned to be listed in a monthly note.',
+    'Running costs are planned to be listed in a monthly note.',
   ],
 } as const;
 
 export const SECURITY_COPY = {
-  statusTitle: 'Reporting is open · bounty terms pending owner confirmation',
+  statusTitle: 'Reporting is open',
   status: [
     'You can report a vulnerability now through either private channel below.',
-    'Reward amounts, funding and payment terms are proposed and pending owner confirmation. Until they are confirmed, no reward is promised.',
-    'The bounty is planned to start on October 13, 2026, at 13:00 UTC, together with the public code review.',
+    'There is no bug bounty, and EKO does not pay for reports.',
+    'The public code review is planned to start on October 13, 2026, at 13:00 UTC.',
   ],
   reportTitle: 'How to report privately',
   channels: [
@@ -130,21 +126,6 @@ export const SECURITY_COPY = {
     'Test on local copies, forks, or accounts and wallets you control.',
     'Do not disrupt the live service, move anyone else’s funds or access their data. If you come across someone else’s data, stop and tell us.',
     'Give us time to fix an issue before you disclose it. We will agree the disclosure with you.',
-  ],
-  rewardsTitle: 'Proposed rewards',
-  rewardsHead: ['Severity', 'Example impact', 'Up to'],
-  rewards: [
-    ['Critical', 'A honeypot fill through a guard bypass; widespread unauthorized execution', '$500'],
-    ['High', 'Unauthorized state change or a material bypass of execution controls', '$300'],
-    ['Medium', 'An integrity failure or disruption with limited scope', '$150'],
-    ['Low', 'A limited-impact defect', '$50'],
-    ['Info', 'Hardening or documentation, with no demonstrated exploit', '$0'],
-  ],
-  rewardTerms: [
-    'At most $500 per valid vulnerability, set by the impact you demonstrate. The first reproducible report of an issue qualifies; duplicates do not.',
-    'Paid in USDC or ETH to a wallet you choose. No ID is requested.',
-    'Paid from creator fees through the dev fee wallet. Before token day, a launch float covers any payout. Terminal fees and the burn wallet never fund the bounty.',
-    'Every payout is listed in the monthly note without naming the reporter.',
   ],
   goodFaithTitle: 'Good-faith research',
   goodFaith: [

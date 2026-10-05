@@ -2,18 +2,18 @@
 
 Both private reporting channels are open: the `security@ekoterminal.com` role mailbox
 (owner-confirmed forwarding, 2026-10-04) and GitHub private vulnerability reporting on
-`EkoTerminal/eko` (enabled; checked 2026-10-05). The bounty terms below remain a draft until
-the owner confirms rewards, funding and payment terms. The public version of this policy is
+`EkoTerminal/eko` (enabled; checked 2026-10-05). There is no bug bounty: EKO does not pay
+for reports (owner decision, 2026-10-05). The public version of this policy is
 <https://ekoterminal.com/security>; the contact file is served at `/.well-known/security.txt`.
 EKO uses AI-assisted and automated review, not a professional audit.
 
 ## Scope
 
 Our deployed contracts, the pre-trade guard and the agent harness are in scope.
-The bounty also covers the receipts verifier, SIWE, harness keys, MCP OAuth and
+Scope also covers the receipts verifier, SIWE, harness keys, MCP OAuth and
 the Zodiac Roles permission configuration. A guard bypass that lets a honeypot
 fill is Critical. Third-party Pons, Uniswap, Safe and Zodiac contracts, social
-engineering and denial-of-service testing are excluded from bounty rewards.
+engineering and denial-of-service testing are excluded.
 At D0 the only new EKO contract is `ReceiptsRegistry`, which holds no funds.
 Later contracts enter scope only when deployed. Third-party protocols, brokerage
 systems, wallets and infrastructure outside EKO's control are excluded.
@@ -34,33 +34,11 @@ WebSocket work accumulation and unverified ETH/USD reference accounting) are
 marked fixed in the ledger; this is historical evidence, not acceptance of this
 launch candidate. Their status and remediation evidence belong in the
 [findings ledger](.audit-grade/findings.tsv); this policy does not close them.
-Bounty funding and monitoring delivery remain pending operational setup (the role
-mailbox and GitHub private reporting are live), not accepted vulnerability findings.
+Monitoring delivery remains pending operational setup (the role mailbox and GitHub
+private reporting are live), not an accepted vulnerability finding.
 
 The [implemented invariant inventory](docs/security/INVARIANTS.md) links each
 covered invariant to exact checking tests and separately lists missing tests.
-
-## Bounty draft
-
-Rewards are assessed for a first, reproducible in-scope report by demonstrated
-impact. Duplicate reports refer to the first accepted report. The maximum is
-$500 per accepted vulnerability, paid from creator fees through the dev fee
-wallet; every payout is disclosed without identifying the reporter unless they
-consent. Proposed settlement is USDC or ETH to a reporter-supplied wallet, with
-no identity document requested. The launch float must cover any accepted payout
-before D0; creator fees fund later payouts. Record every payout in the monthly
-note without personal identifiers. Reports about expected behaviour without
-additional impact may receive no payout.
-
-| Severity | Demonstrated impact | Maximum payout (USD) |
-| --- | --- | ---: |
-| Critical | Honeypot fill through a guard bypass; widespread unauthorized execution or irreversible core-state compromise | $500 |
-| High | Unauthorized state changes or material execution-control bypass | $300 |
-| Medium | Material disruption or integrity failure with limited scope | $150 |
-| Low | Limited-impact defect | $50 |
-| Info | Hardening or documentation issue without demonstrated exploitation | $0 |
-
-<!-- TODO(spec): §14.0 sets a $500 cap but no tier amounts. These proposed maximums require finalization before the bounty goes live. -->
 
 ## Good-faith research and harbour commitment
 
@@ -75,16 +53,16 @@ researchers to clarify scope and resolve accidental policy ambiguity.
 ## Launch timing and readiness
 
 Planned activation is **2026-10-13 at 13:00 UTC**, alongside the public repositories
-and the 72-hour review window ending **2026-10-16 at 13:00 UTC**. This is a draft,
-not an active or funded bounty. D0 sign-off is **October 18**, with a reconfirmation
-October 19; planned D0 is October 20. A High or Medium fix reopens the full
+and the 72-hour review window ending **2026-10-16 at 13:00 UTC**. There is no bug
+bounty. D0 sign-off is **October 18**, with a reconfirmation October 19; planned D0
+is October 20. A High or Medium fix reopens the full
 72-hour window and can postpone sign-off and D0. Deploying the non-fund-holding
 receipts registry does not complete review acceptance.
 
 See the [launch checklist and unresolved evidence](docs/public-launch/CHECKLIST.md).
-No publication, funding or contact is authorized by preparing these files.
+No publication or contact is authorized by preparing these files.
 
-<!-- TODO(spec): GO-PLAN §6.3 specifies 48-hour acknowledgement and activation at T; BACKEND §14.0 says 72 hours and live by D0. This handoff uses the earlier T deadline and stricter 48-hour target. Owner must confirm channels, funding and terms before activation. -->
+<!-- TODO(spec): GO-PLAN §6.3 specifies 48-hour acknowledgement and activation at T; BACKEND §14.0 says 72 hours and live by D0. This handoff uses the earlier T deadline and stricter 48-hour target. The owner dropped the bug bounty on 2026-10-05; reporting channels stay open. -->
 
 ## Privileged powers
 
@@ -129,7 +107,7 @@ The [frozen scope](.audit-grade/SCOPE.md) concerns the earlier review candidate.
 | 8. `DeployReceiptsRegistry.run()`, `RECEIPTS_OWNER`, `RECEIPTS_COMMITTER` | `contracts/script/DeployReceiptsRegistry.s.sol:12` | Deployment operator | Hardware signer via `--ledger`; role addresses public | Deploys immutable registry with supplied roles, rejects zero/equal roles. No implicit post-deploy authority unless deployer is the selected owner/committer. | Retire deployer use; replace role addresses before deploy; hand off existing owner via two steps. |
 | 9. Receipt signing/broadcast service, `APP_ROLE=receipts` | `apps/engines/src/receipts/cli.ts:41`; `apps/server/src/roles.ts:13` | Receipts service operator | Gas-only hot key + host secrets | Signs chain-4663 zero-value registry commits and broadcasts retained transactions. A raw key compromise can spend that key's gas funds; no user keys. | Stop service, on-chain committer rotation, secret reload; preserve pending-attempt records. |
 | 10. `BURN_WALLET_ADDRESS` / `ours.burnWallet`; manual daily signing and weekly bridge role | `apps/server/src/config.ts:85`; `packages/chain/addresses.4663.yaml:30`; `docs/eko/04-BACKEND.md:2447` | Public burn-wallet operator | Separate hardware or 2-of-3 hardware multisig per spec; never server | Intended recipient of terminal fees, paid-API/x402 revenue and token payments only, never creator/dev fees. Manual signing controls those receipts; configured address confers no signing key. Burn/bridge tools are not implemented in this checkout. | Fresh hardware wallet and disclosed address update; update future `X402_PAY_TO` with it (BACKEND §§12.5, 15.5, 18). |
-| 11. `DEV_FEE_WALLET` / `ours.devWallet`; creator-fee and launch signer role | `apps/server/src/config.ts:87`; `packages/chain/addresses.4663.yaml:31`; `docs/eko/04-BACKEND.md:2448` | Public creator-fee operator | Separate hardware | Creator-fee recipient; costs, milestone locks, bounty and one-time launch buy/burn per spec. Public disclosure config only today; never the terminal fee destination or a burn-service key. | Replace/disclose public role and configure creator recipient under applicable protocol rules; no server key. |
+| 11. `DEV_FEE_WALLET` / `ours.devWallet`; creator-fee and launch signer role | `apps/server/src/config.ts:87`; `packages/chain/addresses.4663.yaml:31`; `docs/eko/04-BACKEND.md:2448` | Public creator-fee operator | Separate hardware | Creator-fee recipient; pays running costs. Public disclosure config only today; never the terminal fee destination or a burn-service key. | Replace/disclose public role and configure creator recipient under applicable protocol rules; no server key. |
 | 12. User transaction signing authority | `apps/server/src/http/routes.ts:255`; `apps/server/src/exec/trade-access.ts:62` | User wallet operator | User-controlled wallet; outside host custody | User signs unsigned preparations; server access controls gate preparation, not arbitrary wallet transfers. Server has no user signing key. | User revokes wallet approvals/permissions; session logout only revokes EKO access. |
 | 13. `ADMIN_WALLETS` and database `accounts.role` | `apps/server/src/config.ts:152`; `apps/server/src/http/auth.ts:44` | Release operator / DB administrator | Host configuration + admin wallet (hardware intended) | Allowlist grants computed admin role; otherwise stored role is returned. Trading admin checks resulting role; monitoring independently requires configured wallet allowlist. Does not confer on-chain registry ownership. | Remove allowlist entry, remove persisted admin role if present, invalidate sessions; restart affected replicas. |
 | 14. `PUT /v1/admin/trading/allowlist/:wallet` | `apps/server/src/http/v1/trade-admin.ts:26` | Wallet-session administrator | Wallet sign-in + signed session | Adds/updates wallet role/cap with audit record; caps cannot exceed configured beta role ceiling. Origin required; demo sessions refused. | DELETE route removes grant; revoke administrator access as above. |

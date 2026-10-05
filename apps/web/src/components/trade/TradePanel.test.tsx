@@ -48,12 +48,12 @@ describe('shared guarded panel contract states', () => {
     expect(html(gate(quote({ side: 'sell' })))).toMatch(/class="btn tp-submit">Sell/);
     expect(text).toContain('<details>'); expect(text).toContain('1 check passed');
   });
-  it.each([0, 50, 40, 30, 25] as const)('displays exactly %s bps from the quote, without an inferred tier fee', bps => {
+  it.each([0, 50, 40, 30, 25] as const)('displays exactly %s bps from the quote, without an inferred tier fee or a fee destination', bps => {
     const q = quote({ fee: { bps, usd: bps / 100, destination: bps === 0 ? null : 'burn_wallet' } });
     const text = render(<FeeLines quote={q} tier="source" phase="launch_week" />);
     expect(text).toContain(`${bps / 100}% ($${bps / 100})`);
-    expect(text.includes('→ burn wallet (burned daily)')).toBe(bps !== 0);
-    if (bps === 0) { expect(text).not.toContain('destination'); expect(text).not.toContain('burn wallet'); expect(text).not.toContain('null'); }
+    // The fee line shows only the fee; it never says where fees go.
+    expect(text).not.toMatch(/burn|→|destination/i); expect(text).not.toContain('null');
   });
   it('renders zero curve fee and never uses a quote-supplied external link', () => {
     const q = quote({ route: { venue: 'pons_curve', executable: false, linkOut: 'https://untrusted.example/trade' } });

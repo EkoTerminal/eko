@@ -46,15 +46,11 @@ export function Transparency() {
 
 export function Security() {
   return <Frame title={C.security} path="/security">
-    <section className="legal-review trust-pending" aria-label={S.statusTitle}><h2>{S.statusTitle}</h2>{S.status.map(text => <p key={text}>{text}</p>)}</section>
+    <section className="legal-review" aria-label={S.statusTitle}><h2>{S.statusTitle}</h2>{S.status.map(text => <p key={text}>{text}</p>)}</section>
     <section><h2>{S.reportTitle}</h2><Facts rows={S.channels.map(channel => ({ label: channel.label, note: '', value: <Out href={channel.href}>{channel.text}</Out> }))} /><ul>{S.report.map(text => <li key={text}>{text}</li>)}</ul></section>
     <section><h2>{S.scopeTitle}</h2><ul>{S.scope.map(text => <li key={text}>{text}</li>)}</ul></section>
     <section><h2>{S.outTitle}</h2><ul>{S.out.map(text => <li key={text}>{text}</li>)}</ul></section>
     <section><h2>{S.rulesTitle}</h2><ul>{S.rules.map(text => <li key={text}>{text}</li>)}</ul></section>
-    <section><h2>{S.rewardsTitle} · {PENDING_OWNER}</h2>
-      <table className="trust-table"><thead><tr>{S.rewardsHead.map(head => <th key={head} scope="col">{head}</th>)}</tr></thead>
-        <tbody>{S.rewards.map(([severity, impact, amount]) => <tr key={severity}><th scope="row">{severity}</th><td>{impact}</td><td className="num">{amount}</td></tr>)}</tbody></table>
-      <ul>{S.rewardTerms.map(text => <li key={text}>{text}</li>)}</ul></section>
     <section><h2>{S.goodFaithTitle} · {PENDING_OWNER}</h2>{S.goodFaith.map(text => <p key={text}>{text}</p>)}</section>
     <p><Out href={PROJECT_LINKS.securityPolicy}>{S.fullPolicy}</Out> · <Out href={PROJECT_LINKS.securityTxt}>security.txt</Out></p>
   </Frame>;

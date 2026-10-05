@@ -5,7 +5,6 @@ import { serverNow } from '../../lib/clock';
 import { Link } from '../../lib/Link';
 import { referralLink, useSettingsSession } from '../../lib/settings';
 import { useShell } from '../../store/shell';
-import { FEE_TO_BURN } from '../../copy';
 import { PLAN_COPY as C } from '../../copy/settings';
 import { SettingsConnect } from '../Settings';
 import './settings.css';
@@ -27,7 +26,7 @@ export function FeeDisclosure() {
   const config = useShell(s => s.config), me = useShell(s => s.me), { owner } = useSettingsSession();
   if (!config) return null;
   const bps = config.phase === 'launch_week' ? 0 : config.flags.tiers_active && owner && me ? me.entitlements.feeBps : 50;
-  return <div className="note">{config.phase === 'launch_week' ? <p>{C.feeLaunch}</p> : bps === 0 ? <p>{C.feeUniswapZero}</p> : <p>{C.fee} {FEE_TO_BURN(`${bps / 100}%`)} {C.feeUniswap}.</p>}<p>{C.feeCurve}</p></div>;
+  return <div className="note">{config.phase === 'launch_week' ? <p>{C.feeLaunch}</p> : bps === 0 ? <p>{C.feeUniswapZero}</p> : <p>{`${C.fee}: ${bps / 100}% ${C.feeUniswap}.`}</p>}<p>{C.feeCurve}</p></div>;
 }
 export default function Plan() {
   const config = useShell(s => s.config), me = useShell(s => s.me), { owner } = useSettingsSession();

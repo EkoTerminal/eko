@@ -1,10 +1,11 @@
 import type { ScoreboardResponse, ScoreboardRow } from '@eko/shared';
+// The API still serves a `milestones` record kind; milestone buys were dropped (owner decision 2026-10-05), so it has no tab.
 export const SCOREBOARD_TABS = [
-  ['calls', 'Calls'], ['honeypots_refused', 'Refused'], ['honeypots_missed', 'Missed'], ['cohort', 'Weekly cohort'], ['milestones', 'Milestone buys'],
+  ['calls', 'Calls'], ['honeypots_refused', 'Refused'], ['honeypots_missed', 'Missed'], ['cohort', 'Weekly cohort'],
 ] as const;
 export function availabilityMessage(value: ScoreboardResponse['availability']['cohort']) {
   if (value.status === 'observed') return `Measured through ${value.through}`;
-  return ({ monitoring_missing: 'Monitoring is unavailable.', coverage_gap: 'Monitoring coverage has a gap.', outcomes_unaccepted: 'Measured outcomes have not been accepted yet.', forecast_dependency: 'Forecast grades are unavailable.', d0_gated: 'Milestone buys open at token launch.', milestones_unaccepted: 'Measured milestone buys are unavailable.' })[value.reason];
+  return ({ monitoring_missing: 'Monitoring is unavailable.', coverage_gap: 'Monitoring coverage has a gap.', outcomes_unaccepted: 'Measured outcomes have not been accepted yet.', forecast_dependency: 'Forecast grades are unavailable.', d0_gated: 'This record is not available.', milestones_unaccepted: 'This record is not available.' })[value.reason];
 }
 export function counterText(data: ScoreboardResponse | null, metric: 'refused' | 'missed') {
   if (!data || data.availability[metric].status !== 'observed' || data.counters[metric] === null) return NOT_CHECKED;

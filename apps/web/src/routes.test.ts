@@ -10,7 +10,7 @@ describe('§2.2 route table', () => {
     expect(ROUTES.filter((r) => r.stage === 'T').map((r) => r.path)).toEqual(T);
   });
   it('registers D0 and Drop routes only under their exact shared flag', () => {
-    expect(new Set(ROUTES.map((r) => r.path)).size).toBe(44);
+    expect(new Set(ROUTES.map((r) => r.path)).size).toBe(43);
     for (const r of ROUTES.filter((r) => r.stage !== 'T')) {
       expect(r.flag).toBeDefined(); expect(FLAG_NAMES).toContain(r.flag);
       expect(enabledRoutes()).not.toContain(r);
@@ -27,6 +27,8 @@ describe('§2.2 route table', () => {
     expect(resolveRoute('/settings')?.route.auth).toBe('public');
     expect(resolveRoute('/settings/plan')?.route.stage).toBe('T');
     for (const path of ['/no-such-page', '/trade', '/lab', '/arena', '/coin/%ZZ']) expect(resolveRoute(path)).toBeNull();
+    // The Burn Board was dropped (owner decision 2026-10-05); no flag brings it back.
+    expect(resolveRoute('/burn', allFlags)).toBeNull();
     expect(match('/scan/:id', '/scan/a%20b')).toEqual({ id: 'a b' });
   });
   it('keeps coin and agent breadcrumbs in their parent navigation', () => {

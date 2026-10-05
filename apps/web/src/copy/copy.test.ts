@@ -21,8 +21,7 @@ const FORBIDDEN = [/price support/i, /\bfloor\b/i, /\bbid\b/i, /our chart gets b
 
 describe('canonical §8 copy', () => {
   it('snapshots every exact constant and fee wording', () => {
-    expect({ ...copy, FEE_TO_BURN: copy.FEE_TO_BURN('0.5%') }).toMatchSnapshot();
-    expect(copy.FEE_TO_BURN('0%')).toBe('0% → burn wallet (burned daily)');
+    expect({ ...copy }).toMatchSnapshot();
   });
   it('keeps disclaimers out of hard-coded source text outside copy/', () => {
     const violations: string[] = [];
@@ -54,6 +53,20 @@ describe('canonical §8 copy', () => {
       readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
         if (line.includes('// copy-allow:')) return;
         if (LANDING_FORBIDDEN.some((pattern) => pattern.test(line))) violations.push(`${file.slice(landing.length + 1)}:${i + 1}`);
+      });
+    }
+    expect(violations).toEqual([]);
+  });
+  // Owner decision 2026-10-05: no token burns, buybacks, milestone buys or bug bounty in anything users read.
+  const DROPPED = [/burn wallet/i, /burned daily/i, /daily burn/i, /buy[- ]?(and|&)[- ]?burn/i, /burn board/i, /buy-?backs?/i, /milestone (buy|timelock)/i,
+    /\bbounty\b/i, /\bpayouts?\b/i, /closed beta/i];
+  it('keeps dropped token burn, buyback, milestone and bounty promises out of canonical copy', () => {
+    const violations: string[] = [];
+    for (const file of sourceFiles.filter((file) => file.startsWith(join(src, 'copy') + '/'))) {
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        // The one allowed mention says plainly that there is none.
+        const text = line.replace('There is no bug bounty', '');
+        if (DROPPED.some((pattern) => pattern.test(text))) violations.push(`${file}:${i + 1}`);
       });
     }
     expect(violations).toEqual([]);

@@ -56,6 +56,6 @@ export default function UI() {
       <div className="ui-row">{['bg', 'panel', 'plate', 'raise', 'side'].map((surface) => <span key={surface} className="ui-surface" style={{ background: `var(--${surface})` }}>{surface}</span>)}</div>
     </Collapsible>
     <Collapsible id="ui-tokens" title="Every token"><dl className="ui-token-grid">{tokenNames.map((name) => <div key={name}><dt>{name}</dt><dd>{/^#|^rgb|^color-mix/.test(tokenValues[name] ?? '') && <i style={{ background: `var(${name})` }} />}{tokenValues[name]}</dd></div>)}</dl></Collapsible>
-    <Collapsible id="ui-copy" title="Canonical copy"><dl className="ui-copy">{Object.entries(copy).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{typeof value === 'function' ? value('0.5%') : value}</dd></div>)}</dl></Collapsible>
+    <Collapsible id="ui-copy" title="Canonical copy"><dl className="ui-copy">{Object.entries(copy).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl></Collapsible>
   </main>;
 }

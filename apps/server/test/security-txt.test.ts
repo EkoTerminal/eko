@@ -81,7 +81,7 @@ describe('RFC 9116 security.txt', () => {
           expect(missing.statusCode).toBe(404);
           expect(missing.json()).toMatchObject({ error: 'not_found' });
         }
-        // The bug bounty policy page the file links to is an SPA route.
+        // The security policy page the file links to is an SPA route.
         expect((await built.app.inject('/security')).body).toBe(html);
       } finally { await built.close(); }
     } finally { await rm(web, { recursive: true, force: true }); }

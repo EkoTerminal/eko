@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { AnalysisPolicyNotice, PolicyLinks } from '../components/PolicyLinks';
 import { LegalLine } from '../components/shell/Shell';
 import { BUILT_ON, DYOR, NON_AFFILIATION } from '../copy';
-import { findPolicy, LEGAL_COPY, POLICY_DRAFTS, POLICY_REVIEW } from '../copy/legal';
+import { findPolicy, isApprovedPolicy, LEGAL_COPY, POLICY_APPROVAL, POLICY_DRAFTS, POLICY_REVIEW } from '../copy/legal';
 import { SETTINGS_COPY } from '../copy/settings';
 import { resolveRoute } from '../routes';
 import { CoinVerdict } from './terminal/CoinCard';
@@ -23,17 +23,31 @@ describe('versioned launch policy drafts', () => {
     expect((await resolved!.route.load()).default).toBe(Legal);
   });
 
-  it.each(POLICY_DRAFTS)('renders $slug with version, pending external approval and required disclaimers', (policy) => {
+  it('marks only Terms and Privacy as approved by the owner on 2026-10-05', () => {
+    expect(POLICY_DRAFTS.filter((policy) => isApprovedPolicy(policy.slug)).map((policy) => policy.slug)).toEqual(['terms', 'privacy']);
+    expect(POLICY_APPROVAL).toMatchObject({ version: '2026-10-05', approvedAt: '2026-10-05' });
+    expect(isApprovedPolicy('__proto__')).toBe(false); expect(isApprovedPolicy('TERMS')).toBe(false);
+  });
+
+  it.each(POLICY_DRAFTS)('renders $slug with its version, approval state, contact and required disclaimers', (policy) => {
     const html = render(policy.slug);
     expect(html).toContain(`<h1>${policy.title}</h1>`);
-    expect(html).toContain(POLICY_REVIEW.version);
     expect(html).toContain('dateTime="2026-10-05"');
-    expect(html).toContain(LEGAL_COPY.draft);
-    expect(html).toContain(LEGAL_COPY.pending);
-    expect(html).toContain('Draft — pending owner approval');
-    // The domain is confirmed; the policy contact stays visibly pending instead of a look-alike placeholder.
+    if (isApprovedPolicy(policy.slug)) {
+      expect(html).toContain(`<h2>${LEGAL_COPY.approved}</h2>`);
+      expect(html).toContain(`<dt>${LEGAL_COPY.version}</dt><dd>${POLICY_APPROVAL.version}</dd>`);
+      expect(html).toContain(`<dt>${LEGAL_COPY.approvalDate}</dt><dd><time dateTime="2026-10-05">2026-10-05</time></dd>`);
+      expect(html).not.toMatch(/draft|pending/i);
+    } else {
+      expect(html).toContain(POLICY_REVIEW.version);
+      expect(html).toContain(LEGAL_COPY.draft);
+      expect(html).toContain(LEGAL_COPY.pending);
+      expect(html).toContain('Draft — pending owner approval');
+    }
+    // Policy questions go to the official X and Telegram accounts listed on /official; no handle is invented here.
     expect(html).toContain('Website: ekoterminal.com');
-    expect(html).toContain('Contact for questions about these policies: pending owner confirmation');
+    expect(html).toContain('Questions about these policies: contact the official EKO X or Telegram account, listed on <a href="/official">Official project links</a>');
+    expect(html).toContain('Security reports: security@ekoterminal.com');
     expect(html).not.toContain('{{');
     for (const text of [DYOR, BUILT_ON, NON_AFFILIATION]) expect(html).toContain(text);
     expect(POLICY_REVIEW.ownerApproval.approvedAt).toBeNull();
@@ -92,8 +106,9 @@ describe('versioned launch policy drafts', () => {
     const terms = render('terms'), privacy = render('privacy');
     expect(terms).toContain('Terminal fee: 0% during launch week');
     expect(terms).toContain('Live trading can be paused at any time');
-    expect(terms).toContain('Planned from token day: a 0.5% terminal fee on Uniswap-routed trades');
-    expect(terms).toContain('Terminal fees never go to the dev wallet');
+    expect(terms).toContain('From token day, any terminal fee will be published before it starts.');
+    expect(terms).toContain('Pons-curve trades carry no terminal fee at launch');
+    expect(terms).toContain('EKO pays nothing to token holders');
     expect(terms).toContain('OFAC sanctions list');
     expect(terms).toContain('EKO never receives your Robinhood login details');
     expect(privacy).toContain('journal is opt-in');
@@ -103,8 +118,8 @@ describe('versioned launch policy drafts', () => {
     const privacyText = findPolicy('privacy')!.sections.flatMap((section) => section.paragraphs).join('\n');
     expect(privacyText).toContain(`${SETTINGS_COPY.privacy}, “${SETTINGS_COPY.deleteTitle}”`);
     expect(privacy).toContain('It keeps your sign-in record, your trade records and any public receipt hashes');
-    for (const pending of ['The list of providers is pending owner confirmation', 'Server log and backup retention: pending owner confirmation',
-      'The contact address for privacy questions is pending owner confirmation']) expect(privacy).toContain(pending);
+    for (const open of ['The list of providers will be published here once it is confirmed', 'Server log and backup retention periods will be published here once they are confirmed',
+      'For privacy questions, contact the official EKO X or Telegram account listed on the Official project links page (/official)']) expect(privacy).toContain(open);
     expect(render('risk')).toContain('Advisory:');
     expect(render('kol')).toContain('#ad must be the first line');
     expect(render('sanctions')).toContain('there is no permissive fallback');
@@ -115,5 +130,7 @@ describe('versioned launch policy drafts', () => {
     const html = POLICY_DRAFTS.map((policy) => render(policy.slug)).join('\n');
     for (const word of denylist) expect(html.toLowerCase()).not.toContain(word.toLowerCase());
     expect(html).not.toMatch(/\baudited\b|\btrustless\b|automated burns?|\bownerless\b|guaranteed?|win rate|rug-proof|\bsafe\b|protects your Robinhood account/i);
+    // Owner decision 2026-10-05: no token burns, buybacks, milestone buys or bounty, and no fee destination promise.
+    expect(html).not.toMatch(/burn|buyback|milestone|timelock|bounty|payout/i);
   });
 });

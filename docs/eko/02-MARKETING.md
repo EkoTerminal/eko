@@ -7,9 +7,20 @@ date: 2026-09-30
 target: Robinhood Chain (4663)
 ---
 
+> **Owner decisions 2026-10-05 (these override this document wherever they conflict):**
+> 1. **No token burns, buybacks or milestone buys.** EKO does not encourage holding its token for financial benefit. Never post about the burn wallet, daily burns, buy-and-burn, the Burn Board, the Burn Engine, Pons buybacks as EKO policy, milestone buys or the milestone timelock, or anything implying the token gains value from EKO's actions.
+> 2. **No bug bounty.** Never post rewards or payouts. Point security reports to GitHub private vulnerability reporting on `EkoTerminal/eko` or the `security.txt` contact.
+> 3. **Terms and Privacy approved** by the owner on 2026-10-05.
+> 4. **Policy and privacy questions** go to the official EKO X and Telegram accounts, as listed on `/official`.
+> 5. **No closed beta.** The product launches publicly on Tue Oct 13.
+>
+> Sections and beats that promised these carry a "Dropped 2026-10-05" note.
+
 > **v2.1 (2026-09-30): renamed to EKO.** Ticker `$EKO`. Tiers are Listener / Reader / Oracle / Source; verdicts are Clear / Monitor / Danger; scam call-outs are Ghost Reports; product credits are EKO Points; the look follows the EKO site (noise into signal, echo rings, teal-navy and pale cyan). Also aligned: the Claude connector path (Customize → Connectors), the daily burn time (20:00 UTC, proposed), the bug bounty (live from T) and the burn wallet (hardware #6 or a 2-of-3 Safe).
 
 ## 00 · How to Use This Document
+
+> **Dropped 2026-10-05:** the `[BURN_WALLET]` and `[TIMELOCK]` placeholders. There is no burn wallet or milestone timelock.
 
 **The fact sheet wins every conflict.** Every claim is tagged with the stage it becomes true. Before that stage, copy says "planned", "ships at token launch" or "shipping in Drop N". Dates are targets: D0 moves if a gate is red, and a Drop slides a week if its evals aren't green (internal update plan).
 
@@ -88,6 +99,8 @@ EKO's look is noise turning into signal: static, echo rings and a faint polterge
 
 ### Taglines
 
+> **Dropped 2026-10-05:** every tagline about burns or buy-and-burn. Do not post them.
+
 | Line | Status | Rule |
 |---|---|---|
 | "Every move has a cause." | Fact sheet §1 (site hero) | Bios, site hero, decks, launch posts |
@@ -116,6 +129,8 @@ EKO's look is noise turning into signal: static, echo rings and a faint polterge
 > **Rule:** copy that says "won't let you buy a honeypot" must link the Scoreboard's "honeypots missed" count on the same page. It describes the guard's design, not a "rug-proof" promise.
 
 ### The Five Pillars
+
+> **Dropped 2026-10-05:** pillar 4 (terminal fees fund a daily public burn). Do not post it.
 
 | Pillar | Message | Proof points (stage) |
 |---|---|---|
@@ -198,6 +213,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 
 ### Token and Fees
 
+> **Dropped 2026-10-05:** K3 (Pons buyback), K4's "paid straight to the public burn wallet", K5 to K8 (buy-and-burn, burn wallet, launch buy-and-burn, Burn Engine), K9's burn wording and K10 (milestone buys). Do not post them. Any terminal fee from token day is announced before it starts, with no destination promise.
+
 | # | Claim | Allowed wording | Forbidden wording | Source or proof | True from (stage) |
 |---|---|---|---|---|---|
 | K1 | Launch | "Launches on Pons, paired with ETH, once its public gates pass (target ~Oct 20)" | A fixed date as a promise; the exact time; "presale" | Fact sheet §4–5 | `D0` |
@@ -228,6 +245,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 
 ### Security, Trust and Team
 
+> **Dropped 2026-10-05:** the bug bounty in S5, and the burn wallet, daily burns and timelock in M1 to M4. Do not post them.
+
 | # | Claim | Allowed wording | Forbidden wording | Source or proof | True from (stage) |
 |---|---|---|---|---|---|
 | S1 | Credentials | "We never receive your Robinhood credentials" | — | Internal policy doc | `T` |
@@ -254,6 +273,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 
 ### Wrong vs Right
 
+> **Dropped 2026-10-05:** the "Right" versions in rows 4, 8, 11, 12, 13 and 14 that mention burns, buy-and-burn, milestone buys, the burn wallet or the bug bounty. Do not post them.
+
 | # | Wrong | Right |
 |---|---|---|
 | 1 | "EKO is the safety layer for Robinhood's AI agents." | "A harness for the agent you've connected to Robinhood through its MCP. Built on Robinhood Chain. Not affiliated with, endorsed by, or officially connected with Robinhood Markets, Inc." |
@@ -272,6 +293,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 | 14 | "0.5% of every trade, on any coin, is burned." | "The terminal fee on Uniswap-routed trades (0.5%, less by tier) goes to the public burn wallet and is burned daily. Pons-curve trades carry no terminal fee at launch." |
 
 ## 05 · Required Disclaimers and Where They Go
+
+> **Dropped 2026-10-05:** token posts about burns and milestones. There are none to post.
 
 **The three required texts (fact sheet §6):**
 - **D-1:** "DYOR · Not financial advice · AI-generated analysis"
@@ -297,6 +320,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 
 ### X: Two Accounts
 
+> **Dropped 2026-10-05:** milestone posts and the weekly burn report.
+
 | | Main: `{{MAIN_HANDLE}}` | Bot: `{{BOT_HANDLE}}` |
 |---|---|---|
 | **Run by** | Humans (ML; OWN approves token, team and crisis posts) | Automation, labelled "Automated by `{{MAIN_HANDLE}}`" |
@@ -315,6 +340,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 7. **If it's suspended,** never open a replacement account (see 12).
 
 ### Telegram
+
+> **Dropped 2026-10-05:** burn recaps and milestone buys in the announcement channel.
 
 | Surface | What | From |
 |---|---|---|
@@ -341,6 +368,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 ## 07 · Content Engine
 
 ### Cadence
+
+> **Dropped 2026-10-05:** the daily burn post, the weekly burn report, Pons buyback totals and milestone buys in the monthly note. Do not post them.
 
 | When | Post | Account | From |
 |---|---|---|---|
@@ -382,6 +411,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 
 ### Burn Post (stats only)
 
+> **Dropped 2026-10-05:** the burn post and all of its templates. Do not post them.
+
 > **Template (bot):** "Daily burn: [N] `$EKO` bought with the burn wallet's full balance and burned. Tx: [hash]. Funded by terminal fees [N] · API and x402 revenue [N] · token payments [N]. Total: [N] ([N]% of supply). Burn wallet: [BURN_WALLET]. Not financial advice."
 
 1. The daily post, in the template above.
@@ -400,6 +431,8 @@ If a claim isn't here, get OWN's approval before using it. Every number in a pos
 3. "Clear · $[SYMBOL] · No playbook matches at block [block]. Receipt [ID]."
 
 ### Drop Teaser, Launch and Recap
+
+> **Dropped 2026-10-05:** the Drop 7 Burn Engine teaser and launch copy.
 
 Every Drop gets a 48h teaser, a demo video, a release note (what shipped, eval scores, known limits) and a mascot post (internal update plan).
 
@@ -434,6 +467,8 @@ Each clip shows the problem, then the preflight result, the human's decision and
 
 ## 08 · Launch Campaign, Day by Day
 
+> **Dropped 2026-10-05:** the closed beta (`T-6`), the launch buy-and-burn, the burn wallet going live, daily burn posts, the weekly burn report and milestone buys in this calendar. The product launches publicly on Tue Oct 13.
+
 | Day | Beat | Channel | Asset | Owner | Copy |
 |---|---|---|---|---|---|
 | `T-10` Oct 3 | Accounts live; mascot teaser; first Ghost Report (pre-release engine); Telegram opens; waitlist | X, Telegram | Static silhouette, Ghost Report card | ML; DEV verifies | "Something has been listening to the chain. Don't be an echo." |
@@ -463,6 +498,8 @@ Each clip shows the problem, then the preflight result, the human's decision and
 
 ### Beta-Week Public Stats Posts
 
+> **Dropped 2026-10-05:** the closed beta stats post. There is no closed beta.
+
 **At `T`:**
 > "Closed beta, Oct 7–12: [N] testers, [N] verdicts, [N] honeypots refused, [N] missed, [N] agents connected, [N] preflights. Log: [link]. [D-1]"
 
@@ -472,6 +509,8 @@ Each clip shows the problem, then the preflight result, the human's decision and
 **Rules:** if misses are above zero, that line goes first. The unchecked-order rate joins at `D0`. At `D0`, post the week in numbers before the CA.
 
 ### Token-Day Run-of-Show (content side)
+
+> **Dropped 2026-10-05:** the native buyback line, the launch buy-and-burn and its post, the burn wallet going live and the first daily burn. Do not post them.
 
 | Time | Action | Owner | Copy or check |
 |---|---|---|---|
@@ -492,6 +531,8 @@ Each clip shows the problem, then the preflight result, the human's decision and
 
 ### Burn Wallet Live, and the Daily Burn
 
+> **Dropped 2026-10-05:** this whole beat. There is no burn wallet and no daily burn. Do not post it.
+
 - **`D0`, burn wallet live** (company voice; OWN approves):
   > "The burn wallet is live: [BURN_WALLET]. It receives only the terminal fee on Uniswap-routed trades, paid-API and x402 revenue, and token payments, never dev fees. Once a day we buy `$EKO` with its full balance and burn it, and every transaction is posted here, on Telegram and on the Burn Board. First burn: this evening. Not financial advice."
 - **Every day from `D0`:** the bot posts each burn tx (Burn Post, 07). If a burn is late, see "Missed or late daily burn" (12).
@@ -501,6 +542,8 @@ Each clip shows the problem, then the preflight result, the human's decision and
 - **Record:** every burn tx is logged on the Burn Board.
 
 ### Milestone-Buy Announcements
+
+> **Dropped 2026-10-05:** milestone buys and every template here. Do not post them.
 
 **Milestones** (fact sheet §5):
 - 1,000 wallets connected
@@ -540,6 +583,8 @@ Each clip shows the problem, then the preflight result, the human's decision and
 - **Never pay for:** price calls, raids, engagement pods or follower boosts.
 
 ### Brief Template
+
+> **Dropped 2026-10-05:** "terminal fees fund a daily public burn" as a key message.
 
 ```
 Campaign: [name] · Stage: [T / D0 / Drop N] · Tracking link: [link]
@@ -582,6 +627,8 @@ Pay: per [activation / first trade], in [asset], weekly
 
 ### FAQ Macros
 
+> **Dropped 2026-10-05:** the burn and bug bounty parts of `/wenpump`, `/fees`, `/burns`, `/audit` and `/team`. Do not use them.
+
 | Command | Reply |
 |---|---|
 | `/wentoken` (before `D0`) | "Product first. The token launches on Pons once four public gates pass: zero honeypot fills, eval gates green, contract review done (AI-assisted and automated, not a professional audit), bug bounty live. Target ~Oct 20, gate-based. The CA comes only from our channel, main account and site." |
@@ -608,6 +655,8 @@ Pay: per [activation / first trade], in [asset], weekly
 
 ## 12 · Crisis Comms Playbooks
 
+> **Dropped 2026-10-05:** the missed or late daily burn playbook and every burn wallet reference.
+
 **Every incident, first hour:**
 1. ML pauses scheduled posts, and DEV pauses any affected bot templates.
 2. DEV confirms the facts, and OWN approves the statement.
@@ -628,6 +677,8 @@ Pay: per [activation / first trade], in [asset], weekly
 
 ## 13 · Asset Checklist
 
+> **Dropped 2026-10-05:** the daily burn, launch buy-and-burn, weekly burn report and milestone cards, and the Burn Board OG image.
+
 | Asset | Spec | Needed by | Owner |
 |---|---|---|---|
 | Brand kit | EKO wordmark and echo-ring mark; palette not confusingly similar to Robinhood's | `T-10` | ML |
@@ -642,6 +693,8 @@ Pay: per [activation / first trade], in [asset], weekly
 | Crisis statements | All 8, pre-approved | `T-3` | OWN |
 
 ## 14 · FAQ
+
+> **Dropped 2026-10-05:** the burn, buyback, milestone-buy and bug bounty answers (for example 3, 19, 20, 23, 24, 25, 26, 27, 28 and 41). Do not use them.
 
 **Basics**
 1. **What is EKO?** The harness your trading agent runs inside. Its first app is a trench terminal for Robinhood Chain (fact sheet §1).
@@ -705,6 +758,8 @@ Pay: per [activation / first trade], in [asset], weekly
 
 ## 15 · KPIs and Reporting
 
+> **Dropped 2026-10-05:** burn, burn-wallet, buyback and milestone metrics.
+
 **Day-30 targets (fact sheet §9).** These are internal. **Never post them as promises.**
 
 | Metric | Target | Metric | Target |
@@ -733,6 +788,8 @@ NEXT     next Drop teaser date · asks for DEV/OWN
 
 ### Claim Checklist
 
+> **Dropped 2026-10-05:** the check on launch burn wording. There are no burns to describe.
+
 Every factual claim in this doc is a row in 04, with its source in the row. Tick each group against its sources:
 
 - [ ] **H1–H13, T1–T12, D1–D5** (product): fact sheet §3–4, §5b and §9, [Anthropic custom connectors][claude-connectors], plus the internal harness spec, product spec §8, roadmap, evals doc and policy doc where the row cites them
@@ -758,6 +815,8 @@ Every factual claim in this doc is a row in 04, with its source in the row. Tick
 - [ ] Every example number is `[N]` or a sourced figure
 
 ### Placeholders and Open Items
+
+> **Dropped 2026-10-05:** the buyback slice, the burn wallet, the timelock, the launch buy-and-burn, the bug bounty page, burns and milestone progress in these lists.
 
 **Fact-sheet placeholders still open:** `{{MAIN_HANDLE}}` / `{{BOT_HANDLE}}`, `{{DOMAIN}}`, and the buyback slice (tentatively 25%, confirmed by OWN and locked at creation).
 

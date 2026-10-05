@@ -29,6 +29,7 @@ describe('Scoreboard and receipt UI', () => {
     const html = renderToStaticMarkup(<Scoreboard />);
     expect(html.indexOf('Misses first')).toBeLessThan(html.indexOf('Scoreboard records'));
     expect(html).not.toContain('sample-receipt');
+    expect(html).not.toMatch(/milestone/i); // milestone buys were dropped; the record kind has no tab
   });
   it('keeps equal headline classes and unknown counters separate from observed zero', () => {
     // Unmeasured: one explanation instead of two empty figures; still never confused with an observed zero.

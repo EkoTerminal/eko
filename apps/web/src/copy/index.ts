@@ -3,9 +3,6 @@ export const ADVISORY = 'Advisory: your agent is told to check with EKO before e
 export const ENFORCED_ONCHAIN = 'Enforced on-chain by this agent’s session-key policy.';
 export const ONCHAIN_ADVISORY = 'Advisory for now: on-chain enforcement turns on after its contract review passes.';
 export const APPROVAL_UNAVAILABLE = 'This order needs approval, which is available from token day on the Reader tier and above.';
-export const BURN_WALLET = 'Burned daily from a public burn wallet; every transaction posted.';
-export const BURN_DISCLOSURE = 'Daily burn buys pay the token’s 2% fee (Pons 1% + 1% creator tax) like any buyer; see the monthly note.';
-export const FEE_TO_BURN = (pct: string) => `${pct} → burn wallet (burned daily)`;   // e.g. "0.5% → burn wallet (burned daily)"
 export const FEE_CURVE_ZERO = '0% on Pons-curve trades';
 export const BETA = 'Beta · forecasts are graded against all launches';
 export const REAL_FUNDS = 'Real funds · your wallet signs every trade';

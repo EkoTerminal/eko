@@ -9,7 +9,7 @@ import { formatCoinPrice } from '../../lib/format';
 import { Seg, inertText } from '../ui';
 import { GuardCompact } from '../GuardCompact';
 import { AnalysisPolicyNotice } from '../PolicyLinks';
-import { REAL_FUNDS, FEE_CURVE_ZERO, FEE_TO_BURN } from '../../copy';
+import { REAL_FUNDS, FEE_CURVE_ZERO } from '../../copy';
 import { TRADE_COPY as C, TRADE_LABELS as L } from '../../copy/trade';
 import { NOT_CHECKED } from '../../copy/availability';
 import { panelBlock, quoteMatches, tradeRequestKey, tradeErrorText, emptyQuote, type PanelGate, type QuoteSnapshot } from './tradePanelModel';
@@ -27,7 +27,7 @@ export function FeeLines({ quote: q, tier, phase }: { quote: TradeQuote; tier?: 
     <dt>{L.input}</dt><dd>{q.amountIn}</dd><dt>{L.value}</dt><dd>{q.valueWei}</dd>
     <dt>{L.receive}</dt><dd>{q.expectedOut}</dd><dt>{L.minimum}</dt><dd>{q.minOut}</dd>
     <dt>{L.route}</dt><dd>{L.venues[q.route.venue]}{q.route.poolId && <> · {inertText(q.route.poolId)}</>}</dd>
-    <dt>{L.fee}</dt><dd>{q.fee.bps === 0 ? `${fee}${q.route.venue === 'pons_curve' ? ` · ${FEE_CURVE_ZERO}` : phase === 'launch_week' ? ` · ${C.zeroLaunch}` : ''}` : q.fee.destination === 'burn_wallet' ? FEE_TO_BURN(fee) : fee}</dd>
+    <dt>{L.fee}</dt><dd>{q.fee.bps === 0 ? `${fee}${q.route.venue === 'pons_curve' ? ` · ${FEE_CURVE_ZERO}` : phase === 'launch_week' ? ` · ${C.zeroLaunch}` : ''}` : fee}</dd>
     {tier && <><dt>{L.tier}</dt><dd>{tier}</dd></>}
     <dt>{L.buyTax}</dt><dd>{q.buyTaxPct}%</dd><dt>{L.sellTax}</dt><dd>{q.sellTaxPct}%</dd>
     <dt>{L.exit}</dt><dd>{q.exitCostPct}%</dd><dt>{L.impact}</dt><dd>{q.priceImpactBps / 100}%</dd>

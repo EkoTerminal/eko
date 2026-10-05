@@ -2,10 +2,10 @@ export const APP_NAME = 'EKO';
 export const PAGE_TITLES: Record<string, string> = {
   '/': 'Landing', '/radar': 'Radar', '/feed': 'Feed', '/pairs': 'New pairs', '/coin/:address': 'Coin', '/scan': 'Scan', '/scan/:id': 'Scan result',
   '/bags': 'Scan my bags', '/bags/r/:id': 'Bag report', '/watch': 'Watchlist', '/scoreboard': 'Scoreboard', '/receipt/:id': 'Receipt verify',
-  '/official': 'Official project links', '/transparency': 'Transparency', '/security': 'Security and bug bounty',
+  '/official': 'Official project links', '/transparency': 'Transparency', '/security': 'Security',
   '/census': 'Census', '/drops': 'Drops', '/mission': 'Mission Control', '/mission/agents/:id': 'Agent detail', '/mission/connect': 'Connect an agent',
   '/mission/approvals': 'Approvals', '/approve/:id': 'Approval', '/lab': 'Rule Lab', '/lab/:loopId': 'Rule Lab', '/research': 'Research', '/research/:id': 'Deep Research',
-  '/perps': 'Perps', '/burn': 'Burn Board', '/swarm': 'Beat the Swarm', '/embed/clear/:address': 'Clear badge',
+  '/perps': 'Perps', '/swarm': 'Beat the Swarm', '/embed/clear/:address': 'Clear badge',
   '/oauth/consent': 'Connector consent', '/settings': 'Settings', '/settings/plan': 'Plan', '/legal/:doc': 'Legal', '/afi': 'Agent Flow Index', '/embed/afi': 'Agent Flow Index',
   '/crews': 'Rug Ring Radar', '/crews/:id': 'Crew', '/leaderboards': 'Leaderboards', '/arena': 'The Arena', '/desk/:runId': 'Desk',
   '/mission/launcher': 'Agent Launcher', '/inside': 'Inside', '/embed/verdict/:address': 'Verdict widget',

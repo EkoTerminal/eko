@@ -7,6 +7,15 @@ date: 2026-09-30
 target: Robinhood Chain (4663)
 ---
 
+> **Owner decisions 2026-10-05 (these override this plan wherever they conflict):**
+> 1. **No token burns, buybacks or milestone buys.** EKO does not encourage holding its token for financial benefit. Dropped: the burn wallet receiving fees and burning daily, the launch buy-and-burn, the Burn Board, the Burn Engine, Pons buybacks presented as EKO policy, milestone buys and the milestone timelock, and anything implying the token gains value from EKO's actions.
+> 2. **No bug bounty.** No rewards, payments, funding or payouts. Private reporting stays open: GitHub private vulnerability reporting on `EkoTerminal/eko` and the existing `security.txt` contact.
+> 3. **Terms and Privacy approved** by the owner on 2026-10-05.
+> 4. **Policy and privacy questions** go to the official EKO X and Telegram accounts, as listed on `/official`.
+> 5. **No closed beta.** The product launches publicly on Tue Oct 13.
+>
+> Sections that planned these items carry a "Dropped 2026-10-05" note. The rest of this plan is unchanged.
+
 > **v2.1 (2026-09-30): renamed to EKO.** Ticker `$EKO`. Tiers are Listener / Reader / Oracle / Source; verdicts are Clear / Monitor / Danger; scam call-outs are Ghost Reports; product credits are EKO Points; the look follows the EKO site (noise into signal, echo rings, teal-navy and pale cyan). Also aligned: the Claude connector path (Customize → Connectors), the daily burn time (20:00 UTC, proposed), the bug bounty (live from T) and the burn wallet (hardware #6 or a 2-of-3 Safe).
 
 > **Internal document.** The name is **EKO** and the ticker **$EKO** (decided 2026-09-30; it replaces the earlier working name). Values in `{{...}}` are open owner decisions (§2); never guess them. SignalOS is merged fully and its brand is retired. This plan names it only for the merge logistics, and public docs never do.
@@ -31,6 +40,8 @@ target: Robinhood Chain (4663)
 - **[Card exception]**: the only allowed non-crypto payment is X (the API, and Premium if USDC isn't offered). **Decided:** if the USDC wallet doesn't work in the X Developer Console (or Premium checkout), pay by card. No further approval is needed, and each card payment is marked in the monthly note.
 
 ## 1. Timeline at a glance
+
+> **Dropped 2026-10-05:** the closed beta, the bug bounty, the burn wallet, the launch buy-and-burn, the daily and weekly burns and the Burn Engine in this table. See the owner decisions block at the top.
 
 | Dates | Phase | Exit gate |
 |---|---|---|
@@ -59,6 +70,8 @@ target: Robinhood Chain (4663)
 | 4 | Team token buys at launch | None, or amounts per disclosed wallet, timelocked 6 months. **Not covered by the v2 decisions**, so it's still needed. | **Oct 18** |
 
 ### 2.2 Resolved (v2, Sep 30)
+
+> **Dropped 2026-10-05:** R2 (Pons buyback as EKO policy), R3 (daily burns), R4 (launch buy-and-burn), R5's "paid to the burn wallet" and R12 (bug bounty). Any terminal fee from token day is published before it starts, with no destination promise.
 
 | # | Decision | Answer |
 |---|---|---|
@@ -205,6 +218,8 @@ target: Robinhood Chain (4663)
 
 ## 5. Wallets and keys
 
+> **Dropped 2026-10-05:** the burn wallet and milestone timelock rows, and the dev fee wallet's bounty and buy-and-burn duties.
+
 | Wallet | Purpose | Custody | Holds | Public |
 |---|---|---|---|---|
 | **Deployer** | Deploys the ReceiptsRegistry (week 1), then the milestone timelock from a standard audited template (D0). There's no other D0 contract. | Hardware #1 | Gas | Yes |
@@ -237,6 +252,8 @@ target: Robinhood Chain (4663)
 > - **The automated Burn Engine** is a Drop 7 target (§6.5).
 
 ### 6.1 Deployment sequence
+
+> **Dropped 2026-10-05:** the bug bounty going live, the milestone timelock deployment and the $100 launch buy-and-burn.
 
 | When | Step (owner) |
 |---|---|
@@ -278,6 +295,9 @@ target: Robinhood Chain (4663)
 - [ ] **Wording:** "AI-assisted and automated review, not a professional audit." Never say "audited" (FACTS §6). A paid audit comes later, funded by fees (§15).
 
 ### 6.3 Bug bounty (self-run, up to $500)
+
+> **Dropped 2026-10-05:** the bug bounty. There are no rewards, payments, funding or payouts. Private reporting stays open: GitHub private vulnerability reporting on `EkoTerminal/eko` and the `security.txt` contact.
+
 - [ ] **Self-run, with no platform:**
   - The terms are in `SECURITY.md` in each public repo.
   - Reports go to `security@{{DOMAIN}}`, which is published in `security.txt`.
@@ -293,6 +313,9 @@ target: Robinhood Chain (4663)
 - [ ] **Live at T (Oct 13, 13:00),** together with the public repos and the 72h window.
 
 ### 6.4 Explorer verification
+
+> **Dropped 2026-10-05:** the milestone timelock, the burn wallet, the launch buy-and-burn and the burn wallet history.
+
 - [ ] Verify the ReceiptsRegistry and the milestone timelock on robinhoodchain.blockscout.com, with the source commit.
 - [ ] Request labels: "receipts," "milestone timelock," "dev fee wallet," "burn wallet."
 - [ ] Publish a "check it yourself" page covering:
@@ -301,6 +324,8 @@ target: Robinhood Chain (4663)
   - the burn wallet's full history (each daily buy and burn)
 
 ### 6.5 Drop 7: the automated Burn Engine (target; gated on review)
+
+> **Dropped 2026-10-05:** the Burn Engine. EKO plans no token burns.
 
 **Nothing in this section happens at T or D0.** At launch, burns are manual and daily from the burn wallet (§12.2).
 - The engine is a Drop 7 target (~Dec 8), likely a "Lite" variant first: capped slices, a slippage cap, and no withdraw.
@@ -402,6 +427,8 @@ The Drop streams run on spare build-agent capacity behind flags. Drops 1–7 hav
 
 ## 8. Closed beta (Oct 7–12)
 
+> **Dropped 2026-10-05:** the closed beta. The product launches publicly on Tue Oct 13.
+
 **Recruiting (Marketing), in waves on Oct 7, 9 and 11:**
 - **Waitlist trenchers**
 - **20–50 agent owners:** Claude, ChatGPT and OpenClaw users on Robinhood's MCP
@@ -460,6 +487,8 @@ The Drop streams run on spare build-agent capacity behind flags. Drops 1–7 hav
 
 ## 10. Beta-week public stats (T+1 → T+6) and the token gate review
 
+> **Dropped 2026-10-05:** the gate items for the bug bounty, the burn wallet, the launch buy-and-burn and the buyback slice.
+
 **Daily stats card** (15:00, Oct 14–19): a deterministic template posted from main and the Telegram channel, with numbers from Dev A.
 
 | Stat | Source |
@@ -503,6 +532,9 @@ Show numbers only, with misses next to refusals. The token is "planned; it launc
 ## 11. Token day (D0, Tue Oct 20)
 
 ### 11.1 Pons creation checklist
+
+> **Dropped 2026-10-05:** "native buyback ON" as EKO policy, the launch buy-and-burn staging and the "dev buy → burned" self-scan line.
+
 The Owner is at the keyboard and Dev A reads every field back.
 - [ ] **Creator:** the dev fee wallet, so the creator and fee recipient are one public address.
 - [ ] **Name and ticker:** EKO / `$EKO`, exactly as decided; re-checked against clones on Oct 19.
@@ -521,6 +553,9 @@ The Owner is at the keyboard and Dev A reads every field back.
 - [ ] **If the verdict isn't Clear, post it anyway and explain.**
 
 ### 11.3 Launch buy-and-burn and burn wallet wiring
+
+> **Dropped 2026-10-05:** the launch buy-and-burn, the burn wallet, the daily burn and burning token payments. Do not run or post any of this.
+
 - [ ] **The $100 launch buy-and-burn (~L+1m):**
   - Once the anti-sniper window has ended (`antiSnipe.endsInSec` is 0 on our card), the dev wallet buys **$100** of the token.
   - It **burns the full amount immediately**, with `token.burn` if the token supports it, or otherwise a transfer to the dead address. Check which on the D0-1 fork dry run.
@@ -547,6 +582,8 @@ The Owner is at the keyboard and Dev A reads every field back.
 - [ ] X (API; image cards, no links), Farcaster (Neynar) and Telegram, all with summoned replies only, one per interaction, deterministic cards, rate limits and dedupe.
 
 ### 11.6 Run-of-show
+
+> **Dropped 2026-10-05:** the launch buy-and-burn rows, publishing the burn wallet, pointing fees at the burn wallet, the `burn_board` flag and the first daily burn.
 
 | Time | Action | Owner |
 |---|---|---|
@@ -580,6 +617,8 @@ The Owner is at the keyboard and Dev A reads every field back.
 - [ ] **Wed:** review. The public roadmap lists only drops with a working demo.
 
 ### 12.2 The daily burn ritual (from D0)
+
+> **Dropped 2026-10-05:** the daily burn ritual, its posts and the weekly burn report. EKO plans no token burns.
 
 Once a day at the scheduled time, the burn wallet's full balance is bought and burned, and every transaction is posted. The wording is always "burned daily from a public burn wallet; every transaction posted."
 
@@ -629,6 +668,8 @@ It's posted from main and the Telegram channel, and linked from the transparency
 
 ### 12.3 Milestone buys
 
+> **Dropped 2026-10-05:** milestone buys and the milestone timelock.
+
 The milestones are 1,000 wallets connected, 100 agents connected, $1M volume, 30 days with zero fills, and $10M volume.
 - [ ] Dev A confirms the milestone against its published definition (§14).
 - [ ] The Owner computes **10% of creator fees earned since the last milestone** (the first one counts from launch) and publishes the calculation.
@@ -636,6 +677,9 @@ The milestones are 1,000 wallets connected, 100 agents connected, $1M volume, 30
 - [ ] The mascot posts the tx hashes and the Scoreboard logs it. Wording: "bought and locked X because Y shipped." Never mention price.
 
 ### 12.4 Monthly note and weekly reports
+
+> **Dropped 2026-10-05:** bounty payouts, burns, Pons buybacks and milestone buys in these notes, and the weekly burn report.
+
 - [ ] **Monthly fee and costs note** (first working day; the first is Mon Nov 2, covering Oct 20–31; written by the Owner). It covers:
   - **fees earned:** creator fees, terminal fees, and paid API and x402 revenue
   - **costs** by vendor, with any card payment ([Card exception]) marked, and bounty payouts
@@ -674,6 +718,8 @@ The milestones are 1,000 wallets connected, 100 agents connected, $1M volume, 30
 - **Communication:** the status page and an in-app banner.
 
 ### 13.5 Burn wallet
+
+> **Dropped 2026-10-05:** this runbook, with the burn wallet and daily burns.
 
 **Missed or late burn**
 - **Detection:** the status-page check or the Sev 2 alert (no burn transaction within 60 min of the scheduled time). The Burn Board shows "running late" on its own.
@@ -767,6 +813,8 @@ The planned start is **month 4 (~January 2027)**, after Drop 9. Any of these bri
 - [ ] An entity shortlist (Owner), a paid contract-audit plan funded by fees (the first paid audit; until then, the §6.2 review on a budget), the Agent Apps pitch, and FISD due-diligence drafts.
 
 ## 16. Master checklist
+
+> **Dropped 2026-10-05:** every burn wallet, daily or weekly burn, launch buy-and-burn, buyback slice, milestone buy, Burn Engine, bug bounty and closed beta item below.
 
 - [ ] **Sep 30 · Owner:** name decided: EKO (decision 1); domain and handles registered by Oct 2; co-owner agreement; SignalOS merge logistics (brand retired)
 - [ ] **Sep 30 · Marketing:** handle availability checked for EKO (X, Telegram, Farcaster)

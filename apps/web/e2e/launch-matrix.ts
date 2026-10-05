@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import { test, configureContext } from './helpers';
 test.use({ actionTimeout: 10_000 });
 import { ROUTES } from '../src/routes';
-import { LEGAL_COPY, POLICY_DRAFTS } from '../src/copy/legal';
+import { isApprovedPolicy, LEGAL_COPY, POLICY_DRAFTS } from '../src/copy/legal';
 import { candidate, signIn, write, audit, captureErrors, evidence, origin } from './launch-helpers';
 
 export function registerLaunchMatrix(viewports: { width: number; height: number }[]) {
@@ -69,7 +69,7 @@ export function registerLaunchMatrix(viewports: { width: number; height: number 
           if (path.startsWith('/legal/')) {
             await expect(page.locator('#main').getByRole('navigation', { name: 'Launch policies' }).getByRole('link')).toHaveCount(POLICY_DRAFTS.length);
             await expect(page.locator('#main').getByRole('navigation', { name: 'Launch policies' }).locator('[aria-current="page"]')).toHaveCount(1);
-            await expect(page.getByRole('heading', { name: LEGAL_COPY.draft, exact: true })).toBeVisible();
+            await expect(page.getByRole('heading', { name: isApprovedPolicy(path.split('/')[2] ?? '') ? LEGAL_COPY.approved : LEGAL_COPY.draft, exact: true })).toBeVisible();
           }
           if (['/census', '/mission/connect', '/receipt/' + data.receiptId].includes(path))
           await info.attach(`launch-${viewport.width}-${theme}-${path.split('/')[1]}`, { body: await page.screenshot(), contentType: 'image/png' });

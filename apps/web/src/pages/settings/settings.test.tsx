@@ -174,7 +174,7 @@ describe('task 119 settings (offline fixtures, no live account)', () => {
     const launch = render(<Plan />); expect(launch).toContain(P.launch); expect(launch).toContain(P.feeLaunch);
     expect(launch).not.toMatch(/87654321|Connect to start 30|Redeem|Bonus minutes|Qualified referrals/);
     useShell.setState({ config: { ...config, phase: 'token_live' } });
-    const d0 = render(<Plan />); expect(d0).toContain(P.tokenLive); expect(d0).toContain('Terminal fee 0.5% → burn wallet (burned daily) on Uniswap-routed trades.'); expect(d0).not.toContain(P.feeLaunch);
+    const d0 = render(<Plan />); expect(d0).toContain(P.tokenLive); expect(d0).toContain('Terminal fee: 0.5% on Uniswap-routed trades.'); expect(d0).not.toMatch(/burn/i); expect(d0).not.toContain(P.feeLaunch);
   });
   it('uses real referral response values, with bonuses hidden until their flag', () => {
     const data = { code: 'sample-code', link: 'https://eko.example/?ref=sample-code', referred: 7, qualified: 4, bonusMinutes: 120 };
