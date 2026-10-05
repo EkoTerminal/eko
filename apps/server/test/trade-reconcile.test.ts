@@ -293,4 +293,14 @@ it('decodes the indexed v3 pool and net recipient transfers; refuses unrelated/m
     topics: encodeEventTopics({ abi: [{ type: 'event', name: 'Withdrawal', inputs: [{ name: 'src', type: 'address', indexed: true }, { name: 'wad', type: 'uint256', indexed: false }] }], eventName: 'Withdrawal', args: { src: wallet } }),
     data: encodeAbiParameters([{ type: 'uint256' }], [99n]) } as TradeReceipt['logs'][number];
   expect(await decodeV3Fill(current, { ...r, logs: [...soldLogs.slice(0, 2), withdrawal] }, sources)).toEqual({ filledIn: '105', filledOut: '99' });
+  // Robinhood Chain's WETH has no Withdrawal event: SwapRouter02's unwrap burns the router's WETH instead.
+  const burn = (from: Hex, amount: bigint) => ({ ...logs[1]!, address: quoteToken,
+    topics: encodeEventTopics({ abi: ERC20_ABI, eventName: 'Transfer', args: { from, to: `0x${'0'.repeat(40)}` } }),
+    data: encodeAbiParameters([{ type: 'uint256' }], [amount]) }) as TradeReceipt['logs'][number];
+  expect(await decodeV3Fill(current, { ...r, logs: [...soldLogs.slice(0, 2), burn(wallet, 99n)] }, sources)).toEqual({ filledIn: '105', filledOut: '99' });
+  // Both events for one unwrap count once; a burn by any other address is not the router's unwrap.
+  expect(await decodeV3Fill(current, { ...r, logs: [...soldLogs.slice(0, 2), burn(wallet, 99n), withdrawal] }, sources)).toEqual({ filledIn: '105', filledOut: '99' });
+  expect(await decodeV3Fill(current, { ...r, logs: [...soldLogs.slice(0, 2), burn(pool, 99n)] }, sources)).toBeNull();
+  // The unwrap can never report more than the pool paid out.
+  expect(await decodeV3Fill(current, { ...r, logs: [...soldLogs.slice(0, 2), burn(wallet, 100n)] }, sources)).toBeNull();
 });

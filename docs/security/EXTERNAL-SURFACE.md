@@ -340,8 +340,8 @@ Measured: **522/522 (100.00%)** documented. Minimum: **90%**.
 | `auditTradeConfig` | function | [apps/server/src/exec/trade-access.ts:142](../../apps/server/src/exec/trade-access.ts#L142) | Yes |
 | `v3TradeBackend` | function | [apps/server/src/exec/trade-backend.ts:21](../../apps/server/src/exec/trade-backend.ts#L21) | Yes |
 | `returned.quote` | method | [apps/server/src/exec/trade-backend.ts:31](../../apps/server/src/exec/trade-backend.ts#L31) | Yes |
-| `decodeV3Fill` | function | [apps/server/src/exec/trade-reconcile.ts:23](../../apps/server/src/exec/trade-reconcile.ts#L23) | Yes |
-| `v3ReconciliationBackend` | function | [apps/server/src/exec/trade-reconcile.ts:98](../../apps/server/src/exec/trade-reconcile.ts#L98) | Yes |
+| `decodeV3Fill` | function | [apps/server/src/exec/trade-reconcile.ts:24](../../apps/server/src/exec/trade-reconcile.ts#L24) | Yes |
+| `v3ReconciliationBackend` | function | [apps/server/src/exec/trade-reconcile.ts:102](../../apps/server/src/exec/trade-reconcile.ts#L102) | Yes |
 | `TradeError.constructor` | constructor | [apps/server/src/exec/trades.ts:40](../../apps/server/src/exec/trades.ts#L40) | Yes |
 | `preparationError` | function | [apps/server/src/exec/trades.ts:47](../../apps/server/src/exec/trades.ts#L47) | Yes |
 | `TradeService.constructor` | constructor | [apps/server/src/exec/trades.ts:63](../../apps/server/src/exec/trades.ts#L63) | Yes |

@@ -32,9 +32,11 @@ function setup() {
         bodies.set(body.idempotencyKey, { order, body: JSON.stringify(body) });
       } else order = existing.order;
       result = { order, tx };
-    } else if (path.endsWith('/submitted')) { order = { ...order!, status: 'submitted', txHash: body.txHash }; result = { order }; }
-    else if (path.endsWith('/rejected')) { order = { ...order!, status: 'rejected', errorCode: body.code }; result = { order }; }
-    else result = { order };
+    // The server's v1 contract (apps/server/src/http/v1/trade.ts): callbacks and detail return the TradeOrder itself.
+    } else if (path.endsWith('/submitted')) { order = { ...order!, status: 'submitted', txHash: body.txHash }; result = order; }
+    else if (path.endsWith('/rejected')) { order = { ...order!, status: 'rejected', errorCode: body.code }; result = order; }
+    else if (init.method === 'GET' && path === `/trade/orders/${order?.id}`) result = order;
+    else return new Response(JSON.stringify({ error: 'not_found', message: 'Unknown fixture route' }), { status: 404 });
     if (dropped === path) { dropped = ''; throw new Error('Fixture connection lost after server persistence'); }
     return new Response(JSON.stringify(result));
   }).parse);

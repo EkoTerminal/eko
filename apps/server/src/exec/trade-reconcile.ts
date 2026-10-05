@@ -1,4 +1,4 @@
-import { decodeEventLog, decodeFunctionData, parseAbi, type Hex, type TransactionReceipt } from 'viem';
+import { decodeEventLog, decodeFunctionData, parseAbi, zeroAddress, type Hex, type TransactionReceipt } from 'viem';
 import type { RetainedTrade } from './trades.js';
 import { ERC20_ABI, POOL_ABI, ROUTER_ABI, type V3TradeSources } from './v3-routes.js';
 import type { UniswapV3Adapter } from './chain.js';
@@ -19,7 +19,8 @@ export interface TradeReconciliationBackend {
 }
 
 /** Single-hop indexed v3 only. Pool Swap proves execution; coin Transfer logs measure the
- * account's net token amount, including transfer tax, without converting raw units to Number. */
+ * account's net token amount, including transfer tax, without converting raw units to Number.
+ * Native output is the router's unwrap: a WETH9 Withdrawal from the router, or the router's WETH burn. */
 export async function decodeV3Fill(retained: RetainedTrade, receipt: TradeReceipt, sources: V3TradeSources): Promise<ActualFill | null> {
   const q = retained.quote, b = retained.checked?.order.execution;
   if (!b || q.route.venue !== 'uniswap_v3' || !q.route.executable || !q.route.poolId) return null;
@@ -43,7 +44,7 @@ export async function decodeV3Fill(retained: RetainedTrade, receipt: TradeReceip
   } catch { return null; }
   const swaps = [];
   let recipientTransfer = false;
-  let received = 0n, spent = 0n, quoteReceived = 0n, quoteSpent = 0n, unwrapped = 0n;
+  let received = 0n, spent = 0n, quoteReceived = 0n, quoteSpent = 0n, unwrapped = 0n, burned = 0n;
   const withdrawalAbi = parseAbi(['event Withdrawal(address indexed src, uint256 wad)']);
   for (const log of receipt.logs) {
     if (log.removed || log.transactionHash !== receipt.transactionHash || log.blockHash !== receipt.blockHash) return null;
@@ -63,6 +64,8 @@ export async function decodeV3Fill(retained: RetainedTrade, receipt: TradeReceip
           if (ev.eventName === 'Transfer') {
             if (same(ev.args.to, b.account)) quoteReceived += ev.args.value;
             if (same(ev.args.from, b.account)) quoteSpent += ev.args.value;
+            // Robinhood Chain's WETH emits no WETH9 Withdrawal: an unwrap burns the router's WETH (Transfer to zero).
+            if (same(ev.args.from, b.tx.to) && same(ev.args.to, zeroAddress)) burned += ev.args.value;
           }
         } catch {
           const ev = decodeEventLog({ abi: withdrawalAbi, data: log.data, topics: log.topics });
@@ -85,7 +88,8 @@ export async function decodeV3Fill(retained: RetainedTrade, receipt: TradeReceip
   }
   if (coinDelta <= 0n || quoteDelta >= 0n || spent <= received || spent - received < coinDelta) return null;
   if (!same(swap.recipient, nativeOut ? b.tx.to : b.account)) return null;
-  const actualOut = nativeOut ? unwrapped : quoteReceived - quoteSpent;
+  // A token that emits both events for one unwrap is counted once, preferring the WETH9 event.
+  const actualOut = nativeOut ? (unwrapped > 0n ? unwrapped : burned) : quoteReceived - quoteSpent;
   if (actualOut <= 0n || actualOut > -quoteDelta) return null;
   return { filledIn: (spent - received).toString(), filledOut: actualOut.toString() };
 }
