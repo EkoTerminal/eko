@@ -11,7 +11,7 @@ import { REAL_FUNDS, DYOR, NON_AFFILIATION } from '../../copy';
 import { TRADE_COPY as C } from '../../copy/trade';
 import { FeeLines, TradePanelView } from './TradePanel';
 import { TradeLock } from './TradeContext';
-import { antiSnipeDeadline, emptyQuote, panelBlock, quoteExpired, tradeRequestKey, TradeQuoteSession, type PanelGate } from './tradePanelModel';
+import { antiSnipeDeadline, emptyQuote, panelBlock, quoteExpired, tradeErrorText, tradeRequestKey, TradeQuoteSession, type PanelGate } from './tradePanelModel';
 const css = readFileSync(new URL('./trade-panel.css', import.meta.url), 'utf8');
 import coinSource from '../../pages/terminal/Coin.tsx?raw';
 import radarSource from '../../pages/terminal/Radar.tsx?raw';
@@ -47,6 +47,14 @@ describe('shared guarded panel contract states', () => {
     expect(text).toMatch(/class="btn tp-submit btn-primary">Buy/);
     expect(html(gate(quote({ side: 'sell' })))).toMatch(/class="btn tp-submit">Sell/);
     expect(text).toContain('<details>'); expect(text).toContain('1 check passed');
+  });
+  it('treats a binding quote that only lists an exact approval as actionable; the approval is the flow’s first step', () => {
+    const q = quote({ side: 'sell', approvals: [{ token: account, spender: account, amount: '900719925474099312345', kind: 'erc20' }] });
+    expect(panelBlock(gate(q))).toBeNull();
+    // An approval shortfall reported as a hard refusal (the pre-fix server shape) stays refused, never offered.
+    const refused = quote({ side: 'sell', binding: false, approvals: q.approvals, guard: { decision: 'refuse', checks: [{ code: 'token_approval_required', status: 'refuse', label: 'Refused' }] } });
+    expect(panelBlock(gate(refused))).toBe(C.refused);
+    expect(tradeErrorText('approval_required')).toContain('exact amount');
   });
   it.each([0, 50, 40, 30, 25] as const)('displays exactly %s bps from the quote, without an inferred tier fee or a fee destination', bps => {
     const q = quote({ fee: { bps, usd: bps / 100, destination: bps === 0 ? null : 'burn_wallet' } });

@@ -11,7 +11,7 @@ const block = 77_500_000n;
 const now = () => 1_791_000_000_000;
 const request: TradeQuoteRequest = { coin, account, side: 'buy', amountUsd: 100, slippageBps: 50 };
 
-function fixture(quoteAsset: 'WETH' | 'USDG' = 'WETH', decimals = 6, reverse = false) {
+function fixture(quoteAsset: 'WETH' | 'USDG' = 'WETH', decimals = 6, reverse = false, allowance = 0n) {
   const registry = loadRegistry();
   const quote = registry.requireAddress(`tokens.${quoteAsset}`);
   const weth = registry.requireAddress('tokens.WETH');
@@ -26,6 +26,8 @@ function fixture(quoteAsset: 'WETH' | 'USDG' = 'WETH', decimals = 6, reverse = f
       case 'decimals': return args.address.toLowerCase() === usdg.toLowerCase() ? 6 : args.address.toLowerCase() === coin ? decimals : 18;
       case 'getPool': return pools.find(p => p.fee === args.args?.[2])?.address ?? zeroAddress;
       case 'token0': return reverse ? quote : coin;
+      // The account's current allowance for the router (fixture: none unless a test grants it).
+      case 'allowance': return allowance;
       // 1 coin = 1 quote, with the respective raw-unit scale and token ordering.
       case 'slot0': {
         const pool = pools.find(p => p.address === args.address)!;
@@ -113,6 +115,20 @@ describe('indexed v3 unsigned CA-7 routes (injected fixture evidence)', () => {
     expect(legs[0]).toMatchObject({ functionName: 'exactInputSingle', args: [{ recipient: account, amountIn: BigInt(q.amountIn), amountOutMinimum: BigInt(q.minOut) }] });
   });
 
+  it.each(['buy', 'sell'] as const)('lists the exact %s approval only while the account allowance is short', async side => {
+    const short = fixture('USDG', 8, false, 99n);
+    const q = await short.adapter.quoteTrade({ ...request, side }, short.sources);
+    expect(q.approvals).toEqual([{ token: side === 'buy' ? short.quote : coin, spender: short.router, amount: q.amountIn, kind: 'erc20' }]);
+    const allowanceReads = short.readContract.mock.calls.filter(([args]) => args.functionName === 'allowance');
+    expect(allowanceReads.length).toBeGreaterThan(0);
+    for (const [args] of allowanceReads) expect(args).toMatchObject({ args: [account, short.router], blockNumber: block });
+    const enough = fixture('USDG', 8, false, BigInt(q.amountIn));
+    expect((await enough.adapter.quoteTrade({ ...request, side }, enough.sources)).approvals).toEqual([]);
+    // Without an account the allowance is unknown: the approval stays listed and nothing is read for it.
+    const indicative = fixture('USDG', 8, false, BigInt(q.amountIn));
+    expect((await indicative.adapter.quoteTrade({ ...request, side, account: undefined }, indicative.sources)).approvals).toHaveLength(1);
+    expect(indicative.readContract.mock.calls.some(([args]) => args.functionName === 'allowance')).toBe(false);
+  });
   it('pins every decimal, pool, slot and tier read, price and fee estimate to one block', async () => {
     const f = fixture();
     await f.adapter.quoteTrade(request, f.sources);

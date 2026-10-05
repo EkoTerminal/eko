@@ -26,6 +26,7 @@ import { RetentionWorker } from './retention-worker.js';
 import { QuoteStore } from './exec/quotes.js';
 import { TradeService, type TradeBackend } from './exec/trades.js';
 import { SellGuard } from './exec/sell-guard.js';
+import { liveTradeBackend, readModelVerdicts, type LiveTradeOverrides } from './exec/live-trade.js';
 import { ExecutionService } from './exec/service.js';
 import { JournalService } from './harness/journal.js';
 import { PointsService } from './points/service.js';
@@ -108,7 +109,7 @@ export const ADDRESS_REQUESTS_PER_MINUTE = 1800;
  * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
  * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
  */
-export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground?: boolean; ogRenderer?: OgRenderer; alertSinks?: { page?: AlertSink; sentry?: AlertSink }; tradeBackend?: TradeBackend } = {}): Promise<{ app: FastifyInstance; ctx: Ctx; close(): Promise<void> }> {
+export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground?: boolean; ogRenderer?: OgRenderer; alertSinks?: { page?: AlertSink; sentry?: AlertSink }; tradeBackend?: TradeBackend; tradeOverrides?: LiveTradeOverrides } = {}): Promise<{ app: FastifyInstance; ctx: Ctx; close(): Promise<void> }> {
   initErrorReporting(cfg.SENTRY_DSN, cfg.NODE_ENV);
   const dbh = await openDb({ databaseUrl: cfg.DATABASE_URL, pgliteDir: cfg.PGLITE_DIR });
   await runMigrations(dbh);
@@ -192,6 +193,10 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     hub.broadcast({ type: 'health', health: h });
   };
 
+  // Live v1 trade acquisition (api quotes/orders, worker reconciliation). Fail-closed: with LIVE_TRADING_ENABLED off,
+  // or without the pinned-block RPC and simulation host, there is no backend and quotes refuse with the reason.
+  const liveTrade = liveTradeBackend(cfg, { chains: () => chains, sql: () => dbh.chain.sql, verdict: readModelVerdicts(reads) }, opts.tradeOverrides);
+  if (cfg.LIVE_TRADING_ENABLED && !liveTrade.backend && !opts.tradeBackend) logger.warn({ missing: liveTrade.missing }, 'Live trade backend unavailable; v1 trade quotes refuse');
   const ethUsd = () => market.lastPrice('ETH-USD')?.price ?? null;
   const exec = new ExecutionService(
     db,
@@ -203,8 +208,9 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       live: new UniswapV3Adapter(chains, 'robinhood-mainnet', ethUsd),
     },
     { liveEnabled: cfg.LIVE_TRADING_ENABLED, paperFeeBps: 10, tradeAccess, sanctions,
-      // TODO(spec): install the authenticated accepted acquisition registry from 052/072/071.
-      trades: new TradeService(db, tradeAccess, sanctions, opts.tradeBackend, Date.now, { incidents, onOrder: (acc, order) => hub.publishOrder(acc, order),
+      // Indexed v3 only; Pons (072) and v4 (071) acquisition stay quote-only until their probes are installed here.
+      trades: new TradeService(db, tradeAccess, sanctions, opts.tradeBackend ?? liveTrade.backend, Date.now, { incidents, onOrder: (acc, order) => hub.publishOrder(acc, order),
+        unavailable: liveTrade.unavailable || undefined,
         ...(cfg.SELL_CHECK_ENABLED ? { sellGuard: new SellGuard(dbh.chain, { getBlockNumber: () => chains.get('robinhood-mainnet').getBlockNumber(),
           request: input => chains.get('robinhood-mainnet').request(input as never) }) } : {}) }) },
     {

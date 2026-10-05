@@ -154,6 +154,9 @@ const EnvSchema = z.object({
   RH_MAINNET_RPC_URL: z.string().optional(),
   /** Mainnet execution stays disabled unless this is explicitly true. */
   LIVE_TRADING_ENABLED: bool,
+  /** Private simulation host (Anvil forked from an archive upstream) for live-trade probes; one per process. Unset:
+   * live quotes refuse. */
+  ANVIL_FORK_URL: optionalValue(z.url()),
   ADMIN_WALLETS: z.string().default(''),
   SECURITY_COLLECTORS: z.string().default('{}').transform(parseSecurityCollectors),
   /** Chain-table retention on the worker (packages/db/src/retention.ts). Unset keeps full history (BACKEND §3.6). */

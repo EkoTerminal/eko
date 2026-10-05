@@ -107,6 +107,17 @@ describe('052 isolated acquisition queue and separate execution preparation',()=
     worker.observe.mockImplementation(async()=>observationFor(b));
     expect(await service.prepare(capture(b).request,clocks)).toMatchObject({status:'validated'});
   });
+  it('requires the paying token allowance for buys paid in a token, never for native-value buys',async()=>{
+    const tokenPaid={...binding(),tx:{...binding().tx,value:'0'}};
+    const worker={observe:vi.fn(async(b:ActualOrderBinding)=>({...observationFor(b),allowanceBefore:'0'}))};
+    const service=new ActualOrderService(async()=>capture(tokenPaid),worker,()=>NOW);
+    expect(await service.prepare(capture(tokenPaid).request,clocks)).toEqual({status:'unavailable',code:'token_approval_required'});
+    worker.observe.mockImplementation(async(b:ActualOrderBinding)=>observationFor(b));
+    expect(await service.prepare(capture(tokenPaid).request,clocks)).toMatchObject({status:'validated'});
+    // Native ETH pays a native-value buy: the probe's allowance reading is irrelevant there.
+    const native=new ActualOrderService(async()=>capture(),{observe:async(b:ActualOrderBinding)=>({...observationFor(b),allowanceBefore:'0'})},()=>NOW);
+    expect(await native.prepare(actualRequest(),clocks)).toMatchObject({status:'validated'});
+  });
   it('implements the 072 structural handoff and refuses changed hashes, bytes and stale request clocks',async()=>{
     const service=new ActualOrderService(async()=>capture(),probe,()=>NOW),input=handoff();
     expect(await service.revalidate(input)).toMatchObject({status:'validated',orderHash:input.orderHash});

@@ -108,7 +108,8 @@ function rpcFailure(err: unknown): boolean {
  * Validate amount/slippage, accepted manifest wiring and factory-confirmed indexed pools at one
  * block, then select the highest net-USD unsigned route. Caller owns wallet auth, Guard/probe and
  * binding. Missing prices/fee estimates, unsupported routes, RPC failures or invalid raw units
- * reject. Route remains executable=false with zero terminal fee.
+ * reject. Route remains executable=false with zero terminal fee. An exact ERC-20 approval is
+ * listed when the account's allowance at the block is below the input (always without an account).
  * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
  * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
  */
@@ -145,6 +146,16 @@ export async function quoteV3Trade(client: PublicClient, input: TradeQuoteReques
   if (metadata.get(weth.toLowerCase())!.decimals !== 18) throw new ChainQuoteError('no_route', 'Native ETH route requires 18-decimal WETH');
   if (!positive(ethPrice)) throw new ChainQuoteError('stale_data', 'ETH USD price unavailable');
   const recipient = input.account ?? padHex('0x01', { size: 20 });
+  // An approval is listed only while the wallet's current allowance is short; indicative quotes always list it.
+  const allowances = new Map<string, Promise<bigint>>();
+  const allowanceOf = (token: Address) => {
+    let found = allowances.get(token.toLowerCase());
+    if (!found) {
+      found = client.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [input.account!, router], blockNumber: block });
+      allowances.set(token.toLowerCase(), found);
+    }
+    return found;
+  };
   let missingPrice = false;
   let missingFee = false;
   let rpcFailures = 0;
@@ -161,6 +172,7 @@ export async function quoteV3Trade(client: PublicClient, input: TradeQuoteReques
     let gasEstimate: bigint;
     let sqrtPrice: bigint;
     let token0: Address;
+    let approvalNeeded: boolean;
     try {
       const canonical = await client.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'getPool', args: [tokenIn, tokenOut, pool.fee], blockNumber: block });
       if (same(canonical, zeroAddress) || !same(canonical, pool.address)) return null;
@@ -172,6 +184,7 @@ export async function quoteV3Trade(client: PublicClient, input: TradeQuoteReques
       [amountOut, , , gasEstimate] = quoted.result;
       sqrtPrice = slot[0]; token0 = first;
       if (amountOut <= 0n || sqrtPrice <= 0n || (!same(token0, tokenIn) && !same(token0, tokenOut))) return null;
+      approvalNeeded = !(input.side === 'buy' && same(tokenIn, weth)) && (!input.account || await allowanceOf(tokenIn) < amountIn);
     } catch (err) {
       if (rpcFailure(err)) rpcFailures++;
       return null;
@@ -203,7 +216,7 @@ export async function quoteV3Trade(client: PublicClient, input: TradeQuoteReques
       // Construction alone is never an accepted probe or account-bound preflight.
       route: { venue: 'uniswap_v3', poolId: pool.address, executable: false },
       fee: { bps: 0, usd: 0, destination: null },
-      approvals: nativeIn ? [] : [{ token: tokenIn, spender: router, amount: amountIn.toString(), kind: 'erc20' }],
+      approvals: nativeIn || !approvalNeeded ? [] : [{ token: tokenIn, spender: router, amount: amountIn.toString(), kind: 'erc20' }],
       asOfBlock: Number(block), expiresAt: new Date(quotedAt + 20_000).toISOString(), tx,
     };
     return { route, netUsd };

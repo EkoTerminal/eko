@@ -93,6 +93,13 @@ describe('guarded v1 flow: offline wallet-spy end-to-end', () => {
     f.settle('confirmed'); expect(await f.flow.recover()).toMatchObject({ status: 'confirmed', filledIn: '91', filledOut: '82' });
     expect(f.env.onOrder).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'confirmed', filledOut: '82' }));
   });
+  it('an order refused for a missing allowance after the re-quote sends no swap and names the approval', async () => {
+    const f = setup(); f.setQuote({ approvals: [{ token: account, spender: router, amount: f.handoff().quote.amountIn, kind: 'erc20' }] });
+    f.env.approve = vi.fn(async (_step, _address, check) => { check(); f.setQuote({ approvals: [] }); return hash; });
+    f.env.client.order = async () => { throw Object.assign(new Error('Approve first'), { code: 'approval_required' }); };
+    const error = await refusal(f.flow.execute(f.handoff()), 'approval_required');
+    expect(error.sent).toBe('approval'); expect(f.env.approve).toHaveBeenCalledOnce(); expect(f.env.send).not.toHaveBeenCalled();
+  });
   it.each(['spender', 'amount', 'unlimited', 'permit2', 'token', 'expiration'] )('invalid %s approval makes zero wallet requests', async kind => {
     const f = setup(); const step: TradeQuote['approvals'][number] = { token: account, spender: router, amount: f.handoff().quote.amountIn, kind: 'erc20' };
     if (kind === 'spender') step.spender = account;

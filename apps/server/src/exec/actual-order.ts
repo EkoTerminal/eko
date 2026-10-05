@@ -141,7 +141,9 @@ export class ActualOrderService {
       const result = evaluate(current.request, current.policy, current.agent, { ...current.deps, guardPolicyV2: true,
         now: () => finishedAtMs, actualStateFor: () => current.state, actualOrderFor: () => ({ status: 'ready', observation: observed }) });
       if (result.decision !== 'allow') return { status: 'unavailable', code: result.reasons[0]?.split(':')[0] ?? 'execution_denied', reasons: result.reasons };
-      if (b.side === 'sell' && BigInt(observed.allowanceBefore) < BigInt(b.amountIn))
+      // A sell spends the coin; a buy with no native value spends a token. Either needs the wallet's exact allowance,
+      // which the probe reports in `allowanceBefore` for the token being spent.
+      if ((b.side === 'sell' || BigInt(b.tx.value) === 0n) && BigInt(observed.allowanceBefore) < BigInt(b.amountIn))
         return { status: 'unavailable', code: 'token_approval_required' };
       return { status: 'validated', orderHash: expectedHash, evidenceIds: [...observed.evidenceIds] };
     } catch {

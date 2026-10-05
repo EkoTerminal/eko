@@ -65,7 +65,9 @@ export class TradeService {
     private readonly now: () => number = Date.now,
     private readonly lifecycle: { incidents?: IncidentService; onOrder?: (accountId: string, order: TradeOrder) => void;
       /** When installed, every buy quote first re-runs the sell check at its size; a failed sell is a hard refusal. */
-      sellGuard?: Pick<SellGuard, 'check' | 'refused'> } = {}) {}
+      sellGuard?: Pick<SellGuard, 'check' | 'refused'>;
+      /** Refusal message while no acquisition backend is installed (for example, the simulation host is unset). */
+      unavailable?: string } = {}) {}
 
   private async screen(wallet: string | null | undefined) {
     if (!wallet) return;
@@ -135,7 +137,7 @@ export class TradeService {
     if (input.account && (!owner.wallet || input.account !== owner.wallet.toLowerCase())) throw new TradeError('wallet_mismatch', 'Quote account differs from the signed-in wallet');
     await this.screen(input.account);
     await this.sellCheck(input);
-    if (!this.backend) throw new TradeError('sim_unavailable', 'Actual-account trade acquisition is unavailable');
+    if (!this.backend) throw new TradeError('sim_unavailable', this.lifecycle.unavailable || 'Actual-account trade acquisition is unavailable');
     const id = randomUUID(), quotedAt = this.now();
     let result: Awaited<ReturnType<TradeBackend['quote']>>;
     try { result = await this.backend.quote(owner, input, id); }
@@ -158,7 +160,10 @@ export class TradeService {
       quotedAt: new Date(quotedAt), expiresAt: new Date(expiresAt), createdAt: new Date(this.now()) };
     if (input.account && checked && quote.route.executable && quote.guard.decision !== 'refuse') {
       const prepared = await this.prepare(retained);
-      if (prepared.status !== 'validated') quote = { ...quote, binding: false, guard: { decision: 'refuse', checks: [...quote.guard.checks,
+      // Every other check passed and only the wallet's exact approval is missing: the quote stays binding and its
+      // listed approval is the next step. Orders keep refusing (approval_required) until the allowance is on chain.
+      const approvalOnly = prepared.status !== 'validated' && prepared.code === 'token_approval_required' && quote.approvals.length > 0;
+      if (prepared.status !== 'validated' && !approvalOnly) quote = { ...quote, binding: false, guard: { decision: 'refuse', checks: [...quote.guard.checks,
         { code: prepared.code, status: 'refuse', label: 'Current execution checks refused or are unavailable' }] } };
     }
     quote = await this.access.informationalQuote(quote);

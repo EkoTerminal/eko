@@ -39,6 +39,8 @@ let executable = true;
 let warnings: TradeQuote['guard']['checks'] = [];
 let acquisitionAdvance = 0;
 let measuredUsd = 100;
+let approvals: TradeQuote['approvals'] = [];
+let allowance: string | null = null;
 const screen = { assertWallet: vi.fn(async () => { if (denial) throw new ScreeningError(denial === 'sanctioned' ? 'sanctioned' : 'stale_data'); }) };
 const backend: TradeBackend = {
   quote: vi.fn(async (_owner, input, id) => {
@@ -52,7 +54,7 @@ const backend: TradeBackend = {
       networkFeeUsd: 0.02, route: { venue: 'uniswap_v3', executable }, expectedOut: b.amountIn, minOut: b.minOut,
       priceImpactBps: 10, buyTaxPct: 0, sellTaxPct: 0, exitCostPct: 1,
       fee: fee ? { bps: 50, usd: 0.5, destination: 'burn_wallet' } : { bps: 0, usd: 0, destination: null },
-      approvals: [], guard: { decision: warnings.length ? 'warn' : 'allow', checks: warnings },
+      approvals, guard: { decision: warnings.length ? 'warn' : 'allow', checks: warnings },
       expiresAt: new Date(at + 20_000).toISOString(), asOfBlock: Number(b.cursor.blockNumber) };
     return { quote, checked: input.account ? req : null };
   }),
@@ -66,7 +68,7 @@ const backend: TradeBackend = {
   }),
   probe: { observe: vi.fn(async (b: ActualOrderBinding, state, now) => {
     at += acquisitionAdvance;
-    return { ...observationFor(b), state, refreshedAtMs: now, notionalUsd: measuredUsd };
+    return { ...observationFor(b), state, refreshedAtMs: now, notionalUsd: measuredUsd, allowanceBefore: allowance ?? b.amountIn };
   }) },
 };
 let access: TradeAccessService;
@@ -88,7 +90,7 @@ beforeAll(async () => {
     (await built.ctx.dbh.db.select().from(tradingAllowlist).where(eq(tradingAllowlist.wallet, w)))[0], () => at);
 });
 afterAll(async () => { await built.close(); });
-beforeEach(() => { at = NOW; enabled = true; denial = ''; criticalStale = changed = high = fee = false; executable = true; warnings = []; acquisitionAdvance = 0; measuredUsd = 100; });
+beforeEach(() => { at = NOW; enabled = true; denial = ''; criticalStale = changed = high = fee = false; executable = true; warnings = []; acquisitionAdvance = 0; measuredUsd = 100; approvals = []; allowance = null; });
 
 describe('075 durable guarded trade intents', () => {
   it('uses the supported v3 adapter and trusted acquisition; construction alone stays quote-only', async () => {
@@ -215,6 +217,26 @@ describe('075 durable guarded trade intents', () => {
     if (kind === 'allowlist') { await built.ctx.dbh.db.delete(tradingAllowlist).where(eq(tradingAllowlist.wallet, wallet)); code = 'not_allowlisted'; }
     try { await expect(service().order(owner, order(q.id))).rejects.toMatchObject({ code }); }
     finally { cfg.TRADE_MAX_USD = undefined; if (kind === 'allowlist') await built.ctx.dbh.db.insert(tradingAllowlist).values({ wallet, role: 'beta_user', capUsd: 100, addedBy: owner.id }); }
+  });
+  it('keeps an approval-only shortfall binding with its exact approval listed; orders wait for the allowance', async () => {
+    allowance = '0'; approvals = [{ token: binding().coin, spender: binding().tx.to, amount: binding().amountIn, kind: 'erc20' }];
+    const q = await quote({ side: 'sell' });
+    expect(q).toMatchObject({ binding: true, guard: { decision: 'allow', checks: [] }, approvals });
+    await expect(service().order(owner, order(q.id))).rejects.toMatchObject({ code: 'approval_required' });
+    expect(await built.ctx.dbh.db.select().from(tradeOrders).where(eq(tradeOrders.quoteId, q.id))).toHaveLength(0);
+    // The wallet approved exactly: the next quote lists nothing and the order returns bytes.
+    allowance = null; approvals = [];
+    const next = await quote({ side: 'sell' });
+    expect(next).toMatchObject({ binding: true, approvals: [] });
+    expect((await service().order(owner, order(next.id))).tx).toBeDefined();
+    // A shortfall the quote does not list gives the wallet nothing to act on, so it stays a refusal.
+    allowance = '0';
+    expect(await quote({ side: 'sell' })).toMatchObject({ binding: false, guard: { decision: 'refuse', checks: [expect.objectContaining({ code: 'token_approval_required' })] } });
+  });
+  it('names the missing live configuration when no acquisition backend is installed', async () => {
+    const unconfigured = new TradeService(built.ctx.dbh.db, access, screen, undefined, () => at, { unavailable: 'Live trade quotes are not configured on this server' });
+    await expect(unconfigured.quote(owner, { coin: binding().coin, account: wallet, side: 'buy', amountUsd: 100, slippageBps: 100, riskMode: 'balanced' }))
+      .rejects.toMatchObject({ code: 'sim_unavailable', message: 'Live trade quotes are not configured on this server' });
   });
   it('caps the fresh measured actual size even when the request declared a smaller notional', async () => {
     const q = await quote(); measuredUsd = 101;

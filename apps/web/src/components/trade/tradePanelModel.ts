@@ -37,6 +37,7 @@ export function tradeErrorText(code: string) {
     case 'recovery_pending': case 'recovery_unavailable': return C.recovery;
     case 'user_rejected': return 'Rejected in wallet. No swap was sent.';
     case 'approval_pending': return 'Approval confirmation is pending.';
+    case 'approval_required': return 'Approve the exact amount in your wallet first. No swap was sent.';
     case 'trading_paused': return C.paused;
     case 'not_allowlisted': return C.not_allowlisted;
     case 'trade_cap_exceeded': return C.trade_cap_exceeded;
