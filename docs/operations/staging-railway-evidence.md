@@ -275,3 +275,19 @@ the indexer's config digest; it is recorded here and in `infra/railway/staging.j
 After the redeploy, a one-off read-only service truncated `wallet_protocol_coverage`, `userops` and `delegations_7702`
 (last coverage row 22:29:12Z, written by the previous indexer). Database size went from 6.82 GB to 4.25 GB; WAL 1.07 GB.
 Before the pause the database grew about 0.5 GB an hour, a third of it wallet-protocol coverage.
+
+### Transfer roll-up running on the worker: 2026-10-05T00:40Z
+
+Staging runs public `46ba6fd080d8a2cf526f1dfe131ac98ee90a5426` (the sync of source `197fe3d`). The worker has
+`RETENTION_QUOTE_TRANSFER_DAYS=2`, `RETENTION_IDLE_TOKEN_DAYS=14` and `RETENTION_PENDING_POOL_DAYS=3`; these settings
+are part of the attested configuration, and the verifier matched api, worker, indexer and engines against the reviewed
+values. Smoke green. Deployments: api `aa4e27de-0835-465b-9f83-ba14cc8bbdfd`, worker
+`d58893cf-2e3f-4adc-b76a-3c4ca5af0d06`, indexer `cffd034c-09ee-4bf0-ade9-263605527bc8`, engines
+`2238983c-1f47-40cd-a997-fab4934f76bd`. Migration `0181_transfer_baselines` applied at API boot.
+
+The first deploy of the roll-up (`400db80`, source `e349ae2`) never ran it: the worker role starts its jobs in
+`index.ts`, not in `buildApp`. Fixed in `197fe3d`, and the role-image check now requires a built worker to complete a
+retention pass. First live pass: `{"quoteRows":9,"idleTokens":0,"idleRows":0,"pendingRows":0,"finished":true}` (the
+2-day horizon still falls in the early crawled blocks; passes grow as indexed history ages). Design and guards:
+`docs/operations/chain-retention.md`. The Postgres volume resize to 100 GB is pending the owner's confirmation in the
+Railway dashboard.
