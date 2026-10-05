@@ -54,4 +54,4 @@ Updated 2026-10-05. Until each item is decided, the pages say "pending owner con
 ## Release and upkeep
 
 17. `security.txt` expires on 2027-10-01. Someone must renew it before then.
-18. Going live needs this branch merged and deployed; nothing here was deployed.
+18. The pages are live on staging since 2026-10-05. Each keeps its "pending" label until its item is decided.
