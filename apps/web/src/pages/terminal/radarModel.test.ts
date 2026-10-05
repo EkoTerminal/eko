@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRadarRows } from '../../mocks/demo/radar';
-import { applyRadarEvents, currentAgeSec, filterRows, scanDelayed, SORTS, sortRows } from './radarModel';
+import { applyRadarEvents, change8hPct, currentAgeSec, filterRows, scanDelayed, SORTS, sortRows, topMovers } from './radarModel';
 import type { ChannelEvent } from '../../lib/realtime';
 const event = (kind: string, data: unknown) => ({t:'ev',ch:'radar',seq:1,ts:1,kind,data}) as ChannelEvent<'radar'>;
 describe('Radar server order and user sorting', () => {
@@ -33,5 +33,24 @@ describe('Radar server order and user sorting', () => {
     const next=applyRadarEvents(rows,[event('row_upsert',changed),event('row_remove',{address:rows[0].address}),event('rerank',{order:[rows[2].address,rows[1].address]})]);
     expect(next).toEqual([rows[2],changed]); expect(next[0]).toBe(rows[2]); expect(rows[1].change1hPct).not.toBe(99);
     expect(applyRadarEvents(rows,[event('row_upsert',createRadarRows()[3])])).toHaveLength(4);
+  });
+});
+describe('Hot right now without agent-flow data', () => {
+  it('ranks measured Clear or Monitor risers and never invents a mover', () => {
+    const rows = createRadarRows().map((c, i) => ({ ...c, verdictPending: false, unavailable: ['flow' as const], verdict: (['clear', 'monitor', 'danger'] as const)[i % 3],
+      change1hPct: i - 10, spark8h: [1, 1 + i / 100], signal: c.signal && { ...c.signal, composite: 60 } }));
+    const movers = topMovers(rows);
+    expect(movers).toHaveLength(3);
+    for (const c of movers) { expect(c.change1hPct).toBeGreaterThan(0); expect(c.verdict).not.toBe('danger'); }
+    expect(movers.map(c => c.change1hPct)).toEqual([...movers.map(c => c.change1hPct)].sort((a, b) => b - a));
+    expect(topMovers(rows.map(c => ({ ...c, unavailable: ['flow', 'change'] as ('flow' | 'change')[] })))).toEqual([]);
+    expect(topMovers(rows.map(c => ({ ...c, spark8h: undefined })))).toEqual([]);
+    expect(topMovers(rows.map(c => ({ ...c, verdictPending: true })))).toEqual([]);
+  });
+  it('reads the 8h move from the price line only when it is measurable', () => {
+    expect(change8hPct({ spark8h: [2, 3, 2.5] })).toBeCloseTo(25);
+    expect(change8hPct({ spark8h: [0, 1] })).toBeUndefined();
+    expect(change8hPct({ spark8h: [1] })).toBeUndefined();
+    expect(change8hPct({})).toBeUndefined();
   });
 });

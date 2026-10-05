@@ -31,6 +31,8 @@ function serveLanding(): Connect.NextHandleFunction {
 const landing = (): Plugin => ({ name: 'eko-landing', configureServer: (s) => { s.middlewares.use(serveLanding()); }, configurePreviewServer: (s) => { s.middlewares.use(serveLanding()); } });
 
 const api = process.env.EKO_API ?? 'http://localhost:8710';
+// A remote API (for example staging) routes by Host, so the dev proxy must send the target's host.
+const remote = api.startsWith('https://');
 
 export default defineConfig({
   plugins: [react(), landing(), pwa(), budgetGraph()],
@@ -38,10 +40,10 @@ export default defineConfig({
     port: Number(process.env.WEB_PORT ?? 5180),
     strictPort: true,
     proxy: {
-      '/v1': { target: api, ws: true, changeOrigin: false },
-      '/v2': { target: api, changeOrigin: false },
-      '/api': { target: api, changeOrigin: false },
-      '/ws': { target: api.replace(/^http/, 'ws'), ws: true, changeOrigin: false },
+      '/v1': { target: api, ws: true, changeOrigin: remote },
+      '/v2': { target: api, changeOrigin: remote },
+      '/api': { target: api, changeOrigin: remote },
+      '/ws': { target: api.replace(/^http/, 'ws'), ws: true, changeOrigin: remote },
     },
   },
   preview: { host: '127.0.0.1', proxy: { '/v1': { target: api, ws: true }, '/v2': { target: api }, '/api': { target: api } } },

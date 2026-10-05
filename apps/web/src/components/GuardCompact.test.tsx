@@ -76,7 +76,7 @@ describe('037 compact rendering (synthetic fixtures)', () => {
     const chip = render(<CompactVerdictChip level="monitor" guard={null} />);
     expect(chip).toContain('Legacy assessment · rules 1.0.x');expect(chip).toContain('Guard 2 assessment unavailable');
     // One compact chip on the row; its tooltip and accessible name carry both full disclosures.
-    expect(chip).toContain('Legacy grade · Guard 2 pending');expect(chip.match(/class="tag guard-disclosure"/g)).toHaveLength(1);
+    expect(chip).toMatch(/>Legacy grade<\/span>/);expect(chip.match(/class="tag guard-disclosure"/g)).toHaveLength(1);
     expect(chip).toContain(LEGACY_TITLE);expect(chip).toContain(GUARD2_UNAVAILABLE_TITLE);
   });
 });

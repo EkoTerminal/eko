@@ -43,7 +43,9 @@ export const RadarRowSchema = CoinSummarySchema.extend({
 });
 export type RadarRow = z.infer<typeof RadarRowSchema>;
 // CA-36: totals cover every live coin, independent of the loaded page.
-export const RadarTotalsSchema=z.object({coins:z.number().int().nonnegative(),clear:z.number().int().nonnegative(),monitor:z.number().int().nonnegative(),pending:z.number().int().nonnegative(),danger:z.number().int().nonnegative(),evaluatedToday:z.number().int().nonnegative()});
+export const RadarTotalsSchema=z.object({coins:z.number().int().nonnegative(),clear:z.number().int().nonnegative(),monitor:z.number().int().nonnegative(),pending:z.number().int().nonnegative(),danger:z.number().int().nonnegative(),evaluatedToday:z.number().int().nonnegative(),
+  // Last 24 hours, oldest first: distinct live coins evaluated, and coins given a new Danger verdict, per hour.
+  evaluatedByHour:z.array(z.number().int().nonnegative()).length(24).optional(),dangerByHour:z.array(z.number().int().nonnegative()).length(24).optional()});
 export type RadarTotals=z.infer<typeof RadarTotalsSchema>;
 export const RadarResponseSchema=z.object({rows:z.array(RadarRowSchema),cursor:z.string().nullable(),delayedSec:z.number(),totals:RadarTotalsSchema.optional(),guardTotals:GuardTotalsSchema.optional()});
 export const PairRowSchema = CoinSummarySchema.extend({

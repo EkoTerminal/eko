@@ -9,6 +9,18 @@ export type Sort = typeof SORTS[number];
 export const ascending = (sort: Sort) => ['Rank', 'Newest', 'Exit cost'].includes(sort);
 // CA-31 signal is descriptive. Hot ranking uses price and flow; Rank keeps the exact server order.
 export const heatScore = (c: RadarRow) => Math.max(0, c.change1hPct) * (c.flow.agentPct + 20);
+/**
+ * Live rows do not measure agent buying yet, so no row can be Hot. Until they do, the strip shows the strongest
+ * measured movers instead: a Clear or Monitor guard, a rise over the last hour and an 8h price line, ranked by
+ * the size of the move weighted by the beta signal. A ranking of real readings, not a recommendation.
+ */
+export const topMovers = (rows: readonly RadarRow[], n = 3): RadarRow[] => rows
+  .filter((c) => !c.verdictPending && (c.verdict === 'clear' || c.verdict === 'monitor') && !c.unavailable?.includes('change')
+    && c.change1hPct > 0 && !c.unavailable?.includes('spark') && (c.spark8h?.length ?? 0) >= 2)
+  .map((c) => ({ c, score: Math.log1p(c.change1hPct / 100) * (c.signal?.composite ?? 50) }))
+  .sort((a, b) => b.score - a.score || a.c.address.localeCompare(b.c.address)).slice(0, n).map(({ c }) => c);
+/** Percent change across the 8h price line, or undefined when the line is too short or starts at zero. */
+export const change8hPct = (c: Pick<RadarRow, 'spark8h'>) => { const s = c.spark8h; return s && s.length >= 2 && s[0]! > 0 ? (s.at(-1)! / s[0]! - 1) * 100 : undefined; };
 /** When each row version arrived, in client milliseconds. `ageSec` is only meaningful relative to it. */
 export type ReceivedAt = ReadonlyMap<string, number>;
 /**

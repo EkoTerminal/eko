@@ -41,6 +41,14 @@ export class RadarService {
     const midnight=Math.floor(this.store.now()/86400000)*86400;
     const today=await this.store.db.sql.query<{n:string}>('SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN read_coins r ON r.coin=e.coin WHERE e.sec>=$1 AND e.sec<$2 AND r.activity>$3',[midnight,midnight+86400,new Date(this.store.now()-7*86400000)]);
     const count=(tier:number)=>Number(result.rows.find(r=>r.tier===tier)?.n ?? 0);
-    return {coins:result.rows.reduce((n,r)=>n+Number(r.n),0),clear:count(0),monitor:count(1),pending:count(2),danger:count(3),evaluatedToday:Number(today.rows[0].n)};
+    const from=Math.floor(this.store.now()/3600000)*3600-23*3600,live=new Date(this.store.now()-7*86400000);
+    const [scanned,danger]=await Promise.all([
+      this.store.db.sql.query<{h:number;n:string}>('SELECT floor((e.sec-$1)/3600)::int AS h,count(DISTINCT e.coin) AS n FROM engine_runs e JOIN read_coins r ON r.coin=e.coin WHERE e.sec>=$1 AND r.activity>$2 GROUP BY 1',[from,live]),
+      this.store.db.sql.query<{h:number;n:string}>(`SELECT floor((e.sec-$1)/3600)::int AS h,count(DISTINCT v.coin) AS n FROM verdicts v JOIN engine_runs e ON e.coin=v.coin AND e.block=v.valid_from_block
+        WHERE e.sec>=$1 AND v.data->>'level'='danger' GROUP BY 1`,[from]),
+    ]);
+    const hourly=(rows:{h:number;n:string}[])=>Array.from({length:24},(_,i)=>Number(rows.find(r=>Number(r.h)===i)?.n ?? 0));
+    return {coins:result.rows.reduce((n,r)=>n+Number(r.n),0),clear:count(0),monitor:count(1),pending:count(2),danger:count(3),evaluatedToday:Number(today.rows[0].n),
+      evaluatedByHour:hourly(scanned.rows),dangerByHour:hourly(danger.rows)};
   }
 }

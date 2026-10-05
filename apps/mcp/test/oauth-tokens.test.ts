@@ -67,7 +67,8 @@ describe('prepared OAuth token lifecycle (database and injected HTTP fixtures; n
       expect(await tokens.authenticate(pair.access_token.slice(0, -1) + (pair.access_token.endsWith('A') ? 'B' : 'A'))).toBeNull();
       const stored = (await db.chain.sql.query('SELECT * FROM oauth_tokens')).rows;
       const audit = (await db.chain.sql.query('SELECT * FROM audit_log')).rows;
-      for (const secret of [a.code, pair.access_token, pair.refresh_token, pair.access_token.split('_').at(-1), pair.refresh_token.split('_').at(-1)])
+      // Each token is eko_o?t_<prefix>_<base64url secret>; the secret itself may contain '_'.
+      for (const secret of [a.code, pair.access_token, pair.refresh_token, pair.access_token.split('_').slice(3).join('_'), pair.refresh_token.split('_').slice(3).join('_')])
         expect(JSON.stringify([stored, audit])).not.toContain(secret);
       expect(stored[0]).toMatchObject({ access_hash: expect.stringMatching(/^[0-9a-f]{64}$/), refresh_hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
       expect((await harness.keys(a.accountId, identity!.agent.id))[0]).toMatchObject({ kind: 'oauth', lastUsedAt: expect.any(String) });

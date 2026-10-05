@@ -215,6 +215,17 @@
 .signal-beta{font:10px var(--sans);color:var(--muted);text-transform:none;letter-spacing:0}.rt-sig .signal-beta{padding:0 3px}
 .sb-dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}.sb-dot.stale{background:#d8ac62}
 .rt.no-signal .c-sig,.rt.no-spark .c-spark{display:none}
+.rt.no-flow .c-flow,.rt.no-exit .c-exit,.rt.no-liq .c-liq{display:none}
+/* Fixed table layout still reserves a hidden header cell's width, so hidden columns also get zero width;
+   Watch for then takes the space and the 8h line widens. */
+.rt.no-signal .c-sig,.rt.no-spark .c-spark,.rt.no-beta .c-beta,.rt.no-flow .c-flow,.rt.no-exit .c-exit,.rt.no-liq .c-liq{width:0}
+.rt:is(.no-flow,.no-exit,.no-liq) .c-spark{width:150px}
+.radar-notes{margin:6px 0 10px;color:var(--text-3,var(--muted));font-size:12px}
+.radar-notes summary{cursor:pointer;width:max-content;list-style:none}
+.radar-notes summary::-webkit-details-marker{display:none}
+.radar-notes summary::before{content:'ⓘ ';opacity:.8}
+.radar-notes[open] summary{margin-bottom:6px}
+.rt .guard-disclosure{white-space:nowrap}
 .tpanel fieldset{border:0;padding:0;margin:0;min-width:0}.tp-side{display:flex;align-items:center;justify-content:space-between;gap:8px}.tp-side .seg button{padding:6px 14px}.tp-amounts{display:flex;flex-wrap:wrap;gap:5px;margin:12px 0}.tp-amounts input{width:80px;height:28px}.tp-quote{display:grid;grid-template-columns:auto 1fr;gap:7px;margin:14px 0;font-size:13px}.tp-quote dt{color:var(--muted)}.tp-quote dd{margin:0;text-align:right}.tp-guard{font-size:13px;padding:12px;background:var(--raise);color:var(--muted)}.tp-submit{width:100%;margin-top:12px;white-space:normal;font-size:13px}
 .radar-trade-drawer{position:fixed;inset:0 0 0 auto;width:min(440px,100vw);height:100dvh;max-height:100dvh;margin:0;padding:22px;background:var(--panel);color:var(--ink);border:1px solid var(--rule2)}.radar-trade-drawer::backdrop{background:#000a}.radar-trade-drawer .insp-bar{margin-bottom:24px}.radar-error,.radar-more{margin:16px 0}.empty{padding:32px;text-align:center;color:var(--muted)}
 @media(max-width:700px){.hot-grid{grid-template-columns:1fr}.radar{padding:26px 18px 18px}.radar .page-head h1{font-size:48px}.radar .sec-head .end{margin-left:0;flex-wrap:wrap;gap:10px}.radar .toolbar-live{font-size:12px}.radar .ghost-report{flex-wrap:wrap}.radar .ghost-report .btn{margin-left:27px}.radar .toolbar-end{margin-left:0}}

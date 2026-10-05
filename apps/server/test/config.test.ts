@@ -34,6 +34,6 @@ describe('EKO market configuration', () => {
 
   it('serves indexed reads without a legacy market feed', async () => {
     const built = await buildApp(loadConfig({ ...base, MARKET_DATA_SOURCE:'onchain', LEGACY_API:'false' }), { startBackground:false });
-    try { expect((await built.app.inject('/v1/radar')).json()).toEqual({rows:[],cursor:null,delayedSec:0,totals:{coins:0,clear:0,monitor:0,pending:0,danger:0,evaluatedToday:0}}); expect(built.ctx.market.simulated).toBe(false); } finally { await built.close(); }
+    try { expect((await built.app.inject('/v1/radar')).json()).toEqual({rows:[],cursor:null,delayedSec:0,totals:{coins:0,clear:0,monitor:0,pending:0,danger:0,evaluatedToday:0,evaluatedByHour:Array(24).fill(0),dangerByHour:Array(24).fill(0)}}); expect(built.ctx.market.simulated).toBe(false); } finally { await built.close(); }
   });
 });

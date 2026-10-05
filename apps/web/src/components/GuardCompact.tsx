@@ -15,7 +15,7 @@ export function CompactVerdictChip({ level, guard, pending = false, failed = fal
   if (guard === null) {
     const disclosure = `Legacy assessment · rules 1.0.x: ${LEGACY_TITLE} ${GUARD_UNAVAILABLE}: ${GUARD2_UNAVAILABLE_TITLE}`;
     return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}<VerdictChip level={level} verdictPending={pending} {...context} />
-      <span className="tag guard-disclosure" title={disclosure} aria-label={disclosure}>Legacy grade · Guard 2 pending</span></>;
+      <span className="tag guard-disclosure" title={disclosure} aria-label={disclosure}>Legacy grade</span></>;
   }
   return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}{guard !== undefined && <span className="tag" title={LEGACY_TITLE}>Legacy assessment · rules 1.0.x</span>}<VerdictChip level={level} verdictPending={pending} {...context} />
     {guard ? <VerdictChip level={level} guard={guard} /> : null}{details}</>;
