@@ -191,10 +191,10 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:84](../../apps/engines/src/worker.ts#L84) | Yes |
 | `EngineWorker.stop` | method | [apps/engines/src/worker.ts:96](../../apps/engines/src/worker.ts#L96) | Yes |
 | `EngineWorker.replay` | method | [apps/engines/src/worker.ts:104](../../apps/engines/src/worker.ts#L104) | Yes |
-| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:137](../../apps/engines/src/worker.ts#L137) | Yes |
-| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:174](../../apps/engines/src/worker.ts#L174) | Yes |
-| `EngineWorker.run` | method | [apps/engines/src/worker.ts:348](../../apps/engines/src/worker.ts#L348) | Yes |
-| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:373](../../apps/engines/src/worker.ts#L373) | Yes |
+| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:139](../../apps/engines/src/worker.ts#L139) | Yes |
+| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:176](../../apps/engines/src/worker.ts#L176) | Yes |
+| `EngineWorker.run` | method | [apps/engines/src/worker.ts:350](../../apps/engines/src/worker.ts#L350) | Yes |
+| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:375](../../apps/engines/src/worker.ts#L375) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |

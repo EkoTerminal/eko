@@ -20,19 +20,29 @@ export async function materializeHistory(db: ChainDb, coin: Address, block: numb
   await db.sql.query('INSERT INTO deployer_stats VALUES($1,$2,$3,$4,$5) ON CONFLICT(deployer,coin,valid_from_block,rules_version) DO UPDATE SET data=excluded.data', [token.deployer,binary(coin),block,JSON.stringify(data),RULES_VERSION]);
   cache?.recordHistory(rowHex(token.deployer),block,data);
 }
-export async function updateOutcomes(db: ChainDb, block: number, nowSec: number, clock?:ClockCache,cache?:ReplayCache) {
+/** A live engine retries a skipped outcome (no end block, no trades, no price yet) at most this often. */
+export const OUTCOME_SKIP_RETRY_SEC = 1800;
+/**
+ * `skips` (live mode) remembers outcomes that could not be decided yet. Without it, every coin that never traded was
+ * reloaded on every write while the engine held its write lock, so evaluations slowed to minutes each.
+ */
+export async function updateOutcomes(db: ChainDb, block: number, nowSec: number, clock?:ClockCache,cache?:ReplayCache,skips?:Map<string,number>) {
   const tokens = cache ? [...cache.tokens.values()].filter(t=>Number(t.first_block)<=block && seconds(cache.clock.get(Number(t.first_block))!.ts)<=nowSec-3600 && cache.outcomesAt(rowHex(t.address),Infinity).length<3).sort((a,b)=>Number(a.first_block)-Number(b.first_block) || rowHex(a.address).localeCompare(rowHex(b.address))).map(t=>({address:t.address,ts:cache.clock.get(Number(t.first_block))!.ts})) : (await db.sql.query<{ address: Uint8Array; ts: Date }>(`SELECT t.address,b.ts FROM tokens t JOIN engine_block_times b ON b.number=t.first_block
     WHERE t.first_block<=$1 AND b.ts<=to_timestamp($2-3600) AND (SELECT count(*) FROM outcomes o WHERE o.coin=t.address)<3 ORDER BY t.first_block,t.address`, [block,nowSec])).rows;
   for (const token of tokens) for (const [horizon,duration] of [['1h',3600],['24h',86400],['7d',604800]] as const) {
     if (nowSec<seconds(token.ts)+duration) continue;
     const coin=rowHex(token.address);
     const attempt=`${coin}:${horizon}`;
+    if(!cache && skips && (skips.get(attempt) ?? -Infinity)>nowSec-OUTCOME_SKIP_RETRY_SEC)continue;
+    const skip=()=>{skips?.set(attempt,nowSec);};
     if(cache ? cache.outcomesAt(coin,Infinity).some(o=>o.horizon===horizon) || cache.outcomeAttempts.has(attempt) : (await db.sql.query('SELECT 1 FROM outcomes WHERE coin=$1 AND horizon=$2', [token.address,horizon])).rows.length) continue;
-    const end = cache ? cache.endBlock(seconds(token.ts)+duration,block) : (await db.sql.query<{ number:string; ts:Date }>('SELECT number,ts FROM engine_block_times WHERE number<=$1 AND ts>=to_timestamp($2) ORDER BY number LIMIT 1', [block,seconds(token.ts)+duration])).rows[0];
-    if (!end) continue;
+    const end = cache ? cache.endBlock(seconds(token.ts)+duration,block) : (await db.sql.query<{ number:string; ts:Date }>('SELECT number,ts FROM engine_block_times WHERE ts>=to_timestamp($2) AND number<=$1 ORDER BY ts,number LIMIT 1', [block,seconds(token.ts)+duration])).rows[0];
+    // Block times never decrease with height, so the earliest time at or after the horizon is its first block; this
+    // order uses the (ts, number) index instead of scanning every earlier block.
+    if (!end) { skip(); continue; }
     cache?.outcomeAttempts.add(attempt);
     const s=await loadSources(db,coin,Number(end.number),undefined,clock,cache,true);
-    if (!s || !s.swaps.length) continue;
+    if (!s || !s.swaps.length) { skip(); continue; }
     const insiders=new Set([s.deployer,...s.exemptionWallets]);
     const buys=s.swaps.filter(r=>r.side===1 && r.trader!=null && !r.senders_pending && insiders.has(rowHex(r.trader)) && seconds(r.ts)<=s.createdAtSec+3600).reduce((n,r)=>n+Number(r.amount_coin),0);
     const sells=s.swaps.filter(r=>r.side===-1 && r.trader!=null && !r.senders_pending && insiders.has(rowHex(r.trader)));
@@ -56,15 +66,16 @@ export async function updateOutcomes(db: ChainDb, block: number, nowSec: number,
     const matches=cache ? cache.matchesAt(coin,Number(end.number)) : (await db.sql.query<{ data:PlaybookMatch }>('SELECT data FROM playbook_matches WHERE coin=$1 AND valid_from_block<=$2 AND rules_version=$3', [token.address,end.number,RULES_VERSION])).rows.map(r=>r.data);
     // TODO(spec): survived requires an observed price or liquidity series. It records that outcome only;
     // it does not assert unperformed simulation/owner checks passed.
-    if (drop==null && !liquidityObserved && !matches.some(m=>m.id==='honeypot' && m.level==='danger')) continue;
+    if (drop==null && !liquidityObserved && !matches.some(m=>m.id==='honeypot' && m.level==='danger')) { skip(); continue; }
     const outcome = matches.some(m=>m.id==='honeypot' && m.level==='danger') ? 'honeypot' :
       liquidityRug || (drop!=null && drop>=0.9 && sells.length>0) ? 'rugged' :
       denominator>0 && firstHourSold/denominator>0.5 ? 'dumped' : 'survived';
-    if(outcome==='survived' && Object.values(s.attributionCoverage ?? {}).some(g=>g.status==='incomplete'))continue;
+    if(outcome==='survived' && Object.values(s.attributionCoverage ?? {}).some(g=>g.status==='incomplete')){ skip(); continue; }
     const refs: EvidenceRef[]=[...s.swaps.slice(0,1).map(r=>evidence(r,'Outcome initial price')),...s.swaps.slice(-1).map(r=>evidence(r,'Outcome horizon price')),
       ...sells.map(r=>evidence(r,'Outcome insider sell'))];
     const data={ evidence:refs,attributionCoverage:s.attributionCoverage,priceDrop:drop,liquidityRug,firstHourSoldShare:denominator ? firstHourSold/denominator : null };
     await db.sql.query('INSERT INTO outcomes VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [token.address,horizon,end.number,outcome,JSON.stringify(data)]);
+    skips?.delete(attempt);
     cache?.recordOutcome(coin,{horizon,valid_from_block:String(end.number),outcome,data});
     await materializeHistory(db,coin,block,cache);
   }

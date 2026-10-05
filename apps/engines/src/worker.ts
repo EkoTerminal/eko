@@ -126,6 +126,8 @@ export class EngineWorker {
   private yielded=false;
   /** Coins whose head refresh already ran in the current startup sequence. */
   private startupDone=new Set<Address>();
+  /** Outcomes that could not be decided yet, by coin and horizon, with the time they were last tried. */
+  private outcomeSkips=new Map<string,number>();
   /**
    * Expire traces, refresh registry/clock state, reconcile cursor and process bounded scan/activity
    * work before advancing the engine cursor. Engines role only; missing head returns zero, orphaned
@@ -191,7 +193,7 @@ export class EngineWorker {
           await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
           const canonicalHash=await tx.blockHash(BigInt(block));
           if(header.hash && canonicalHash!=null && canonicalHash!==hex(header.hash))throw new Error('Indexed block changed during scan preparation');
-          await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock);
+          await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,undefined,this.outcomeSkips);
           sources.history=await historyAt(tx,sources.deployer,coin,sources.asOfBlock);
           return this.persistRun(tx,sources);
         });
@@ -307,7 +309,7 @@ export class EngineWorker {
           // Outcomes are keyed by horizon time, so a later block covers every earlier one. Replay runs in block
           // order (unchanged); live first scans run ahead of older backlog, which must not re-run this per write.
           if(sources.asOfBlock>outcomesBlock) {
-            await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,this.cache);
+            await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,this.cache,this.outcomeSkips);
             outcomesBlock=sources.asOfBlock;
           }
           const {historyAt}=await import('./sources.js');sources.history=await historyAt(tx,sources.deployer,sources.coin,sources.asOfBlock,this.cache);
@@ -328,7 +330,7 @@ export class EngineWorker {
     const end=clock.at(-1);
     if(!this.stopped && end && outcomesBlock<end.number){const start=performance.now();await this.db.tx(async tx=>{
       await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
-      await updateOutcomes(tx,end.number,end.sec,this.clock,this.cache);
+      await updateOutcomes(tx,end.number,end.sec,this.clock,this.cache,this.outcomeSkips);
     });this.metrics.writeMs+=performance.now()-start;}
     // A yielded poll records only coins whose checkpoints all ran; the rest are planned again next poll.
     this.yielded=yielded;
@@ -418,7 +420,7 @@ export class EngineWorker {
       }
       const canonicalHash=await tx.blockHash(BigInt(block));
       if (b.hash && canonicalHash!=null && canonicalHash!==hex(b.hash)) throw new Error('Indexed block changed during engine preparation');
-      await updateOutcomes(tx,block,now,this.clock);
+      await updateOutcomes(tx,block,now,this.clock,undefined,this.outcomeSkips);
       for (const coin of selected) {
         const s=prepared.get(coin); if (!s){this.cardFailures++;continue;}
         // Refresh after outcomes/earlier launches in this block have materialized.

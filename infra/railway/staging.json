@@ -105,8 +105,10 @@
         "RUN_WORKER": "false",
         "SERVE_WEB": "false",
         "ENGINE_MODE": "live",
-        "ENGINE_CONCURRENCY": "1",
+        "ENGINE_CONCURRENCY": "4",
         "ANVIL_FORK_URL": "http://sim.private.invalid:8545",
+        "RPC_PAID_MAX_RPM": "400",
+        "RPC_PUBLIC_MAX_RPM": "300",
         "RPC_PAID_DAILY_BUDGET": "600000",
         "RPC_SESSION_BUDGET": ""
       },
