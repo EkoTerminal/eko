@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRadarRows } from '../../mocks/demo/radar';
-import { applyRadarEvents, change8hPct, currentAgeSec, filterRows, scanDelayed, SORTS, sortRows, topMovers } from './radarModel';
+import { applyRadarEvents, currentAgeSec, filterRows, hottest, scanDelayed, SORTS, sortRows } from './radarModel';
 import type { ChannelEvent } from '../../lib/realtime';
 const event = (kind: string, data: unknown) => ({t:'ev',ch:'radar',seq:1,ts:1,kind,data}) as ChannelEvent<'radar'>;
 describe('Radar server order and user sorting', () => {
@@ -35,22 +35,23 @@ describe('Radar server order and user sorting', () => {
     expect(applyRadarEvents(rows,[event('row_upsert',createRadarRows()[3])])).toHaveLength(4);
   });
 });
-describe('Hot right now without agent-flow data', () => {
-  it('ranks measured Clear or Monitor risers and never invents a mover', () => {
-    const rows = createRadarRows().map((c, i) => ({ ...c, verdictPending: false, unavailable: ['flow' as const], verdict: (['clear', 'monitor', 'danger'] as const)[i % 3],
-      change1hPct: i - 10, spark8h: [1, 1 + i / 100], signal: c.signal && { ...c.signal, composite: 60 } }));
-    const movers = topMovers(rows);
-    expect(movers).toHaveLength(3);
-    for (const c of movers) { expect(c.change1hPct).toBeGreaterThan(0); expect(c.verdict).not.toBe('danger'); }
-    expect(movers.map(c => c.change1hPct)).toEqual([...movers.map(c => c.change1hPct)].sort((a, b) => b - a));
-    expect(topMovers(rows.map(c => ({ ...c, unavailable: ['flow', 'change'] as ('flow' | 'change')[] })))).toEqual([]);
-    expect(topMovers(rows.map(c => ({ ...c, spark8h: undefined })))).toEqual([]);
-    expect(topMovers(rows.map(c => ({ ...c, verdictPending: true })))).toEqual([]);
+describe('Hot right now strip', () => {
+  const rows = () => createRadarRows().map((c, i) => ({ ...c, verdictPending: false, unavailable: ['flow' as const], flow: { ...c.flow, agentPct: 0 },
+    verdict: (['clear', 'monitor', 'danger'] as const)[i % 3], change1hPct: 1, trades1h: 20, volumeBaselineUsd: 1_000, volume1hUsd: 500 + i * 100 }));
+  it('features Hot coins first, then the most active, and never Danger, unscanned or barely traded coins', () => {
+    const list = rows(); list[4] = { ...list[4], volume1hUsd: 5_000 };
+    const picked = hottest(list);
+    expect(picked).toHaveLength(3);
+    expect(picked[0].address).toBe(list[4].address);
+    for (const c of picked) { expect(c.verdict).not.toBe('danger'); expect(c.trades1h).toBeGreaterThanOrEqual(5); }
+    const volumes = picked.slice(1).map(c => c.volume1hUsd ?? 0); expect(volumes).toEqual([...volumes].sort((a, b) => b - a));
+    expect(hottest(list.map(c => ({ ...c, verdictPending: true })))).toEqual([]);
+    expect(hottest(list.map(c => ({ ...c, trades1h: 4 })))).toEqual([]);
+    expect(hottest(list.map(c => ({ ...c, unavailable: ['flow', 'volume'] as ('flow' | 'volume')[] })))).toEqual([]);
   });
-  it('reads the 8h move from the price line only when it is measurable', () => {
-    expect(change8hPct({ spark8h: [2, 3, 2.5] })).toBeCloseTo(25);
-    expect(change8hPct({ spark8h: [0, 1] })).toBeUndefined();
-    expect(change8hPct({ spark8h: [1] })).toBeUndefined();
-    expect(change8hPct({})).toBeUndefined();
+  it('filters Hot by the tag rows show, including a Danger coin with unusual trading', () => {
+    const list = rows(); list[2] = { ...list[2], volume1hUsd: 9_000 };
+    expect(list[2].verdict).toBe('danger');
+    expect(filterRows(list, 'Hot', 'All').map(c => c.address)).toContain(list[2].address);
   });
 });

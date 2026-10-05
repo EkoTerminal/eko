@@ -1,26 +1,25 @@
 import { z } from 'zod';
 import { RadarRowSchema, type RadarRow } from '@eko/shared';
 import type { ChannelEvent } from '../../lib/realtime';
-import { heatOf } from '../../lib/heat';
+import { activityRatio, displayHeat, heatOf } from '../../lib/heat';
 import { SCAN_DELAYED_AFTER_SEC } from '../../copy/availability';
 export { RadarResponseSchema } from '@eko/shared';
 export const SORTS = ['Rank', 'Hottest', '1h move', 'Agent flow', 'Newest', 'Exit cost'] as const;
 export type Sort = typeof SORTS[number];
 export const ascending = (sort: Sort) => ['Rank', 'Newest', 'Exit cost'].includes(sort);
-// CA-31 signal is descriptive. Hot ranking uses price and flow; Rank keeps the exact server order.
-export const heatScore = (c: RadarRow) => Math.max(0, c.change1hPct) * (c.flow.agentPct + 20);
+// CA-31 signal is descriptive. Hot ranking uses last-hour activity against the usual hour, the 1h move and, when
+// measured, agent buying; Rank keeps the exact server order.
+export const heatScore = (c: RadarRow) => activityRatio(c) * (1 + Math.max(0, c.unavailable?.includes('change') ? 0 : c.change1hPct) / 100)
+  + (c.unavailable?.includes('flow') ? 0 : c.flow.agentPct / 10);
 /**
- * Live rows do not measure agent buying yet, so no row can be Hot. Until they do, the strip shows the strongest
- * measured movers instead: a Clear or Monitor guard, a rise over the last hour and an 8h price line, ranked by
- * the size of the move weighted by the beta signal. A ranking of real readings, not a recommendation.
+ * Hot right now: Hot coins first, then the most active of the rest, so the strip shows where trading is when
+ * nothing clears the Hot bar. Danger and unscanned coins are never featured; a coin needs some real trades.
  */
-export const topMovers = (rows: readonly RadarRow[], n = 3): RadarRow[] => rows
-  .filter((c) => !c.verdictPending && (c.verdict === 'clear' || c.verdict === 'monitor') && !c.unavailable?.includes('change')
-    && c.change1hPct > 0 && !c.unavailable?.includes('spark') && (c.spark8h?.length ?? 0) >= 2)
-  .map((c) => ({ c, score: Math.log1p(c.change1hPct / 100) * (c.signal?.composite ?? 50) }))
-  .sort((a, b) => b.score - a.score || a.c.address.localeCompare(b.c.address)).slice(0, n).map(({ c }) => c);
-/** Percent change across the 8h price line, or undefined when the line is too short or starts at zero. */
-export const change8hPct = (c: Pick<RadarRow, 'spark8h'>) => { const s = c.spark8h; return s && s.length >= 2 && s[0]! > 0 ? (s.at(-1)! / s[0]! - 1) * 100 : undefined; };
+export const hottest = (rows: readonly RadarRow[], n = 3): RadarRow[] => rows
+  .filter((c) => !c.verdictPending && (c.verdict === 'clear' || c.verdict === 'monitor') && !c.unavailable?.includes('volume')
+    && (c.trades1h ?? 0) >= 5)
+  .map((c) => ({ c, hot: heatOf(c) === 'hot', score: heatScore(c) }))
+  .sort((a, b) => Number(b.hot) - Number(a.hot) || b.score - a.score || a.c.address.localeCompare(b.c.address)).slice(0, n).map(({ c }) => c);
 /** When each row version arrived, in client milliseconds. `ageSec` is only meaningful relative to it. */
 export type ReceivedAt = ReadonlyMap<string, number>;
 /**
@@ -40,11 +39,11 @@ const sortField = (sort: Sort): NonNullable<RadarRow['unavailable']>[number] | u
 export function sortRows(rows: readonly RadarRow[], sort: Sort, received?: ReceivedAt): RadarRow[] {
   const list = [...rows];
   if (sort === 'Rank') return list;
-  const value = (c: RadarRow) => (sortField(sort) && c.unavailable?.includes(sortField(sort)!)) || (sort === 'Hottest' && (c.unavailable?.includes('flow') || c.unavailable?.includes('change'))) ? undefined : sort === 'Hottest' ? heatScore(c) : sort === '1h move' ? c.change1hPct : sort === 'Agent flow' ? c.flow.agentPct : sort === 'Newest' ? -launchedAt(c, received) : c.exitCost1kPct;
+  const value = (c: RadarRow) => (sortField(sort) && c.unavailable?.includes(sortField(sort)!)) || (sort === 'Hottest' && (c.unavailable?.includes('volume') || c.volume1hUsd === undefined)) ? undefined : sort === 'Hottest' ? heatScore(c) : sort === '1h move' ? c.change1hPct : sort === 'Agent flow' ? c.flow.agentPct : sort === 'Newest' ? -launchedAt(c, received) : c.exitCost1kPct;
   return list.sort((a, b) => { const av = value(a), bv = value(b); return av === undefined ? bv === undefined ? 0 : 1 : bv === undefined ? -1 : ascending(sort) ? av - bv : bv - av; });
 }
 export const filterRows = (rows: readonly RadarRow[], show: string, stage: string) => rows.filter((c) =>
-  (show === 'All' || (show === 'Hot' ? heatOf(c) === 'hot' : c.verdict === show.toLowerCase())) &&
+  (show === 'All' || (show === 'Hot' ? displayHeat(c) === 'hot' : c.verdict === show.toLowerCase())) &&
   (stage === 'All' || c.stage === (stage === 'Curve' ? 'curve' : 'graduated')));
 export function applyRadarEvents(rows: readonly RadarRow[], events: readonly ChannelEvent<'radar'>[]): RadarRow[] {
   let next = [...rows];

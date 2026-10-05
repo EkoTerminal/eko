@@ -8,6 +8,12 @@ interface Stored {
   curve: Uint8Array | null; graduated_block: string | null; total_supply: string | null; decimals: number | null;
   first_block:string; created_at: Date | null; activity: Date | null; data: unknown | null; verdict: unknown | null;
   price: number | null; previous1h: number | null; previous24h: number | null; volume: number; spark: number[] | null;
+  trades: string | number; prior_volume: number; first_minute: Date | null;
+}
+/** Last-hour volume and trades, and the usual hourly volume over the earlier part of the last day. */
+function activity(t: Pick<Stored, 'volume' | 'trades' | 'prior_volume' | 'first_minute'>, now: number) {
+  const start = Math.max(now - 86400, t.first_minute ? new Date(t.first_minute).getTime() / 1000 : now), hours = (now - 3600 - start) / 3600;
+  return { volume1hUsd: Number(t.volume), trades1h: Number(t.trades), ...(hours >= 1 ? { volumeBaselineUsd: Number(t.prior_volume) / hours } : {}) };
 }
 export interface ReadRow { eligible:boolean;row: RadarRow; card: CoinCard | null; volume: number; activity: number; firstBlock:number; graduationBlock:number }
 export class ReadStore {
@@ -69,7 +75,10 @@ export class ReadStore {
       SELECT b.coin,(array_agg(close ORDER BY minute DESC))[1] AS price,
         (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-3600)))[1] AS previous1h,
         (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-86400)))[1] AS previous24h,
-        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume
+        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume,
+        coalesce(sum(trades) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS trades,
+        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-86400) AND minute<to_timestamp($1::double precision-3600)),0) AS prior_volume,
+        min(minute) AS first_minute
       FROM bars_1m b ${bounded ? 'WHERE b.coin=ANY($2::bytea[])' : 'JOIN selected t ON t.address=b.coin'} GROUP BY b.coin
     ), buckets AS (
       SELECT b.coin,floor(extract(epoch FROM minute)/600) AS bucket,(array_agg(close ORDER BY minute DESC))[1] AS close
@@ -77,7 +86,7 @@ export class ReadStore {
       WHERE ${bounded ? 'b.coin=ANY($2::bytea[]) AND' : ''} minute>=to_timestamp(floor($1::double precision/600)*600-47*600) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket
     ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)
     SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,
-      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,s.points AS spark
+      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,coalesce(b.trades,0) AS trades,coalesce(b.prior_volume,0) AS prior_volume,b.first_minute,s.points AS spark
     FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
     LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
     const flows=await readFlows(this.db,result.rows.map(t=>hex(t.address)));
@@ -114,6 +123,7 @@ export class ReadStore {
         topPlaybook: verdict?.playbooks[0]?.id, ageSec: Math.max(0,now-(t.created_at ? new Date(t.created_at).getTime()/1000 : now)),
         flow:flowValues, exitCost1kPct:0,
         rank:0, signal:card?.signal, spark8h:t.pricing_pending ? undefined : t.spark ?? [], beta:verdict?.beta, unavailable,
+        ...(t.pricing_pending ? {} : activity(t, now)),
       };
       return { eligible:t.eligible,row,card,volume:t.pricing_pending ? 0 : t.volume,firstBlock:Number(t.first_block),graduationBlock:Number(t.graduated_block ?? 0),activity:t.activity ? new Date(t.activity).getTime() : this.now() };
     });

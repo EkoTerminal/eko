@@ -75,6 +75,8 @@ describe('v1 indexed read routes',()=>{
     await db.sql.query('INSERT INTO bars_1m(coin,minute,open,high,low,close,volume_usd,trades,first_block,last_block) VALUES($1,$2,1,1,1,1,1,1,$3,$3)',[binary(sampleAddress(1008)),new Date(now-2*3600000),card.verdict.asOfBlock]);
     const hourOnly=(await built.app.inject('/v1/radar')).json().rows.find((r:{address:string})=>r.address===sampleAddress(1008));expect(hourOnly.unavailable).not.toContain('change');expect(hourOnly.change24hPct).toBeUndefined();
     const measured=RadarRowSchema.parse((await built.app.inject('/v1/radar')).json().rows.find((r:{address:string})=>r.address===sampleAddress(1000)));
+    // Last hour: the bar ten minutes ago. Usual hour: the bar two hours ago over the 23 earlier hours of the last day.
+    expect(measured).toMatchObject({volume1hUsd:100,trades1h:1});expect(measured.volumeBaselineUsd).toBeCloseTo(100/23,6);
     expect(measured.priceUsd).toBe(8);expect(measured.change1hPct).toBe(100);expect(measured.change24hPct).toBe(300);expect(measured.marketCapUsd).toBe(800);expect(measured.unavailable).not.toContain('change');expect(measured.unavailable).not.toContain('marketCap');
     const bars=(await built.app.inject(`/v1/coins/${sampleAddress(1000)}/candles?tf=5m&from=${Math.floor(now/1000)-26*3600}&to=${Math.floor(now/1000)}`)).json().bars;
     expect(bars.map((b:{c:number})=>b.c)).toEqual([2,4,8]);

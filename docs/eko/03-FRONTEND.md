@@ -239,16 +239,16 @@ export interface RouteDef {
 - **Components:**
   - The page head: title, one line of purpose, and three figures (scanned today, honeypots refused, Danger now).
   - The Ghost Report strip, when one is live.
-  - **Hot right now:** up to three tiles (symbol, `HeatTag` + `VerdictChip`, sparkline, signal, agents buying, 1h). "Unusual activity and agent buying in the last hour. Not a recommendation." Selecting a tile opens it in the inspector.
+  - **Hot right now:** up to three tiles (symbol, `HeatTag` + `VerdictChip`, sparkline, signal, last-hour volume against the usual hour, 1h): Hot coins first, then the most active Clear or Monitor coins with at least 5 trades in the hour. Danger and unscanned coins are never featured. "Unusual trading in the last hour against each coin's usual hour, then the most active. Not a recommendation." Selecting a tile opens it in the inspector.
   - Toolbar: Show (All · Hot · Clear · Monitor · Danger), stage, sort, the heat legend; mode and lens (Drop 1, `lenses`) and launchpad filters join it.
   - The Burn hero slot (D0, when promoted).
   - **The table** (virtualized): Coin (symbol via `UntrustedText`, name and age), Guard (`VerdictChip`), Watch for (top playbook and confidence), Signal, 1h, Last 8h (sparkline), Who's buying (`FlowBar` + agent %), Liquidity, Exit at $1k, and **Trade** (opens the sheet in place). Signal, 1h, Who's buying and Exit headers sort (`aria-sort`). Columns drop by container width, least important first: Liquidity, Trade, Who's buying, Last 8h, Watch for, 1h and Signal; the coin, its verdict and exit cost always stay. A Beta Ape Score column appears only when `beta` is present.
-  - **Row marking:** Hot rows get a cool tint and edge plus the Hot tag; Danger rows a warm tint and edge with dimmed figures; Fading rows are dimmer. Danger always wins, and every shade has a word beside it.
-  - **Interim Hot rule** (until the Signal is live, 04-BACKEND §7.7): up 3%+ in 1 h, agents ≥ 30% of buying, liquidity ≥ $10k, and not Danger. After two weeks of beta data, tune the tiers so Hot marks at most ~10% of rows and red flags at most ~15%.
+  - **Row marking:** Hot rows get a cool tint and edge plus the Hot tag; Danger rows a warm tint and edge with dimmed figures; Fading rows are dimmer. Danger always wins the tint, and every shade has a word beside it; a Danger row with unusual trading still shows the Hot tag (and appears under Show · Hot).
+  - **Hot rule** (owner decision 2026-10-05: general activity, any coin; `apps/web/src/lib/heat.ts`): last-hour USD volume at least 3× the coin's usual hour (its average over up to 23 earlier hours), at least 10 trades and $1,000 in the hour, and the 1h price not falling. A coin with under an hour of earlier trading has no usual hour and needs 25 trades and $5,000 instead. Agent buying, when measured, is a second path (signal 70+, rising, agents ≥ 30% of buying). After two weeks of data, tune the thresholds so Hot marks at most ~10% of rows and red flags at most ~15%.
   - **Dithered marks** (ordered dither, the same Bayer matrix as the chart plates). A blue-white shimmer grows with the move, a low dark-red ember with the risk. Intensity is dot density, and every tier is also stated in words (tags, verdicts, the legend):
     - Shimmer 1 · warming: up 3%+ in 1h, agents 25%+ of buying, signal 60+ (no tag).
-    - Shimmer 2 · Hot: the Hot rule (signal 70+, rising, agents 30%+).
-    - Shimmer 3 · surging: Hot, and up 10%+ in 1h with agents 40%+.
+    - Shimmer 2 · Hot: the Hot rule above.
+    - Shimmer 3 · surging: Hot, and up 10%+ in 1h with last-hour volume 6× the usual hour or agents 40%+.
     - Ember 1 · falling: down 8%+ in 1h with a signal under 65.
     - Ember 2 · Danger: the guard's verdict.
     - Ember 3 · red flag: Danger, and a honeypot, 75%+ exit cost at $1k, or a playbook match at 97%+.

@@ -40,6 +40,11 @@ export const RadarRowSchema = CoinSummarySchema.extend({
   signal: CoinSignalSchema.optional(),
   spark8h: z.array(z.number()).max(48).optional(),
   change24hPct: z.number().optional(),
+  // Last-hour trading against the coin's usual hour (Hot): USD volume and trades in the last 60 minutes, and the
+  // average USD volume per hour over up to 23 earlier hours; the baseline is omitted when there is under an hour of it.
+  volume1hUsd: z.number().nonnegative().optional(),
+  trades1h: z.number().int().nonnegative().optional(),
+  volumeBaselineUsd: z.number().nonnegative().optional(),
 });
 export type RadarRow = z.infer<typeof RadarRowSchema>;
 // CA-36: totals cover every live coin, independent of the loaded page.

@@ -49,7 +49,7 @@ export const WALLET_LABEL_WORD = {
 export function HeatTag({ heat, compact = false }: { heat: 'hot' | 'fading' | 'normal' | 'avoid' | 'scanning'; compact?: boolean }) {
   if (heat !== 'hot' && heat !== 'fading') return null;
   const hot = heat === 'hot';
-  return <span className={`heat-tag ${heat}`} title={hot ? 'Unusual activity and agent buying in the last hour. Not a recommendation.' : 'Activity and price are falling off.'}>
+  return <span className={`heat-tag ${heat}`} title={hot ? "Unusual trading in the last hour against this coin's usual hour. Not a recommendation." : 'Activity and price are falling off.'}>
     {hot ? <IconFlame /> : <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5l4.5 4.5 2-2L13 11M13 7.5V11H9.5" /></svg>}
     <span className={compact ? 'sr' : undefined}>{hot ? 'Hot' : 'Fading'}</span>
   </span>;

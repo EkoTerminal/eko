@@ -1,6 +1,8 @@
 import { expect } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
-import { test, configureContext } from './helpers';
+import type { PublicConfig } from '@eko/shared';
+import { TRADING_PAUSED_TITLE } from '../src/copy/availability';
+import { test, configureContext, patchDemoResponse } from './helpers';
 test.use({ demo: true });
 
 for (const [width,height] of [[1512,982],[1440,900],[1280,800],[390,844]]) test(`Radar geometry and inspector at ${width}×${height}`, async ({page}) => {
@@ -58,7 +60,20 @@ test('WS flashes update existing rows once without changing their node identity'
     (window as unknown as { radarRows: Map<string, Element> }).radarRows.get((el as HTMLElement).dataset.address!) === el))).toBe(true);
   await expect(page.locator('.rt tbody tr[data-address]')).toHaveCount(30);
 });
+test('Trade stays off and says why while live trading is paused',async({page})=>{
+  // The demo config pauses live trading: every Trade button is disabled with the reason; Refused rows keep the guard's.
+  await page.setViewportSize({width:1512,height:982});await page.goto('/radar');
+  await page.getByRole('button',{name:'Close details',exact:true}).last().click();
+  const trades=page.locator('.c-act button').filter({hasText:/^Trade$/});await expect(trades.first()).toBeVisible();
+  for(const trade of await trades.all()){
+    await expect(trade).toBeDisabled();await expect(trade).toHaveAttribute('title',TRADING_PAUSED_TITLE);
+    expect(await trade.getAttribute('aria-label')).toContain(TRADING_PAUSED_TITLE);
+  }
+  await expect(page.locator('.c-act button:not(:disabled)')).toHaveCount(0);
+});
 test('trade opens an inert drawer and returns focus',async({page})=>{
+  // Serve the demo config with live trading on so Trade opens the drawer; the paused state is covered above.
+  await patchDemoResponse<PublicConfig>(page,'/v1/config',config=>({...config,trading:{...config.trading,liveEnabled:true}}));
   await page.setViewportSize({width:1512,height:982});await page.goto('/radar');
   await page.getByRole('button',{name:'Close details',exact:true}).last().click();
   // The full-width list exposes its Trade column at this size.
@@ -107,6 +122,7 @@ test('Desktop nav icons, tile labels, and mouse/touch targets', async ({page,bro
 
 // Packet 118 replacement for the retired fabricated Ghost Report banner (FRONTEND §3.2, §8).
 test.describe('reviewed Ghost Reports over HTTP', () => {
+  // Real HTTP: the helper turns mocks off for this context although the radar config starts Vite with VITE_MOCKS=1.
   test.use({ demo: false });
   test('reviewed evidence renders, while an empty public record never invents findings', async ({ page }) => {
     await page.goto('/__ui');
