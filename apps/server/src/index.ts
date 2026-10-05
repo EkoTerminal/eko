@@ -32,7 +32,7 @@ process.on('uncaughtException', (err) => reportError(err, { where: 'uncaughtExce
 const workerOnly = cfg.APP_ROLE === 'worker';
 const { app, ctx, close } = await buildApp(cfg, workerOnly ? { startBackground: false } : {});
 const securityCollectors = workerOnly ? workerSecurityCollectors(ctx) : undefined;
-if (workerOnly) { ctx.exec.start(); ctx.sanctionsWorker.start(); }
+if (workerOnly) { ctx.exec.start(); ctx.sanctionsWorker.start(); ctx.retentionWorker.start(); }
 securityCollectors?.start();
 let dev: Awaited<ReturnType<typeof startDev>> | undefined;
 try { dev = cfg.APP_ROLE === 'dev' ? await startDev(ctx) : undefined; } catch(error) { await close(); startupResolve(); throw error; }

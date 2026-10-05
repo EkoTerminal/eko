@@ -70,6 +70,7 @@ export interface Ctx {
   tradeAccess: TradeAccessService;
   sanctions: SanctionsService;
   sanctionsWorker: SanctionsWorker;
+  retentionWorker: RetentionWorker;
   dbh: DbHandle;
   reads: ReturnType<typeof readServices>;
   hub: Hub;
@@ -207,7 +208,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     },
   );
   const quant = new QuantService(market);
-  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
+  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
 
   // Market data → WebSocket, throttled to ~4 Hz per stream (closed bars always go out immediately).
   const pendingCandles = new Map<string, Extract<ServerMessage, { type: 'candle' }>>();

@@ -113,6 +113,7 @@ async function launch(role, signal, ready, extra = {}, direct = false, expectedE
     if (expectedError) assert.ok(stderr.includes(expectedError), `Missing named requirement: ${stderr}`);
   }
   console.log(`role=${role} entry=${direct ? 'direct' : 'dispatcher'} check=${ready ? signal : 'startup-refused'} exit=${result.code}`);
+  return stdout;
 }
 
 // Exercise the actual compiled CLI and its dispatcher for every implemented role.
@@ -141,6 +142,8 @@ try {
 for (const role of ['engines', 'worker']) {
   await launch(role, 'SIGINT', role === 'engines' ? 'engines_started' : 'EKO worker ready');
 }
+// The worker role starts its jobs outside buildApp: a configured retention pass must actually run there.
+assert.ok((await launch('worker', 'SIGTERM', 'EKO worker ready', { RETENTION_PENDING_POOL_DAYS: '3' })).includes('Chain retention pass'), 'worker retention did not run');
 for (const direct of [true, false]) await launch('mcp', 'SIGTERM', 'EKO MCP ready', {
   HARNESS_KEY_PEPPER: 'image-fixture-placeholder'.repeat(3), MCP_PUBLIC_URL: 'https://mcp.eko.example/mcp',
   LAUNCH_WEEK_AGENT_LIMIT: '1',
