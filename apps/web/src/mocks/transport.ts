@@ -6,7 +6,7 @@ import { createRadarCard } from './demo/radar';
 import { createPairCard } from './demo/pairs';
 import { feedSnapshot, pairSnapshot } from './demo/market';
 import { match } from '../lib/router';
-import { DEFAULT_PREFERENCES, PreferencesSchema, TelemetrySchema, SIWE_STATEMENT, AgentDetailSchema, AgentSchema, PolicySchema, ApiKeyInfoSchema, AlertSettingsSchema, TradeQuoteRequestSchema, TradeQuoteSchema, type AlertSettings, type Preferences } from '@eko/shared';
+import { DEFAULT_PREFERENCES, PreferencesSchema, TelemetrySchema, SIWE_STATEMENT, AgentDetailSchema, AgentSchema, PolicySchema, ApiKeyInfoSchema, AlertSettingsSchema, TradeQuoteRequestSchema, TradeQuoteSchema, JournalConsentSchema, type AlertSettings, type Preferences } from '@eko/shared';
 import { createMissionDemo, emitMission } from './demo/mission';
 import { demoPacks, demoPresets } from './demo/mission-packs';
 import { policyErrors } from '../lib/mission';
@@ -16,6 +16,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 export function createMockTransport() {
   let wallet: string | null = null;
   const preferenceStore = new Map<string, Preferences>();
+  const journalOptIn = new Set<string>();
   const mission = createMissionDemo();
   const alertSettings = new Map<string, AlertSettings>();
   const watches=new Map<string,{kind:'coin'|'wallet'|'crew';target:string}>();
@@ -67,9 +68,18 @@ export function createMockTransport() {
         preferenceStore.set(wallet ?? 'guest', parsed.data); return json(parsed.data);
       }
     }
+    if (route === '/me/journal-consent' && (method === 'GET' || method === 'PUT')) {
+      if (!wallet) return json({ error: 'wallet_auth_required', message: 'Verify your wallet to manage journal data.' }, 401);
+      if (method === 'PUT') {
+        const parsed = JournalConsentSchema.safeParse(JSON.parse(String(init.body ?? '{}')));
+        if (!parsed.success) return json({ error: 'bad_request', message: 'Invalid journal consent.' }, 400);
+        if (parsed.data.optedIn) journalOptIn.add(wallet); else journalOptIn.delete(wallet);
+      }
+      return json({ optedIn: journalOptIn.has(wallet) });
+    }
     if (route === '/me/data' && method === 'DELETE') {
       if (!wallet) return json({ error: 'wallet_auth_required', message: 'Verify your wallet to delete harness data.' }, 401);
-      preferenceStore.delete(wallet);
+      preferenceStore.delete(wallet); journalOptIn.delete(wallet);
       return json({ deletedAt: '2026-10-13T12:00:00.000Z' });
     }
     if (route === '/pairs' && method === 'GET') return json({ rows: pairSnapshot().filter((r) => !query.has('stage') || r.column === query.get('stage')).slice(0, 100), cursor: null, delayedSec: 0 });

@@ -1,7 +1,10 @@
 # Vulnerability reporting (draft)
 
-This policy is a draft until private advisories and bounty funding are live. The
-`security@ekoterminal.com` role mailbox is live (owner-confirmed forwarding, 2026-10-04).
+Both private reporting channels are open: the `security@ekoterminal.com` role mailbox
+(owner-confirmed forwarding, 2026-10-04) and GitHub private vulnerability reporting on
+`EkoTerminal/eko` (enabled; checked 2026-10-05). The bounty terms below remain a draft until
+the owner confirms rewards, funding and payment terms. The public version of this policy is
+<https://ekoterminal.com/security>; the contact file is served at `/.well-known/security.txt`.
 EKO uses AI-assisted and automated review, not a professional audit.
 
 ## Scope
@@ -16,9 +19,8 @@ Later contracts enter scope only when deployed. Third-party protocols, brokerage
 systems, wallets and infrastructure outside EKO's control are excluded.
 
 Report a reproducible issue privately by email to `security@ekoterminal.com`, or
-through the repository's GitHub **Security → Report a vulnerability** once private
-security advisories are enabled (TODO(owner): enable private vulnerability
-reporting on the public repository).
+through GitHub **Security → Report a vulnerability** on the public repository
+(<https://github.com/EkoTerminal/eko/security/advisories/new>).
 Include the affected version/commit, impact, steps to reproduce and a minimal
 proof of concept using local fixtures or a fork. Do not send credentials, private
 keys or personal data. The proposed launch response target is 48 hours (within
@@ -32,8 +34,8 @@ WebSocket work accumulation and unverified ETH/USD reference accounting) are
 marked fixed in the ledger; this is historical evidence, not acceptance of this
 launch candidate. Their status and remediation evidence belong in the
 [findings ledger](.audit-grade/findings.tsv); this policy does not close them.
-Private advisories, bounty funding and monitoring delivery remain pending
-operational setup (the role mailbox is live), not accepted vulnerability findings.
+Bounty funding and monitoring delivery remain pending operational setup (the role
+mailbox and GitHub private reporting are live), not accepted vulnerability findings.
 
 The [implemented invariant inventory](docs/security/INVARIANTS.md) links each
 covered invariant to exact checking tests and separately lists missing tests.

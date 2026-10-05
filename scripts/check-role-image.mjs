@@ -148,6 +148,18 @@ for (const direct of [true, false]) await launch('mcp', 'SIGTERM', 'EKO MCP read
   HARNESS_KEY_PEPPER: 'image-fixture-placeholder'.repeat(3), MCP_PUBLIC_URL: 'https://mcp.eko.example/mcp',
   LAUNCH_WEEK_AGENT_LIMIT: '1',
 }, direct);
+// The deployed shape: journal KEK and a provisioned destruction ledger register preflight and
+// journal beside the five reads. An ephemeral key and temporary ledger only.
+const journalFixture = mkdtempSync(join(tmpdir(), 'eko-mcp-journal-'));
+try {
+  const ledger = join(journalFixture, 'destruction.log');
+  writeFileSync(ledger, 'eko-journal-destruction-v1\n', { mode: 0o600 });
+  for (const direct of [true, false]) await launch('mcp', 'SIGTERM', 'EKO MCP ready', {
+    HARNESS_KEY_PEPPER: 'image-fixture-placeholder'.repeat(3), MCP_PUBLIC_URL: 'https://mcp.eko.example/mcp',
+    LAUNCH_WEEK_AGENT_LIMIT: '1', JOURNAL_KEK: randomBytes(32).toString('hex'), JOURNAL_KEK_ID: 'image-fixture-kek',
+    JOURNAL_TOMBSTONE_PATH: ledger,
+  }, direct);
+} finally { rmSync(journalFixture, { recursive: true, force: true }); }
 for (const role of ['bots', 'og', 'swarm', 'research']) await launch(role, undefined, undefined, {}, false, 'unavailable in this image');
 for (const role of ['keeper', 'unknown']) await launch(role, undefined, undefined, {}, false, 'Unknown or missing APP_ROLE');
 await launch('api', undefined, undefined, { NODE_ENV: 'production' }, false, 'DATABASE_URL required in production');

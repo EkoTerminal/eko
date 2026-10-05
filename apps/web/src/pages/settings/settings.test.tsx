@@ -10,7 +10,8 @@ import { useShell } from '../../store/shell';
 import { Settings } from '../Settings';
 import Plan, { ReferralDetails, trialCountdown } from './Plan';
 import { PrivacySettings } from './Privacy';
-import { deleteHarnessData, referralLink } from '../../lib/settings';
+import { deleteHarnessData, journalConsent, referralLink, setJournalConsent } from '../../lib/settings';
+import { JournalConsentSetting } from './JournalConsent';
 import { SETTINGS_COPY as C, PLAN_COPY as P } from '../../copy/settings';
 import { ADVISORY, BUILT_ON, NON_AFFILIATION } from '../../copy';
 import { resolveRoute } from '../../routes';
@@ -36,6 +37,9 @@ vi.mock('react', async original => {
     const index = state.index++;
     if (!(index in state.values)) state.values[index] = typeof initial === 'function' ? initial() : initial;
     return [state.values[index], (next: unknown) => { state.values[index] = typeof next === 'function' ? next(state.values[index]) : next; }];
+  }, useEffect: (effect: () => void, deps?: unknown[]) => {
+    // Harness renders call components directly; their loads are driven explicitly by each test.
+    if (!mocks.hookState) return actual.useEffect(effect, deps);
   } };
 });
 const walletA = `0x${'1'.repeat(40)}`, walletB = `0x${'2'.repeat(40)}`;
@@ -125,6 +129,31 @@ describe('task 119 settings (offline fixtures, no live account)', () => {
     expect(render(harness.view())).toContain('2026-10-13T12:00:00.000Z');
     expect(mocks.fetchParsed).toHaveBeenCalledWith('/me/data', expect.anything(), { method: 'DELETE' });
     expect(render(harness.view())).not.toContain('<form');
+  });
+  it('lets only the verified owner turn the agent journal on and off; deletion forgets it', async () => {
+    await signIn(walletA); mocks.fetchParsed.mockClear();
+    expect(await journalConsent()).toEqual({ optedIn: false });
+    expect(await setJournalConsent(true)).toEqual({ optedIn: true });
+    expect(await journalConsent()).toEqual({ optedIn: true });
+    expect(mocks.fetchParsed).toHaveBeenCalledWith('/me/journal-consent', expect.anything(), { method: 'PUT', body: { optedIn: true } });
+    const html = render(<Settings />);
+    for (const copy of [C.journalTitle, C.journalToggle, C.journalLoading, C.deleteTitle]) expect(html).toContain(copy);
+    // The toggle: disabled until loaded, then a change saves and shows the server's answer.
+    const state = { values: [] as unknown[], index: 0 }, owner = useApp.getState().account!.id;
+    const view = (id = owner) => { mocks.hookState = state; state.index = 0; const tree = JournalConsentSetting({ owner: id }); mocks.hookState = null; return tree; };
+    const box = () => elements(view()).find(e => e.type === 'input')!;
+    expect(box().props.disabled).toBe(true);
+    state.values[0] = true; mocks.fetchParsed.mockClear();
+    expect(render(view())).toContain(C.journalOn);
+    (box().props.onChange as (e: unknown) => void)({ target: { checked: false } });
+    await vi.waitFor(() => expect(render(view())).toContain(C.journalOff));
+    expect(mocks.fetchParsed).toHaveBeenCalledWith('/me/journal-consent', expect.anything(), { method: 'PUT', body: { optedIn: false } });
+    mocks.fetchParsed.mockClear();
+    const stale = elements(view('previous-account')).find(e => e.type === 'input')!;
+    (stale.props.onChange as (e: unknown) => void)({ target: { checked: true } });
+    expect(mocks.fetchParsed).not.toHaveBeenCalled();
+    await setJournalConsent(true); await deleteHarnessData('DELETE');
+    expect(await journalConsent()).toEqual({ optedIn: false });
   });
   it('does not send deletion if its confirmation belongs to an old account', async () => {
     await signIn(walletA); const harness = privacyHarness('previous-account');

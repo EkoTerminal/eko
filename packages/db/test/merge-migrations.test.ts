@@ -8,7 +8,7 @@ import type { ChainDb } from '../src/index.js';
 const mainIndexer = ['0101_chain','0102_market','0103_range_errors','0110_rpc_usage','0111_pending_senders','0112_pending_pricing','0117_pons_progress'];
 const mainEngines = ['0104_engines','0105_engine_activity','0106_engine_rules_versions','0107_engine_pons_static','0108_engine_query_indexes','0113_v1_reads','0114_batched_read_models'];
 const mergedIndexer = [...mainIndexer.slice(0,-1),'0115_guard_sources','0117_pons_progress','0136_wallet_protocol','0150_agent_registry','0180_eth_usd_reference_sources','0181_transfer_baselines'];
-const mergedEngines = [...mainEngines,'0116_guard_revisions','0118_guard_receipts','0119_guard_shadow','0120_receipt_outbox','0121_v3_reference_simulation','0122_private_receipts','0123_receipt_committer','0124_signal_shadow','0134_directional_depth','0135_scan_jobs','0137_v4_reference_simulation','0142_ghost_reports','0147_card_availability','0149_wallet_labels','0153_wallet_fingerprints','0154_wallet_fingerprint_indexes','0158_watcher_flow','0159_watcher_flow_invalidation','0161_campaign_replay','0168_outcome_labels','0169_swarm_worker','0175_swarm_paper','0179_review_api'];
+const mergedEngines = [...mainEngines,'0116_guard_revisions','0118_guard_receipts','0119_guard_shadow','0120_receipt_outbox','0121_v3_reference_simulation','0122_private_receipts','0123_receipt_committer','0124_signal_shadow','0134_directional_depth','0135_scan_jobs','0137_v4_reference_simulation','0142_ghost_reports','0147_card_availability','0149_wallet_labels','0153_wallet_fingerprints','0154_wallet_fingerprint_indexes','0158_watcher_flow','0159_watcher_flow_invalidation','0161_campaign_replay','0168_outcome_labels','0169_swarm_worker','0175_swarm_paper','0179_review_api','0182_sell_checks'];
 async function applyMain(db: ChainDb) {
   for(const [ledger,ids] of [['eko_indexer_migrations',mainIndexer],['eko_engine_migrations',mainEngines]] as const) {
     await db.sql.query(`CREATE TABLE ${ledger}(id text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())`);
@@ -47,6 +47,8 @@ async function assertMerged(db: ChainDb) {
   expect((await db.sql.query<{id:string}>('SELECT id FROM eko_indexer_migrations ORDER BY id')).rows.map(r=>r.id)).toEqual(mergedIndexer);
   expect((await db.sql.query<{id:string}>('SELECT id FROM eko_engine_migrations ORDER BY id')).rows.map(r=>r.id)).toEqual(mergedEngines);
   expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename='sim_runs'")).rows).toHaveLength(1);
+  expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename IN ('sell_check_latest','sell_check_runs','sell_check_refusals')")).rows).toHaveLength(3);
+  expect((await db.sql.query("SELECT tgname FROM pg_trigger WHERE tgname IN ('read_sell_check_insert','read_sell_check_update')")).rows).toHaveLength(2);
   expect((await db.sql.query("SELECT indexname FROM pg_indexes WHERE indexname='pons_events_token_block'")).rows).toHaveLength(1);
   expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename IN ('guard_availability','guard_verdict_revisions','guard_receipt_payloads','guard_shadow_runs')")).rows).toHaveLength(4);
 }

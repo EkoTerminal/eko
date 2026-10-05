@@ -43,6 +43,7 @@ export * from './simulation/fork-gateway.js';
 export * from './simulation/fork-runtime.js';
 export * from './simulation/fork-manifest.js';
 export * from './simulation/v4.js';
+export * from './simulation/sell-check.js';
 export * from './execution/v4.js';
 export { PonsActualOrderProbe } from './execution/pons-actual.js';
 export type { PonsActualOrderRoute } from './execution/pons-actual.js';

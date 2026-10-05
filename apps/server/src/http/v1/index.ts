@@ -63,7 +63,7 @@ export async function registerV1(app: FastifyInstance, cfg: Config, flags: FlagS
     if (account) await v1.register(async area => tradeAdminRoutes(area, cfg, account));
     if (rpc) await v1.register(async area => rpcRoutes(area, rpc));
     await v1.register(async area => healthRoutes(area, rpcUsage, cfg));
-    await v1.register(async area => packRoutes(area));
+    await v1.register(async area => packRoutes(area, cfg.MCP_PUBLIC_URL));
     await v1.register(async (area) => configRoutes(area, cfg, flags, access, account));
     await v1.register(async (area) => demoRoutes(area, cfg));
   }, { prefix: '/v1' });

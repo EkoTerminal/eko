@@ -29,6 +29,10 @@ export const CoinSummarySchema = z.object({
   missingChecks: z.array(z.string()).optional(),
   // CA-31 (accepted): market cap in USD for the Radar inspector and coin view.
   marketCapUsd: z.number().optional(),
+  // TODO(spec): additive. The live sell check (BACKEND §6.2 contract probe) at one block: `refused` means a buy went
+  // through and the sell reverted or returned under 5% in simulation, so the guard refuses buy quotes. Absent means
+  // not checked yet; it is never inferred.
+  sellCheck: z.object({ status: z.enum(['sellable', 'refused']), asOfBlock: z.number().int().nonnegative(), checkedAt: z.iso.datetime() }).optional(),
 });
 export type CoinSummary = z.infer<typeof CoinSummarySchema>;
 export const RadarRowSchema = CoinSummarySchema.extend({
@@ -50,7 +54,11 @@ export type RadarRow = z.infer<typeof RadarRowSchema>;
 // CA-36: totals cover every live coin, independent of the loaded page.
 export const RadarTotalsSchema=z.object({coins:z.number().int().nonnegative(),clear:z.number().int().nonnegative(),monitor:z.number().int().nonnegative(),pending:z.number().int().nonnegative(),danger:z.number().int().nonnegative(),evaluatedToday:z.number().int().nonnegative(),
   // Last 24 hours, oldest first: distinct live coins evaluated, and coins given a new Danger verdict, per hour.
-  evaluatedByHour:z.array(z.number().int().nonnegative()).length(24).optional(),dangerByHour:z.array(z.number().int().nonnegative()).length(24).optional()});
+  evaluatedByHour:z.array(z.number().int().nonnegative()).length(24).optional(),dangerByHour:z.array(z.number().int().nonnegative()).length(24).optional(),
+  // TODO(spec): additive. GO-PLAN §10 "Honeypots refused" = guard refusals on trade/quote: distinct coins whose buy quote
+  // the guard refused because the sell check failed, since UTC midnight and per hour over the last 24 hours. Omitted
+  // while quotes do not run the sell check, so the head shows "not checked yet" rather than a zero.
+  honeypotsRefused:z.number().int().nonnegative().optional(),refusedByHour:z.array(z.number().int().nonnegative()).length(24).optional()});
 export type RadarTotals=z.infer<typeof RadarTotalsSchema>;
 export const RadarResponseSchema=z.object({rows:z.array(RadarRowSchema),cursor:z.string().nullable(),delayedSec:z.number(),totals:RadarTotalsSchema.optional(),guardTotals:GuardTotalsSchema.optional()});
 export const PairRowSchema = CoinSummarySchema.extend({

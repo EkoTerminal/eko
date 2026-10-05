@@ -116,6 +116,27 @@ describe('075 durable guarded trade intents', () => {
     adapter.quoteTrade.mockRejectedValueOnce(new Error('provider-details'));
     await expect(routed.quote(owner, input)).rejects.toMatchObject({ code: 'sim_unavailable', message: 'Trade acquisition is unavailable' });
   });
+  it('re-runs the sell check on every buy quote and refuses a coin whose sell fails before route acquisition', async () => {
+    const result = (status: string) => ({ status, coin: binding().coin, block: 1, route: null, ethUsd: 2000, probes: [], requests: 1, exit100: null, exit1k: null }) as never;
+    let next = 'refused';
+    const sellGuard = { check: vi.fn(async () => { if (next === 'throw') throw new Error('provider-details'); return result(next); }), refused: vi.fn(async () => {}) };
+    const guarded = new TradeService(built.ctx.dbh.db, access, screen, backend, () => at, { sellGuard });
+    const input = { coin: binding().coin, account: wallet, side: 'buy' as const, amountUsd: 100, slippageBps: 100, riskMode: 'balanced' as const };
+    const acquired = vi.mocked(backend.quote).mock.calls.length;
+    await expect(guarded.quote(owner, input)).rejects.toMatchObject({ code: 'guard_refused', message: expect.stringContaining('could not be sold back') });
+    expect(sellGuard.check).toHaveBeenCalledWith(input.coin, 100);
+    expect(sellGuard.refused).toHaveBeenCalledTimes(1);
+    next = 'buy_failed'; await expect(guarded.quote(owner, input)).rejects.toMatchObject({ code: 'guard_refused' });
+    for (const failure of ['unavailable', 'unsupported', 'throw']) { next = failure; await expect(guarded.quote(owner, input)).rejects.toMatchObject({ code: 'sim_unavailable' }); }
+    // Only failed sells are counted, and no refused or unchecked quote reached acquisition or was retained.
+    expect(sellGuard.refused).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.quote).mock.calls.length).toBe(acquired);
+    next = 'sellable'; expect(await guarded.quote(owner, input)).toMatchObject({ binding: true });
+    // Sells reduce risk and never run the sell check.
+    const checks = sellGuard.check.mock.calls.length;
+    await guarded.quote(owner, { ...input, side: 'sell' });
+    expect(sellGuard.check.mock.calls.length).toBe(checks);
+  });
   it('retains owner, exact inputs and original 15s clocks for another service/replica, with zero fees', async () => {
     const q = await quote(); expect(TradeQuoteSchema.parse(q)).toMatchObject({ binding: true, fee: { bps: 0, usd: 0, destination: null } });
     expect(Date.parse(q.expiresAt)).toBe(NOW + 15000);

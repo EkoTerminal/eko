@@ -1,4 +1,4 @@
-import { type ReceiptApiStore } from '@eko/db';
+import { readCensus, readFlows, unavailableFlow, type ReceiptApiStore } from '@eko/db';
 import { toUntrusted } from '@eko/untrusted';
 import { UntrustedSchema, SenseCensusResultSchema, type Address, type PlaybookMatch } from '@eko/shared';
 import type { GuardReadStore } from './guard-store.js';
@@ -55,18 +55,24 @@ export class SensesReadService {
     return sanitize(result.version === 1 ? result.verdict : result);
   }
   /**
-   * Read the negotiated card, enforce delay, sanitize text and mark requested-window flow
-   * unavailable instead of relabeling another window. Caller supplies version/window/delay;
-   * missing or delayed cards return unavailable and SQL failures reject.
+   * Read the negotiated card, enforce delay and sanitize text. V1 serves the requested window's
+   * measured Watcher flow (packet 102) with its availability mask, as REST does; an unmeasured
+   * window keeps structural zeros only under `meta.flow.unavailable`, never relabeling another
+   * window. Caller supplies version/window/delay; missing or delayed cards return unavailable and
+   * SQL failures reject.
    */
   async card(coin: Address, version: 1 | 2, window: '5m' | '1h' | '24h', delay: number) {
     const result = await this.guard.negotiatedCard(coin, version);
     if (!result || !result.card) return unavailable('coin_unavailable');
     const block = result.version === 1 ? result.card.freshness.block : result.card.freshness.cursor.blockNumber;
     if (await this.delayed(block, delay)) return unavailable('delayed_snapshot_unavailable');
-    if (result.version === 1) return sanitize({ ...result.card, flow: {
-      status: 'unavailable' as const, window, dependency: '102' as const, beta: true as const, confidence: 0 as const } });
-    // No measured requested window is available yet. Keep all other captured V2
+    if (result.version === 1) {
+      const flow = (await readFlows(this.guard.db, [coin], window)).get(coin) ?? unavailableFlow(window, result.card.freshness.block);
+      const { meta: flowMeta, ...values } = flow;
+      const { flow: _otherWindow, ...meta } = result.card.meta ?? {};
+      return sanitize({ ...result.card, flow: values, meta: flowMeta ? { ...meta, flow: flowMeta } : meta });
+    }
+    // The V2 projection has no measured requested window yet. Keep all other captured V2
     // facts/gaps intact and mark every flow metric unavailable rather than relabel it.
     const card = sanitize(result.card);
     const reset = (v: unknown): unknown => {
@@ -102,13 +108,12 @@ export class SensesReadService {
       : playbooks.length > 0 && playbooks.every(m => m.history) ? 'available' as const : 'unavailable' as const };
   }
   /**
-   * Return the MCP Census calibration-gated unavailable projection with no measured precision
-   * value. This read performs no acquisition and does not publish the REST Census snapshot.
+   * Return the same precision-gated Census as REST GET /census: methodology, model and gate status
+   * with no headline numbers until the label gate passes and finalized coverage exists. No
+   * classification, measurement or acquisition runs here; SQL/schema failures reject.
    */
   async census() {
-    return SenseCensusResultSchema.parse({ status: 'unavailable', dependency: '102', gated: true,
-      reason: 'labels_in_calibration', methodologyUrl: '/methodology', gate: {
-        metric: 'likely_agent_precision', value: null, threshold: 0.9, modelVersion: null, evaluatedAt: null } });
+    return sanitize(SenseCensusResultSchema.parse(await readCensus(this.guard.db, this.guard.legacy.now())));
   }
   /**
    * Read a receipt proof/status, omitting revealed and canonical payloads from anchored responses.

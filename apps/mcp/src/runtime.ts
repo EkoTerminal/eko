@@ -17,6 +17,7 @@ import { ReceiptApiStore, type ReceiptRegistryReader } from '../../../packages/d
 import { registerHarnessTools } from './harness.js';
 import { JournalService } from '../../server/src/harness/journal.js';
 import { PreflightService, type CachedPreflightInputs } from '../../server/src/harness/preflight.js';
+import { storedPreflightInputs } from '../../server/src/harness/preflight-inputs.js';
 import { pruneOAuthDiscovery } from './oauth.js';
 import { TrustProxyHopsSchema } from '../../server/src/proxy-trust.js';
 
@@ -110,7 +111,8 @@ export async function createMcpRuntime(env: NodeJS.ProcessEnv, tools: ToolRegist
       await handle.chain.sql.query('SELECT id FROM preflights LIMIT 0');
       const journal = new JournalService(handle.chain, destruction,
         { kek: Buffer.from(cfg.JOURNAL_KEK, 'hex'), id: cfg.JOURNAL_KEK_ID });
-      registerHarnessTools(readTools, new PreflightService(handle.chain, journal, cachedInputs), journal);
+      // Default Senses for preflight: the stored engine verdict/card/price, never acquisition.
+      registerHarnessTools(readTools, new PreflightService(handle.chain, journal, cachedInputs ?? storedPreflightInputs), journal);
     }
     const app = buildMcpApp({ authenticate: key => auth.authenticate(key), entitlements: () => entitlements.get(),
       limits, tools: readTools, publicUrl: cfg.MCP_PUBLIC_URL, trustProxyHops: cfg.TRUST_PROXY_HOPS,

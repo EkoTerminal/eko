@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
-import { AgentDetailSchema, ApiKeyCreatedSchema, JournalEntrySchema, PackSchema, PreflightResultSchema,
+import { AgentDetailSchema, ApiKeyCreatedSchema, JournalEntrySchema, PackSchema, PreflightResultSchema, type Pack,
   type PreflightRequest, type PreflightResult } from '@eko/shared';
 import { orderHash } from '../../../packages/policy/src/index.js';
 import { NOW } from '../../../packages/policy/test/fixtures.js';
@@ -10,6 +10,7 @@ import { preflightFixture } from '../../server/test/preflight-fixture.js';
 import { loadConfig } from '../../server/src/config.js';
 import { AuthService } from '../../server/src/http/auth.js';
 import { registerV1 } from '../../server/src/http/v1/index.js';
+import { packRoutes } from '../../server/src/http/v1/packs.js';
 import { FlagService } from '../../server/src/flags/service.js';
 import { accounts } from '../../server/src/db/schema.js';
 import { EntitlementsService } from '../../server/src/harness/entitlements.js';
@@ -35,6 +36,18 @@ beforeAll(async () => {
 });
 afterAll(async () => { await mcp?.close(); await api?.close(); await f?.close(); });
 
+/** The endpoint and Authorization value a client sends after pasting this pack with its key. */
+function connection(pack: Pack, key: string) {
+  const template = pack.configTemplate.replaceAll('{{API_KEY}}', key);
+  if (pack.platform === 'claude_code') {
+    const [, url, authorization] = /^claude mcp add --transport http eko (\S+) --header "Authorization: ([^"]+)"$/.exec(template) ?? [];
+    return { url, authorization };
+  }
+  const server = JSON.parse(template).mcpServers.eko;
+  // Claude Desktop starts the mcp-remote bridge, which sends the env value as the header.
+  if (pack.platform === 'claude_desktop') return { url: server.args[2], authorization: server.env.EKO_AUTH_HEADER };
+  return { url: server.url, authorization: server.headers.Authorization };
+}
 function assertOrders(trace: { order: PreflightRequest; result: PreflightResult }[], orders: PreflightRequest[]) {
   for (const order of orders) expect(trace.some(check => check.result.decision === 'allow' &&
     check.order.clientOrderRef === order.clientOrderRef && orderHash(check.order.order) === orderHash(order.order)),
@@ -46,11 +59,26 @@ describe('096 generated API-key packs, scripted local connection sessions', () =
     expect(response.statusCode).toBe(200); expect(response.headers['cache-control']).toBe('no-store');
     const packs = response.json().map((p: unknown) => PackSchema.parse(p));
     expect(packs.map((p: { platform: string; stage: string }) => [p.platform, p.stage])).toEqual([
-      ['claude_code', 'T'], ['generic_mcp', 'T'], ['claude_connector', 'D0']]);
-    expect(packs[2].configTemplate).toBe('{{MCP_URL}}'); expect(packs[2].setup).toContain('Pending task 099');
+      ['claude_code', 'T'], ['claude_desktop', 'T'], ['generic_mcp', 'T'], ['claude_connector', 'D0']]);
+    expect(packs[3].configTemplate).toBe('{{MCP_URL}}'); expect(packs[3].setup).toContain('Pending task 099');
     expect((await mcp.inject('/oauth/authorize')).statusCode).toBe(404);
   });
-  it.each(['claude_code', 'generic_mcp'])('%s: creates a key, journals first call, allows exact orders and stops on denial without retry', async platform => {
+  it('fills the deployment MCP endpoint into every template and leaves the key to the browser', async () => {
+    const endpoint = 'https://mcp.staging.example.invalid/mcp', filled = Fastify();
+    await filled.register(async area => packRoutes(area, loadConfig({ NODE_ENV: 'test', MCP_PUBLIC_URL: endpoint }).MCP_PUBLIC_URL));
+    try {
+      const packs = (await filled.inject('/packs')).json().map((p: unknown) => PackSchema.parse(p));
+      expect(packs).toHaveLength(4);
+      for (const pack of packs) {
+        expect(pack.configTemplate).toContain(endpoint); expect(pack.configTemplate).not.toContain('{{MCP_URL}}');
+        if (pack.platform !== 'claude_connector') expect(connection(pack, 'sample-key')).toEqual({ url: endpoint, authorization: 'Bearer sample-key' });
+      }
+      expect(packs.find((p: Pack) => p.platform === 'claude_connector')!.stage).toBe('D0');
+    } finally { await filled.close(); }
+    for (const invalid of ['http://mcp.staging.example.invalid/mcp', 'https://mcp.staging.example.invalid/', 'https://mcp.staging.example.invalid/mcp?key=1'])
+      expect(() => loadConfig({ NODE_ENV: 'test', MCP_PUBLIC_URL: invalid })).toThrow();
+  });
+  it.each(['claude_code', 'claude_desktop', 'generic_mcp'])('%s: creates a key, journals first call, allows exact orders and stops on denial without retry', async platform => {
     const pack = (await api.inject('/v1/packs')).json().map((p: unknown) => PackSchema.parse(p)).find((p: {platform:string}) => p.platform === platform)!;
     const [account] = await f.handle.db.insert(accounts).values({ kind: 'wallet' }).returning();
     const token = await auth.createSession(account!.id), session = `eko_sid=${encodeURIComponent(api.signCookie(token))}`;
@@ -60,11 +88,11 @@ describe('096 generated API-key packs, scripted local connection sessions', () =
     expect(created.statusCode).toBe(201); const agent = AgentDetailSchema.parse(created.json());
     const issued = await request('POST', `/agents/${agent.id}/keys`, {});
     expect(issued.statusCode).toBe(201); const key = ApiKeyCreatedSchema.parse(issued.json());
-    const config = JSON.parse(pack.configTemplate.replaceAll('{{API_KEY}}', key.secret).replaceAll('{{MCP_URL}}', url));
-    expect(config.mcpServers.eko.url).toBe(url);
+    const config = connection({ ...pack, configTemplate: pack.configTemplate.replaceAll('{{MCP_URL}}', url) }, key.secret);
+    expect(config.url).toBe(url);
     const call = async (name: string, args: object) => {
       const response = await mcp.inject({ method: 'POST', url: '/mcp',
-        headers: { authorization: config.mcpServers.eko.headers.Authorization, accept: 'application/json, text/event-stream' },
+        headers: { authorization: config.authorization, accept: 'application/json, text/event-stream' },
         payload: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } } });
       expect(response.statusCode).toBe(200); return response.json().result;
     };

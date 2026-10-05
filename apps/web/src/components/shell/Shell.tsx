@@ -54,7 +54,7 @@ export function PlanChip({ compact = false }: { compact?: boolean }) {
 }
 export function LegalLine() {
   const flags = useShell((s) => s.config?.flags);
-  return <div className="side-legal"><p>{flags?.burn_board && <><Link to="/burn">Burn Board</Link> · </>}<Link to="/drops">Drops</Link> · <Link to="/settings">Settings</Link> · <Link to="/legal/terms">Legal</Link> · <Link to="/official">Official project links</Link> · <Link to="/transparency">Transparency</Link></p><PolicyLinks /><p>{BUILT_ON}</p><p>{NON_AFFILIATION}</p><p>{DYOR}</p></div>;
+  return <div className="side-legal"><p>{flags?.burn_board && <><Link to="/burn">Burn Board</Link> · </>}<Link to="/drops">Drops</Link> · <Link to="/settings">Settings</Link> · <Link to="/legal/terms">Legal</Link> · <Link to="/official">Official project links</Link> · <Link to="/transparency">Transparency</Link> · <Link to="/security">Security</Link></p><PolicyLinks /><p>{BUILT_ON}</p><p>{NON_AFFILIATION}</p><p>{DYOR}</p></div>;
 }
 function Navigation({ onDone }: { onDone?: () => void }) {
   const path = usePath(), flags = useShell((s) => s.config?.flags), approvals = useShell((s) => s.approvalIds.length);

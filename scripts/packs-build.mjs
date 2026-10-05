@@ -21,7 +21,7 @@ export function generatePacks(manifest) {
   };
   const files = {}, packs = [];
   for (const [platform, source] of Object.entries(manifest.targets)) {
-    assert.ok(['claude_code', 'generic_mcp', 'claude_connector'].includes(platform));
+    assert.ok(['claude_code', 'claude_desktop', 'generic_mcp', 'claude_connector'].includes(platform));
     const target = expand(source);
     assert.equal(target.stage, platform === 'claude_connector' ? 'D0' : 'T');
     const rendered = {};
@@ -32,7 +32,8 @@ export function generatePacks(manifest) {
         : `${JSON.stringify(contents, null, 2)}\n`;
       files[`${platform}/${path}`] = rendered[path];
     }
-    const configTemplate = target.connectorUrl ?? Object.entries(rendered).find(([path]) => path.endsWith('.json'))?.[1]?.trimEnd();
+    // A one-line command (Claude Code) beats a file to paste; connectors carry only their URL.
+    const configTemplate = target.command ?? target.connectorUrl ?? Object.entries(rendered).find(([path]) => path.endsWith('.json'))?.[1]?.trimEnd();
     assert.ok(configTemplate);
     packs.push({ platform, stage: target.stage, version: manifest.version, configTemplate, instructions, setup: target.setup });
     if (target.connectorUrl) {

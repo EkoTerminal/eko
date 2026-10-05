@@ -38,6 +38,23 @@ evaluation slower and new launches waited behind hours of backlog showing "Scann
 `pnpm --filter @eko/engines exec node --import tsx test/live-catchup-benchmark.ts` compares one lagging live poll
 with and without coalescing on a timestamped PGlite fixture (`BENCH_SWAPS`, `BENCH_HOURS` resize it).
 
+Live sell checks (BACKEND §6.2, the "probe through `eth_call` with a state-override set" fallback; off by default):
+
+- `SELL_CHECK_ENABLED=true` with `RPC_HTTP_URL`, live mode only. One `eth_call` per size runs the never-deployed probe
+  (`packages/chain/probe/BwProbe.sol`, or `V4Probe.sol` for native-ETH v4 pools) at the indexed head block, with only
+  the probe's code and ETH balance overridden. Routes come from indexed rows: the Pons curve until graduation, then the
+  graduated pool, else the native-ETH v3/v4 pool with the most USD volume in the last day. Sizes are $100 and $1,000 at
+  the indexer's own ETH-USD (recent ETH-quoted swaps); no price means no check.
+- A coin is checked once it is 30 s old, then again only after new activity (at most every
+  `SELL_CHECK_MIN_INTERVAL_SEC`, default 600), after `SELL_CHECK_MAX_AGE_SEC` idle (default 86400), on graduation, or
+  15 min after a provider failure. `SELL_CHECK_BATCH` (default 8) coins per `SELL_CHECK_POLL_MS` (default 5000) tick.
+- Cost: 2 paid requests per check, plus 1 when a Pons curve sell fails (to rule out graduation closing the curve).
+  `SELL_CHECK_DAILY_REQUESTS` (default 60000) caps it per UTC day; the process budget still applies, and an exhausted
+  budget pauses the checks until the next UTC day.
+- Results: `sell_check_latest` (one reading per coin; a provider failure keeps the earlier reading of the same route),
+  `sell_check_runs` (every check, kept 30 days). `refused` means a buy went through and the sell reverted or returned
+  under 5%; it is a contract-probe result, not the deep-simulated `honeypot` playbook match, which is unchanged.
+
 `ENGINE_CONCURRENCY` defaults to 4 (1–32); `ENGINE_POLL_MS` defaults to 2000. SIGINT/SIGTERM finish the current
 coin evaluation, drain in-flight reads and close the database. Replay prints `replay_complete` or `replay_interrupted`
 with evaluations/s, elapsed time, RPC call counts by method, and wall-time shares for source loading, writes and

@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileJournalDestructionLedger } from '../../../packages/db/src/crypto/destruction.js';
+import { migrate, migrateEngines } from '../../../packages/db/src/index.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { EntitlementsSchema, type Entitlements } from '@eko/shared';
 import { openDb, runMigrations } from '../../server/src/db/client.js';
@@ -14,7 +15,8 @@ import { EntitlementsService } from '../../server/src/harness/entitlements.js';
 import { buildMcpApp, PROTOCOL_VERSIONS, type McpDependencies } from '../src/app.js';
 import { SqlRateLimits, type RateLimits } from '../src/limits.js';
 import { createMcpRuntime, mcpConfig, mcpLogger, runMcpProcess } from '../src/runtime.js';
-import { ToolRegistry, UNTRUSTED_NOTICE, type ToolContext } from '../src/tools.js';
+import { ToolRegistry, UNTRUSTED_NOTICE, WITHHELD_TEXT, type ToolContext } from '../src/tools.js';
+import { HarnessError } from '../../server/src/harness/service.js';
 
 const publicUrl = 'https://mcp.eko.example/mcp';
 const pepper = randomBytes(32).toString('hex'); // fake runtime secret; never a checked-in credential
@@ -136,6 +138,8 @@ describe('authenticated stateless Streamable HTTP (offline fixtures)', () => {
       expect(response.json().result.structuredContent).toEqual(result);
       expect(response.json().result.notice).toBe(UNTRUSTED_NOTICE);
       expect(response.json().result.content[0].text).toBe(`Advisory preflight result returned. ${UNTRUSTED_NOTICE}`);
+      expect(response.json().result.content).toHaveLength(2);
+      expect(JSON.parse(response.json().result.content[1].text)).toEqual(result);
       expect(handler.mock.calls[0][0]).toMatchObject({ agentId: f.agent.id });
       expect(handler.mock.calls[0][1]).toMatchObject({ accountId: f.owner, keyId: f.key.keyId, delayedSec: 0 });
       for (const arguments_ of [{ ...preflight, accountId: foreign.owner }, { ...preflight, clientOrderRef: 'short' },
@@ -242,8 +246,27 @@ describe('authenticated stateless Streamable HTTP (offline fixtures)', () => {
       const response = (await rpc(server, f.key.secret, 'tools/call', { name: 'playbook_match', arguments: { coin: order.instrument } })).json().result;
       expect(response.structuredContent.playbooks[0].evidence[0].text).toEqual(thirdParty);
       expect(JSON.stringify(response.content)).not.toContain(thirdParty.text);
+      // The model-facing JSON keeps every EKO-authored field and the Untrusted flags, not the text.
+      const mirrored = JSON.parse(response.content[1].text);
+      expect(mirrored.playbooks[0].evidence[0].text).toEqual({ ...thirdParty, text: WITHHELD_TEXT });
+      expect({ ...mirrored, playbooks: [{ ...mirrored.playbooks[0], evidence: [{ ...mirrored.playbooks[0].evidence[0], text: thirdParty }] }] })
+        .toEqual(response.structuredContent);
       const invalid = (await rpc(server, f.key.secret, 'tools/call', { name: 'preflight', arguments: preflight })).json().result;
       expect(invalid.isError).toBe(true); expect(invalid.structuredContent).toBeUndefined();
+    } finally { await server.close(); }
+  });
+
+  it('tells the agent fixed harness reasons, including the human step for journal opt-in', async () => {
+    const f = await identity();
+    const tools = new ToolRegistry().register('preflight', async () => { throw new HarnessError('forbidden', 'Journal opt-in is required'); })
+      .register('journal', async () => { throw new HarnessError('conflict', 'Agent is disconnected.'); });
+    const server = app(tools);
+    try {
+      const optIn = (await rpc(server, f.key.secret, 'tools/call', { name: 'preflight', arguments: preflight })).json().result;
+      expect(optIn.isError).toBe(true); expect(optIn.structuredContent).toBeUndefined();
+      expect(optIn.content).toEqual([{ type: 'text', text: `Tool unavailable. Journal opt-in is required: ask the human to turn on the agent journal in EKO Settings, Privacy & data, then retry. ${UNTRUSTED_NOTICE}` }]);
+      const other = (await rpc(server, f.key.secret, 'tools/call', { name: 'journal', arguments: { kind: 'note', payload: {} } })).json().result;
+      expect(other.content[0].text).toBe(`Tool unavailable. Agent is disconnected. ${UNTRUSTED_NOTICE}`);
     } finally { await server.close(); }
   });
 
@@ -263,6 +286,7 @@ describe('authenticated stateless Streamable HTTP (offline fixtures)', () => {
       expect((await rpc(server, f.key.secret, 'tools/call', { name: 'journal', arguments: { kind: 'note', payload: { text: 'x'.repeat(16 * 1024) } } })).json().error.code).toBe(-32602);
       expect((await rpc(server, f.key.secret, 'tools/call', { name: 'journal', arguments: { kind: 'note', payload: {} } })).json().result.isError).toBe(true);
       expect(log).toContain('[redacted]'); expect(log).not.toContain(f.key.secret); expect(log).not.toContain('fixture-cookie');
+      expect(response.json().result.content[0].text).toBe(`Tool unavailable. ${UNTRUSTED_NOTICE}`);
       expect((await server.inject({ method: 'POST', url: '/mcp', headers: { authorization: `Bearer ${f.key.secret}`, accept: 'application/json, text/event-stream' }, payload: `{${f.key.secret}` })).body).not.toContain(f.key.secret);
     } finally { await server.close(); }
   });
@@ -275,7 +299,8 @@ describe('MCP process lifecycle without ports/providers', () => {
     const handle = await openDb({ pgliteDir: ':memory:' });
     let runtime: Awaited<ReturnType<typeof createMcpRuntime>> | undefined;
     try {
-      await runMigrations(handle);
+      // The API applies all three ledgers before MCP starts; Census reads the engine tables.
+      await runMigrations(handle); await migrate(handle.chain); await migrateEngines(handle.chain);
       await writeFile(path, 'eko-journal-destruction-v1\n', { mode: 0o600 });
       const auth = new HarnessService(handle.db, pepper);
       const [account] = await handle.db.insert(accounts).values({ kind: 'wallet' }).returning();
@@ -290,7 +315,7 @@ describe('MCP process lifecycle without ports/providers', () => {
       expect((await rpc(runtime.app, key.secret, 'tools/list')).json().result.tools.map((tool: { name: string }) => tool.name))
         .toEqual(['coin_verdict', 'coin_card', 'playbook_match', 'census_summary', 'receipts_lookup']);
       expect((await rpc(runtime.app, key.secret, 'tools/call', { name: 'census_summary', arguments: {} }))
-        .json().result.structuredContent).toMatchObject({ status: 'unavailable', dependency: '102', gated: true });
+        .json().result.structuredContent).toMatchObject({ gated: true, chain: [], coins: [], gate: { value: null } });
       new FileJournalDestructionLedger(path).destroy(account!.id, '2026-10-02T00:00:00Z');
       // Database still has the key, as a pre-deletion backup would. The current ledger denies it.
       expect(await auth.authenticate(key.secret)).not.toBeNull();

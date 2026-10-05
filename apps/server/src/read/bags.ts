@@ -108,7 +108,7 @@ export class BagsService {
         }
         if (balance === '0') return null;
         const meta = card?.meta?.tradeability;
-        const exitCost = meta && meta.asOfBlock <= Number(block) && !meta.unavailable && !meta.missing?.includes('exitCostPct') ? card!.tradeability.exitCostPct.usd1k : null;
+        const exitCost = meta && meta.asOfBlock <= Number(block) && !meta.unavailable && !meta.missing?.includes('exitCostPct') && !meta.missing?.includes('exitCostPct.usd1k') ? card!.tradeability.exitCostPct.usd1k : null;
         const value = balance !== null && candidate.price !== null ? Number(balance) * candidate.price : undefined;
         const row: Holding = { coin, balance, balanceStatus, status: cardError ? 'error' : card ? 'ready' : 'pending',
           playbooks: card?.verdict.playbooks.map(p => p.id) ?? [], exitCost1kPct: exitCost,

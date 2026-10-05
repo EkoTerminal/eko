@@ -1,5 +1,6 @@
 import { useConnection } from 'wagmi';
 import { z } from 'zod';
+import { JournalConsentSchema } from '@eko/shared';
 import { useApp } from '../store/app';
 import { fetchParsed } from './api';
 import { SETTINGS_COPY as C } from '../copy/settings';
@@ -10,6 +11,13 @@ export function useSettingsSession() {
   const account = useApp(s => s.account);
   const verified = account?.kind === 'wallet' && !!address && account.walletAddress === address.toLowerCase();
   return { address, chainId, owner: verified ? account.id : null, identity: verified || account?.kind === 'guest' ? account?.id : null };
+}
+/** Owner-only journal opt-in (BACKEND §9.9); preflight and journal tools require it. */
+export function journalConsent(signal?: AbortSignal) {
+  return fetchParsed('/me/journal-consent', JournalConsentSchema, { signal });
+}
+export function setJournalConsent(optedIn: boolean) {
+  return fetchParsed('/me/journal-consent', JournalConsentSchema, { method: 'PUT', body: { optedIn } });
 }
 export async function deleteHarnessData(confirmation: string) {
   if (confirmation !== C.deleteWord) throw new Error(C.deletePrompt);

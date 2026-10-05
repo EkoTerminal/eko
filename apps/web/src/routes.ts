@@ -16,7 +16,7 @@ function route(path: string, stage: Stage, workspace: RouteDef['workspace'], aut
     if (path === '/legal/:doc') return import('./pages/Legal');
     if (path === '/oauth/consent') return import('./pages/OAuthConsent');
     if (path === '/census') return import('./pages/Census');
-    if (path === '/official' || path === '/transparency') { const pages = await import('./pages/trust/Launch'); return { default: path === '/official' ? pages.Official : pages.Transparency }; }
+    if (path === '/official' || path === '/transparency' || path === '/security') { const pages = await import('./pages/trust/Launch'); return { default: path === '/official' ? pages.Official : path === '/security' ? pages.Security : pages.Transparency }; }
     if (path === '/scoreboard') return import('./pages/trust/Scoreboard');
     if (path === '/receipt/:id') return import('./pages/trust/Receipt');
     if (path === '/drops') return import('./pages/Drops');
@@ -42,7 +42,7 @@ export const ROUTES: readonly RouteDef[] = [
   route('/radar', 'T', 'terminal'), route('/feed', 'T', 'terminal'), route('/pairs', 'T', 'terminal'),
   route('/coin/:address', 'T', 'terminal'), route('/scan', 'T', 'static'), route('/scan/:id', 'T', 'terminal'),
   route('/bags', 'T', 'terminal', 'siwe'), route('/bags/r/:id', 'T', 'terminal'), route('/watch', 'T', 'terminal', 'siwe'),
-  route('/official', 'T', 'trust'), route('/transparency', 'T', 'trust'),
+  route('/official', 'T', 'trust'), route('/transparency', 'T', 'trust'), route('/security', 'T', 'trust'),
   route('/scoreboard', 'T', 'trust'), route('/receipt/:id', 'T', 'trust'), route('/census', 'T', 'trust'), route('/drops', 'T', 'trust'),
   route('/mission', 'T', 'mission', 'siwe'), route('/mission/agents/:id', 'T', 'mission', 'siwe'), route('/mission/connect', 'T', 'mission', 'siwe'),
   route('/mission/approvals', 'D0', 'mission', 'siwe', 'approvals'), route('/approve/:id', 'D0', 'mission', 'siwe', 'approvals'),

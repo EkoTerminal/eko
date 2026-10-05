@@ -25,6 +25,7 @@ import { SanctionsService, SanctionsWorker } from './sanctions/service.js';
 import { RetentionWorker } from './retention-worker.js';
 import { QuoteStore } from './exec/quotes.js';
 import { TradeService, type TradeBackend } from './exec/trades.js';
+import { SellGuard } from './exec/sell-guard.js';
 import { ExecutionService } from './exec/service.js';
 import { JournalService } from './harness/journal.js';
 import { PointsService } from './points/service.js';
@@ -61,6 +62,7 @@ import { TelegramLinkService } from './telegram/link.js';
 import { createOgRenderer, type OgRenderer } from '@eko/og-renderer';
 import { BagsService } from './read/bags.js';
 import { registerShareRoutes, ShareService, spaDocument, webHeaders } from './http/share.js';
+import { securityTxtRoutes } from './http/security-txt.js';
 
 export const VERSION = '0.1.0';
 
@@ -114,6 +116,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   await migrateEngines(dbh.chain);
   const points = new PointsService(dbh.chain,cfg.POINTS_RATES,cfg.POINTS_ACTIVE_FROM);
   const reads = readServices(new ReadStore(dbh.chain),points,()=>phaseAt(cfg,Date.now()));
+  reads.store.sellCheckQuotes = cfg.SELL_CHECK_ENABLED;
   await reads.store.refreshModels();
   const db = dbh.db;
   const flags = FlagService.fromDb(db, cfg.FLAGS);
@@ -201,7 +204,9 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     },
     { liveEnabled: cfg.LIVE_TRADING_ENABLED, paperFeeBps: 10, tradeAccess, sanctions,
       // TODO(spec): install the authenticated accepted acquisition registry from 052/072/071.
-      trades: new TradeService(db, tradeAccess, sanctions, opts.tradeBackend, Date.now, { incidents, onOrder: (acc, order) => hub.publishOrder(acc, order) }) },
+      trades: new TradeService(db, tradeAccess, sanctions, opts.tradeBackend, Date.now, { incidents, onOrder: (acc, order) => hub.publishOrder(acc, order),
+        ...(cfg.SELL_CHECK_ENABLED ? { sellGuard: new SellGuard(dbh.chain, { getBlockNumber: () => chains.get('robinhood-mainnet').getBlockNumber(),
+          request: input => chains.get('robinhood-mainnet').request(input as never) }) } : {}) }) },
     {
       onOrder: (acc, o) => hub.toAccount(acc, { type: 'order', order: o }),
       onPortfolio: (acc, mode) => hub.toAccount(acc, { type: 'portfolio', mode }),
@@ -292,6 +297,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     bags: new BagsService(reads.store, db, chains.get('robinhood-mainnet')), receipts }, ogRenderer);
   app.addHook('onClose', async () => { if (!opts.ogRenderer) await ogRenderer?.close(); });
   await registerShareRoutes(app, shares);
+  await securityTxtRoutes(app);
   let serveSpa: Awaited<ReturnType<typeof spaDocument>> | null = null;
   if (cfg.SERVE_WEB) {
     const dist = resolve(process.cwd(), cfg.WEB_DIST_DIR);
@@ -314,7 +320,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     } else logger.warn({ dist }, 'SERVE_WEB set but web build not found');
   }
   app.setNotFoundHandler((req, reply) => {
-    if (!serveSpa || ['/v1', '/v2', '/og', '/api', '/ws', '/dev', '/site/'].some(prefix => req.url.startsWith(prefix))) return notFound(reply);
+    if (!serveSpa || ['/v1', '/v2', '/og', '/api', '/ws', '/dev', '/site/', '/.well-known/'].some(prefix => req.url.startsWith(prefix))) return notFound(reply);
     return serveSpa(req.url, reply, cfg, shares);
   });
 

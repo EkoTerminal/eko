@@ -8,7 +8,7 @@ import { openDb, runMigrations } from '../src/db/client.js';
 import { accounts } from '../src/db/schema.js';
 import { HarnessService } from '../src/harness/service.js';
 import { JournalService } from '../src/harness/journal.js';
-import { PreflightService, type CachedPreflightInputs, type PreflightApprovals } from '../src/harness/preflight.js';
+import { PreflightService, type CachedPreflightInputs, type PreflightApprovals, type PreflightInputs } from '../src/harness/preflight.js';
 import { NOW, policy } from '../../../packages/policy/test/fixtures.js';
 import { agent as actualAgent, bindRequest, deps as actualDeps, request } from '../../../packages/policy/test/actual-fixtures.js';
 import type { Policy } from '@eko/shared';
@@ -35,8 +35,9 @@ export async function preflightFixture() {
     const p = await harness.policy((await handle.chain.sql.query<{account_id:string}>('SELECT account_id FROM agents WHERE id=$1', [agentId])).rows[0]!.account_id, agentId);
     return bindRequest({ ...request, agentId, clientOrderRef: ref }, p);
   }
-  const cached: CachedPreflightInputs = () => actualDeps;
-  const service = (inputs = cached, approvals?: PreflightApprovals) => new PreflightService(handle.chain, journal, inputs, approvals, () => NOW);
+  // Synchronous fixture evidence; the stored transaction argument is unused.
+  const cached = (..._args: Partial<Parameters<CachedPreflightInputs>>): PreflightInputs => actualDeps;
+  const service = (inputs: CachedPreflightInputs = cached, approvals?: PreflightApprovals) => new PreflightService(handle.chain, journal, inputs, approvals, () => NOW);
   return { handle, harness, journal, ledger, owner, req, cached, service, path, pepper, kek, keyId,
     async close() { await handle.close(); kek.fill(0); await rm(dir, { recursive: true, force: true }); } };
 }

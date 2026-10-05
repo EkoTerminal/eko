@@ -32,7 +32,7 @@ rejects it rather than starting a substitute process.
 | indexer | available; owner-approved paid RPC budget up to 600,000 requests per UTC day (2026-10-04) | private; `indexer_started`, `head_tick`, cursor/hash/lag | 1 CPU, 2 GiB |
 | engines | available; owner-approved paid RPC budget up to 600,000 requests per UTC day (2026-10-04) | private; `engines_started`, queue progress and receipt outbox | 1 CPU, 2 GiB |
 | worker (reconciler) | available, exactly one | no listener; `EKO worker ready`, exclusive Postgres lease | 1 CPU, 2 GiB |
-| mcp | transport compiled; handlers require 094/095; keep unprovisioned pending integration | private only; `/health` and authenticated `/mcp` initialize; future real tool checks | 1 CPU, 2 GiB |
+| mcp | available: all seven T tools on the API's Postgres; provision per "MCP service" below; OAuth stays off | TLS 8710 at `https://mcp.<domain>/mcp`; `/health`, authenticated `tools/list` (seven tools) and one `census_summary` call | 1 CPU, 2 GiB, small volume for the journal ledger |
 | receipts | compiled role; keep unprovisioned pending registry/committer acceptance | private; actual registry event/root/proof, not startup alone | 1 CPU, 2 GiB |
 | bots | unavailable, requires 116 + role/image integration | approved Telegram path only; X/Farcaster remain off | 1 CPU, 2 GiB |
 | og | unavailable, requires 111 + role/image integration | future TLS deterministic PNG route | 1 CPU, 2 GiB |
@@ -76,8 +76,8 @@ API/worker production boot also requires a verified **public burn wallet** addre
 in `BURN_WALLET_ADDRESS` (address placeholder only in the handoff). Use
 `RECEIPTS_REGISTRY_ADDRESS` only after separately authorized contract deployment
 and verified registry evidence; it remains unset until then. Never substitute a
-dev wallet. `DEV_FEE_WALLET` is unnecessary here. `SESSION_SECRET`, `DEMO_SECRET`
-and `HARNESS_KEY_PEPPER` are names only; generate and retain them out of band.
+dev wallet. `DEV_FEE_WALLET` is unnecessary here. `SESSION_SECRET`, `DEMO_SECRET`,
+`HARNESS_KEY_PEPPER` and `JOURNAL_KEK` are names only; generate and retain them out of band.
 No user keys, burn-wallet key, registry-owner key, custody key, keeper, sweep key
 or facilitator key belongs here. The receipts committer key, once authorized,
 is scoped to that service and funded for gas only. Bot vendor credentials stay
@@ -121,12 +121,13 @@ SIWE cookie headers, original HTTPS scheme/host and a suitable WS idle timeout.
 never bake RPC URLs, keys or a private host into browser assets. Validate TLS,
 CORS/SIWE nonce domain, secure cookies and WS ack from outside after authorization.
 
-Only API has a public domain in this candidate. Future accepted MCP gets its own
-TLS origin `https://mcp.<staging-domain>/mcp` (Streamable HTTP, preserve streaming
-and auth headers, no buffering); OAuth discovery/issuer must match that origin
-only after 097–099 acceptance. OG gets a separate accepted image route when 111
-lands. Do not route those hosts to API placeholders or claim connector success.
-Postgres, indexer, engines, reconciler and receipts get no public TCP/HTTP domain.
+API and MCP have public domains. MCP gets its own TLS origin
+`https://mcp.<domain>/mcp` (Streamable HTTP; preserve the Authorization header, no
+buffering); OAuth discovery/issuer may match that origin only after 097–099
+acceptance, and `MCP_OAUTH_ENABLED` stays `false` (the MCP runtime refuses `true`).
+OG gets a separate accepted image route when 111 lands. Do not route those hosts
+to API placeholders or claim connector success. Postgres, indexer, engines,
+reconciler and receipts get no public TCP/HTTP domain.
 
 Keep Anvil on a compatible private VM with pinned Foundry binary/image version,
 private volume and no public listener. Connect via an authenticated private tunnel
@@ -203,9 +204,10 @@ railway variables --service api --set 'APP_ROLE=api' --set 'RUN_WORKER=false'
    coverage, the largest table group. Wallet fingerprints then lack account-abstraction and calldata evidence.
    The worker also rolls old transfers into per-holder baselines (`RETENTION_QUOTE_TRANSFER_DAYS=2`,
    `RETENTION_IDLE_TOKEN_DAYS=14`, `RETENTION_PENDING_POOL_DAYS=3`); see `docs/operations/chain-retention.md`.
-7. Keep mcp/receipts/bots/og unprovisioned until their packets, compiled entries,
+7. Keep receipts/bots/og unprovisioned until their packets, compiled entries,
    secrets and role dispatch integration have landed and their own tests pass.
-   075 supplies trade lifecycle; 080 receipts; 093 MCP; 116 Telegram. Never add a
+   075 supplies trade lifecycle; 080 receipts; 116 Telegram. MCP (093–095) is
+   provisioned separately, after the API, per "MCP service" below. Never add a
    keeper, swarm/research job, burn job or unaccepted tool during this rollout.
 8. For an authorized source deployment from the exact pinned clean checkout:
    set `EKO_SOURCE_REVISION` on the **API, worker, indexer and engines services** to the full lowercase
@@ -223,6 +225,91 @@ railway variables --service api --set 'APP_ROLE=api' --set 'RUN_WORKER=false'
    it does not exercise paid acquisition, signing, MCP, migrations or team trades.
    GO PLAN §9's authenticated/tool/receipt/scan/trade smoke is a separate acceptance
    run on the integrated candidate, not satisfied by this boot smoke.
+
+## MCP service
+
+The `mcp` image role serves the seven T tools (`coin_verdict`, `coin_card`,
+`playbook_match`, `census_summary`, `receipts_lookup`, `preflight`, `journal`) at
+`https://mcp.<domain>/mcp` from the **same Postgres as the API**. It runs no
+migrations and refuses to start until the API has applied them. Agents
+authenticate with harness API keys from Mission Control; OAuth stays off. It makes
+no RPC calls while `RECEIPTS_REGISTRY_ADDRESS` is unset (receipts then read as
+pending). Pool: up to 10 Postgres connections per process; include it in the
+connection budget. Nothing below has been run; each step needs authorization.
+
+**API prerequisites** (the tools depend on them; set, then redeploy the API):
+
+1. `LAUNCH_WEEK_AGENT_LIMIT=1` (BACKEND §9.2: preflight and journal free for one
+   agent). Unset means zero: the API refuses every new agent and MCP every key.
+2. Journal storage, without which preflight and journal refuse every call:
+   `JOURNAL_KEK` (secret, 64 hex characters, `openssl rand -hex 32`, with the
+   offline backup SECURITY.md requires; never rotate by replacement),
+   `JOURNAL_KEK_ID=staging-journal-kek-1` and
+   `JOURNAL_TOMBSTONE_PATH=/data/journal/destruction.log` on a volume mounted at
+   `/data` (provision the ledger as below).
+3. `MCP_PUBLIC_URL=https://mcp.<domain>/mcp`, so `GET /v1/packs` serves setups
+   with the endpoint filled in.
+4. Owners turn on the agent journal in Settings, Privacy & data (or the Connect
+   check step). No call infers it.
+
+**Ledger provisioning, once per service (api and mcp).** The destruction ledger
+must exist before use; a missing or malformed file disables journal access and
+MCP key authentication by design, and nothing auto-creates it. Railway mounts
+volumes owned by root while the image runs as the unprivileged `node` user
+(uid 1000), so initialise as root once: set the service variable
+`RAILWAY_RUN_UID=0` and this temporary start command, deploy, then restore
+`node dist/launch.js` and delete `RAILWAY_RUN_UID`:
+
+```sh
+sh -c 'mkdir -p /data/journal && { [ -s /data/journal/destruction.log ] || printf "eko-journal-destruction-v1\n" > /data/journal/destruction.log; } && chown -R 1000:1000 /data/journal && chmod 600 /data/journal/destruction.log'
+```
+
+It never overwrites a non-empty ledger. TODO(spec): BACKEND §3.5 assumes one
+shared ledger; Railway volumes attach to a single service, so API and MCP each
+hold one and `DELETE /me/data` appends only to the API's. In normal operation the
+same deletion revokes the keys, destroys the wrapped data key and removes consent
+in Postgres, so MCP refuses that account anyway. After any database restore, copy
+the API's current ledger over MCP's before MCP serves traffic (the 084 rule: mount
+the current ledger first).
+
+**Create and deploy the service:**
+
+1. `railway add --service mcp` (or the image-source form with the API's accepted
+   digest). Settings: config path `infra/railway/mcp.json` (Dockerfile build,
+   `node dist/launch.js`, health check `/health`), one replica to start (it is
+   stateless; rate limits are shared in Postgres), limits 1 CPU and 2 GiB, a
+   volume mounted at `/data`.
+2. Variables: `commonEnvironment` plus `services.mcp.environment`, overriding
+   `MCP_PUBLIC_URL=https://mcp.<domain>/mcp` (the same value as the API's) and
+   `PUBLIC_ORIGIN` (the API's value). Secrets as Railway references, never pasted
+   values: `DATABASE_URL=${{Postgres.DATABASE_URL}}`,
+   `HARNESS_KEY_PEPPER=${{api.HARNESS_KEY_PEPPER}}`,
+   `JOURNAL_KEK=${{api.JOURNAL_KEK}}`. Pepper and KEK must equal the API's or keys
+   and journal entries do not verify. Set `EKO_SOURCE_REVISION` to the full SHA
+   being deployed. Leave `MCP_OAUTH_ENABLED=false`, no RPC URL and no registry
+   address.
+3. Provision the ledger (above).
+4. Networking: add the custom domain `mcp.<domain>` on port 8710, then the CNAME
+   and `_railway-verify` TXT records Railway shows at the DNS provider.
+5. Deploy from the same clean pinned checkout as the API, after the API:
+   `railway up --service mcp --detach`. Its log shows one `EKO role identity`
+   line, then `EKO MCP ready`.
+6. Verify, read-only: `curl -sS https://mcp.<domain>/health` returns
+   `{"ok":true,"transport":"streamable-http","oauthEnabled":false}`. With a key from
+   Mission Control, Connect (journal on):
+
+   ```sh
+   curl -sS https://mcp.<domain>/mcp -H "Authorization: Bearer $EKO_API_KEY" \
+     -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+   claude mcp add --transport http eko https://mcp.<domain>/mcp --header "Authorization: Bearer $EKO_API_KEY"
+   claude mcp list
+   ```
+
+   `tools/list` must name all seven tools (five without the journal settings).
+   Then ask the agent to call `census_summary`, `coin_verdict`, a robinhood-venue
+   `preflight` and `journal` (`session_start`); the first journal event appears on
+   the Connect page. Record results in the evidence document, not here.
 
 ## How to verify
 

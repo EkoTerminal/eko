@@ -81,65 +81,86 @@ export const BackfillResponseSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('missing'), reason: z.enum(['range_unavailable', 'boundary_unavailable', 'header_unavailable']) }),
 ]);
 export type BackfillResponse = z.infer<typeof BackfillResponseSchema>;
+const attemptKind = z.enum(['header', 'logs', 'boundary']);
 const checkpointSchema = z.strictObject({ version: z.literal(1), manifestHash: digest, candidateRevision: digest,
   owner: id, status: z.enum(['prepared', 'running', 'stopped', 'complete', 'failed']), reason: reasonCode.nullable(),
   calls: z.number().int().nonnegative().safe(), units: z.number().int().nonnegative().safe(), costNanoUsd: uint,
-  requests: z.array(z.strictObject({ key: digest, request: requestSchema, artifactHash: digest.nullable() })),
+  // `extra` lists provider attempts beyond the one the reservation prepays (retries, multi-call reads),
+  // each admitted and charged before its dispatch. Absent means none.
+  requests: z.array(z.strictObject({ key: digest, request: requestSchema, artifactHash: digest.nullable(),
+    extra: z.array(attemptKind).max(100000).optional() })),
   elapsedMs: z.number().nonnegative().finite(), peakRssBytes: z.number().nonnegative().finite(),
 });
 export type BackfillCheckpoint = z.infer<typeof checkpointSchema>;
 export const backfillRequestKey = (r: BackfillRequest) => pilotHash(requestSchema.parse(r));
-export function initialBackfillCheckpoint(m: SelectiveBackfillManifest, candidateRevision: string, owner: string): BackfillCheckpoint {
-  return checkpointSchema.parse({ version: 1, manifestHash: pilotHash(SelectiveBackfillManifestSchema.parse(m)),
-    candidateRevision, owner, status: 'prepared', reason: null, calls: 0, units: 0, costNanoUsd: '0',
-    requests: [], elapsedMs: 0, peakRssBytes: 0 });
+/** Empty ledger bound to one manifest hash (selective backfill or launch enumeration). */
+export function backfillCheckpointFor(manifestHash: string, candidateRevision: string, owner: string): BackfillCheckpoint {
+  return checkpointSchema.parse({ version: 1, manifestHash, candidateRevision, owner, status: 'prepared', reason: null,
+    calls: 0, units: 0, costNanoUsd: '0', requests: [], elapsedMs: 0, peakRssBytes: 0 });
 }
+export function initialBackfillCheckpoint(m: SelectiveBackfillManifest, candidateRevision: string, owner: string): BackfillCheckpoint {
+  return backfillCheckpointFor(pilotHash(SelectiveBackfillManifestSchema.parse(m)), candidateRevision, owner);
+}
+export type BackfillAttemptKind = BackfillRequest['kind'];
+/** Admits one provider attempt before it is dispatched, or throws a named stop (cap, shutdown). */
+export type BackfillAdmit = (kind: BackfillAttemptKind) => Promise<void>;
 export interface BackfillIO {
   /** Single-owner durable store; responses are content hashed and source-scoped by the driver. */
   artifact(key: string): Promise<BackfillResponse | null>;
   putArtifact(key: string, response: BackfillResponse): Promise<void>;
   save(c: BackfillCheckpoint): Promise<void>;
   request(r: BackfillRequest): Promise<BackfillResponse>;
+  /** Bound by the runner around each request() call and unbound after it. A measured source routes every
+   * underlying provider attempt through it before dispatch: the reservation prepays one attempt of the
+   * request's own kind, and retries or extra calls are charged and cap-checked one by one. Required for
+   * measured manifests; fixture sources answer each request with exactly the prepaid attempt. */
+  bindAttempts?(admit: BackfillAdmit | null): void;
   /** Local canonical-source status, never an unmetered RPC. Reorg requires a new source manifest. */
   sourceRevision(): Promise<string>;
   stopped(): boolean; now(): number; rss(): number;
 }
-class BackfillStop extends Error {}
-type Gap = { scope: string; reason: string; from: string; through: string };
-type RangeResult = { from: string; through: string; artifactKey: string; eventCount: number };
+/** A named, resumable stop (cap, shutdown, reorg, unavailable header), as opposed to a failure. */
+export class BackfillStop extends Error {}
+export type BackfillGap = { scope: string; reason: string; from: string; through: string };
+export type BackfillRange = { from: string; through: string; artifactKey: string; eventCount: number };
+type Launch = z.infer<typeof BackfillLaunchSchema>;
+type Cursor = z.infer<typeof cursor>;
+type LogsRequest = Extract<BackfillRequest, { kind: 'logs' }>;
 export interface BackfillResult {
   validation: 'fixture' | 'measured'; sourceRevision: string; candidateRevision: string; manifestHash: string;
   status: BackfillCheckpoint['status']; reason: string | null;
-  frame: ReturnType<typeof backfillFrame>; launches: z.infer<typeof BackfillLaunchSchema>[];
-  metadataRanges: RangeResult[]; selected: { coin: string; from: string; through: string;
-    boundaryKey: string; ranges: RangeResult[]; complete: boolean }[]; gaps: Gap[];
+  frame: ReturnType<typeof backfillFrame>; launches: Launch[];
+  metadataRanges: BackfillRange[]; selected: { coin: string; from: string; through: string;
+    boundaryKey: string; ranges: BackfillRange[]; complete: boolean }[]; gaps: BackfillGap[];
   enumerationComplete: boolean; requestCalls: number; requestUnits: number; rpcNanoUsd: string;
   fixedNanoUsd: string; pricingEvidence: string | null; invoiceNanoUsd: null;
   nativeFundingComplete: false; historyComplete: false; released: false;
   elapsedMs: number; peakRssBytes: number;
 }
-/** Acquisition tape and boundary snapshots only; never a label, price or funding graph. */
-export async function runSelectiveBackfill(input: SelectiveBackfillManifest, c: BackfillCheckpoint, io: BackfillIO,
-  candidateRevision: string, owner: string): Promise<BackfillResult> {
-  const m = SelectiveBackfillManifestSchema.parse(input);
+/** What one ledger acquires under: source, availability cut, budget and cursors pinned in advance. */
+export interface BackfillScope {
+  validation: 'fixture' | 'measured'; sourceRevision: string;
+  availability: SelectiveBackfillManifest['availability']; budget: SelectiveBackfillManifest['budget']; pins: Cursor[];
+}
+/** Rejects a checkpoint bound to another manifest/candidate/owner or whose ledger is not internally exact. */
+export function assertBackfillLedger(c: BackfillCheckpoint, manifestHash: string, budget: BackfillScope['budget'],
+  candidateRevision: string, owner: string) {
   checkpointSchema.parse(c);
-  if (c.manifestHash !== pilotHash(m) || c.candidateRevision !== candidateRevision || c.owner !== owner) throw new Error('Backfill checkpoint source/candidate/owner mismatch');
-  if (c.calls !== c.requests.length || new Set(c.requests.map(r => r.key)).size !== c.requests.length ||
-    c.units !== c.requests.reduce((n, r) => n + m.budget.weights[r.request.kind], 0) ||
-    BigInt(c.costNanoUsd) !== BigInt(c.units) * BigInt(m.budget.unitNanoUsd) ||
-    c.units > m.budget.checkpointUnits || BigInt(c.costNanoUsd) + BigInt(m.budget.fixedNanoUsd) > BigInt(m.budget.capNanoUsd) ||
+  if (c.manifestHash !== manifestHash || c.candidateRevision !== candidateRevision || c.owner !== owner) throw new Error('Backfill checkpoint source/candidate/owner mismatch');
+  const attempts = c.requests.flatMap(r => [r.request.kind, ...(r.extra ?? [])]);
+  if (c.calls !== attempts.length || new Set(c.requests.map(r => r.key)).size !== c.requests.length ||
+    c.units !== attempts.reduce((n, kind) => n + budget.weights[kind], 0) ||
+    BigInt(c.costNanoUsd) !== BigInt(c.units) * BigInt(budget.unitNanoUsd) ||
+    c.units > budget.checkpointUnits || BigInt(c.costNanoUsd) + BigInt(budget.fixedNanoUsd) > BigInt(budget.capNanoUsd) ||
     c.requests.some(r => r.key !== backfillRequestKey(r.request))) throw new Error('Backfill checkpoint ledger mismatch');
+}
+/** Shared core: durable request ledger, sparse timestamp search and adaptive log splits for one scope. */
+export function createBackfillSession(m: BackfillScope, c: BackfillCheckpoint, io: BackfillIO,
+  sink: { gaps: BackfillGap[]; launches: Launch[] }) {
   const started = io.now(), previous = c.elapsedMs;
-  const out: BackfillResult = { validation: m.validation, sourceRevision: m.sourceRevision, candidateRevision,
-    manifestHash: c.manifestHash, status: 'running', reason: null, frame: backfillFrame(m.startSec, m.mode, m.historyMetadata),
-    launches: [], metadataRanges: [], selected: [], gaps: [], enumerationComplete: false,
-    requestCalls: c.calls, requestUnits: c.units, rpcNanoUsd: c.costNanoUsd, fixedNanoUsd: m.budget.fixedNanoUsd,
-    pricingEvidence: m.budget.pricingEvidence, invoiceNanoUsd: null, nativeFundingComplete: false, historyComplete: false,
-    released: false, elapsedMs: c.elapsedMs, peakRssBytes: c.peakRssBytes };
   const save = async () => { c.elapsedMs = previous + io.now() - started; c.peakRssBytes = Math.max(c.peakRssBytes, io.rss()); await io.save(c); };
-  const pins = new Map([m.availability.watermark, ...m.selected.map(s => s.launch.creation)]
-    .map(c => [c.blockNumber, { hash: c.blockHash, timestamp: c.timestampSec }]));
-  const pin = (at: z.infer<typeof cursor>) => {
+  const pins = new Map([m.availability.watermark, ...m.pins].map(c => [c.blockNumber, { hash: c.blockHash, timestamp: c.timestampSec }]));
+  const pin = (at: Cursor) => {
     const prior = pins.get(at.blockNumber);
     if (prior && prior.hash !== at.blockHash) throw new BackfillStop('source_reorg');
     if (prior && prior.timestamp !== at.timestampSec) throw new Error('Source timestamp mismatch');
@@ -189,11 +210,17 @@ export async function runSelectiveBackfill(input: SelectiveBackfillManifest, c: 
     }
     return value;
   };
+  // Every charge is checked against both caps before the attempt it pays for can be dispatched.
+  const charge = (kind: BackfillAttemptKind) => {
+    const units = m.budget.weights[kind], cost = BigInt(units) * BigInt(m.budget.unitNanoUsd);
+    if (c.units + units > m.budget.checkpointUnits || BigInt(c.costNanoUsd) + cost + BigInt(m.budget.fixedNanoUsd) > BigInt(m.budget.capNanoUsd)) throw new BackfillStop('cap_reached');
+    c.calls++; c.units += units; c.costNanoUsd = (BigInt(c.costNanoUsd) + cost).toString();
+  };
   const request = async (r: BackfillRequest) => {
     if (io.stopped()) throw new BackfillStop('shutdown_requested');
     if (await io.sourceRevision() !== m.sourceRevision) throw new BackfillStop('source_reorg');
     const key = backfillRequestKey(r);
-    let entry = c.requests.find(e => e.key === key);
+    const entry = c.requests.find(e => e.key === key);
     const cached = await io.artifact(key);
     if (cached) {
       if (!entry) throw new Error('Unreserved artifact');
@@ -204,13 +231,32 @@ export async function runSelectiveBackfill(input: SelectiveBackfillManifest, c: 
     }
     if (entry) throw new BackfillStop('request_outcome_unconfirmed'); // Never blindly redispatch after a crash.
     if (m.validation === 'measured' && (!m.budget.approvalRef || !m.budget.pricingEvidence)) throw new BackfillStop('approval_or_pricing_missing');
-    const units = m.budget.weights[r.kind], cost = BigInt(units) * BigInt(m.budget.unitNanoUsd);
-    if (c.units + units > m.budget.checkpointUnits || BigInt(c.costNanoUsd) + cost + BigInt(m.budget.fixedNanoUsd) > BigInt(m.budget.capNanoUsd)) throw new BackfillStop('cap_reached');
-    entry = { key, request: r, artifactHash: null }; c.requests.push(entry);
-    c.calls++; c.units += units; c.costNanoUsd = (BigInt(c.costNanoUsd) + cost).toString(); await save();
-    const response = validateResponse(r, await io.request(r));
+    if (m.validation === 'measured' && !io.bindAttempts) throw new Error('Measured source must meter every provider attempt');
+    charge(r.kind);
+    const reserved: BackfillCheckpoint['requests'][number] = { key, request: r, artifactHash: null };
+    c.requests.push(reserved); await save();
+    let prepaid = true, open = true, admitted = 0;
+    io.bindAttempts?.(async kind => {
+      if (!open) throw new Error('Provider attempt outside its request');
+      if (io.stopped()) throw new BackfillStop('shutdown_requested');
+      if (prepaid && kind === r.kind) { prepaid = false; admitted++; return; }
+      charge(kind); (reserved.extra ??= []).push(kind); admitted++; await save();
+    });
+    let raw: BackfillResponse;
+    try { raw = await io.request(r); }
+    catch (error) {
+      // A metered source that stopped before admitting any attempt sent nothing: release the reservation
+      // so a resume re-plans it, instead of treating it as an unconfirmed dispatch.
+      if (io.bindAttempts && admitted === 0 && error instanceof BackfillStop && c.requests.at(-1) === reserved) {
+        c.requests.pop(); c.calls--; c.units -= m.budget.weights[r.kind];
+        c.costNanoUsd = (BigInt(c.costNanoUsd) - BigInt(m.budget.weights[r.kind]) * BigInt(m.budget.unitNanoUsd)).toString();
+        await save();
+      }
+      throw error;
+    } finally { open = false; io.bindAttempts?.(null); }
+    const response = validateResponse(r, raw);
     if (await io.sourceRevision() !== m.sourceRevision) throw new BackfillStop('source_reorg');
-    await io.putArtifact(key, response); entry.artifactHash = pilotHash(response); await save();
+    await io.putArtifact(key, response); reserved.artifactHash = pilotHash(response); await save();
     return response;
   };
   const header = async (block: bigint) => {
@@ -218,7 +264,8 @@ export async function runSelectiveBackfill(input: SelectiveBackfillManifest, c: 
     if (response.kind !== 'header') throw new BackfillStop('header_unavailable');
     return response.cursor;
   };
-  // Sparse binary search, shared cache: never fetch every empty block's timestamp.
+  // Sparse binary search over pinned headers, shared cache: never a block-rate estimate or per-block scan.
+  // Returns the first block whose timestamp is >= `timestamp`; its predecessor is verified to be earlier.
   const blockAt = async (timestamp: string) => {
     if (BigInt(timestamp) > BigInt(m.availability.watermark.timestampSec)) throw new BackfillStop('future_source_cut');
     let lo = 0n, hi = BigInt(m.availability.watermark.blockNumber);
@@ -228,9 +275,11 @@ export async function runSelectiveBackfill(input: SelectiveBackfillManifest, c: 
     }
     const h = await header(lo);
     if (BigInt(h.timestampSec) < BigInt(timestamp)) throw new BackfillStop('header_unavailable');
+    // The search already visited lo - 1, so this re-read is a cached artifact, not a new request.
+    if (lo > 0n && BigInt((await header(lo - 1n)).timestampSec) >= BigInt(timestamp)) throw new Error('Non-monotonic block timestamps');
     return lo;
   };
-  const acquireRange = async (r: Extract<BackfillRequest, { kind: 'logs' }>, scope: string, ranges: RangeResult[], metadata: boolean): Promise<void> => {
+  const acquireRange = async (r: LogsRequest, scope: string, ranges: BackfillRange[], metadata: boolean): Promise<void> => {
     const split = () => splitPilotLogs({ ...r, id: 'selective', priority: 'history' }).map(j => {
       if (j.kind !== 'logs') throw new Error('Unexpected trace split');
       return { kind: 'logs' as const, from: j.from, through: j.through, addresses: j.addresses, topics: j.topics };
@@ -246,14 +295,30 @@ export async function runSelectiveBackfill(input: SelectiveBackfillManifest, c: 
       const children = split();
       if (children.length) { for (const child of children) await acquireRange(child, scope, ranges, metadata); return; }
     }
-    if (response.kind !== 'logs') { out.gaps.push({ scope, reason: response.kind === 'missing' ? response.reason : 'dense_unsplittable', from: r.from, through: r.through }); return; }
+    if (response.kind !== 'logs') { sink.gaps.push({ scope, reason: response.kind === 'missing' ? response.reason : 'dense_unsplittable', from: r.from, through: r.through }); return; }
     ranges.push({ from: r.from, through: r.through, artifactKey: backfillRequestKey(r), eventCount: response.events.length });
     if (metadata) for (const launch of response.launches) {
-      const prior = out.launches.find(l => l.coin === launch.coin);
+      const prior = sink.launches.find(l => l.coin === launch.coin);
       if (prior && pilotHash(prior) !== pilotHash(launch)) throw new Error('Conflicting launch metadata');
-      if (!prior) out.launches.push(launch);
+      if (!prior) sink.launches.push(launch);
     }
   };
+  return { save, request, header, blockAt, acquireRange };
+}
+/** Acquisition tape and boundary snapshots only; never a label, price or funding graph. */
+export async function runSelectiveBackfill(input: SelectiveBackfillManifest, c: BackfillCheckpoint, io: BackfillIO,
+  candidateRevision: string, owner: string): Promise<BackfillResult> {
+  const m = SelectiveBackfillManifestSchema.parse(input);
+  assertBackfillLedger(c, pilotHash(m), m.budget, candidateRevision, owner);
+  const out: BackfillResult = { validation: m.validation, sourceRevision: m.sourceRevision, candidateRevision,
+    manifestHash: c.manifestHash, status: 'running', reason: null, frame: backfillFrame(m.startSec, m.mode, m.historyMetadata),
+    launches: [], metadataRanges: [], selected: [], gaps: [], enumerationComplete: false,
+    requestCalls: c.calls, requestUnits: c.units, rpcNanoUsd: c.costNanoUsd, fixedNanoUsd: m.budget.fixedNanoUsd,
+    pricingEvidence: m.budget.pricingEvidence, invoiceNanoUsd: null, nativeFundingComplete: false, historyComplete: false,
+    released: false, elapsedMs: c.elapsedMs, peakRssBytes: c.peakRssBytes };
+  const { save, request, header, blockAt, acquireRange } = createBackfillSession({ validation: m.validation,
+    sourceRevision: m.sourceRevision, availability: m.availability, budget: m.budget,
+    pins: m.selected.map(s => s.launch.creation) }, c, io, out);
   c.status = 'running'; c.reason = null; await save();
   try {
     const watermark = await header(BigInt(m.availability.watermark.blockNumber));
@@ -270,7 +335,7 @@ export async function runSelectiveBackfill(input: SelectiveBackfillManifest, c: 
       const boundary: BackfillRequest = { kind: 'boundary', coin: s.launch.coin, cursor: parent };
       const state = await request(boundary), scope = s.launch.coin;
       if (state.kind !== 'boundary') out.gaps.push({ scope, reason: 'boundary_unavailable', from: parent.blockNumber, through: parent.blockNumber });
-      const selected = { coin: scope, from: creation.blockNumber, through: (end - 1n).toString(), boundaryKey: backfillRequestKey(boundary), ranges: [] as RangeResult[], complete: false };
+      const selected = { coin: scope, from: creation.blockNumber, through: (end - 1n).toString(), boundaryKey: backfillRequestKey(boundary), ranges: [] as BackfillRange[], complete: false };
       out.selected.push(selected);
       for (const f of s.filters) await acquireRange({ kind: 'logs', ...f, from: selected.from, through: selected.through }, scope, selected.ranges, false);
       selected.complete = !out.gaps.some(g => g.scope === scope);

@@ -52,14 +52,23 @@
         "SESSION_COOKIE_DOMAIN": "staging.example.invalid",
         "WEB_DIST_DIR": "/app/web",
         "MIGRATIONS_DIR": "/app/drizzle",
-        "TRADE_CAPS_FILE": "/app/dist/trading-caps.yaml"
+        "TRADE_CAPS_FILE": "/app/dist/trading-caps.yaml",
+        "MCP_PUBLIC_URL": "https://mcp.staging.example.invalid/mcp",
+        "LAUNCH_WEEK_AGENT_LIMIT": "1",
+        "JOURNAL_KEK_ID": "staging-journal-kek-1",
+        "JOURNAL_TOMBSTONE_PATH": "/data/journal/destruction.log"
       },
       "secretNames": [
         "DATABASE_URL",
         "SESSION_SECRET",
         "DEMO_SECRET",
-        "HARNESS_KEY_PEPPER"
+        "HARNESS_KEY_PEPPER",
+        "JOURNAL_KEK"
       ],
+      "volume": {
+        "mountPath": "/data",
+        "contents": "journal destruction ledger only, provisioned once; never a database copy"
+      },
       "public": true,
       "limits": {
         "cpu": 1,
@@ -155,27 +164,32 @@
     "mcp": {
       "config": "infra/railway/mcp.json",
       "available": true,
-      "requiresPackets": [
-        "094",
-        "095"
-      ],
+      "requiresPackets": [],
       "environment": {
         "APP_ROLE": "mcp",
         "RUN_WORKER": "false",
         "SERVE_WEB": "false",
         "MCP_PUBLIC_URL": "https://mcp.staging.example.invalid/mcp",
-        "PUBLIC_ORIGIN": "https://app.staging.example.invalid"
+        "PUBLIC_ORIGIN": "https://app.staging.example.invalid",
+        "LAUNCH_WEEK_AGENT_LIMIT": "1",
+        "JOURNAL_KEK_ID": "staging-journal-kek-1",
+        "JOURNAL_TOMBSTONE_PATH": "/data/journal/destruction.log"
       },
       "secretNames": [
         "DATABASE_URL",
-        "HARNESS_KEY_PEPPER"
+        "HARNESS_KEY_PEPPER",
+        "JOURNAL_KEK"
       ],
-      "public": false,
+      "volume": {
+        "mountPath": "/data",
+        "contents": "journal destruction ledger only, provisioned once; never a database copy"
+      },
+      "public": true,
       "limits": {
         "cpu": 1,
         "memoryMb": 2048
       },
-      "readiness": "GET /health + authenticated /mcp initialize; real tool handlers require 094/095"
+      "readiness": "GET /health + authenticated /mcp tools/list with all seven T tools + one census_summary call"
     },
     "receipts": {
       "config": "infra/railway/receipts.json",

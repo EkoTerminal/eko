@@ -12,7 +12,7 @@ export const NOT_INDEXED = 'Not indexed yet';
 export const CARD_UNAVAILABLE = 'Coin card unavailable';
 export const CARD_WAIT = 'Search the indexed token identity for its current status.';
 export const NEAR_GRAD = 'Curve at 75% or more';
-const checks:Record<string,string>={simulations:'buy-then-sell simulation',exitCosts:'exit costs',ownerPowerAnalysis:'owner powers',agentPct:'agent labels',crewPct:'crew labels',humanPct:'human labels',depthUsd:'liquidity depth',routing:'routing',completeLpOwnership:'complete LP ownership',antiSnipeTiming:'anti-snipe timing',taxes:'taxes',knownLocksAndVesting:'locks and vesting',bundlesHeldPct:'bundle holdings',freshWalletsPct:'fresh wallet holdings',circulating:'circulating supply',totalSupply:'total supply',dynamicPoolFees:'dynamic pool fees'};
+const checks:Record<string,string>={simulations:'buy-then-sell simulation',exitCosts:'exit costs','exitCostPct.usd100':'exit cost at $100','exitCostPct.usd1k':'exit cost at $1K','exitCostPct.usd10k':'exit cost at $10K',buyTax:'buy tax',sellTax:'sell tax',ownerPowerAnalysis:'owner powers',agentPct:'agent labels',crewPct:'crew labels',humanPct:'human labels',depthUsd:'liquidity depth',routing:'routing',completeLpOwnership:'complete LP ownership',antiSnipeTiming:'anti-snipe timing',taxes:'taxes',knownLocksAndVesting:'locks and vesting',bundlesHeldPct:'bundle holdings',freshWalletsPct:'fresh wallet holdings',circulating:'circulating supply',totalSupply:'total supply',dynamicPoolFees:'dynamic pool fees'};
 export function missingChecks(evaluated?:PlaybookId[],meta?:CoinCardMeta,missing:string[]=[]) {
   const absent=evaluated ? PlaybookIdSchema.options.filter(id=>!evaluated.includes(id)) : [];
   const names=[...absent.map(id=>id.replaceAll('_',' ')),...missing,...Object.values(meta ?? {}).flatMap(m=>m.missing ?? [])];
@@ -25,6 +25,10 @@ export const LEGACY_TITLE='Graded by EKO’s first rule set (rules 1.0.x), shown
 export const GUARD2_UNAVAILABLE_TITLE='The current buyer-risk check (Guard 2) has no result for this coin yet. Buys stay unavailable until it does.';
 export const GUARD_LEGEND='Legacy assessment · rules 1.0.x: the grade from EKO’s first rule set, shown for reference. Guard 2 assessment unavailable: the current buyer-risk check has no result for this coin yet, and buys stay unavailable until it does.';
 
+// Live sell check (BACKEND §6.2 contract probe). A failed sell refuses buy quotes; it is not called a confirmed honeypot.
+export const SELL_FAILS='Sell fails';
+export const SELL_CHECK_TEXT={sellable:'Sold back in a buy-then-sell simulation',refused:'Sell failed in simulation · buys refused'} as const;
+export const SELL_FAILS_TITLE='A buy went through and the sell reverted or returned under 5% in simulation at the checked block, so the guard refuses buys.';
 export const NOT_CHECKED_LABEL='Not checked yet';
 export const NOT_TRACKED_LABEL='Not tracked yet';
 export const FEED_GAPS_LEGEND='— not tracked yet: trades, Ghost Reports, swarm calls and burns arrive with their data sources.';

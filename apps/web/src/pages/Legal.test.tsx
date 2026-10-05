@@ -5,6 +5,7 @@ import { AnalysisPolicyNotice, PolicyLinks } from '../components/PolicyLinks';
 import { LegalLine } from '../components/shell/Shell';
 import { BUILT_ON, DYOR, NON_AFFILIATION } from '../copy';
 import { findPolicy, LEGAL_COPY, POLICY_DRAFTS, POLICY_REVIEW } from '../copy/legal';
+import { SETTINGS_COPY } from '../copy/settings';
 import { resolveRoute } from '../routes';
 import { CoinVerdict } from './terminal/CoinCard';
 import { TradePanel } from '../components/trade/TradePanel';
@@ -29,8 +30,11 @@ describe('versioned launch policy drafts', () => {
     expect(html).toContain('dateTime="2026-10-05"');
     expect(html).toContain(LEGAL_COPY.draft);
     expect(html).toContain(LEGAL_COPY.pending);
-    expect(html).toContain('{{PUBLIC_DOMAIN}}');
-    expect(html).toContain('{{POLICY_CONTACT}}');
+    expect(html).toContain('Draft — pending owner approval');
+    // The domain is confirmed; the policy contact stays visibly pending instead of a look-alike placeholder.
+    expect(html).toContain('Website: ekoterminal.com');
+    expect(html).toContain('Contact for questions about these policies: pending owner confirmation');
+    expect(html).not.toContain('{{');
     for (const text of [DYOR, BUILT_ON, NON_AFFILIATION]) expect(html).toContain(text);
     expect(POLICY_REVIEW.ownerApproval.approvedAt).toBeNull();
     expect(POLICY_REVIEW.ownerApproval.evidenceRef).toBeNull();
@@ -84,13 +88,23 @@ describe('versioned launch policy drafts', () => {
     }
   });
 
-  it('states candidate limitations and staged economics without claiming accepted dependencies', () => {
-    expect(render('terms')).toContain('Terminal fee: 0% during launch week');
-    expect(render('terms')).toContain('Guarded execution is unavailable');
-    expect(render('terms')).toContain('Token-day fees remain staged');
-    expect(render('privacy')).toContain('journal is opt-in');
-    expect(render('privacy')).toContain('Account-wide deletion is unavailable');
-    expect(render('privacy')).toContain('separate opt-in');
+  it('states launch limits and staged economics without claiming unconfirmed decisions', () => {
+    const terms = render('terms'), privacy = render('privacy');
+    expect(terms).toContain('Terminal fee: 0% during launch week');
+    expect(terms).toContain('Live trading can be paused at any time');
+    expect(terms).toContain('Planned from token day: a 0.5% terminal fee on Uniswap-routed trades');
+    expect(terms).toContain('Terminal fees never go to the dev wallet');
+    expect(terms).toContain('OFAC sanctions list');
+    expect(terms).toContain('EKO never receives your Robinhood login details');
+    expect(privacy).toContain('journal is opt-in');
+    expect(privacy).toContain('separate opt-in');
+    expect(privacy).toContain('is not available yet');
+    // Deletion copy names the real Settings control and what it keeps.
+    const privacyText = findPolicy('privacy')!.sections.flatMap((section) => section.paragraphs).join('\n');
+    expect(privacyText).toContain(`${SETTINGS_COPY.privacy}, “${SETTINGS_COPY.deleteTitle}”`);
+    expect(privacy).toContain('It keeps your sign-in record, your trade records and any public receipt hashes');
+    for (const pending of ['The list of providers is pending owner confirmation', 'Server log and backup retention: pending owner confirmation',
+      'The contact address for privacy questions is pending owner confirmation']) expect(privacy).toContain(pending);
     expect(render('risk')).toContain('Advisory:');
     expect(render('kol')).toContain('#ad must be the first line');
     expect(render('sanctions')).toContain('there is no permissive fallback');

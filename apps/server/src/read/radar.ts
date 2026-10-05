@@ -1,4 +1,5 @@
 import { hex } from '@eko/db';
+import { sellRefusalTotals } from '@eko/engines';
 import { InputError } from '../http/v1/helpers.js';
 import type { RadarRow } from '@eko/shared';
 import type { ReadRow, ReadStore } from './store.js';
@@ -48,7 +49,9 @@ export class RadarService {
         WHERE e.sec>=$1 AND v.data->>'level'='danger' GROUP BY 1`,[from]),
     ]);
     const hourly=(rows:{h:number;n:string}[])=>Array.from({length:24},(_,i)=>Number(rows.find(r=>Number(r.h)===i)?.n ?? 0));
+    // Refusals exist only while buy quotes run the sell check; otherwise the stat has no source and is omitted (CA-36).
+    const refused=this.store.sellCheckQuotes ? await sellRefusalTotals(this.store.db,this.store.now()) : null;
     return {coins:result.rows.reduce((n,r)=>n+Number(r.n),0),clear:count(0),monitor:count(1),pending:count(2),danger:count(3),evaluatedToday:Number(today.rows[0].n),
-      evaluatedByHour:hourly(scanned.rows),dangerByHour:hourly(danger.rows)};
+      evaluatedByHour:hourly(scanned.rows),dangerByHour:hourly(danger.rows),...(refused ? {honeypotsRefused:refused.today,refusedByHour:refused.byHour} : {})};
   }
 }

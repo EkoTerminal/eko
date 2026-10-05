@@ -1,33 +1,61 @@
 import type { ReactNode } from 'react';
 import { BUILT_ON, DYOR, NON_AFFILIATION } from '../../copy';
+import { NOT_PUBLISHED, OFFICIAL_COPY as O, PENDING_OWNER, PROJECT_LINKS, SECURITY_COPY as S, TRANSPARENCY_COPY as T, TRUST_COPY as C } from '../../copy/trust';
 import { Link } from '../../lib/Link';
 import '../legal.css';
 
-// TODO(spec): Accepted public repository URLs and project deployment records are
-// not supplied. Keep identifiers unresolved until the owner supplies provenance.
-const projects = ['ReceiptsRegistry', 'Registry owner', 'Registry committer', 'Dev fee wallet', 'Burn wallet', 'Milestone timelock'];
-const repositories = ['contracts', 'playbooks', 'receipts-verifier'];
-function Frame({ title, children }: { title: string; children: ReactNode }) {
-  return <div className="shell-page legal-page">
-    <header className="page-head"><span className="eyebrow">Public launch preparation</span><h1>{title}</h1></header>
-    <nav className="policy-links" aria-label="Project evidence"><Link to="/official">Official project links</Link><Link to="/transparency">Transparency</Link><Link to="/scoreboard">Scoreboard</Link><Link to="/legal/terms">Launch policies</Link></nav>
-    <aside className="legal-review"><h2>Prepared · release evidence pending</h2><p>We have no token yet at T; any token claiming to be EKO is fake. We never DM first. Public repository URLs and verified project identifiers have not been supplied for this candidate.</p></aside>
+// TODO(spec): Project wallet, contract and social identifiers are not supplied yet. They stay "Not published
+// yet" until the owner publishes them with provenance; never fill them with sample values.
+const PAGES = [['/official', C.official], ['/transparency', C.transparency], ['/security', C.security], ['/scoreboard', C.scoreboard], ['/legal/terms', C.policies]] as const;
+
+/** External or server-served link: a plain anchor, never SPA navigation. */
+function Out({ href, children }: { href: string; children: ReactNode }) {
+  return href.startsWith('https:') ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <a href={href}>{children}</a>;
+}
+function Frame({ title, path, children }: { title: string; path: string; children: ReactNode }) {
+  return <div className="shell-page legal-page trust-launch">
+    <header className="page-head"><span className="eyebrow">{C.eyebrow}</span><h1>{title}</h1></header>
+    <nav className="policy-links" aria-label={C.nav}>{PAGES.map(([to, label]) => <Link key={to} to={to} aria-current={to === path ? 'page' : undefined}>{label}</Link>)}</nav>
+    <aside className="legal-review trust-warning" aria-label={C.warningTitle}><h2>{C.warningTitle}</h2>{C.warning.map(text => <p key={text}>{text}</p>)}</aside>
     <article>{children}</article>
     <footer className="legal-footer"><p>{BUILT_ON}</p><p>{NON_AFFILIATION}</p><p>{DYOR}</p></footer>
   </div>;
 }
+function Facts({ rows }: { rows: readonly { label: string; note: string; value: ReactNode }[] }) {
+  return <dl className="trust-facts">{rows.map(row => <div key={row.label}><dt>{row.label}</dt><dd>{row.value}{row.note && <span className="trust-note">{row.note}</span>}</dd></div>)}</dl>;
+}
+const unpublished = <strong className="trust-status">{NOT_PUBLISHED}</strong>;
+
 export function Official() {
-  return <Frame title="Official project links">
-    <section><h2>Project identifiers</h2><p>Public domain: {'{{PUBLIC_DOMAIN}}'} · Pending owner confirmation. No token contract is listed at T.</p><dl>{projects.map(role => <div key={role}><dt>{role}</dt><dd>Unresolved · verified public record pending</dd></div>)}</dl></section>
-    <section><h2>Source repositories</h2><ul>{repositories.map(name => <li key={name}>{name} · Prepared files only; publication and URL pending</li>)}</ul></section>
-    <section><h2>Disclosure channel</h2><p>Role mailbox: security@ekoterminal.com · Forwarding pending owner confirmation. Private repository advisories also await an enabled public repository. Do not assume either reporting route is available.</p><p>The bounty terms and security.txt are draft files. No live or funded bounty is established by this page.</p></section>
+  return <Frame title={C.official} path="/official">
+    <p>{O.intro}</p>
+    <section><h2>{O.verifiedTitle}</h2><Facts rows={O.verified.map(link => ({ ...link, value: <Out href={link.href}>{link.text}</Out> }))} /></section>
+    <section><h2>{O.unpublishedTitle}</h2><p>{O.unpublishedIntro}</p><Facts rows={O.unpublished.map(item => ({ ...item, value: unpublished }))} /></section>
   </Frame>;
 }
+
 export function Transparency() {
-  return <Frame title="Transparency">
-    <section><h2>Review and deployment are separate</h2><p>AI-assisted and automated review, not a professional audit.</p><p>The receipts registry holds no user funds and may be deployed before its review is accepted. No verified deployment address, live bytecode comparison or completed review is supplied here. Browser receipt verification remains unavailable until an independently verified registry pin is supplied.</p><p>On-chain guardrails remain advisory until their permission configuration passes review. A passing fixture does not establish live acceptance.</p></section>
-    <section><h2>Planned public review</h2><p>October 13, 2026, 13:00 UTC to October 16, 2026, 13:00 UTC. Opening and closing evidence are pending. A High or Medium fix restarts the full 72 hours.</p><p>Fix rechecks and final hash: October 17. Owner D0 sign-off: October 18, reconfirmed October 19. Planned token day: October 20, subject to acceptance.</p></section>
-    <section><h2>Evidence and gaps</h2><p>The repository preparation includes file hashes, licences, privileged powers, invariants, negative tests, coverage, fork results, mutation results and the findings ledger. These retained reports refer to their own candidates; final-candidate reports and public URLs are pending.</p><p>Three contract findings remain open (two Low, one Info). Historical Medium findings are marked fixed in their ledger; final-candidate rechecks are pending. Reported aggregate core coverage is 92.04%, below the 95% target. Original fork-pin dependency evidence remains incomplete.</p><p>Three independent contract reviews, analyzer reports, completed public window, final hash and active bounty evidence remain required. No final sign-off is recorded.</p></section>
-    <section><h2>Check project roles and history</h2><p>When accepted identifiers are supplied, check chain 4663, source commit, deployment transaction and exact runtime bytecode. Read the registry owner(), pendingOwner() and committer(); verify any multisig threshold and modules separately.</p><p>The dev fee wallet and burn wallet have separate roles. Creator fees fund proposed bounty rewards; terminal fees belong to the burn wallet. Daily manual buy-and-burn activity and the launch buy-and-burn are staged for token day. No burn transaction or wallet history is claimed here.</p></section>
+  return <Frame title={C.transparency} path="/transparency">
+    <section><h2>{T.walletsTitle}</h2><p>{T.walletsIntro}</p><Facts rows={T.wallets.map(item => ({ ...item, value: unpublished }))} /></section>
+    <section><h2>{T.feesTitle}</h2>{T.fees.map(text => <p key={text}>{text}</p>)}</section>
+    <section><h2>{T.reviewTitle}</h2>{T.review.map(text => <p key={text}>{text}</p>)}<p><Out href={PROJECT_LINKS.findings}>{T.findingsLink}</Out> · <Link to="/security">{C.security}</Link></p></section>
+    <section><h2>{T.tokenTitle}</h2>{T.token.map(text => <p key={text}>{text}</p>)}</section>
+    <section><h2>{T.checkTitle}</h2>{T.check.map(text => <p key={text}>{text}</p>)}</section>
+  </Frame>;
+}
+
+export function Security() {
+  return <Frame title={C.security} path="/security">
+    <section className="legal-review trust-pending" aria-label={S.statusTitle}><h2>{S.statusTitle}</h2>{S.status.map(text => <p key={text}>{text}</p>)}</section>
+    <section><h2>{S.reportTitle}</h2><Facts rows={S.channels.map(channel => ({ label: channel.label, note: '', value: <Out href={channel.href}>{channel.text}</Out> }))} /><ul>{S.report.map(text => <li key={text}>{text}</li>)}</ul></section>
+    <section><h2>{S.scopeTitle}</h2><ul>{S.scope.map(text => <li key={text}>{text}</li>)}</ul></section>
+    <section><h2>{S.outTitle}</h2><ul>{S.out.map(text => <li key={text}>{text}</li>)}</ul></section>
+    <section><h2>{S.rulesTitle}</h2><ul>{S.rules.map(text => <li key={text}>{text}</li>)}</ul></section>
+    <section><h2>{S.rewardsTitle} · {PENDING_OWNER}</h2>
+      <table className="trust-table"><thead><tr>{S.rewardsHead.map(head => <th key={head} scope="col">{head}</th>)}</tr></thead>
+        <tbody>{S.rewards.map(([severity, impact, amount]) => <tr key={severity}><th scope="row">{severity}</th><td>{impact}</td><td className="num">{amount}</td></tr>)}</tbody></table>
+      <ul>{S.rewardTerms.map(text => <li key={text}>{text}</li>)}</ul></section>
+    <section><h2>{S.goodFaithTitle} · {PENDING_OWNER}</h2>{S.goodFaith.map(text => <p key={text}>{text}</p>)}</section>
+    <p><Out href={PROJECT_LINKS.securityPolicy}>{S.fullPolicy}</Out> · <Out href={PROJECT_LINKS.securityTxt}>security.txt</Out></p>
   </Frame>;
 }

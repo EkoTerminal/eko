@@ -9,9 +9,12 @@ import { HarnessError } from './service.js';
 import { metrics } from '../obs/metrics.js';
 
 /** Cache reads only. Acquisition belongs to 052; a miss returns its named queue/denial.
- * Never accept evidence, policy, approvals or release switches from tool context. */
-export type CachedPreflightInputs = (request: PreflightRequest, policy: Policy, agent: Agent, now: number) =>
-  Omit<Deps, 'now' | 'approvalFor' | 'approvalsAvailable'>;
+ * Never accept evidence, policy, approvals or release switches from tool context. Stored readers
+ * use the supplied transaction (one connection, so a single-connection database cannot deadlock)
+ * and resolve their lookups before the pure evaluation runs. */
+export type CachedPreflightInputs = (request: PreflightRequest, policy: Policy, agent: Agent, now: number, tx: ChainDb) =>
+  PreflightInputs | Promise<PreflightInputs>;
+export type PreflightInputs = Omit<Deps, 'now' | 'approvalFor' | 'approvalsAvailable'>;
 /**
  * Return cache-miss dependencies with the policy Guard version; verdict, card and price reads
  * return undefined. Pure fallback; it acquires no evidence and grants no execution permission.
@@ -82,7 +85,7 @@ export class PreflightService {
           previous && (approval.id !== previous.result.approvalId || approval.preflightId !== previous.result.preflightId))) throw new Error('Approval binding mismatch');
         const current = approval && Date.parse(approval.expiresAt) <= now && approval.status === 'pending'
           ? { ...approval, status: 'expired' as const } : approval;
-        const deps: Deps = { ...this.inputs(req, policy, agent, now), now: () => now,
+        const deps: Deps = { ...await this.inputs(req, policy, agent, now, tx), now: () => now,
           approvalsAvailable: this.approvals?.available ?? false,
           approvalFor: (id, ref, h) => id === agent.id && ref === req.clientOrderRef && h === hash ? current : undefined };
         let result: PreflightResult = { ...evaluate(req, policy, agent, deps),

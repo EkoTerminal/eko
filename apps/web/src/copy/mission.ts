@@ -18,6 +18,7 @@ export const MISSION_COPY = {
 export const PLATFORM_COPY = {
   claude_connector: ['Claude Desktop and claude.ai', 'Custom connector. You sign in with OAuth; there’s no key to copy.'],
   claude_code: ['Claude Code', 'One command in your terminal, with a harness API key.'],
+  claude_desktop: ['Claude Desktop', 'One config entry and a local bridge (Node.js), with a harness API key.'],
   chatgpt: ['ChatGPT', 'Connector with OAuth sign-in, like the Claude app.'],
   openclaw: ['OpenClaw', `MCP config plus the ${APP_NAME} skill, with an API key.`],
   generic_mcp: ['Generic MCP', 'Any client that speaks MCP over Streamable HTTP.'],
@@ -331,5 +332,6 @@ export const CONNECT_STEPS = {
   approvals: 'Check trade approvals are on in Robinhood',
   connectorReturn: 'Your browser returns to the client’s registered callback. Add the harness instructions there, then return here to Verify.',
   keyConfig: 'The key goes in the Authorization header. Copy the config with your key filled in.',
-  keyCheck: `Ask your agent to check in with ${APP_NAME}. Its first journal event will appear below.`,
+  keyCheck: `Turn on the agent journal, then ask your agent to check in with ${APP_NAME}. Its first journal event will appear below.`,
+  keyCheckBelow: 'Its first journal event will appear below.',
 };

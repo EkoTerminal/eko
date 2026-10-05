@@ -59,7 +59,8 @@ Every export maps [SECURITY.public.md](SECURITY.public.md) to `SECURITY.md` and
 The security.txt file is a **non-live template**: replace domain/repository
 placeholders, confirm role-mailbox forwarding, set a future expiry, and serve
 it at HTTPS `/.well-known/security.txt` only after owner release instruction.
-No template is served by this candidate. Private advisories must be enabled and
+The site's own file (ekoterminal.com) is served by the API from
+`apps/server/src/http/security-txt.ts`; this template is only for the exports. Private advisories must be enabled and
 tested in each repository; a link alone is not evidence of a working channel.
 
 The contracts export additionally includes the implemented privileged-power

@@ -2,8 +2,9 @@ import Fastify, { LogController, type FastifyError, type FastifyServerOptions } 
 import { z } from 'zod';
 import type { Agent, Entitlements, OAuthScope } from '@eko/shared';
 import type { RateLimits } from './limits.js';
-import { ToolRegistry, toolContracts, UNTRUSTED_NOTICE, type ToolContext } from './tools.js';
+import { ToolRegistry, toolContracts, toolSchemas, modelText, UNTRUSTED_NOTICE, type ToolContext } from './tools.js';
 import { OAuthTokenError, type OAuthTokenService } from '../../server/src/harness/oauth-tokens.js';
+import { HarnessError } from '../../server/src/harness/service.js';
 import { OAuthDiscoveryError, type OAuthDiscovery } from './oauth.js';
 import { proxyTrust } from '../../server/src/proxy-trust.js';
 
@@ -19,6 +20,11 @@ const responseSchema = z.union([
 const rpcError = (id: string | number | null, code: number, message: string, data?: object) =>
   ({ jsonrpc: '2.0', id, error: { code, message, ...(data ? { data } : {}) } });
 const tierRates = { listener: 30, reader: 120, oracle: 300, source: 600 } as const;
+// Harness errors carry fixed server-authored messages (never request data). Add the next step
+// for the human-only fixes an agent cannot make itself.
+const harnessReason = (error: HarnessError) => error.message === 'Journal opt-in is required'
+  ? 'Journal opt-in is required: ask the human to turn on the agent journal in EKO Settings, Privacy & data, then retry.'
+  : `${error.message.replace(/\.$/, '')}.`;
 class PrivateRequestLogs extends LogController { override disableRequestLogging = true; }
 
 export interface McpDependencies {
@@ -177,10 +183,8 @@ export function buildMcpApp(deps: McpDependencies, options: Pick<FastifyServerOp
       const visible = await deps.tools.visible(ctx);
       if (method === 'tools/list') {
         if (!z.strictObject({ _meta: z.record(z.string(), z.unknown()).optional() }).safeParse(params ?? {}).success) return rpcError(requestId, -32602, 'Invalid params');
-        return result({ tools: visible.map(({ name }) => ({ name, description: toolContracts[name].text,
-          // Shared address/hex transforms canonicalize strings; emit their wire validation schema.
-          inputSchema: z.toJSONSchema(toolContracts[name].input, { io: 'input' }),
-          outputSchema: z.toJSONSchema(toolContracts[name].output, { io: 'input' }),
+        return result({ tools: visible.map(({ name }) => ({ name, description: toolContracts[name].description,
+          inputSchema: toolSchemas(name).input, outputSchema: toolSchemas(name).output,
           annotations: { readOnlyHint: toolContracts[name].readOnly, openWorldHint: false } })) });
       }
       const call = z.strictObject({ name: z.string(), arguments: z.record(z.string(), z.unknown()).optional(),
@@ -199,10 +203,15 @@ export function buildMcpApp(deps: McpDependencies, options: Pick<FastifyServerOp
         .send(rpcError(requestId, -32000, 'Rate limited', { retryAfterSec: budget.retryAfterSec }));
       try {
         const structuredContent = await tool.invoke(call.data.arguments ?? {}, ctx);
-        return result({ structuredContent, content: [{ type: 'text', text: `${contract.text} ${UNTRUSTED_NOTICE}` }],
-          notice: UNTRUSTED_NOTICE });
-      } catch {
-        return result({ isError: true, content: [{ type: 'text', text: `Tool unavailable. ${UNTRUSTED_NOTICE}` }], notice: UNTRUSTED_NOTICE });
+        // TODO(spec): §9.1 specifies only a short templated content text. Clients such as Claude
+        // Code give the model `content`, never structuredContent, so the second block mirrors the
+        // result as JSON (MCP's backward-compatible form) with third-party text withheld.
+        return result({ structuredContent, content: [{ type: 'text', text: `${contract.text} ${UNTRUSTED_NOTICE}` },
+          { type: 'text', text: modelText(structuredContent) }], notice: UNTRUSTED_NOTICE });
+      } catch (error) {
+        // Only fixed, server-authored harness reasons are shown; other failures stay withheld.
+        const reason = error instanceof HarnessError ? ` ${harnessReason(error)}` : '';
+        return result({ isError: true, content: [{ type: 'text', text: `Tool unavailable.${reason} ${UNTRUSTED_NOTICE}` }], notice: UNTRUSTED_NOTICE });
       }
     });
   });

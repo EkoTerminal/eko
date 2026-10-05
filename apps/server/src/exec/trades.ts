@@ -12,6 +12,7 @@ import { ChainQuoteError } from './v3-routes.js';
 import { ActualFillSchema, PostFillEvidenceSchema, type TradeReconciliationBackend, type TradeReceipt, type ActualFill, type PostFillEvidence } from './trade-reconcile.js';
 import { IncidentService } from '../obs/incidents.js';
 import type { TradeAccessService } from './trade-access.js';
+import type { SellGuard } from './sell-guard.js';
 
 export const TradeInputSchema = TradeQuoteRequestSchema.extend({
   amountUsd: z.number().positive().finite(), slippageBps: z.number().int().min(0).max(9999),
@@ -62,12 +63,30 @@ export class TradeService {
   constructor(private readonly db: Db, private readonly access: TradeAccessService,
     private readonly sanctions: Pick<SanctionsService, 'assertWallet'>, private readonly backend?: TradeBackend,
     private readonly now: () => number = Date.now,
-    private readonly lifecycle: { incidents?: IncidentService; onOrder?: (accountId: string, order: TradeOrder) => void } = {}) {}
+    private readonly lifecycle: { incidents?: IncidentService; onOrder?: (accountId: string, order: TradeOrder) => void;
+      /** When installed, every buy quote first re-runs the sell check at its size; a failed sell is a hard refusal. */
+      sellGuard?: Pick<SellGuard, 'check' | 'refused'> } = {}) {}
 
   private async screen(wallet: string | null | undefined) {
     if (!wallet) return;
     try { await this.sanctions.assertWallet(wallet); }
     catch (error) { throw new TradeError((error as { code?: string }).code === 'sanctioned' ? 'sanctioned' : 'stale_data', 'Wallet screening unavailable or refused'); }
+  }
+  /** BACKEND §12: "the sell fails (honeypot)" refuses in every mode, and a sell check that cannot run refuses too
+   * (`sim_unavailable`, fail closed). A refusal never reaches route acquisition or the wallet. */
+  private async sellCheck(input: TradeQuoteRequest) {
+    const guard = this.lifecycle.sellGuard;
+    if (!guard || input.side !== 'buy') return;
+    let result: Awaited<ReturnType<SellGuard['check']>>;
+    try { result = await guard.check(input.coin, input.amountUsd); }
+    catch { throw new TradeError('sim_unavailable', 'The sell check could not run, so the guard refuses this buy'); }
+    if (result.status === 'refused') {
+      // The refusal stands even if counting it fails.
+      try { await guard.refused(result, input.amountUsd); } catch { /* counter write is best effort */ }
+      throw new TradeError('guard_refused', 'The sell check failed: in simulation this coin could not be sold back, so the guard refuses this buy');
+    }
+    if (result.status === 'buy_failed') throw new TradeError('guard_refused', 'The buy did not go through in simulation');
+    if (result.status !== 'sellable') throw new TradeError('sim_unavailable', 'The sell check could not run, so the guard refuses this buy');
   }
   private async admission(owner: TradeOwner, input: TradeQuoteRequest) {
     await this.screen(owner.wallet);
@@ -115,6 +134,7 @@ export class TradeService {
     const input = { ...TradeInputSchema.parse(raw), riskMode: raw.riskMode ?? 'safe' as const };
     if (input.account && (!owner.wallet || input.account !== owner.wallet.toLowerCase())) throw new TradeError('wallet_mismatch', 'Quote account differs from the signed-in wallet');
     await this.screen(input.account);
+    await this.sellCheck(input);
     if (!this.backend) throw new TradeError('sim_unavailable', 'Actual-account trade acquisition is unavailable');
     const id = randomUUID(), quotedAt = this.now();
     let result: Awaited<ReturnType<TradeBackend['quote']>>;

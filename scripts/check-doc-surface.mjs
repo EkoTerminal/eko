@@ -31,7 +31,7 @@ const modules = [
   'apps/engines/src/coverage-pilot.ts',
   // Later packets extend the same external boundaries; keep them in the census.
   'apps/server/src/obs/security-collectors.ts', 'apps/server/src/obs/security-worker.ts',
-  'apps/server/src/obs/security-config.ts', 'apps/server/src/http/share.ts',
+  'apps/server/src/obs/security-config.ts', 'apps/server/src/http/share.ts', 'apps/server/src/http/security-txt.ts',
   'apps/server/src/read/senses.ts', 'apps/server/src/read/scoreboard.ts',
   'packages/db/src/flow-read.ts', 'apps/engines/src/watcher/flow-store.ts',
   'apps/server/src/telegram/',

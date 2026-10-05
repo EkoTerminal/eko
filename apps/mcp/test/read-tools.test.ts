@@ -1,17 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { Ajv } from 'ajv';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormatsModule from 'ajv-formats';
 import { CoinCardSchema, GuardAssessmentV2Schema, CoinCardV2Schema, SenseCensusResultSchema,
-  type Address, type ReceiptLookup } from '@eko/shared';
+  type Address, type CoinCardMeta, type ReceiptLookup } from '@eko/shared';
 import v1 from '../../../packages/shared/test/fixtures/contracts/v1.json';
 import { guardSamples } from '../../../packages/shared/test/fixtures/contracts/guard-v2.js';
 import { receiptSamples } from '../../../packages/shared/test/fixtures/contracts/public-receipts.js';
 import { SensesReadService } from '../../server/src/read/senses.js';
 import type { GuardReadStore } from '../../server/src/read/guard-store.js';
 import { registerReadTools } from '../src/read-tools.js';
-import { toolContracts, type ToolContext, UNTRUSTED_NOTICE } from '../src/tools.js';
+import { portableSchema, toolContracts, toolSchemas, type ToolContext, UNTRUSTED_NOTICE } from '../src/tools.js';
 import { buildMcpApp } from '../src/app.js';
 
 const coin = v1.Verdict.coin as Address;
+const addFormats = addFormatsModule as unknown as (ajv: Ajv | Ajv2020) => void;
 const ctx: ToolContext = { accountId: 'demo-account', keyId: 'fixture-key', agent: {
   id: 'sample-agent', name: 'Sample agent', kind: 'other', status: 'active', uncheckedOrders24h: 0 },
   entitlements: { tier: 'reader', limits: { agents: 1, deepResearchPerDay: 0, loopBacktestsPerDay: 0, realtime: true }, feeBps: 0 },
@@ -25,8 +29,12 @@ function fixture() {
   ];
   card.verdict.playbooks = card.playbooks;
   const v2card = CoinCardV2Schema.parse(structuredClone(guardSamples.CoinCardV2));
+  const flows: { window: string; coin: Buffer; data: object }[] = [];
   const guard = {
-    db: { sql: { query: vi.fn(async () => ({ rows: [{ ts: new Date(1000_000) }] })) } },
+    // Block times answer the delay check; Watcher flow/Census tables start empty (nothing measured).
+    db: { sql: { query: vi.fn(async (sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> =>
+      /engine_block_times/.test(sql) ? { rows: [{ ts: new Date(1000_000) }] }
+        : /FROM flow_windows/.test(sql) ? { rows: flows.filter(r => r.window === params?.[1]) } : { rows: [] }) } },
     legacy: { now: () => 1060_000 },
     negotiatedCard: vi.fn(async (_coin: Address, version: 1 | 2) => version === 1
       ? { version: 1 as const, card } : { version: 2 as const, card: v2card }),
@@ -41,7 +49,7 @@ function fixture() {
     const tool = (await registry.visible(context)).find(t => t.name === name)!;
     return tool.invoke(input, context);
   };
-  return { card, v2card, guard, receipts, service, registry, invoke };
+  return { card, v2card, guard, receipts, service, registry, invoke, flows };
 }
 
 describe('launch Senses (synthetic read fixtures; no ports/providers)', () => {
@@ -58,15 +66,53 @@ describe('launch Senses (synthetic read fixtures; no ports/providers)', () => {
       for (const tool of listed) {
         const contract = toolContracts[tool.name as keyof typeof toolContracts];
         expect(tool.inputSchema).toEqual(z.toJSONSchema(contract.input, { io: 'input' }));
-        expect(tool.outputSchema).toEqual(z.toJSONSchema(contract.output, { io: 'input' }));
+        // MCP clients require an object-typed output schema; unions keep every branch under anyOf,
+        // and repeated subschemas are shared through $defs.
+        const { type, ...output } = tool.outputSchema;
+        expect(type).toBe('object');
+        const emitted = portableSchema(z.toJSONSchema(contract.output, { io: 'input', reused: 'ref' })) as Record<string, unknown>;
+        expect(output).toEqual(emitted.type === 'object' ? (({ type: _type, ...rest }) => rest)(emitted) : emitted);
+        expect(tool.outputSchema).toEqual(toolSchemas(tool.name).output);
+        expect(tool.inputSchema.type).toBe('object');
         expect(tool.inputSchema.additionalProperties).toBe(false);
         expect(tool.annotations.readOnlyHint).toBe(true);
+        expect(tool.description).toBe(contract.description);
+        expect(tool.description).not.toBe(contract.text);
       }
       const result = (await server.inject({ method: 'POST', url: '/mcp', headers, payload: {
         jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'census_summary', arguments: {} } } })).json().result;
       expect(SenseCensusResultSchema.parse(result.structuredContent).gated).toBe(true);
       expect(result.notice).toBe(UNTRUSTED_NOTICE);
+      // Clients that show the model only `content` still receive the result as JSON.
+      expect(result.content[0].text).toBe(`${toolContracts.census_summary.text} ${UNTRUSTED_NOTICE}`);
+      expect(JSON.parse(result.content[1].text)).toEqual(result.structuredContent);
     } finally { await server.close(); }
+  });
+
+  it('advertises compact object schemas that strict clients compile and every result variant satisfies', async () => {
+    const f = fixture(), ajv = [new Ajv({ strict: false, validateFormats: true, validateSchema: false, allErrors: true }),
+      new Ajv2020({ strict: false, validateFormats: true, validateSchema: false, allErrors: true })];
+    for (const validator of ajv) addFormats(validator);
+    // Inlined, the coin_card schema was ~19 MB; one tools/list must stay a small download.
+    const names = Object.keys(toolContracts) as (keyof typeof toolContracts)[];
+    expect(JSON.stringify(names.map(name => toolSchemas(name))).length).toBeLessThan(1_000_000);
+    const anchored: ReceiptLookup = { ...receiptSamples.ReceiptLookup, status: 'anchored', merkleRoot: `0x${'cd'.repeat(32)}`,
+      proof: [`0x${'ab'.repeat(32)}`], batchId: 1, txHash: `0x${'ef'.repeat(32)}`, block: 1, blockHash: `0x${'12'.repeat(32)}`,
+      registry: coin, chainId: 4663, logIndex: 0, revealed: { schemaVersion: 'verdict-1' }, canonicalPayload: 'payload' };
+    const results: [keyof typeof toolContracts, unknown][] = [
+      ['coin_verdict', await f.invoke('coin_verdict', { coin })], ['coin_verdict', await f.invoke('coin_verdict', { coin, version: 2 })],
+      ['coin_card', await f.invoke('coin_card', { coin })], ['coin_card', await f.invoke('coin_card', { coin, version: 2, flowWindow: '5m' })],
+      ['playbook_match', await f.invoke('playbook_match', { coin })], ['census_summary', await f.invoke('census_summary', {})],
+      ['receipts_lookup', await f.invoke('receipts_lookup', { id: 'fixture' })],
+    ];
+    f.receipts.get.mockResolvedValue(anchored);
+    results.push(['receipts_lookup', await f.invoke('receipts_lookup', { id: 'fixture' })]);
+    f.guard.negotiatedVerdict.mockResolvedValue(null as never); f.guard.negotiatedCard.mockResolvedValue(null as never);
+    for (const name of ['coin_verdict', 'coin_card', 'playbook_match'] as const) results.push([name, await f.invoke(name, { coin })]);
+    for (const [name, value] of results) for (const validator of ajv) {
+      const validate = validator.compile(toolSchemas(name).output);
+      expect(validate(value), `${name}: ${validator.errorsText(validate.errors)}`).toBe(true);
+    }
   });
 
   it('rejects unknown input keys, unsupported versions/windows/levels, instruction strings and malformed IDs', async () => {
@@ -94,11 +140,23 @@ describe('launch Senses (synthetic read fixtures; no ports/providers)', () => {
     expect(await f.invoke('coin_verdict', { coin, version: 2 })).toEqual({ version: 2, verdict: null });
   });
 
-  it.each(['5m', '1h', '24h'] as const)('returns honest %s flow gaps for V1 and V2 without numeric placeholders', async window => {
+  it.each(['5m', '1h', '24h'] as const)('serves the measured %s window or an explicit unavailable mask (V1) and named V2 gaps', async window => {
     const f = fixture();
+    // Nothing measured: structural zeros carry the unavailable mask, never a relabeled window.
     const result = await f.invoke('coin_card', { coin, flowWindow: window });
-    expect(result.flow).toEqual({ status: 'unavailable', dependency: '102', window, beta: true, confidence: 0 });
+    expect(CoinCardSchema.parse(result).flow).toMatchObject({ window, agentPct: 0, humanPct: 0, beta: true, confidence: 0 });
+    expect((result.meta as CoinCardMeta).flow).toMatchObject({ unavailable: true, confidence: 0,
+      missing: ['agentPct', 'crewPct', 'humanPct', 'washEstPct'], asOfBlock: f.card.freshness.block });
     expect(f.card.flow).toEqual(v1.CoinCard.flow);
+    // A clean Watcher snapshot for exactly this window is served with its own mask.
+    const measured = { window, agentPct: 40, crewPct: 10, humanPct: 50, washEstPct: 0, beta: true, confidence: 0.8,
+      modelVersion: 'fp-1.0.0', meta: { confidence: 0.8, asOfBlock: 7, unavailable: false } };
+    f.flows.push({ window: window === '5m' ? '24h' : '5m', coin: Buffer.from(coin.slice(2), 'hex'), data: { ...measured, window: window === '5m' ? '24h' : '5m', agentPct: 99 } });
+    f.flows.push({ window, coin: Buffer.from(coin.slice(2), 'hex'), data: measured });
+    const served = await f.invoke('coin_card', { coin, flowWindow: window });
+    const { meta: measuredMeta, ...values } = measured;
+    expect(served.flow).toEqual(values);
+    expect((served.meta as CoinCardMeta).flow).toEqual(measuredMeta);
     const v2 = await f.invoke('coin_card', { coin, version: 2, flowWindow: window });
     const card = CoinCardV2Schema.parse(v2.card);
     expect(card.flow.windowSec).toBe({ '5m': 300, '1h': 3600, '24h': 86400 }[window]);
@@ -145,12 +203,14 @@ describe('launch Senses (synthetic read fixtures; no ports/providers)', () => {
   });
 
   it('keeps the separate label gate closed, rejects gated headlines and ungated unaccepted models', async () => {
+    // The REST GET /census read: no accepted precision evaluation means metadata only.
     const f = fixture(), result = await f.invoke('census_summary', {});
-    expect(result).toMatchObject({ status: 'unavailable', gated: true, dependency: '102', gate: { value: null, modelVersion: null } });
-    expect(result).not.toHaveProperty('chain'); expect(result).not.toHaveProperty('coins'); expect(result).not.toHaveProperty('asOf');
+    expect(result).toMatchObject({ gated: true, methodologyUrl: '/census#methodology', chain: [], coins: [],
+      gate: { metric: 'likely_agent_precision', value: null, threshold: 0.9, modelVersion: 'fp-1.0.0', evaluatedAt: null } });
+    expect(result.reason).toMatch(/publication gate/);
     expect(SenseCensusResultSchema.safeParse({ ...v1.Census, gated: true }).success).toBe(false);
     expect(SenseCensusResultSchema.safeParse({ ...v1.Census, gated: false, gate: { ...v1.Census.gate, value: 0.89 } }).success).toBe(false);
-    expect(SenseCensusResultSchema.safeParse({ ...result, agentPct: 0 }).success).toBe(false);
+    expect(SenseCensusResultSchema.safeParse({ ...result, chain: v1.Census.chain }).success).toBe(false);
   });
 
   it('sanitizes adversarial names and nested evidence in both versions without mutating stored data', async () => {

@@ -185,7 +185,9 @@ export const AgentSummarySchema = z.object({
 });
 export type AgentSummary = z.infer<typeof AgentSummarySchema>;
 export const PackSchema = z.object({
-  platform: z.enum(['claude_code', 'claude_connector', 'chatgpt', 'openclaw', 'generic_mcp']),
+  // TODO(spec): BACKEND §23 Pack lists no Claude Desktop config pack. claude_desktop is the API-key
+  // path through a local stdio bridge while the OAuth connector (claude_connector) waits on 099.
+  platform: z.enum(['claude_code', 'claude_desktop', 'claude_connector', 'chatgpt', 'openclaw', 'generic_mcp']),
   stage: z.enum(['T', 'D0']),
   version: z.number(),
   configTemplate: z.string(),

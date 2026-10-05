@@ -17,6 +17,30 @@ const inert = {
   SWARM_ENABLED: 'false', MCP_OAUTH_ENABLED: 'false', AI_DAILY_BUDGET_USD: '0',
   RPC_PAID_DAILY_BUDGET: '0', RPC_SESSION_BUDGET: '0',
 };
+const publicRoles = new Set(['api', 'mcp']);
+const healthPaths = { api: '/v1/health', mcp: '/health' };
+/**
+ * The MCP role must agree with the API it shares Postgres with: keys minted by the API verify
+ * with the same pepper, journal entries written by either decrypt with the same KEK version, and
+ * the launch agent quota is the same on both. Only names of the shared secrets are listed.
+ */
+function validateHarness(catalog) {
+  const api = { ...catalog.commonEnvironment, ...catalog.services.api.environment };
+  const mcp = { ...catalog.commonEnvironment, ...catalog.services.mcp.environment };
+  if (!catalog.services.mcp.available) return;
+  const endpoint = new URL(mcp.MCP_PUBLIC_URL);
+  assert.ok(endpoint.protocol === 'https:' && endpoint.pathname === '/mcp' && !endpoint.search && !endpoint.hash
+    && !endpoint.username && !endpoint.password, 'mcp: MCP_PUBLIC_URL must be an HTTPS /mcp URL without credentials');
+  assert.equal(api.MCP_PUBLIC_URL, mcp.MCP_PUBLIC_URL, 'api fills /packs with the MCP endpoint');
+  assert.match(mcp.LAUNCH_WEEK_AGENT_LIMIT, /^[1-9]\d*$/, 'mcp: launch agent quota must be positive');
+  assert.equal(api.LAUNCH_WEEK_AGENT_LIMIT, mcp.LAUNCH_WEEK_AGENT_LIMIT, 'api and mcp agent quota');
+  assert.match(mcp.JOURNAL_KEK_ID, /^[A-Za-z0-9._-]{1,64}$/);
+  assert.equal(api.JOURNAL_KEK_ID, mcp.JOURNAL_KEK_ID, 'api and mcp journal KEK version');
+  for (const name of ['HARNESS_KEY_PEPPER', 'JOURNAL_KEK']) {
+    for (const role of ['api', 'mcp']) assert.ok(catalog.services[role].secretNames.includes(name), `${role}: ${name} secret name`);
+  }
+  assert.ok(mcp.JOURNAL_TOMBSTONE_PATH && api.JOURNAL_TOMBSTONE_PATH, 'journal destruction ledger path');
+}
 export function validateStaging(catalog, manifests, roleSource) {
   assert.equal(catalog.formatVersion, 1);
   assert.equal(catalog.purpose, 'staging-only');
@@ -39,8 +63,8 @@ export function validateStaging(catalog, manifests, roleSource) {
     assert.equal(service.environment.APP_ROLE, role);
     assert.equal(service.environment.RUN_WORKER, role === 'worker' ? 'true' : 'false');
     assert.equal(service.environment.SERVE_WEB, role === 'api' ? 'true' : 'false');
-    // Only API/web has public ingress in the pinned candidate.
-    assert.equal(service.public, role === 'api');
+    // Only API/web and the MCP endpoint have public ingress.
+    assert.equal(service.public, publicRoles.has(role), `${role}: public ingress`);
     const env = { ...catalog.commonEnvironment, ...service.environment };
     for (const [key, value] of Object.entries(inert)) {
       if (paidRpcRoles.has(role) && (key === 'RPC_PAID_DAILY_BUDGET' || key === 'RPC_SESSION_BUDGET')) continue;
@@ -71,9 +95,15 @@ export function validateStaging(catalog, manifests, roleSource) {
     assert.deepEqual(manifest.deploy, {
       startCommand: 'node dist/launch.js', numReplicas: 1,
       restartPolicyType: 'ON_FAILURE', restartPolicyMaxRetries: 3,
-      ...(role === 'api' ? { healthcheckPath: '/v1/health', healthcheckTimeout: 120 } : {}),
+      ...(healthPaths[role] ? { healthcheckPath: healthPaths[role], healthcheckTimeout: 120 } : {}),
     });
+    if (service.volume) {
+      assert.deepEqual(Object.keys(service.volume).sort(), ['contents', 'mountPath']);
+      assert.match(service.volume.mountPath, /^\/[a-z0-9/_-]+$/);
+      assert.ok(env.JOURNAL_TOMBSTONE_PATH?.startsWith(`${service.volume.mountPath}/`), `${role}: ledger must live on its volume`);
+    }
   }
+  validateHarness(catalog);
   assert.equal(catalog.postgres.major, 16);
   assert.equal(catalog.postgres.private, true);
   assert.equal(catalog.postgres.replicas, 1);
@@ -111,6 +141,18 @@ if (process.argv.includes('--self-test')) {
     c => { delete c.identityAttestation; },
     c => { c.identityAttestation.configVersion = 2; },
     c => { c.identityAttestation.buildArgument = 'SOURCE_REVISION'; },
+    c => { c.services.mcp.public = false; },
+    c => { c.services.engines.public = true; },
+    c => { c.services.mcp.environment.MCP_PUBLIC_URL = 'http://mcp.staging.example.invalid/mcp'; c.services.api.environment.MCP_PUBLIC_URL = 'http://mcp.staging.example.invalid/mcp'; },
+    c => { c.services.mcp.environment.MCP_PUBLIC_URL = 'https://user:secret@mcp.staging.example.invalid/mcp'; c.services.api.environment.MCP_PUBLIC_URL = c.services.mcp.environment.MCP_PUBLIC_URL; },
+    c => { c.services.api.environment.MCP_PUBLIC_URL = 'https://other.staging.example.invalid/mcp'; },
+    c => { c.services.mcp.environment.LAUNCH_WEEK_AGENT_LIMIT = '0'; c.services.api.environment.LAUNCH_WEEK_AGENT_LIMIT = '0'; },
+    c => { c.services.mcp.environment.LAUNCH_WEEK_AGENT_LIMIT = '2'; },
+    c => { c.services.api.environment.JOURNAL_KEK_ID = 'other-kek'; },
+    c => { c.services.mcp.secretNames = c.services.mcp.secretNames.filter(name => name !== 'JOURNAL_KEK'); },
+    c => { c.services.mcp.environment.JOURNAL_KEK = '00'.repeat(32); },
+    c => { c.services.mcp.environment.MCP_OAUTH_ENABLED = 'true'; },
+    c => { c.services.mcp.environment.JOURNAL_TOMBSTONE_PATH = '/tmp/destruction.log'; },
   ];
   for (const mutate of mutations) {
     const changed = structuredClone(catalog); mutate(changed);
@@ -120,6 +162,8 @@ if (process.argv.includes('--self-test')) {
     m => { m.worker.deploy.numReplicas = 2; },
     m => { m.engines.deploy.healthcheckPath = '/v1/health'; },
     m => { m.api.build.dockerfilePath = 'missing'; },
+    m => { delete m.mcp.deploy.healthcheckPath; delete m.mcp.deploy.healthcheckTimeout; },
+    m => { m.mcp.deploy.healthcheckPath = '/v1/health'; },
   ];
   for (const mutate of manifestMutations) {
     const changed = structuredClone(manifests); mutate(changed);

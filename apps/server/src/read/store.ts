@@ -1,4 +1,5 @@
 import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
+import { readSellChecks, type SellCheckReading } from '@eko/engines';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
@@ -15,9 +16,27 @@ function activity(t: Pick<Stored, 'volume' | 'trades' | 'prior_volume' | 'first_
   const start = Math.max(now - 86400, t.first_minute ? new Date(t.first_minute).getTime() / 1000 : now), hours = (now - 3600 - start) / 3600;
   return { volume1hUsd: Number(t.volume), trades1h: Number(t.trades), ...(hours >= 1 ? { volumeBaselineUsd: Number(t.prior_volume) / hours } : {}) };
 }
-export interface ReadRow { eligible:boolean;row: RadarRow; card: CoinCard | null; volume: number; activity: number; firstBlock:number; graduationBlock:number }
+export interface ReadRow { eligible:boolean;row: RadarRow; card: CoinCard | null; volume: number; activity: number; firstBlock:number; graduationBlock:number; exit100?:number|null }
+/** Sell-check fields the engine card leaves unmeasured: the probe measures exit cost and sellability only. */
+const SELL_CHECK_UNMEASURED=['exitCostPct.usd10k','buyTax','sellTax','taxes','antiSnipeTiming'];
+/**
+ * Overlay a live sell-check reading on a card whose own tradeability is unavailable, as flows are overlaid. Only the
+ * measured sizes leave `missing`; taxes, limits, anti-snipe timing and the $10K size stay named as not checked.
+ * `honeypot` keeps the engine's confirmed value: a contract-probe failure alone is not a confirmed honeypot (§6.2).
+ */
+export function withSellCheck(card:CoinCard,sell:SellCheckReading|undefined):CoinCard {
+  const prior=card.meta?.tradeability;
+  if(!sell || prior?.unavailable===false)return card;
+  const missing=new Set([...(prior?.missing ?? []).filter(m=>!['simulations','exitCosts'].includes(m) && !m.startsWith('referenceUsd')),...SELL_CHECK_UNMEASURED]);
+  if(sell.exit100==null)missing.add('exitCostPct.usd100');
+  if(sell.exit1k==null)missing.add('exitCostPct.usd1k');
+  return {...card,tradeability:{...card.tradeability,exitCostPct:{usd100:sell.exit100 ?? 0,usd1k:sell.exit1k ?? 0,usd10k:0}},
+    meta:{...card.meta,tradeability:{confidence:0.5,asOfBlock:sell.block,unavailable:false,missing:[...missing],flags:[...new Set([...(prior?.flags ?? []),`sell_check_${sell.status}`])]}}};
+}
 export class ReadStore {
   constructor(readonly db: ChainDb, public now: () => number = Date.now) {}
+  /** True when buy quotes run the live sell check, so refusals are being counted (Radar's "Honeypots refused"). */
+  sellCheckQuotes=false;
   private rankRefresh?:Promise<void>;
   private modelRefresh?:Promise<void>;
   private listeners=new Set<(coins:Address[])=>void>();
@@ -90,13 +109,16 @@ export class ReadStore {
     FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
     LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
     const flows=await readFlows(this.db,result.rows.map(t=>hex(t.address)));
+    const sells=await readSellChecks(this.db,result.rows.map(t=>hex(t.address)),this.now());
     return result.rows.map(t => {
-      const card = t.data ? CoinCardSchema.parse(t.data) : null;
+      const sell=sells.get(hex(t.address));
+      const card = t.data ? withSellCheck(CoinCardSchema.parse(t.data),sell) : null;
       const verdict = t.verdict ? VerdictSchema.parse(t.verdict) : null;
       const flow=flows.get(hex(t.address))??unavailableFlow('1h');
       const {meta:flowMeta,...flowValues}=flow;
       if(card){card.flow=flowValues;card.meta={...card.meta,flow:flowMeta};}
-      const unavailable: NonNullable<RadarRow['unavailable']> = ['exitCost'];
+      // CA-35: exit cost at $1K is a measurement only when the sell check measured that size.
+      const unavailable: NonNullable<RadarRow['unavailable']> = sell?.exit1k==null ? ['exitCost'] : [];
       if(flow.meta?.unavailable)unavailable.push('flow');
       // Depth is structural in current engine cards, even when LP ownership is known.
       if (!card || card.meta?.liquidity?.unavailable || card.meta?.liquidity?.missing?.includes('depthUsd')) unavailable.push('liquidity');
@@ -121,18 +143,19 @@ export class ReadStore {
         evaluatedPlaybooks: verdict?.evaluatedPlaybooks,
         missingChecks: [...new Set(Object.values(card?.meta ?? {}).flatMap(m => m.missing ?? []))],
         topPlaybook: verdict?.playbooks[0]?.id, ageSec: Math.max(0,now-(t.created_at ? new Date(t.created_at).getTime()/1000 : now)),
-        flow:flowValues, exitCost1kPct:0,
+        flow:flowValues, exitCost1kPct:sell?.exit1k ?? 0,
+        ...(sell ? {sellCheck:{status:sell.status,asOfBlock:sell.block,checkedAt:sell.checkedAt.toISOString()}} : {}),
         rank:0, signal:card?.signal, spark8h:t.pricing_pending ? undefined : t.spark ?? [], beta:verdict?.beta, unavailable,
         ...(t.pricing_pending ? {} : activity(t, now)),
       };
-      return { eligible:t.eligible,row,card,volume:t.pricing_pending ? 0 : t.volume,firstBlock:Number(t.first_block),graduationBlock:Number(t.graduated_block ?? 0),activity:t.activity ? new Date(t.activity).getTime() : this.now() };
+      return { eligible:t.eligible,row,card,volume:t.pricing_pending ? 0 : t.volume,firstBlock:Number(t.first_block),graduationBlock:Number(t.graduated_block ?? 0),activity:t.activity ? new Date(t.activity).getTime() : this.now(),exit100:sell?.exit100 ?? null };
     });
   }
   async exists(address:Address) {return (await this.db.sql.query('SELECT 1 FROM tokens WHERE address=$1',[binary(address)])).rows.length>0;}
   async card(address: Address) {
     const result = await this.db.sql.query<{ data: unknown }>('SELECT data FROM coin_card_latest WHERE coin=$1',[binary(address)]);
     if (!result.rows.length) return null;
-    const card = CoinCardSchema.parse(result.rows[0].data);
+    const card = withSellCheck(CoinCardSchema.parse(result.rows[0].data),(await readSellChecks(this.db,[address.toLowerCase() as Address],this.now())).get(address.toLowerCase() as Address));
     const times = await this.db.sql.query<{ ts: Date }>(`SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1`,[card.freshness.block]);
     card.freshness.ageSec = times.rows[0] ? Math.max(0,Math.floor((this.now()-new Date(times.rows[0].ts).getTime())/1000)) : card.freshness.ageSec;
     const flow=(await readFlows(this.db,[address])).get(address)??unavailableFlow('1h',card.freshness.block);

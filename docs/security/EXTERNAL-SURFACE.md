@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
+Measured: **522/522 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -245,7 +245,7 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:132](../../apps/indexer/src/log-head.ts#L132) | Yes |
 | `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:458](../../apps/indexer/src/log-head.ts#L458) | Yes |
 | `acquireScanJob` | function | [apps/indexer/src/scan-jobs.ts:13](../../apps/indexer/src/scan-jobs.ts#L13) | Yes |
-| `buildMcpApp` | function | [apps/mcp/src/app.ts:52](../../apps/mcp/src/app.ts#L52) | Yes |
+| `buildMcpApp` | function | [apps/mcp/src/app.ts:58](../../apps/mcp/src/app.ts#L58) | Yes |
 | `registerHarnessTools` | function | [apps/mcp/src/harness.ts:10](../../apps/mcp/src/harness.ts#L10) | Yes |
 | `SqlRateLimits.constructor` | constructor | [apps/mcp/src/limits.ts:16](../../apps/mcp/src/limits.ts#L16) | Yes |
 | `SqlRateLimits.consume` | method | [apps/mcp/src/limits.ts:24](../../apps/mcp/src/limits.ts#L24) | Yes |
@@ -260,12 +260,15 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `OAuthDiscovery.prune` | method | [apps/mcp/src/oauth.ts:233](../../apps/mcp/src/oauth.ts#L233) | Yes |
 | `pruneOAuthDiscovery` | function | [apps/mcp/src/oauth.ts:246](../../apps/mcp/src/oauth.ts#L246) | Yes |
 | `registerReadTools` | function | [apps/mcp/src/read-tools.ts:10](../../apps/mcp/src/read-tools.ts#L10) | Yes |
-| `mcpConfig` | function | [apps/mcp/src/runtime.ts:31](../../apps/mcp/src/runtime.ts#L31) | Yes |
-| `mcpLogger` | function | [apps/mcp/src/runtime.ts:68](../../apps/mcp/src/runtime.ts#L68) | Yes |
-| `createMcpRuntime` | function | [apps/mcp/src/runtime.ts:83](../../apps/mcp/src/runtime.ts#L83) | Yes |
-| `runMcpProcess` | function | [apps/mcp/src/runtime.ts:138](../../apps/mcp/src/runtime.ts#L138) | Yes |
-| `ToolRegistry.register` | method | [apps/mcp/src/tools.ts:78](../../apps/mcp/src/tools.ts#L78) | Yes |
-| `ToolRegistry.visible` | method | [apps/mcp/src/tools.ts:100](../../apps/mcp/src/tools.ts#L100) | Yes |
+| `mcpConfig` | function | [apps/mcp/src/runtime.ts:32](../../apps/mcp/src/runtime.ts#L32) | Yes |
+| `mcpLogger` | function | [apps/mcp/src/runtime.ts:69](../../apps/mcp/src/runtime.ts#L69) | Yes |
+| `createMcpRuntime` | function | [apps/mcp/src/runtime.ts:84](../../apps/mcp/src/runtime.ts#L84) | Yes |
+| `runMcpProcess` | function | [apps/mcp/src/runtime.ts:140](../../apps/mcp/src/runtime.ts#L140) | Yes |
+| `portableSchema` | function | [apps/mcp/src/tools.ts:66](../../apps/mcp/src/tools.ts#L66) | Yes |
+| `toolSchemas` | function | [apps/mcp/src/tools.ts:84](../../apps/mcp/src/tools.ts#L84) | Yes |
+| `modelText` | function | [apps/mcp/src/tools.ts:102](../../apps/mcp/src/tools.ts#L102) | Yes |
+| `ToolRegistry.register` | method | [apps/mcp/src/tools.ts:139](../../apps/mcp/src/tools.ts#L139) | Yes |
+| `ToolRegistry.visible` | method | [apps/mcp/src/tools.ts:161](../../apps/mcp/src/tools.ts#L161) | Yes |
 | `loadSwarmConfig` | function | [apps/server/src/ai/swarm-worker.ts:25](../../apps/server/src/ai/swarm-worker.ts#L25) | Yes |
 | `swarmInterval` | function | [apps/server/src/ai/swarm-worker.ts:43](../../apps/server/src/ai/swarm-worker.ts#L43) | Yes |
 | `SwarmWorker.constructor` | constructor | [apps/server/src/ai/swarm-worker.ts:59](../../apps/server/src/ai/swarm-worker.ts#L59) | Yes |
@@ -274,8 +277,8 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.drain` | method | [apps/server/src/ai/swarm-worker.ts:109](../../apps/server/src/ai/swarm-worker.ts#L109) | Yes |
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
-| `buildApp` | function | [apps/server/src/app.ts:109](../../apps/server/src/app.ts#L109) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:342](../../apps/server/src/app.ts#L342) | Yes |
+| `buildApp` | function | [apps/server/src/app.ts:111](../../apps/server/src/app.ts#L111) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:348](../../apps/server/src/app.ts#L348) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:43](../../apps/server/src/exec/actual-order.ts#L43) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:62](../../apps/server/src/exec/actual-order.ts#L62) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:90](../../apps/server/src/exec/actual-order.ts#L90) | Yes |
@@ -306,6 +309,9 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `QuoteStore.put` | method | [apps/server/src/exec/quotes.ts:39](../../apps/server/src/exec/quotes.ts#L39) | Yes |
 | `QuoteStore.get` | method | [apps/server/src/exec/quotes.ts:49](../../apps/server/src/exec/quotes.ts#L49) | Yes |
 | `QuoteStore.consume` | method | [apps/server/src/exec/quotes.ts:59](../../apps/server/src/exec/quotes.ts#L59) | Yes |
+| `SellGuard.constructor` | constructor | [apps/server/src/exec/sell-guard.ts:24](../../apps/server/src/exec/sell-guard.ts#L24) | Yes |
+| `SellGuard.check` | method | [apps/server/src/exec/sell-guard.ts:32](../../apps/server/src/exec/sell-guard.ts#L32) | Yes |
+| `SellGuard.refused` | method | [apps/server/src/exec/sell-guard.ts:46](../../apps/server/src/exec/sell-guard.ts#L46) | Yes |
 | `ExecutionService.constructor` | constructor | [apps/server/src/exec/service.ts:101](../../apps/server/src/exec/service.ts#L101) | Yes |
 | `ExecutionService.tradeQuote` | method | [apps/server/src/exec/service.ts:116](../../apps/server/src/exec/service.ts#L116) | Yes |
 | `ExecutionService.tradeOrder` | method | [apps/server/src/exec/service.ts:125](../../apps/server/src/exec/service.ts#L125) | Yes |
@@ -336,16 +342,16 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `returned.quote` | method | [apps/server/src/exec/trade-backend.ts:31](../../apps/server/src/exec/trade-backend.ts#L31) | Yes |
 | `decodeV3Fill` | function | [apps/server/src/exec/trade-reconcile.ts:23](../../apps/server/src/exec/trade-reconcile.ts#L23) | Yes |
 | `v3ReconciliationBackend` | function | [apps/server/src/exec/trade-reconcile.ts:98](../../apps/server/src/exec/trade-reconcile.ts#L98) | Yes |
-| `TradeError.constructor` | constructor | [apps/server/src/exec/trades.ts:39](../../apps/server/src/exec/trades.ts#L39) | Yes |
-| `preparationError` | function | [apps/server/src/exec/trades.ts:46](../../apps/server/src/exec/trades.ts#L46) | Yes |
-| `TradeService.constructor` | constructor | [apps/server/src/exec/trades.ts:62](../../apps/server/src/exec/trades.ts#L62) | Yes |
-| `TradeService.quote` | method | [apps/server/src/exec/trades.ts:114](../../apps/server/src/exec/trades.ts#L114) | Yes |
-| `TradeService.order` | method | [apps/server/src/exec/trades.ts:155](../../apps/server/src/exec/trades.ts#L155) | Yes |
-| `TradeService.detail` | method | [apps/server/src/exec/trades.ts:218](../../apps/server/src/exec/trades.ts#L218) | Yes |
-| `TradeService.history` | method | [apps/server/src/exec/trades.ts:224](../../apps/server/src/exec/trades.ts#L224) | Yes |
-| `TradeService.submitted` | method | [apps/server/src/exec/trades.ts:237](../../apps/server/src/exec/trades.ts#L237) | Yes |
-| `TradeService.rejected` | method | [apps/server/src/exec/trades.ts:269](../../apps/server/src/exec/trades.ts#L269) | Yes |
-| `TradeService.reconcile` | method | [apps/server/src/exec/trades.ts:279](../../apps/server/src/exec/trades.ts#L279) | Yes |
+| `TradeError.constructor` | constructor | [apps/server/src/exec/trades.ts:40](../../apps/server/src/exec/trades.ts#L40) | Yes |
+| `preparationError` | function | [apps/server/src/exec/trades.ts:47](../../apps/server/src/exec/trades.ts#L47) | Yes |
+| `TradeService.constructor` | constructor | [apps/server/src/exec/trades.ts:63](../../apps/server/src/exec/trades.ts#L63) | Yes |
+| `TradeService.quote` | method | [apps/server/src/exec/trades.ts:133](../../apps/server/src/exec/trades.ts#L133) | Yes |
+| `TradeService.order` | method | [apps/server/src/exec/trades.ts:175](../../apps/server/src/exec/trades.ts#L175) | Yes |
+| `TradeService.detail` | method | [apps/server/src/exec/trades.ts:238](../../apps/server/src/exec/trades.ts#L238) | Yes |
+| `TradeService.history` | method | [apps/server/src/exec/trades.ts:244](../../apps/server/src/exec/trades.ts#L244) | Yes |
+| `TradeService.submitted` | method | [apps/server/src/exec/trades.ts:257](../../apps/server/src/exec/trades.ts#L257) | Yes |
+| `TradeService.rejected` | method | [apps/server/src/exec/trades.ts:289](../../apps/server/src/exec/trades.ts#L289) | Yes |
+| `TradeService.reconcile` | method | [apps/server/src/exec/trades.ts:299](../../apps/server/src/exec/trades.ts#L299) | Yes |
 | `indexedV3Pools` | function | [apps/server/src/exec/v3-routes.ts:66](../../apps/server/src/exec/v3-routes.ts#L66) | Yes |
 | `quoteV3Trade` | function | [apps/server/src/exec/v3-routes.ts:115](../../apps/server/src/exec/v3-routes.ts#L115) | Yes |
 | `parseFlagOverride` | function | [apps/server/src/flags/service.ts:11](../../apps/server/src/flags/service.ts#L11) | Yes |
@@ -377,9 +383,11 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `OAuthTokenService.exchange` | method | [apps/server/src/harness/oauth-tokens.ts:87](../../apps/server/src/harness/oauth-tokens.ts#L87) | Yes |
 | `OAuthTokenService.revoke` | method | [apps/server/src/harness/oauth-tokens.ts:130](../../apps/server/src/harness/oauth-tokens.ts#L130) | Yes |
 | `OAuthTokenService.authenticate` | method | [apps/server/src/harness/oauth-tokens.ts:149](../../apps/server/src/harness/oauth-tokens.ts#L149) | Yes |
-| `unavailablePreflightInputs` | function | [apps/server/src/harness/preflight.ts:19](../../apps/server/src/harness/preflight.ts#L19) | Yes |
-| `PreflightService.constructor` | constructor | [apps/server/src/harness/preflight.ts:36](../../apps/server/src/harness/preflight.ts#L36) | Yes |
-| `PreflightService.run` | method | [apps/server/src/harness/preflight.ts:47](../../apps/server/src/harness/preflight.ts#L47) | Yes |
+| `recentCoinPrice` | function | [apps/server/src/harness/preflight-inputs.ts:17](../../apps/server/src/harness/preflight-inputs.ts#L17) | Yes |
+| `storedPreflightInputs` | function | [apps/server/src/harness/preflight-inputs.ts:36](../../apps/server/src/harness/preflight-inputs.ts#L36) | Yes |
+| `unavailablePreflightInputs` | function | [apps/server/src/harness/preflight.ts:22](../../apps/server/src/harness/preflight.ts#L22) | Yes |
+| `PreflightService.constructor` | constructor | [apps/server/src/harness/preflight.ts:39](../../apps/server/src/harness/preflight.ts#L39) | Yes |
+| `PreflightService.run` | method | [apps/server/src/harness/preflight.ts:50](../../apps/server/src/harness/preflight.ts#L50) | Yes |
 | `HarnessService.constructor` | constructor | [apps/server/src/harness/service.ts:26](../../apps/server/src/harness/service.ts#L26) | Yes |
 | `HarnessService.list` | method | [apps/server/src/harness/service.ts:56](../../apps/server/src/harness/service.ts#L56) | Yes |
 | `HarnessService.detail` | method | [apps/server/src/harness/service.ts:65](../../apps/server/src/harness/service.ts#L65) | Yes |
@@ -410,6 +418,7 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `ghostReportRoutes` | function | [apps/server/src/http/ghost-reports.ts:43](../../apps/server/src/http/ghost-reports.ts#L43) | Yes |
 | `launchMonitoringRoutes` | function | [apps/server/src/http/launch-monitoring.ts:19](../../apps/server/src/http/launch-monitoring.ts#L19) | Yes |
 | `registerRoutes` | function | [apps/server/src/http/routes.ts:68](../../apps/server/src/http/routes.ts#L68) | Yes |
+| `securityTxtRoutes` | function | [apps/server/src/http/security-txt.ts:32](../../apps/server/src/http/security-txt.ts#L32) | Yes |
 | `ShareService.constructor` | constructor | [apps/server/src/http/share.ts:58](../../apps/server/src/http/share.ts#L58) | Yes |
 | `ShareService.content` | method | [apps/server/src/http/share.ts:66](../../apps/server/src/http/share.ts#L66) | Yes |
 | `ShareService.image` | method | [apps/server/src/http/share.ts:95](../../apps/server/src/http/share.ts#L95) | Yes |
@@ -429,7 +438,7 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `registerV1` | function | [apps/server/src/http/v1/index.ts:38](../../apps/server/src/http/v1/index.ts#L38) | Yes |
 | `journalRoutes` | function | [apps/server/src/http/v1/journal.ts:20](../../apps/server/src/http/v1/journal.ts#L20) | Yes |
 | `oauthConsentRoutes` | function | [apps/server/src/http/v1/oauth.ts:19](../../apps/server/src/http/v1/oauth.ts#L19) | Yes |
-| `packRoutes` | function | [apps/server/src/http/v1/packs.ts:10](../../apps/server/src/http/v1/packs.ts#L10) | Yes |
+| `packRoutes` | function | [apps/server/src/http/v1/packs.ts:13](../../apps/server/src/http/v1/packs.ts#L13) | Yes |
 | `readRoutes` | function | [apps/server/src/http/v1/reads.ts:32](../../apps/server/src/http/v1/reads.ts#L32) | Yes |
 | `receiptRoutes` | function | [apps/server/src/http/v1/receipts.ts:14](../../apps/server/src/http/v1/receipts.ts#L14) | Yes |
 | `rpcRoutes` | function | [apps/server/src/http/v1/rpc.ts:59](../../apps/server/src/http/v1/rpc.ts#L59) | Yes |
@@ -473,10 +482,10 @@ Measured: **513/513 (100.00%)** documented. Minimum: **90%**.
 | `ScoreboardService.list` | method | [apps/server/src/read/scoreboard.ts:253](../../apps/server/src/read/scoreboard.ts#L253) | Yes |
 | `SensesReadService.constructor` | constructor | [apps/server/src/read/senses.ts:37](../../apps/server/src/read/senses.ts#L37) | Yes |
 | `SensesReadService.verdict` | method | [apps/server/src/read/senses.ts:49](../../apps/server/src/read/senses.ts#L49) | Yes |
-| `SensesReadService.card` | method | [apps/server/src/read/senses.ts:62](../../apps/server/src/read/senses.ts#L62) | Yes |
-| `SensesReadService.playbooks` | method | [apps/server/src/read/senses.ts:91](../../apps/server/src/read/senses.ts#L91) | Yes |
-| `SensesReadService.census` | method | [apps/server/src/read/senses.ts:108](../../apps/server/src/read/senses.ts#L108) | Yes |
-| `SensesReadService.receipt` | method | [apps/server/src/read/senses.ts:118](../../apps/server/src/read/senses.ts#L118) | Yes |
+| `SensesReadService.card` | method | [apps/server/src/read/senses.ts:64](../../apps/server/src/read/senses.ts#L64) | Yes |
+| `SensesReadService.playbooks` | method | [apps/server/src/read/senses.ts:97](../../apps/server/src/read/senses.ts#L97) | Yes |
+| `SensesReadService.census` | method | [apps/server/src/read/senses.ts:115](../../apps/server/src/read/senses.ts#L115) | Yes |
+| `SensesReadService.receipt` | method | [apps/server/src/read/senses.ts:123](../../apps/server/src/read/senses.ts#L123) | Yes |
 | `roleStartupMessage` | function | [apps/server/src/roles.ts:31](../../apps/server/src/roles.ts#L31) | Yes |
 | `planRole` | function | [apps/server/src/roles.ts:43](../../apps/server/src/roles.ts#L43) | Yes |
 | `acquireRoleLease` | function | [apps/server/src/roles.ts:73](../../apps/server/src/roles.ts#L73) | Yes |

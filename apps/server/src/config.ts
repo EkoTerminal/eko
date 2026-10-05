@@ -70,6 +70,11 @@ const EnvSchema = z.object({
   JOURNAL_KEK_ID: optionalValue(z.string().min(1)),
   JOURNAL_TOMBSTONE_PATH: optionalValue(z.string().min(1)),
   HARNESS_KEY_PEPPER: optionalValue(z.string().min(32)),
+  /** The MCP role's public endpoint, filled into GET /v1/packs templates; unset keeps {{MCP_URL}}. */
+  MCP_PUBLIC_URL: optionalValue(z.url().refine(value => {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.pathname === '/mcp' && !url.search && !url.hash && !url.username && !url.password;
+  }, 'MCP_PUBLIC_URL must be an HTTPS /mcp URL')),
   FLAGS: z.string().default(''),
   DEMO_SECRET: optionalValue(z.string().min(32)),
   LEGACY_API: z.enum(['true', 'false', '1', '0']).default('true').transform((v) => v === 'true' || v === '1'),
@@ -156,6 +161,11 @@ const EnvSchema = z.object({
   /** Must exceed the engines' seven-day idle window, so live evaluation never reads compacted coins. */
   RETENTION_IDLE_TOKEN_DAYS: optionalValue(z.coerce.number().int().min(8).max(365)),
   RETENTION_PENDING_POOL_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
+  /** Live sell check (BACKEND §6.2). Off unless true: the engines role measures exit cost, and the API re-checks every
+   * buy quote and refuses a coin whose sell fails. SELL_CHECK_DAILY_REQUESTS is read by the engines role; it is parsed
+   * here too so the build identity attests the cap for every role. */
+  SELL_CHECK_ENABLED: bool,
+  SELL_CHECK_DAILY_REQUESTS: optionalValue(z.coerce.number().int().min(0).max(5_000_000)),
 });
 
 // TODO(spec): BACKEND §2.4/§18 do not define deployment identity. Version 1 attests
@@ -174,6 +184,7 @@ export const identityConfigKeys = {
   RPC_PAID_DAILY_BUDGET: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
   LIVE_TRADING_ENABLED: true, SECURITY_COLLECTORS: true,
   RETENTION_QUOTE_TRANSFER_DAYS: true, RETENTION_IDLE_TOKEN_DAYS: true, RETENTION_PENDING_POOL_DAYS: true,
+  SELL_CHECK_ENABLED: true, SELL_CHECK_DAILY_REQUESTS: true,
 } as const;
 // Identity also covers the headless image roles the dispatcher starts (indexer, engines, ...), not only the server's own roles.
 const IdentityEnvSchema = EnvSchema.pick(identityConfigKeys).extend({

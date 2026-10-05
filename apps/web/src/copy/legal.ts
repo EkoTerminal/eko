@@ -1,4 +1,4 @@
-import { ADVISORY, DYOR, ONCHAIN_ADVISORY } from './index';
+import { ADVISORY, DYOR, NON_AFFILIATION, ONCHAIN_ADVISORY } from './index';
 
 export interface PolicyDraft {
   slug: string;
@@ -8,16 +8,16 @@ export interface PolicyDraft {
 
 // Approval is an external owner decision tied to this exact draft version, never inferred from a build.
 export const POLICY_REVIEW = {
-  version: '2026-10-02-draft.1',
-  draftedAt: '2026-10-02',
+  version: '2026-10-05-draft.2',
+  draftedAt: '2026-10-05',
   effectiveAt: null,
   ownerApproval: { dueAt: '2026-10-05', approvedAt: null, evidenceRef: null },
 } as const;
 
 export const LEGAL_COPY = {
   navigation: 'Launch policies',
-  draft: 'Draft · owner approval pending',
-  review: 'Owner approval is external and due October 5, 2026. These drafts are not approved or effective terms. Counsel review is planned for the later legal phase.',
+  draft: 'Draft — pending owner approval',
+  review: 'This is a draft for the owner to review. It is not approved and not in effect. A review by legal counsel is planned for a later phase.',
   missing: 'Policy not found',
   choose: 'Choose a policy below.',
   version: 'Version',
@@ -25,49 +25,83 @@ export const LEGAL_COPY = {
   approvalDue: 'Owner approval due',
   approvalDate: 'Owner approval date',
   approvalEvidence: 'Approval evidence',
-  pending: 'Pending external record',
-  contact: 'Public domain: {{PUBLIC_DOMAIN}} · Policy contact: {{POLICY_CONTACT}}. Details await owner confirmation.',
+  pending: 'Pending — not approved yet',
+  contact: 'Website: ekoterminal.com · Contact for questions about these policies: pending owner confirmation · Security reports: security@ekoterminal.com',
 };
 
-// TODO(spec): Confirm the public domain/contact and operational log/backup retention before approval.
+// TODO(spec): The policy contact mailbox, server log and backup retention and the service-provider list are owner
+// decisions (docs/public-launch/OWNER-DECISIONS.md); they stay marked pending until confirmed.
 // TODO(spec): Set the team blackout duration and exception-review procedure externally; no window is invented here.
 export const POLICY_DRAFTS: readonly PolicyDraft[] = [
   { slug: 'terms', title: 'Terms of service', sections: [
-    { title: 'Research and your decisions', paragraphs: [
-      'EKO publishes chain research and provides software for applying your own rules to your own agent. Public outputs are shared research, not individual investment recommendations. You decide whether to use them and bear the risk of loss.',
+    { title: 'What EKO is', paragraphs: [
+      'EKO is a research terminal and a set of tools for Robinhood Chain. It shows chain data, risk checks and AI-generated analysis, lets you trade from your own wallet, and lets you connect your own trading agent so it checks with EKO before it places an order.',
+      'EKO’s analysis is general research shared with every user. It is not investment advice and not a recommendation to buy or sell anything. You make your own decisions and you carry the risk of any loss.',
       DYOR,
-      'Do not use the service for unlawful activity, sanctions evasion, interference with other users or misuse of untrusted token text. EKO does not execute stocks, stock tokens or perpetual futures.',
     ] },
-    { title: 'Your wallet signs', paragraphs: [
-      'EKO is non-custodial. Your wallet signs each terminal trade and exact-amount approval; the server never holds your user keys or funds. We never receive your Robinhood credentials. Review the asset, amount, route, spender, network and fees before signing. Gas, venue fees, taxes, slippage and failed transactions can cost money.',
-      'Guarded execution is unavailable in this draft candidate. Supported routes, current sanctions screening and required checks must be accepted before signing is enabled. An unavailable check is not a passing check; a quote or link out does not establish an executable route.',
+    { title: 'Your wallet, your keys', paragraphs: [
+      'EKO is non-custodial. Your wallet signs every trade and every token approval, and approvals are for the exact amount of the trade. EKO’s servers never hold your private keys or your funds, and EKO never receives your Robinhood login details.',
+      'Before you sign, check the token, amount, route, network and fees your wallet shows you. Network gas, venue fees, token taxes, slippage and failed transactions can all cost money.',
+    ] },
+    { title: 'Live trading', paragraphs: [
+      'Live trading can be paused at any time, for example during an outage or while a required check is unavailable. While it is paused, you can still scan coins and paper trade.',
+      'Live trades can be limited by a per-trade cap. EKO does not trade stocks, stock tokens or perpetual futures for you.',
+      'Before EKO offers a live trade, it checks your trading wallet against the US Treasury’s OFAC sanctions list. If your wallet is listed, or the check cannot be completed, EKO does not offer the trade.',
+    ] },
+    { title: 'Fees', paragraphs: [
+      'Terminal fee: 0% during launch week, until token day. Network, venue and token fees still apply.',
+      'Planned from token day: a 0.5% terminal fee on Uniswap-routed trades, lower with a tier, paid straight to the public burn wallet. The burn wallet’s balance is burned daily by hand, and every transaction is posted. Pons-curve trades carry no terminal fee at launch. Terminal fees never go to the dev wallet.',
+      'Planned tiers start the day after token day. EKO pays nothing to token holders.',
+    ] },
+    { title: 'Agents and guardrails', paragraphs: [
       ADVISORY,
       ONCHAIN_ADVISORY,
+      'An agent can ignore an advisory check. EKO does not control your brokerage account; keep your brokerage’s own trade approvals on if you rely on them.',
     ] },
-    { title: 'Launch fees and later stages', paragraphs: [
-      'Terminal fee: 0% during launch week, until token day. This refers to the EKO terminal fee; network, venue and token charges can still apply. No launch-week terminal fee is sent to a project wallet.',
-      'Token-day fees remain staged. The planned Uniswap terminal fee is 0.5%, with later tier discounts, paid directly to the public burn wallet. Pons-curve trades carry no terminal fee at launch. The dev wallet is separate and is not the destination for terminal fees.',
-      'Daily manual buy-and-burn activity is planned from token day, subject to release gates, with each transaction published. It is not active in this candidate. Tiers, trials, token payments and later fee routes remain unavailable until their stages and checks are accepted. Nothing is paid to token holders.',
+    { title: 'Fair use', paragraphs: [
+      'Do not use EKO for anything unlawful, to evade sanctions, to attack or overload the service, or to interfere with other users.',
+      'Token names, descriptions and links are written by strangers. EKO shows them as untrusted text; treat them that way too.',
     ] },
-    { title: 'Availability and changes', paragraphs: [
-      'Data may be missing, stale or wrong. Access or execution may pause for outages, sanctions checks or incomplete release gates. Recheck live status before any decision. Future policy changes require a dated version and owner approval; these drafts do not establish acceptance of final terms.',
+    { title: 'What can go wrong', paragraphs: [
+      'Data can be missing, late or wrong. AI analysis can be wrong. Risk checks can miss harmful behavior. The service can slow down, pause or go offline. Check the live status before you act.',
+    ] },
+    { title: 'Robinhood', paragraphs: [
+      'EKO runs on Robinhood Chain, a public blockchain.',
+      NON_AFFILIATION,
+    ] },
+    { title: 'Changes', paragraphs: [
+      'If these terms change, the new version will be posted on this page with a new version number and date.',
     ] },
   ] },
   { slug: 'privacy', title: 'Privacy policy', sections: [
-    { title: 'Account and public data', paragraphs: [
-      'Wallet sign-in uses Sign-In with Ethereum (SIWE), linking a public wallet address to a session. An address is a public identifier, not an anonymous identity. Chain transactions and published research remain public. We never receive your Robinhood credentials or wallet private keys.',
+    { title: 'The short version', paragraphs: [
+      'EKO collects as little as it can. It never receives your Robinhood login details, your wallet’s private keys or your seed phrase. Wallet addresses and blockchain transactions are public by nature.',
     ] },
-    { title: 'Optional Flight Recorder', paragraphs: [
-      'The launch Flight Recorder journal is opt-in. Its required design encrypts private entries per user; only salted commitments enter public receipts. Journal collection must remain unavailable until consent, encryption and deletion are implemented and accepted. This draft candidate does not provide that encrypted harness journal; existing manual web notes are a separate feature and are not evidence of encrypted Flight Recorder storage.',
-      'Sharing ground truth requires a separate opt-in. Only de-identified, bucketed outcomes may be shared, never private journal payloads. Shared ground truth is retained indefinitely under the launch design. Public commitments and already shared de-identified data cannot be recalled from public records by deleting a private journal.',
+    { title: 'What EKO collects', paragraphs: [
+      'Wallet sign-in: when you sign in with your wallet (Sign-In with Ethereum), EKO links your public wallet address to a session cookie. A wallet address is a public identifier, not an anonymous one.',
+      'Things you save: your watchlist, alerts, settings, layouts and notes.',
+      'Connected agents: if you connect a trading agent, EKO stores the agent, its settings, the checks it runs and its access keys. Keys are stored as keyed hashes, not in readable form.',
+      'The Flight Recorder journal is opt-in. Private entries are encrypted with a key that belongs to your account. Only salted hashes of entries go into public receipts.',
+      'Usage and speed: the app sends anonymous measurements, such as which screen loaded and how long it took. They are not linked to your wallet.',
+      'Technical data: EKO’s servers process your IP address to limit abuse and keep the service running, and record errors so they can be fixed.',
+      'Notifications: if you turn on browser notifications or link Telegram for alerts, EKO stores what it needs to send them.',
     ] },
-    { title: 'Deletion and retention', paragraphs: [
-      'The required delete-my-data flow destroys the wrapped per-user encryption key before deleting private harness rows, and revokes agent keys and grants. Private entries in restored backups must remain unreadable after key destruction. Public receipt commitments may remain. Harness records are retained until deletion, or up to 30 days after account deletion under the launch design.',
-      'Account-wide deletion is unavailable in this candidate. Do not treat deletion of a manual note as account-wide deletion. Activation depends on verified deletion, retries and backup tombstones. The launch design retains sessions for 90 days, latency samples for 30 days, bot interactions for one year, inference detail for 180 days and audit logs for two years. Operational log and backup retention and the support contact remain pending; these retention controls still require implementation evidence before approval.',
+    { title: 'Who else handles data', paragraphs: [
+      'EKO uses service providers to run: hosting and database, blockchain data (RPC) providers, AI model providers for analysis, and error reporting. Private journal entries stay out of logs, analytics and share images. The list of providers is pending owner confirmation.',
     ] },
-    { title: 'Telegram and processors', paragraphs: [
-      'Telegram group scanning is planned to extract contract addresses rather than retain full group messages. Caller records may link platform identifiers to a group and coin; account linking and notification delivery require separate user action. Telegram behavior is not accepted in this candidate. The bot must disclose data use in its description and /start before activation.',
-      'Infrastructure, RPC and model services may process necessary requests when enabled. Private journal payloads must stay out of logs, telemetry and share images. Processor configuration and operational retention need review before approval. Send privacy requests only to the confirmed policy contact once published.',
+    { title: 'Sharing', paragraphs: [
+      'Your journal is private. A separate opt-in to share de-identified outcomes is planned and is not available yet. Outcomes you choose to share would be kept indefinitely and could not be recalled.',
+    ] },
+    { title: 'Deleting your data', paragraphs: [
+      'In Settings, under Privacy & data, “Delete my harness data” destroys the key that encrypts your journal, deletes your connected agents, journal, notes, settings and layouts, and revokes your agents’ keys and connector access. It cannot be undone.',
+      'It keeps your sign-in record, your trade records and any public receipt hashes. Hashes already posted on-chain cannot be removed.',
+    ] },
+    { title: 'How long EKO keeps data', paragraphs: [
+      'Planned retention: sessions 90 days; usage and speed measurements 30 days; bot interactions one year; AI analysis detail 180 days; audit logs two years. Agent journal and check records stay until you delete them, or 30 days after account deletion. Public chain data and receipts are kept permanently so they stay checkable.',
+      'Server log and backup retention: pending owner confirmation.',
+    ] },
+    { title: 'Changes and contact', paragraphs: [
+      'If this policy changes, the new version will be posted on this page with a new version number and date. The contact address for privacy questions is pending owner confirmation.',
     ] },
   ] },
   { slug: 'risk', title: 'Risk disclosure', sections: [
