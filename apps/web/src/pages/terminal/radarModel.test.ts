@@ -47,6 +47,7 @@ describe('Hot right now strip', () => {
     const volumes = picked.slice(1).map(c => c.volume1hUsd ?? 0); expect(volumes).toEqual([...volumes].sort((a, b) => b - a));
     expect(hottest(list.map(c => ({ ...c, verdictPending: true })))).toEqual([]);
     expect(hottest(list.map(c => ({ ...c, trades1h: 4 })))).toEqual([]);
+    expect(hottest(list.map(c => ({ ...c, change1hPct: -0.5 })))).toEqual([]);
     expect(hottest(list.map(c => ({ ...c, unavailable: ['flow', 'volume'] as ('flow' | 'volume')[] })))).toEqual([]);
   });
   it('filters Hot by the tag rows show, including a Danger coin with unusual trading', () => {

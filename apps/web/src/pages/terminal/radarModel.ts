@@ -13,11 +13,12 @@ export const heatScore = (c: RadarRow) => activityRatio(c) * (1 + Math.max(0, c.
   + (c.unavailable?.includes('flow') ? 0 : c.flow.agentPct / 10);
 /**
  * Hot right now: Hot coins first, then the most active of the rest, so the strip shows where trading is when
- * nothing clears the Hot bar. Danger and unscanned coins are never featured; a coin needs some real trades.
+ * nothing clears the Hot bar. Danger, unscanned and falling coins are never featured; a coin needs some real trades.
+ * At a quiet hour the strip can show fewer than three, or none.
  */
 export const hottest = (rows: readonly RadarRow[], n = 3): RadarRow[] => rows
   .filter((c) => !c.verdictPending && (c.verdict === 'clear' || c.verdict === 'monitor') && !c.unavailable?.includes('volume')
-    && (c.trades1h ?? 0) >= 5)
+    && (c.trades1h ?? 0) >= 5 && (c.unavailable?.includes('change') || c.change1hPct >= 0))
   .map((c) => ({ c, hot: heatOf(c) === 'hot', score: heatScore(c) }))
   .sort((a, b) => Number(b.hot) - Number(a.hot) || b.score - a.score || a.c.address.localeCompare(b.c.address)).slice(0, n).map(({ c }) => c);
 /** When each row version arrived, in client milliseconds. `ageSec` is only meaningful relative to it. */
@@ -56,7 +57,7 @@ export function applyRadarEvents(rows: readonly RadarRow[], events: readonly Cha
 }
 export const PLAYBOOK_NAMES: Record<string, string> = { honeypot: 'Honeypot', tax_trap: 'Tax trap', removable_liquidity: 'Removable liquidity', fee_trap_pool: 'Fee-trap pool', stuck_at_bonding: 'Stuck at bonding', wash_to_trend: 'Wash to trend', clone_swarm: 'Clone', exempt_insiders: 'Exempt insiders', bundle_dump: 'Bundle dump', migration_dump: 'Migration dump', malicious_hook: 'Malicious hook', agent_bait: 'Agent bait', serial_deployer: 'Serial deployer' };
 export const pct = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
-export const usd = (v: number) => v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1000 ? `$${Math.round(v / 1000)}K` : `$${v.toLocaleString('en-US')}`;
+export const usd = (v: number) => v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1000 ? `$${Math.round(v / 1000)}K` : `$${Math.round(v).toLocaleString('en-US')}`;
 export const price = (v: number) => `$${v.toFixed(v < .01 ? 7 : 2)}`;
 export const age = (sec: number) => sec < 3600 ? `${Math.round(sec / 60)}m` : sec < 86400 ? `${(sec / 3600).toFixed(1)}h` : `${(sec / 86400).toFixed(1)}d`;
 export const exitText = (v: number) => v >= 100 ? 'Blocked' : `${v.toFixed(1)}%`;
