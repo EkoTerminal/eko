@@ -1,6 +1,6 @@
 import { decodeFunctionData, encodeFunctionData, keccak256, padHex, parseAbi, stringToHex, toHex,
   type Address, type Hex, type PublicClient } from 'viem';
-import type { SqlClient } from '@eko/db';
+import { binary, type SqlClient } from '@eko/db';
 import { loadRegistry, SerializedMeteredForkLease, type AnvilRpc, type MeteredForkLease } from '@eko/chain';
 import { ActualOrderBindingSchema, canonicalize, type ActualOrderBinding, type ActualOrderObservation, type ActualOrderState,
   type Agent, type GuardAssessmentV2, type GuardCursor, type Policy, type PreflightRequest, type Verdict } from '@eko/shared';
@@ -316,25 +316,75 @@ export const walletPolicy = (mode: Policy['mode']): Policy => ({ mode, blockPlay
 export const walletAgentId = (accountId: string) => `wallet-${accountId}`;
 const walletAgent = (accountId: string, wallet: string): Agent => ({ id: walletAgentId(accountId), name: 'Wallet', kind: 'onchain', wallet: lower(wallet), status: 'active', uncheckedOrders24h: 0 });
 
-/** Current verdict for one coin, or `unavailable` when the read failed (which refuses buys). */
-export type VerdictSource = (coin: Address) => Promise<Verdict | 'unavailable' | undefined>;
+/** What live trade admission knows about one coin's verdict. */
+export interface TradeVerdict {
+  /** The current verdict (what Radar shows) plus any stored Guard v2 assessment; `unavailable` when a read failed. */
+  verdict: Verdict | 'unavailable' | undefined;
+  /** A Guard v2 release is active: its gate (packages/policy/src/guard.ts) takes precedence over the current verdict. */
+  guardV2Active: boolean;
+  /** A requested scan or rescan of this coin is queued or running (scan_jobs phase other than `done`). */
+  scanPending: boolean;
+}
+export type VerdictSource = (coin: Address) => Promise<TradeVerdict>;
 /**
- * The read model's verdict for policy: the legacy verdict plus the stored Guard v2 assessment. Only an `active`
- * assessment admits a buy (packages/policy/src/guard.ts); shadow assessments, as published today, refuse buys.
+ * Read-model verdicts for trade admission. A Guard v2 release counts as active once any active-mode assessment has been
+ * recorded (the only release signal in storage; refreshed every 10 seconds). Any read failure is `unavailable`, which
+ * refuses buys.
  */
-export function readModelVerdicts(reads: { store: { verdict(coin: Address): Promise<Verdict | null> }; guard: { verdict(coin: Address): Promise<GuardAssessmentV2 | null> } }): VerdictSource {
+export function readModelVerdicts(reads: { store: { verdict(coin: Address): Promise<Verdict | null> }; guard: { verdict(coin: Address): Promise<GuardAssessmentV2 | null> } },
+  sql: () => SqlClient, now: () => number = Date.now): VerdictSource {
+  let release: { at: number; active: Promise<boolean> } | undefined;
+  const releaseActive = () => {
+    if (!release || now() - release.at > 10_000) {
+      const active = sql().query<{ active: boolean }>(`SELECT EXISTS(SELECT 1 FROM guard_verdict_revisions
+        WHERE chain_id=4663 AND data->'assessment'->>'mode'='active') AS active`).then(r => r.rows[0]?.active === true);
+      release = { at: now(), active };
+      active.catch(() => { release = undefined; });
+    }
+    return release.active;
+  };
   return async coin => {
     try {
-      const [legacy, guardV2] = await Promise.all([reads.store.verdict(coin), reads.guard.verdict(coin)]);
-      if (!legacy && !guardV2) return undefined;
+      const [legacy, guardV2, guardV2Active, scans] = await Promise.all([reads.store.verdict(coin), reads.guard.verdict(coin), releaseActive(),
+        sql().query<{ pending: number }>(`SELECT 1 AS pending FROM scan_jobs WHERE coin=$1 AND phase<>'done' LIMIT 1`, [binary(coin)])]);
+      const scanPending = scans.rows.length > 0;
+      if (!legacy && !guardV2) return { verdict: undefined, guardV2Active, scanPending };
       const base: Verdict = legacy ?? { coin, level: 'pending', reasons: [], playbooks: [], schemaVersion: 'verdict-1+guard-2', asOfBlock: Number(guardV2!.cursor.blockNumber),
         receipt: { id: guardV2!.receipt.id, hash: guardV2!.receipt.payloadHash, status: 'pending' } };
-      return guardV2 ? { ...base, guardV2 } : base;
-    } catch { return 'unavailable'; }
+      return { verdict: guardV2 ? { ...base, guardV2 } : base, guardV2Active, scanPending };
+    } catch { return { verdict: 'unavailable', guardV2Active: false, scanPending: false }; }
   };
 }
-const receiptIdOf = (verdict: Verdict | 'unavailable' | undefined) =>
-  verdict && verdict !== 'unavailable' ? verdict.guardV2?.receipt.id ?? verdict.receipt.id : 'guard-unavailable';
+
+/**
+ * Buy admission on the current verdict while no Guard v2 release is active (owner decision 2026-10-06). Danger, by
+ * level or by any Danger playbook match, refuses and is never overridable. No verdict yet, a `pending` verdict, or a
+ * queued or running scan of the coin refuses as `scanning`, which is retryable: a requested scan always produces a
+ * verdict newer than the stored one, so while it runs the stored verdict is treated as superseded. Every other level
+ * (`clear`, `monitor`) is admitted, with no waiting period. Sells never reach this gate; the sell check, policy
+ * limits and the exact-account simulation still apply to every buy.
+ */
+export function currentVerdictGate(scanPending: boolean): NonNullable<Deps['buyVerdictGate']> {
+  return verdict => {
+    if (verdict?.level === 'danger' || verdict?.playbooks.some(m => m.level === 'danger'))
+      return { deny: ['guard_danger: EKO rates this coin Danger, so buys are refused'], warn: [] };
+    if (!verdict || verdict.level === 'pending' || scanPending)
+      return { deny: ['scanning: EKO is still scanning this coin; try again shortly'], warn: [] };
+    return { deny: [], warn: [] };
+  };
+}
+/** The buy gate for one coin: Guard v2's own gate once a release is active, otherwise the current-verdict gate. */
+export const buyVerdictGateFor = (tv: TradeVerdict) => tv.guardV2Active ? undefined : currentVerdictGate(tv.scanPending);
+/**
+ * The Guard reference bound into an order and rechecked at order time. Under Guard v2 it is the assessment's receipt
+ * (a new assessment invalidates the quote). Under the current verdict the gate itself re-runs on the fresh verdict at
+ * order time, so a constant keeps routine verdict refreshes from voiding quotes. Sells never depend on a verdict.
+ */
+export function guardReceiptFor(side: 'buy' | 'sell', tv: TradeVerdict): string {
+  if (side === 'sell') return 'not-required:sell';
+  if (!tv.guardV2Active) return 'current-verdict';
+  return tv.verdict && tv.verdict !== 'unavailable' ? tv.verdict.guardV2?.receipt.id ?? tv.verdict.receipt.id : 'guard-unavailable';
+}
 
 /**
  * Accepted acquisition for indexed v3 routes. Quote binds the adapter's exact bytes to the wallet, policy, Guard
@@ -349,6 +399,7 @@ export function v3TradeAcquisition(o: { chain: () => PublicClient; lease: Metere
       const terms = routeTerms(route.tx.data), pool = route.route.poolId ? lower(route.route.poolId) : null;
       if (!terms || !pool) throw new Error('Unsupported route shape');
       const [block, verdict] = await Promise.all([chain().getBlock({ blockNumber: BigInt(route.asOfBlock) }), o.verdict(input.coin)]);
+      const guardReceiptId = guardReceiptFor(input.side, verdict);
       const policy = walletPolicy(input.riskMode ?? 'safe'), fp = await fingerprints(chain(), input.coin, pool, terms, block.number!);
       // The coin's exact approval is part of the bound order whenever the quote still lists it.
       const approval = route.approvals.find(a => same(a.token, input.coin));
@@ -357,7 +408,7 @@ export function v3TradeAcquisition(o: { chain: () => PublicClient; lease: Metere
           tx: { to: route.tx.to, data: route.tx.data, value: route.tx.value },
           execution: { chainId: 4663, account: input.account, recipient: input.account, coin: input.coin, side: input.side,
             amountIn: route.amountIn, minOut: route.minOut, slippageBps: input.slippageBps, cursor: cursorOf(block), ...fp,
-            policyHash: executionPolicyHash(policy), guardReceiptId: receiptIdOf(verdict), tx: route.tx,
+            policyHash: executionPolicyHash(policy), guardReceiptId, tx: route.tx,
             approval: input.side === 'sell' && approval ? { token: input.coin, spender: lower(route.tx.to), amount: route.amountIn, kind: 'erc20',
               tx: { chainId: 4663, to: input.coin, data: erc20.approve(route.tx.to, BigInt(route.amountIn)), value: '0' } } : null } },
         context: { reportedAt: new Date().toISOString() } } : null;
@@ -383,9 +434,10 @@ export function v3TradeAcquisition(o: { chain: () => PublicClient; lease: Metere
       const state: ActualOrderState = { observedAtMs: now, criticalCheckedAtMs: now, cursor: cursorOf(head), ...fp,
         balanceHash: digest({ native, held, allowance }), feeHash: digest({ poolFee: terms.fee, ekoFeeBps: 0 }), controlHash: fp.profileHash,
         sourceRevision: digest('live-trade-v3-1'), semanticHash: digest({ coin: b.coin, side: b.side }),
-        policyHash: executionPolicyHash(policy), guardReceiptId: receiptIdOf(verdict), routeAvailable: same(canonical, pool) };
-      const deps: Deps = { now: Date.now, verdictFor: coin => same(coin, b.coin) ? verdict : undefined, cardFor: () => undefined,
-        priceFor: () => undefined, approvalFor: () => undefined, approvalsAvailable: false };
+        policyHash: executionPolicyHash(policy), guardReceiptId: guardReceiptFor(b.side, verdict), routeAvailable: same(canonical, pool) };
+      const gate = buyVerdictGateFor(verdict);
+      const deps: Deps = { now: Date.now, verdictFor: coin => same(coin, b.coin) ? verdict.verdict : undefined, cardFor: () => undefined,
+        priceFor: () => undefined, approvalFor: () => undefined, approvalsAvailable: false, ...(gate ? { buyVerdictGate: gate } : {}) };
       return { request: retained.checked!, policy, agent: walletAgent(retained.accountId, retained.wallet!), deps, state,
         admission: { status: 'allowed' }, quoteClocks: { quotedAtMs: retained.quotedAt.getTime(), expiresAtMs: retained.expiresAt.getTime() } };
     },

@@ -6,8 +6,8 @@
  * through the access, sanctions, sell-check and policy code, measures every quote and order on the simulation host,
  * returns unsigned bytes, and its reconcile worker confirms fills from receipts. A key generated at test time signs; it
  * is funded with fork-only ETH by `anvil_setBalance`. No real funds, wallets or keys, and no paid RPC: Anvil forks the
- * public RPC only. `v1-trade-harness.ts` lists the only test seams (indexer rows, an active Guard assessment fixture,
- * Anvil's L2-only gas).
+ * public RPC only. Admission runs on the current verdict with no Guard v2 release, as at launch. `v1-trade-harness.ts`
+ * lists the only test seams (indexer and engine rows, Anvil's L2-only gas, the retrying relay).
  *
  * Anvil processes on fixed ports: the trading chain (8547, forked from the public RPC through a retrying loopback relay
  * on 8546, one block per second like a live chain) and one simulation host per server (8548, 8549; each started with `--fork-url` to the trading chain and
@@ -32,7 +32,8 @@ import { loadConfig } from '../../src/config.js';
 import { tradeOrders } from '../../src/db/schema.js';
 import { SellGuard } from '../../src/exec/sell-guard.js';
 import { seedSanctions } from '../sanctions-fixture.js';
-import { anvilNetworkFeeWei, findPonsLaunch, ForkGuard, forkLog, ROUTER, seedIndexedState, startPublicRpcRelay, USDG, warmForkState, WETH } from './v1-trade-harness.js';
+import { anvilNetworkFeeWei, findPonsLaunch, forkLog, ROUTER, seedIndexedState, setScanPending, setStoredSellCheck, setVerdict, startPublicRpcRelay,
+  USDG, warmForkState, WETH } from './v1-trade-harness.js';
 
 const ANVIL = process.env.ANVIL_BIN ?? 'anvil';
 const RELAY_PORT = 8546, CHAIN_PORT = 8547, SIM_PORT = 8548, SIM_B_PORT = 8549;
@@ -59,7 +60,7 @@ process.once('exit', killAnvils);
 const watchdog = setTimeout(() => { killAnvils(); console.error('v1 trade fork run exceeded its time limit'); process.exit(1); }, RUN_LIMIT_MS);
 watchdog.unref();
 
-interface Server { built: Awaited<ReturnType<typeof buildApp>>; cookie: string; guard: ForkGuard }
+interface Server { built: Awaited<ReturnType<typeof buildApp>>; cookie: string }
 let srv: Server;
 let primary: Server;
 let forkBlock: bigint;
@@ -114,10 +115,9 @@ const tradingLive = async (built: Server['built'], enabled: boolean) => {
   expect(response.statusCode, response.body).toBe(200);
 };
 
-/** A production-configured server on its own simulation host; only the Guard verdicts and Anvil's gas are test seams. */
+/** A production-configured server on its own simulation host; Anvil's gas is the only code seam. */
 async function startServer(simPort: number, sellCheck: boolean): Promise<Server & { indexed: Awaited<ReturnType<typeof seedIndexedState>> }> {
   await startAnvil(simPort, ['--fork-url', CHAIN_RPC, '--no-rate-limit']);
-  const guard = new ForkGuard();
   let built: Server['built'] | undefined;
   const cfg = loadConfig({
     NODE_ENV: 'test', APP_ROLE: 'api', PGLITE_DIR: ':memory:', PUBLIC_ORIGIN: ORIGIN, SESSION_SECRET: SECRET, DEMO_SECRET: SECRET,
@@ -129,15 +129,16 @@ async function startServer(simPort: number, sellCheck: boolean): Promise<Server 
     LIVE_TRADING_ENABLED: 'true', TRADING_ALLOWLIST_ONLY: 'false', TRADE_CAPS_FROM: new Date(Date.now() - 3_600_000).toISOString(),
     FEE_BPS_DEFAULT: '0', SELL_CHECK_ENABLED: String(sellCheck), ADMIN_WALLETS: admin.address,
   } as NodeJS.ProcessEnv);
-  built = await buildApp(cfg, { startBackground: false, tradeOverrides: { verdict: guard.source,
-    sources: { networkFeeWei: anvilNetworkFeeWei(() => built!.ctx.chains.get('robinhood-mainnet')) } } });
+  built = await buildApp(cfg, { startBackground: false,
+    tradeOverrides: { sources: { networkFeeWei: anvilNetworkFeeWei(() => built!.ctx.chains.get('robinhood-mainnet')) } } });
   // Production-shaped data: OFAC snapshot, indexed tokens/pools/ETH price, Guard verdicts and the runtime switch.
   await seedSanctions(built.ctx.dbh.chain);
   await built.ctx.dbh.chain.ensurePartitions(new Date());
   const indexed = await seedIndexedState(built.ctx.dbh.chain.sql, patient, forkBlock, pons ? { pons } : {});
-  for (const coin of [USDG, WETH, ...(pons ? [pons.coin] : [])]) guard.set(coin, { level: 'lower' });
+  // Current verdicts as the engines publish them (Radar). The Pons coin is left unscanned.
+  for (const coin of [USDG, WETH]) await setVerdict(built.ctx.dbh.chain.sql, coin, 'clear', forkBlock);
   await tradingLive(built, true);
-  const server = { built, cookie: await signIn(built, trader), guard, indexed };
+  const server = { built, cookie: await signIn(built, trader), indexed };
   // The worker role's reconcile loop (1.5 s ticks), as `APP_ROLE=worker` starts it.
   built.ctx.exec.start();
   return server;
@@ -244,7 +245,9 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
     clearTimeout(watchdog);
   });
 
-  it('native ETH → USDG (v1 buy of USDG): binding quote, order, sign, submit, reconcile to the actual fill', async () => {
+  it('native ETH → USDG (v1 buy of USDG) on the current verdict alone: quote, order, sign, submit, reconcile the fill', async () => {
+    // No Guard v2 release or assessment exists: admission uses the current (Radar) verdict.
+    expect(Number((await srv.built.ctx.dbh.chain.sql.query<{ n: string }>('SELECT count(*) AS n FROM guard_verdict_revisions')).rows[0]!.n)).toBe(0);
     const before = await balanceOf(USDG);
     const q = await quote({ coin: USDG, side: 'buy', amountUsd: 20 });
     expect(q, JSON.stringify(q.guard)).toMatchObject({ coin: USDG, side: 'buy', binding: true, account: trader.address.toLowerCase(), approvals: [],
@@ -276,7 +279,15 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
     expect((history.json() as { rows: TradeOrder[] }).rows.map(o => o.id)).toContain(placed.order.id);
   }, 120_000);
 
-  it('USDG → native ETH (v1 sell of USDG) as the web app runs it: exact approval, re-quote, order, confirm', async () => {
+  it('a holder sells a Danger coin (USDG → native ETH) as the web app runs it: exact approval, re-quote, order, confirm', async () => {
+    // Holders can always exit: the coin is now rated Danger, which refuses buys and never sells.
+    const sql = srv.built.ctx.dbh.chain.sql;
+    await setVerdict(sql, USDG, 'danger', forkBlock, [{ id: 'honeypot', level: 'danger', confidence: 1, evidence: [] }]);
+    try { await sellDangerCoin(); } finally { await setVerdict(sql, USDG, 'clear', forkBlock); }
+  }, 120_000);
+
+  async function sellDangerCoin() {
+    expect(refusalCodes(await quote({ coin: USDG, side: 'buy', amountUsd: 5 }))).toEqual(['guard_danger']);
     // Before the approval the quote is binding and actionable: the exact approval is its next step.
     const first = await quote({ coin: USDG, side: 'sell', amountUsd: 10 });
     expect(first).toMatchObject({ binding: true, amountIn: '10000000', guard: { decision: 'allow', checks: [] },
@@ -300,7 +311,7 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
     expect(ethAfter + swapGas - ethBefore).toBeLessThanOrEqual(BigInt(done.filledOut!));
     expect(ethAfter + swapGas - ethBefore).toBeGreaterThan(BigInt(done.filledOut!) - parseEther('0.0001'));
     expect(await allowanceOf(USDG)).toBe(0n);
-  }, 120_000);
+  }
 
   it('a wallet rejection is recorded as rejected and nothing is submitted', async () => {
     const nonce = await rpc.getTransactionCount({ address: trader.address });
@@ -348,23 +359,43 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
     expect(done).not.toHaveProperty('filledOut');
   }, 90_000);
 
-  it('a Danger Guard verdict, or a buy whose sell check cannot run, is refused at quote time', async () => {
+  it('current-verdict admission: Danger refuses, an unscanned or rescanning coin refuses as retryable, other levels trade', async () => {
+    const sql = srv.built.ctx.dbh.chain.sql;
+    const refusal = async (code: string, key: string) => {
+      const q = await quote({ coin: USDG, side: 'buy', amountUsd: 5 });
+      expect(q, code).toMatchObject({ binding: false, guard: { decision: 'refuse' } });
+      expect(refusalCodes(q)).toEqual([code]);
+      const refused = await orderResponse(q, key);
+      expect(refused.statusCode).toBe(422);
+      expect(refused.json()).toMatchObject({ error: 'guard_refused' });
+      return q;
+    };
     try {
-      const cases: [Parameters<ForkGuard['set']>[1], string][] = [
-        [{ level: 'lower', honeypot: true }, 'honeypot'], [{ level: 'high' }, 'guard_high'],
-        // No active Guard assessment for the coin: production today, before a Guard v2 release.
-        [null, 'guard_incomplete'], ['unavailable', 'sim_unavailable'],
-      ];
-      for (const [setting, code] of cases) {
-        srv.guard.set(USDG, setting);
-        const q = await quote({ coin: USDG, side: 'buy', amountUsd: 5 });
-        expect(q, code).toMatchObject({ binding: false, guard: { decision: 'refuse' } });
-        expect(refusalCodes(q)).toEqual([code]);
-        const refused = await orderResponse(q, `fork-v1-guard-${code}`);
-        expect(refused.statusCode).toBe(422);
-        expect(refused.json()).toMatchObject({ error: 'guard_refused' });
-      }
-    } finally { srv.guard.set(USDG, { level: 'lower' }); }
+      await setVerdict(sql, USDG, 'danger', forkBlock);
+      await refusal('guard_danger', 'fork-v1-guard-danger');
+      // Never scanned: a retryable "scanning" refusal, not a Guard v2 gap.
+      await setVerdict(sql, USDG, null, forkBlock);
+      expect((await refusal('scanning', 'fork-v1-guard-unscanned')).guard.checks[0]!.label).toMatch(/still scanning/);
+      await setVerdict(sql, USDG, 'pending', forkBlock);
+      await refusal('scanning', 'fork-v1-guard-pending');
+      // A requested rescan supersedes the stored verdict until it finishes.
+      await setVerdict(sql, USDG, 'clear', forkBlock);
+      await setScanPending(sql, USDG, true);
+      await refusal('scanning', 'fork-v1-guard-rescan');
+      await setScanPending(sql, USDG, false);
+      // Monitor is admitted with no waiting period.
+      await setVerdict(sql, USDG, 'monitor', forkBlock);
+      expect(await quote({ coin: USDG, side: 'buy', amountUsd: 5 })).toMatchObject({ binding: true, guard: { decision: 'allow', checks: [] } });
+      // A recent stored sell-check reading is used before a probe: a refused sell refuses the buy.
+      await setStoredSellCheck(sql, USDG, 'refused', forkBlock);
+      const unsellable = await quoteResponse({ coin: USDG, side: 'buy', amountUsd: 5 });
+      expect(unsellable.statusCode).toBe(422);
+      expect(unsellable.json()).toMatchObject({ error: 'guard_refused', message: expect.stringContaining('could not be sold back') });
+    } finally {
+      await setStoredSellCheck(sql, USDG, null, forkBlock);
+      await setScanPending(sql, USDG, false);
+      await setVerdict(sql, USDG, 'clear', forkBlock);
+    }
     // The sell check measures exits on native-ETH routes only: a coin quoted against USDG is refused, fail closed.
     const unchecked = await quoteResponse({ coin: WETH, side: 'buy', amountUsd: 5 });
     expect(unchecked.statusCode).toBe(503);
@@ -395,14 +426,16 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
     expect(refusalCodes(over)).toContain('trade_cap_exceeded');
   }, 120_000);
 
-  // The sell check refuses coins with no native-ETH route (above), so a buy paid in USDG runs on a second server with
-  // SELL_CHECK_ENABLED=false and its own simulation host.
+  // The quote-time sell check has no native-ETH route for WETH (above), so a buy paid in USDG runs on a second server with
+  // SELL_CHECK_ENABLED=false and its own simulation host, admitted on a stored sellable reading (stored readings are
+  // what the API uses when it does not probe). The per-order round trip below still measures the exit.
   describe('a buy paid in a token, without the sell check', () => {
     let secondary: Server;
     beforeAll(async () => {
       primary.built.ctx.exec.stop();
       secondary = await startServer(SIM_B_PORT, false);
       srv = secondary;
+      await setStoredSellCheck(secondary.built.ctx.dbh.chain.sql, USDG, 'sellable', forkBlock);
       await warmApi(secondary);
     }, 240_000);
     afterAll(async () => {
@@ -412,6 +445,7 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
     });
 
     it('WETH bought with USDG as the web app runs it: exact USDG approval, re-quote, order, confirm', async () => {
+      await setStoredSellCheck(srv.built.ctx.dbh.chain.sql, WETH, 'sellable', forkBlock);
       const first = await quote({ coin: WETH, side: 'buy', amountUsd: 3 });
       expect(first).toMatchObject({ binding: true, valueWei: '0', guard: { decision: 'allow', checks: [] },
         approvals: [{ token: USDG, spender: ROUTER, amount: '3000000', kind: 'erc20' }] });

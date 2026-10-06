@@ -4,19 +4,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb, runMigrations } from '../src/db/client.js';
 import { eq } from 'drizzle-orm';
-import { TradeQuoteSchema, TradeOrderSchema, type TradeQuote, type ActualOrderBinding } from '@eko/shared';
+import { TradeQuoteSchema, TradeOrderSchema, type TradeQuote, type ActualOrderBinding, type Verdict } from '@eko/shared';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { accounts, tradeQuotes, tradeOrders, tradingAllowlist } from '../src/db/schema.js';
 import { v3TradeBackend } from '../src/exec/trade-backend.js';
 import { ChainQuoteError } from '../src/exec/v3-routes.js';
-import { TradeService, type TradeBackend, type RetainedTrade } from '../src/exec/trades.js';
+import { preparationError, TradeService, type TradeBackend, type RetainedTrade } from '../src/exec/trades.js';
+import { currentVerdictGate } from '../src/exec/live-trade.js';
 import { TradeAccessService } from '../src/exec/trade-access.js';
 import { FlagService } from '../src/flags/service.js';
 import { ScreeningError } from '../src/sanctions/service.js';
 import { createDemoToken } from '../src/http/v1/demo.js';
 import { agent, actualRequest, binding, deps, observationFor, stateFor, wallet } from '../../../packages/policy/test/actual-fixtures.js';
-import { NOW, policy } from '../../../packages/policy/test/fixtures.js';
+import { NOW, policy, verdict as legacyVerdict } from '../../../packages/policy/test/fixtures.js';
 import { cachedGuard, guardFixture } from '../../../packages/policy/test/guard-fixtures.js';
 
 // Offline acquisition fixtures, never live acceptance or fork evidence.
@@ -40,6 +41,7 @@ let warnings: TradeQuote['guard']['checks'] = [];
 let acquisitionAdvance = 0;
 let measuredUsd = 100;
 let approvals: TradeQuote['approvals'] = [];
+let currentVerdict: Verdict | null = null, scanPending = false;
 let allowance: string | null = null;
 const screen = { assertWallet: vi.fn(async () => { if (denial) throw new ScreeningError(denial === 'sanctioned' ? 'sanctioned' : 'stale_data'); }) };
 const backend: TradeBackend = {
@@ -63,7 +65,8 @@ const backend: TradeBackend = {
     const state = { ...stateFor(b), observedAtMs: at, criticalCheckedAtMs: criticalStale ? at - 5001 : at };
     if (changed) state.stateFingerprint = `0x${'22'.repeat(32)}`;
     return { request: retained.checked!, agent, policy: { ...policy, mode: retained.input.riskMode! },
-      deps: high ? { ...deps, verdictFor: () => cachedGuard(guardFixture('high')) } : deps,
+      deps: currentVerdict ? { ...deps, verdictFor: () => currentVerdict!, buyVerdictGate: currentVerdictGate(scanPending) }
+        : high ? { ...deps, verdictFor: () => cachedGuard(guardFixture('high')) } : deps,
       state, admission: { status: 'allowed' as const }, quoteClocks: { quotedAtMs: retained.quotedAt.getTime(), expiresAtMs: retained.expiresAt.getTime() } };
   }),
   probe: { observe: vi.fn(async (b: ActualOrderBinding, state, now) => {
@@ -90,7 +93,7 @@ beforeAll(async () => {
     (await built.ctx.dbh.db.select().from(tradingAllowlist).where(eq(tradingAllowlist.wallet, w)))[0], () => at);
 });
 afterAll(async () => { await built.close(); });
-beforeEach(() => { at = NOW; enabled = true; denial = ''; criticalStale = changed = high = fee = false; executable = true; warnings = []; acquisitionAdvance = 0; measuredUsd = 100; approvals = []; allowance = null; });
+beforeEach(() => { at = NOW; enabled = true; denial = ''; criticalStale = changed = high = fee = false; executable = true; warnings = []; acquisitionAdvance = 0; measuredUsd = 100; approvals = []; allowance = null; currentVerdict = null; scanPending = false; });
 
 describe('075 durable guarded trade intents', () => {
   it('uses the supported v3 adapter and trusted acquisition; construction alone stays quote-only', async () => {
@@ -232,6 +235,29 @@ describe('075 durable guarded trade intents', () => {
     // A shortfall the quote does not list gives the wallet nothing to act on, so it stays a refusal.
     allowance = '0';
     expect(await quote({ side: 'sell' })).toMatchObject({ binding: false, guard: { decision: 'refuse', checks: [expect.objectContaining({ code: 'token_approval_required' })] } });
+  });
+  it('admits buys on the current verdict without Guard v2; a scan in progress is a retryable refusal; sells ignore the verdict', async () => {
+    currentVerdict = { ...legacyVerdict, coin: binding().coin, level: 'monitor' };
+    const admitted = await quote();
+    expect(admitted).toMatchObject({ binding: true, guard: { decision: 'allow', checks: [] } });
+    expect((await service().order(owner, order(admitted.id))).tx).toBeDefined();
+    scanPending = true;
+    const scanning = await quote();
+    expect(scanning).toMatchObject({ binding: false, guard: { decision: 'refuse', checks: [{ code: 'scanning', status: 'refuse', label: expect.stringMatching(/still scanning/) }] } });
+    // A quote admitted before the rescan was requested cannot be ordered until it finishes; the refusal is retryable.
+    scanPending = false; const before = await quote(); scanPending = true;
+    await expect(service().order(owner, order(before.id))).rejects.toMatchObject({ code: 'stale_data' });
+    expect(preparationError('scanning')).toBe('stale_data');
+    currentVerdict = { ...legacyVerdict, coin: binding().coin, level: 'danger' }; scanPending = false;
+    expect(await quote()).toMatchObject({ binding: false, guard: { checks: [expect.objectContaining({ code: 'guard_danger' })] } });
+    // Holders can always exit: a Danger verdict never reaches a sell.
+    expect(await quote({ side: 'sell' })).toMatchObject({ binding: true, guard: { decision: 'allow' } });
+  });
+  it('requires a sell check for every live buy, never for sells', async () => {
+    const strict = new TradeService(built.ctx.dbh.db, access, screen, backend, () => at, { requireSellCheck: true });
+    const input = { coin: binding().coin, account: wallet, side: 'buy' as const, amountUsd: 100, slippageBps: 100, riskMode: 'balanced' as const };
+    await expect(strict.quote(owner, input)).rejects.toMatchObject({ code: 'sim_unavailable', message: expect.stringContaining('sell check') });
+    expect(await strict.quote(owner, { ...input, side: 'sell' })).toMatchObject({ binding: true });
   });
   it('names the missing live configuration when no acquisition backend is installed', async () => {
     const unconfigured = new TradeService(built.ctx.dbh.db, access, screen, undefined, () => at, { unavailable: 'Live trade quotes are not configured on this server' });

@@ -133,6 +133,8 @@ describe('indexed v3 unsigned CA-7 routes (injected fixture evidence)', () => {
     const f = fixture();
     await f.adapter.quoteTrade(request, f.sources);
     expect(f.client.getBlockNumber).toHaveBeenCalledTimes(1);
+    // Never a cached head: a quote right after an approval must see it.
+    expect(f.client.getBlockNumber).toHaveBeenCalledWith({ cacheTime: 0 });
     for (const [args] of f.readContract.mock.calls) expect(args).toHaveProperty('blockNumber', block);
     for (const [args] of f.simulateContract.mock.calls) expect(args).toHaveProperty('blockNumber', block);
     expect(f.simulateContract.mock.calls.map(([args]) => args.args[0].fee).sort((a, b) => a - b)).toEqual([100, 500, 3000, 10000]);

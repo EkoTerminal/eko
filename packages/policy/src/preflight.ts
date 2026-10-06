@@ -16,6 +16,9 @@ export interface Deps extends Prices, ActualOrderDeps {
   /** Return only the approval bound to all three lookup keys. Expiry is reflected in status (§9.7). */
   approvalFor(agentId: string, clientOrderRef: string, hash: `0x${string}`): Approval | undefined;
   approvalsAvailable: boolean;
+  /** Trusted host replacement for the Guard v2 buy gate (guard.ts), used by live trade admission while no Guard v2
+   * release is active. Absent: `guardBuyGate`. The actual-order gate, policy limits and approvals still apply. */
+  buyVerdictGate?(verdict: Verdict | undefined, policy: Policy, asset: string, chainId: number, requestClockMs: number): { deny: string[]; warn: string[] };
 }
 
 /** BACKEND §9.6, in its specified evaluation order. All dependencies are in-memory.
@@ -52,7 +55,7 @@ function evaluatePolicy(req: PreflightRequest, policy: Policy, agent: Agent, d: 
     if (v === 'unavailable') deny.push('sim_unavailable: simulation is down, so on-chain buys are refused');
     else if (d.guardPolicyV2) {
       verdict = v;
-      const gate = guardBuyGate(v, p, asset, o.venue === 'rhc' ? 4663 : 8453, now);
+      const gate = (d.buyVerdictGate ?? guardBuyGate)(v, p, asset, o.venue === 'rhc' ? 4663 : 8453, now);
       deny.push(...gate.deny);
       warn.push(...gate.warn);
     }

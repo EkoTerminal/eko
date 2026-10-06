@@ -48,7 +48,8 @@ export function preparationError(code: string): ErrorCode {
   if (['trading_paused', 'not_allowlisted', 'trade_cap_exceeded', 'sanctioned', 'quote_expired', 'approval_required', 'wallet_mismatch'].includes(code)) return code as ErrorCode;
   if (code === 'token_approval_required' || code === 'approval_missing' || code === 'approval_pending') return 'approval_required';
   if (/changed|mismatch/.test(code)) return 'quote_changed';
-  if (/stale|receipt/.test(code)) return 'stale_data';
+  // The coin is still being scanned: retry shortly (current-verdict admission, exec/live-trade.ts).
+  if (code === 'scanning' || /stale|receipt/.test(code)) return 'stale_data';
   if (/unavailable|queued|unsupported|missing/.test(code)) return 'sim_unavailable';
   return 'guard_refused';
 }
@@ -67,7 +68,9 @@ export class TradeService {
       /** When installed, every buy quote first re-runs the sell check at its size; a failed sell is a hard refusal. */
       sellGuard?: Pick<SellGuard, 'check' | 'refused'>;
       /** Refusal message while no acquisition backend is installed (for example, the simulation host is unset). */
-      unavailable?: string } = {}) {}
+      unavailable?: string;
+      /** Live admission: every buy needs a sellable reading, so a missing sell guard refuses instead of skipping. */
+      requireSellCheck?: boolean } = {}) {}
 
   private async screen(wallet: string | null | undefined) {
     if (!wallet) return;
@@ -78,7 +81,11 @@ export class TradeService {
    * (`sim_unavailable`, fail closed). A refusal never reaches route acquisition or the wallet. */
   private async sellCheck(input: TradeQuoteRequest) {
     const guard = this.lifecycle.sellGuard;
-    if (!guard || input.side !== 'buy') return;
+    if (input.side !== 'buy') return;
+    if (!guard) {
+      if (this.lifecycle.requireSellCheck) throw new TradeError('sim_unavailable', 'The sell check could not run, so the guard refuses this buy');
+      return;
+    }
     let result: Awaited<ReturnType<SellGuard['check']>>;
     try { result = await guard.check(input.coin, input.amountUsd); }
     catch { throw new TradeError('sim_unavailable', 'The sell check could not run, so the guard refuses this buy'); }
@@ -164,7 +171,8 @@ export class TradeService {
       // listed approval is the next step. Orders keep refusing (approval_required) until the allowance is on chain.
       const approvalOnly = prepared.status !== 'validated' && prepared.code === 'token_approval_required' && quote.approvals.length > 0;
       if (prepared.status !== 'validated' && !approvalOnly) quote = { ...quote, binding: false, guard: { decision: 'refuse', checks: [...quote.guard.checks,
-        { code: prepared.code, status: 'refuse', label: 'Current execution checks refused or are unavailable' }] } };
+        { code: prepared.code, status: 'refuse', label: prepared.code === 'scanning' ? 'EKO is still scanning this coin; try again shortly'
+          : 'Current execution checks refused or are unavailable' }] } };
     }
     quote = await this.access.informationalQuote(quote);
     retained.quote = quote;

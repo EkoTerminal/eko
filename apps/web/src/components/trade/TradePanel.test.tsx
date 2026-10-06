@@ -56,6 +56,13 @@ describe('shared guarded panel contract states', () => {
     expect(panelBlock(gate(refused))).toBe(C.refused);
     expect(tradeErrorText('approval_required')).toContain('exact amount');
   });
+  it('shows a scanning refusal as retryable, never as a Guard refusal', () => {
+    const scanning = quote({ binding: false, guard: { decision: 'refuse', checks: [{ code: 'scanning', status: 'refuse', label: 'Still scanning' }] } });
+    expect(panelBlock(gate(scanning))).toBe(tradeErrorText('scanning'));
+    expect(tradeErrorText('scanning')).toMatch(/still scanning/i);
+    const danger = quote({ binding: false, guard: { decision: 'refuse', checks: [{ code: 'scanning', status: 'refuse', label: 'Still scanning' }, { code: 'guard_danger', status: 'refuse', label: 'Danger' }] } });
+    expect(panelBlock(gate(danger))).toBe(C.refused);
+  });
   it.each([0, 50, 40, 30, 25] as const)('displays exactly %s bps from the quote, without an inferred tier fee or a fee destination', bps => {
     const q = quote({ fee: { bps, usd: bps / 100, destination: bps === 0 ? null : 'burn_wallet' } });
     const text = render(<FeeLines quote={q} tier="source" phase="launch_week" />);

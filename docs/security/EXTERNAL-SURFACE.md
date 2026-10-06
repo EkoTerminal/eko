@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **537/537 (100.00%)** documented. Minimum: **90%**.
+Measured: **540/540 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -278,7 +278,7 @@ Measured: **537/537 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
 | `buildApp` | function | [apps/server/src/app.ts:112](../../apps/server/src/app.ts#L112) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:354](../../apps/server/src/app.ts#L354) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:356](../../apps/server/src/app.ts#L356) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:43](../../apps/server/src/exec/actual-order.ts#L43) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:62](../../apps/server/src/exec/actual-order.ts#L62) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:90](../../apps/server/src/exec/actual-order.ts#L90) | Yes |
@@ -307,11 +307,14 @@ Measured: **537/537 (100.00%)** documented. Minimum: **90%**.
 | `v3PostFillSell` | function | [apps/server/src/exec/live-trade.ts:296](../../apps/server/src/exec/live-trade.ts#L296) | Yes |
 | `walletPolicy` | function | [apps/server/src/exec/live-trade.ts:314](../../apps/server/src/exec/live-trade.ts#L314) | Yes |
 | `walletAgentId` | function | [apps/server/src/exec/live-trade.ts:316](../../apps/server/src/exec/live-trade.ts#L316) | Yes |
-| `readModelVerdicts` | function | [apps/server/src/exec/live-trade.ts:325](../../apps/server/src/exec/live-trade.ts#L325) | Yes |
-| `v3TradeAcquisition` | function | [apps/server/src/exec/live-trade.ts:344](../../apps/server/src/exec/live-trade.ts#L344) | Yes |
-| `returned.quote` | method | [apps/server/src/exec/live-trade.ts:348](../../apps/server/src/exec/live-trade.ts#L348) | Yes |
-| `returned.capture` | method | [apps/server/src/exec/live-trade.ts:368](../../apps/server/src/exec/live-trade.ts#L368) | Yes |
-| `liveTradeBackend` | function | [apps/server/src/exec/live-trade.ts:405](../../apps/server/src/exec/live-trade.ts#L405) | Yes |
+| `readModelVerdicts` | function | [apps/server/src/exec/live-trade.ts:334](../../apps/server/src/exec/live-trade.ts#L334) | Yes |
+| `currentVerdictGate` | function | [apps/server/src/exec/live-trade.ts:367](../../apps/server/src/exec/live-trade.ts#L367) | Yes |
+| `buyVerdictGateFor` | function | [apps/server/src/exec/live-trade.ts:377](../../apps/server/src/exec/live-trade.ts#L377) | Yes |
+| `guardReceiptFor` | function | [apps/server/src/exec/live-trade.ts:383](../../apps/server/src/exec/live-trade.ts#L383) | Yes |
+| `v3TradeAcquisition` | function | [apps/server/src/exec/live-trade.ts:394](../../apps/server/src/exec/live-trade.ts#L394) | Yes |
+| `returned.quote` | method | [apps/server/src/exec/live-trade.ts:398](../../apps/server/src/exec/live-trade.ts#L398) | Yes |
+| `returned.capture` | method | [apps/server/src/exec/live-trade.ts:419](../../apps/server/src/exec/live-trade.ts#L419) | Yes |
+| `liveTradeBackend` | function | [apps/server/src/exec/live-trade.ts:457](../../apps/server/src/exec/live-trade.ts#L457) | Yes |
 | `PortfolioService.constructor` | constructor | [apps/server/src/exec/portfolio.ts:41](../../apps/server/src/exec/portfolio.ts#L41) | Yes |
 | `PortfolioService.ensurePaperAccount` | method | [apps/server/src/exec/portfolio.ts:49](../../apps/server/src/exec/portfolio.ts#L49) | Yes |
 | `PortfolioService.paperBalances` | method | [apps/server/src/exec/portfolio.ts:59](../../apps/server/src/exec/portfolio.ts#L59) | Yes |
@@ -324,9 +327,9 @@ Measured: **537/537 (100.00%)** documented. Minimum: **90%**.
 | `QuoteStore.put` | method | [apps/server/src/exec/quotes.ts:39](../../apps/server/src/exec/quotes.ts#L39) | Yes |
 | `QuoteStore.get` | method | [apps/server/src/exec/quotes.ts:49](../../apps/server/src/exec/quotes.ts#L49) | Yes |
 | `QuoteStore.consume` | method | [apps/server/src/exec/quotes.ts:59](../../apps/server/src/exec/quotes.ts#L59) | Yes |
-| `SellGuard.constructor` | constructor | [apps/server/src/exec/sell-guard.ts:24](../../apps/server/src/exec/sell-guard.ts#L24) | Yes |
-| `SellGuard.check` | method | [apps/server/src/exec/sell-guard.ts:32](../../apps/server/src/exec/sell-guard.ts#L32) | Yes |
-| `SellGuard.refused` | method | [apps/server/src/exec/sell-guard.ts:46](../../apps/server/src/exec/sell-guard.ts#L46) | Yes |
+| `SellGuard.constructor` | constructor | [apps/server/src/exec/sell-guard.ts:27](../../apps/server/src/exec/sell-guard.ts#L27) | Yes |
+| `SellGuard.check` | method | [apps/server/src/exec/sell-guard.ts:37](../../apps/server/src/exec/sell-guard.ts#L37) | Yes |
+| `SellGuard.refused` | method | [apps/server/src/exec/sell-guard.ts:55](../../apps/server/src/exec/sell-guard.ts#L55) | Yes |
 | `ExecutionService.constructor` | constructor | [apps/server/src/exec/service.ts:101](../../apps/server/src/exec/service.ts#L101) | Yes |
 | `ExecutionService.tradeQuote` | method | [apps/server/src/exec/service.ts:116](../../apps/server/src/exec/service.ts#L116) | Yes |
 | `ExecutionService.tradeOrder` | method | [apps/server/src/exec/service.ts:125](../../apps/server/src/exec/service.ts#L125) | Yes |
@@ -359,14 +362,14 @@ Measured: **537/537 (100.00%)** documented. Minimum: **90%**.
 | `v3ReconciliationBackend` | function | [apps/server/src/exec/trade-reconcile.ts:102](../../apps/server/src/exec/trade-reconcile.ts#L102) | Yes |
 | `TradeError.constructor` | constructor | [apps/server/src/exec/trades.ts:40](../../apps/server/src/exec/trades.ts#L40) | Yes |
 | `preparationError` | function | [apps/server/src/exec/trades.ts:47](../../apps/server/src/exec/trades.ts#L47) | Yes |
-| `TradeService.constructor` | constructor | [apps/server/src/exec/trades.ts:63](../../apps/server/src/exec/trades.ts#L63) | Yes |
-| `TradeService.quote` | method | [apps/server/src/exec/trades.ts:135](../../apps/server/src/exec/trades.ts#L135) | Yes |
-| `TradeService.order` | method | [apps/server/src/exec/trades.ts:180](../../apps/server/src/exec/trades.ts#L180) | Yes |
-| `TradeService.detail` | method | [apps/server/src/exec/trades.ts:243](../../apps/server/src/exec/trades.ts#L243) | Yes |
-| `TradeService.history` | method | [apps/server/src/exec/trades.ts:249](../../apps/server/src/exec/trades.ts#L249) | Yes |
-| `TradeService.submitted` | method | [apps/server/src/exec/trades.ts:262](../../apps/server/src/exec/trades.ts#L262) | Yes |
-| `TradeService.rejected` | method | [apps/server/src/exec/trades.ts:294](../../apps/server/src/exec/trades.ts#L294) | Yes |
-| `TradeService.reconcile` | method | [apps/server/src/exec/trades.ts:304](../../apps/server/src/exec/trades.ts#L304) | Yes |
+| `TradeService.constructor` | constructor | [apps/server/src/exec/trades.ts:64](../../apps/server/src/exec/trades.ts#L64) | Yes |
+| `TradeService.quote` | method | [apps/server/src/exec/trades.ts:142](../../apps/server/src/exec/trades.ts#L142) | Yes |
+| `TradeService.order` | method | [apps/server/src/exec/trades.ts:188](../../apps/server/src/exec/trades.ts#L188) | Yes |
+| `TradeService.detail` | method | [apps/server/src/exec/trades.ts:251](../../apps/server/src/exec/trades.ts#L251) | Yes |
+| `TradeService.history` | method | [apps/server/src/exec/trades.ts:257](../../apps/server/src/exec/trades.ts#L257) | Yes |
+| `TradeService.submitted` | method | [apps/server/src/exec/trades.ts:270](../../apps/server/src/exec/trades.ts#L270) | Yes |
+| `TradeService.rejected` | method | [apps/server/src/exec/trades.ts:302](../../apps/server/src/exec/trades.ts#L302) | Yes |
+| `TradeService.reconcile` | method | [apps/server/src/exec/trades.ts:312](../../apps/server/src/exec/trades.ts#L312) | Yes |
 | `indexedV3Pools` | function | [apps/server/src/exec/v3-routes.ts:66](../../apps/server/src/exec/v3-routes.ts#L66) | Yes |
 | `quoteV3Trade` | function | [apps/server/src/exec/v3-routes.ts:116](../../apps/server/src/exec/v3-routes.ts#L116) | Yes |
 | `parseFlagOverride` | function | [apps/server/src/flags/service.ts:11](../../apps/server/src/flags/service.ts#L11) | Yes |
@@ -623,7 +626,7 @@ Measured: **537/537 (100.00%)** documented. Minimum: **90%**.
 | `actualNotionalOf` | function | [packages/policy/src/actual-order.ts:130](../../packages/policy/src/actual-order.ts#L130) | Yes |
 | `orderHash` | function | [packages/policy/src/canonical.ts:15](../../packages/policy/src/canonical.ts#L15) | Yes |
 | `guardBuyGate` | function | [packages/policy/src/guard.ts:14](../../packages/policy/src/guard.ts#L14) | Yes |
-| `evaluate` | function | [packages/policy/src/preflight.ts:31](../../packages/policy/src/preflight.ts#L31) | Yes |
+| `evaluate` | function | [packages/policy/src/preflight.ts:34](../../packages/policy/src/preflight.ts#L34) | Yes |
 | `applyPreset` | function | [packages/policy/src/presets.ts:23](../../packages/policy/src/presets.ts#L23) | Yes |
 | `resolveRepeat` | function | [packages/policy/src/repeat.ts:17](../../packages/policy/src/repeat.ts#L17) | Yes |
 | `guardReceiptRevisionKey` | function | [packages/shared/src/contracts/guard-receipts.ts:29](../../packages/shared/src/contracts/guard-receipts.ts#L29) | Yes |

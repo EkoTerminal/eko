@@ -195,7 +195,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
 
   // Live v1 trade acquisition (api quotes/orders, worker reconciliation). Fail-closed: with LIVE_TRADING_ENABLED off,
   // or without the pinned-block RPC and simulation host, there is no backend and quotes refuse with the reason.
-  const liveTrade = liveTradeBackend(cfg, { chains: () => chains, sql: () => dbh.chain.sql, verdict: readModelVerdicts(reads) }, opts.tradeOverrides);
+  const liveTrade = liveTradeBackend(cfg, { chains: () => chains, sql: () => dbh.chain.sql, verdict: readModelVerdicts(reads, () => dbh.chain.sql) }, opts.tradeOverrides);
   if (cfg.LIVE_TRADING_ENABLED && !liveTrade.backend && !opts.tradeBackend) logger.warn({ missing: liveTrade.missing }, 'Live trade backend unavailable; v1 trade quotes refuse');
   const ethUsd = () => market.lastPrice('ETH-USD')?.price ?? null;
   const exec = new ExecutionService(
@@ -211,8 +211,10 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       // Indexed v3 only; Pons (072) and v4 (071) acquisition stay quote-only until their probes are installed here.
       trades: new TradeService(db, tradeAccess, sanctions, opts.tradeBackend ?? liveTrade.backend, Date.now, { incidents, onOrder: (acc, order) => hub.publishOrder(acc, order),
         unavailable: liveTrade.unavailable || undefined,
-        ...(cfg.SELL_CHECK_ENABLED ? { sellGuard: new SellGuard(dbh.chain, { getBlockNumber: () => chains.get('robinhood-mainnet').getBlockNumber(),
-          request: input => chains.get('robinhood-mainnet').request(input as never) }) } : {}) }) },
+        // Live buys always need a sellable reading: a recent stored one, else a quote-time probe when SELL_CHECK_ENABLED.
+        requireSellCheck: Boolean(liveTrade.backend),
+        ...(cfg.SELL_CHECK_ENABLED || liveTrade.backend ? { sellGuard: new SellGuard(dbh.chain, { getBlockNumber: () => chains.get('robinhood-mainnet').getBlockNumber(),
+          request: input => chains.get('robinhood-mainnet').request(input as never) }, Date.now, { probe: cfg.SELL_CHECK_ENABLED }) } : {}) }) },
     {
       onOrder: (acc, o) => hub.toAccount(acc, { type: 'order', order: o }),
       onPortfolio: (acc, mode) => hub.toAccount(acc, { type: 'portfolio', mode }),

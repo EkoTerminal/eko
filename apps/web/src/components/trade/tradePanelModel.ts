@@ -38,6 +38,7 @@ export function tradeErrorText(code: string) {
     case 'user_rejected': return 'Rejected in wallet. No swap was sent.';
     case 'approval_pending': return 'Approval confirmation is pending.';
     case 'approval_required': return 'Approve the exact amount in your wallet first. No swap was sent.';
+    case 'scanning': return 'EKO is still scanning this coin. Try again in a moment.';
     case 'trading_paused': return C.paused;
     case 'not_allowlisted': return C.not_allowlisted;
     case 'trade_cap_exceeded': return C.trade_cap_exceeded;
@@ -67,6 +68,8 @@ export function panelBlock(g: PanelGate): string | null {
   if (s.error) return tradeErrorText(s.error);
   if (!q || !quoteMatches(q, input) || s.requestKey !== tradeRequestKey(input)) return C.loading;
   const refusals = q.guard.checks.filter(c => c.status === 'refuse');
+  // Not scanned yet, or a rescan is running: retryable, unlike a Guard refusal.
+  if (refusals.length && refusals.every(c => c.code === 'scanning')) return tradeErrorText('scanning');
   const admissionCodes = ['trading_paused', 'not_allowlisted', 'trade_cap_exceeded', 'sanctioned', 'wallet_mismatch', 'wallet_auth_required'];
   if (refusals.some(c => !admissionCodes.includes(c.code))) return C.refused;
   if (refusals.length) {

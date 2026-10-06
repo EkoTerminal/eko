@@ -125,7 +125,9 @@ export async function quoteV3Trade(client: PublicClient, input: TradeQuoteReques
   if (registry.data.uniswapV3.swapRouter02.check !== 'router02_wiring') throw new ChainQuoteError('no_route', 'Router wiring is unverified');
   const weth = verified(registry, 'tokens.WETH');
   const usdg = verified(registry, 'tokens.USDG');
-  const block = await client.getBlockNumber();
+  // Always the current head: viem's default block-number cache (the polling interval) can pin a fresh quote to a block
+  // from before the wallet's just-confirmed approval, which would list that approval again.
+  const block = await client.getBlockNumber({ cacheTime: 0 });
   if (block > BigInt(Number.MAX_SAFE_INTEGER)) throw new ChainQuoteError('stale_data', 'Block is out of range');
   const quotedAt = now();
   const indexed = await sources.pools(input.coin, block);

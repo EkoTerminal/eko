@@ -5,7 +5,9 @@ import { loadRegistry } from '@eko/chain';
 import type { GuardAssessmentV2, Verdict } from '@eko/shared';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { liveTradeBackend, liveTradeSources, readModelVerdicts, routeTerms, V3ActualOrderProbe } from '../src/exec/live-trade.js';
+import { buyVerdictGateFor, currentVerdictGate, guardReceiptFor, liveTradeBackend, liveTradeSources, readModelVerdicts, routeTerms, V3ActualOrderProbe, type TradeVerdict } from '../src/exec/live-trade.js';
+import { SellGuard } from '../src/exec/sell-guard.js';
+import type { ChainDb } from '@eko/db';
 import { ROUTER_ABI } from '../src/exec/v3-routes.js';
 import { binding, stateFor } from '../../../packages/policy/test/actual-fixtures.js';
 import { verdict as legacyVerdict } from '../../../packages/policy/test/fixtures.js';
@@ -16,7 +18,8 @@ const registry = loadRegistry();
 const WETH = registry.requireAddress('tokens.WETH').toLowerCase() as `0x${string}`;
 const USDG = registry.requireAddress('tokens.USDG').toLowerCase() as `0x${string}`;
 const ROUTER = registry.requireAddress('uniswapV3.swapRouter02');
-const deps = { chains: () => { throw new Error('no chain reads at construction'); }, sql: () => { throw new Error('no SQL at construction'); }, verdict: async () => undefined };
+const deps = { chains: () => { throw new Error('no chain reads at construction'); }, sql: () => { throw new Error('no SQL at construction'); },
+  verdict: async () => ({ verdict: undefined, guardV2Active: false, scanPending: false }) };
 const fetchSpy = vi.spyOn(globalThis, 'fetch');
 afterEach(() => fetchSpy.mockClear());
 
@@ -115,12 +118,78 @@ describe('live trade sources and probes', () => {
     expect(await probe.observe(b, stateFor(b), 1)).toMatchObject({ status: 'unsupported', origin: 'measured', evidenceIds: [] });
     expect(lease.withExclusive).not.toHaveBeenCalled();
   });
-  it('composes the legacy verdict with the stored Guard assessment; read failures are unavailable', async () => {
+  it('composes the current verdict, the stored Guard assessment, the release signal and pending scans', async () => {
     const assessment = guardFixture() as GuardAssessmentV2;
+    let releaseActive = false, scanPending = false;
+    const queries: string[] = [];
+    const sql: SqlClient = { query: async (q: string) => {
+      queries.push(q);
+      if (q.includes('guard_verdict_revisions')) return { rows: [{ active: releaseActive }] as never[] };
+      if (q.includes('scan_jobs')) return { rows: (scanPending ? [{ pending: 1 }] : []) as never[] };
+      throw new Error(`unexpected ${q}`);
+    } };
+    let clock = 0;
     const reads = (legacy: Verdict | null, v2: GuardAssessmentV2 | null) => ({ store: { verdict: async () => legacy }, guard: { verdict: async () => v2 } });
-    expect(await readModelVerdicts(reads(legacyVerdict, assessment))(coin)).toMatchObject({ ...legacyVerdict, guardV2: assessment });
-    expect(await readModelVerdicts(reads(null, null))(coin)).toBeUndefined();
-    expect(await readModelVerdicts(reads(null, assessment))(coin)).toMatchObject({ level: 'pending', playbooks: [], guardV2: assessment });
-    expect(await readModelVerdicts({ store: { verdict: async () => { throw new Error('db'); } }, guard: { verdict: async () => null } })(coin)).toBe('unavailable');
+    expect(await readModelVerdicts(reads(legacyVerdict, null), () => sql, () => clock)(coin)).toEqual({ verdict: legacyVerdict, guardV2Active: false, scanPending: false });
+    expect(await readModelVerdicts(reads(legacyVerdict, assessment), () => sql)(coin)).toMatchObject({ verdict: { ...legacyVerdict, guardV2: assessment } });
+    expect(await readModelVerdicts(reads(null, null), () => sql)(coin)).toEqual({ verdict: undefined, guardV2Active: false, scanPending: false });
+    expect((await readModelVerdicts(reads(null, assessment), () => sql)(coin)).verdict).toMatchObject({ level: 'pending', playbooks: [], guardV2: assessment });
+    // The release signal is cached for ten seconds; a pending scan is read on every call.
+    const source = readModelVerdicts(reads(legacyVerdict, null), () => sql, () => clock);
+    await source(coin); releaseActive = true; scanPending = true;
+    expect(await source(coin)).toMatchObject({ guardV2Active: false, scanPending: true });
+    clock += 10_001;
+    expect(await source(coin)).toMatchObject({ guardV2Active: true, scanPending: true });
+    expect(queries.filter(q => q.includes('scan_jobs')).every(q => q.includes("phase<>'done'"))).toBe(true);
+    const failing = readModelVerdicts({ store: { verdict: async () => { throw new Error('db'); } }, guard: { verdict: async () => null } }, () => sql);
+    expect(await failing(coin)).toEqual({ verdict: 'unavailable', guardV2Active: false, scanPending: false });
+  });
+});
+
+describe('current-verdict trade admission (no active Guard v2 release)', () => {
+  const coin = padHex('0x10', { size: 20 });
+  const at = (level: Verdict['level'], playbooks: Verdict['playbooks'] = []): Verdict => ({ ...legacyVerdict, level, playbooks });
+  const gate = (scanPending: boolean) => currentVerdictGate(scanPending);
+  const decide = (verdict: Verdict | undefined, scanPending = false) => gate(scanPending)(verdict, {} as never, 'coin', 4663, 0).deny.map(r => r.split(':')[0]);
+  it('admits clear and monitor with no waiting period, refuses Danger and anything not yet scanned as retryable', () => {
+    expect(decide(at('clear'))).toEqual([]);
+    expect(decide(at('monitor'))).toEqual([]);
+    expect(decide(at('danger'))).toEqual(['guard_danger']);
+    // A Danger playbook match refuses whatever the summary level says, and is never overridable by a pending scan.
+    expect(decide(at('monitor', [{ id: 'honeypot', level: 'danger', confidence: 1, evidence: [] }]))).toEqual(['guard_danger']);
+    expect(decide(at('danger'), true)).toEqual(['guard_danger']);
+    expect(decide(undefined)).toEqual(['scanning']);
+    expect(decide(at('pending'))).toEqual(['scanning']);
+    // A requested rescan supersedes the stored verdict until it finishes.
+    expect(decide(at('clear'), true)).toEqual(['scanning']);
+  });
+  it('lets an active Guard v2 release take precedence, and binds no verdict into sells', () => {
+    const tv = (patch: Partial<TradeVerdict>): TradeVerdict => ({ verdict: at('clear'), guardV2Active: false, scanPending: false, ...patch });
+    expect(buyVerdictGateFor(tv({}))).toBeTypeOf('function');
+    expect(buyVerdictGateFor(tv({ guardV2Active: true }))).toBeUndefined();
+    const assessment = guardFixture() as GuardAssessmentV2;
+    expect(guardReceiptFor('buy', tv({ guardV2Active: true, verdict: { ...at('clear'), guardV2: assessment } }))).toBe(assessment.receipt.id);
+    expect(guardReceiptFor('buy', tv({}))).toBe('current-verdict');
+    for (const verdict of [at('danger'), undefined, 'unavailable' as const]) expect(guardReceiptFor('sell', tv({ verdict, guardV2Active: true }))).toBe('not-required:sell');
+  });
+  it('uses a recent stored sell check before probing, and refuses when neither is available', async () => {
+    const rows: { status: string; checked_at: Date }[] = [];
+    let cutoff: unknown;
+    const db = { sql: { query: async (q: string, params: unknown[]) => {
+      if (!q.includes('sell_check_latest')) return { rows: [] };
+      cutoff = params[1];
+      return { rows: rows.map(r => ({ coin: binary(coin), block: '7', venue: 'uniswap_v3', exit_cost_100_pct: 1, exit_cost_1k_pct: 2, ...r })) };
+    } } } as unknown as ChainDb;
+    const client = { getBlockNumber: vi.fn(async () => 7n), request: vi.fn(async () => { throw new Error('no probe expected'); }) };
+    const guard = new SellGuard(db, client, () => 1_000_000, { probe: false });
+    rows.push({ status: 'sellable', checked_at: new Date(1_000_000 - 60_000) });
+    expect(await guard.check(coin, 25)).toMatchObject({ status: 'sellable', block: 7, probes: [] });
+    // Only readings from the last two minutes count (SQL cutoff, in seconds).
+    expect(cutoff).toBe((1_000_000 - 120_000) / 1000);
+    rows[0] = { status: 'refused', checked_at: new Date(1_000_000 - 60_000) };
+    expect(await guard.check(coin, 25)).toMatchObject({ status: 'refused' });
+    rows.length = 0;
+    await expect(guard.check(coin, 25)).rejects.toThrow(/probing is off/);
+    expect(client.request).not.toHaveBeenCalled();
   });
 });

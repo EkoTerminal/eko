@@ -92,6 +92,24 @@ describe('Guard policy completeness (§5.3)', () => {
   });
 });
 
+describe('host buy verdict gate (live trade admission before a Guard v2 release)', () => {
+  it('replaces only the Guard v2 buy gate; the exact-account evidence gate still applies', () => {
+    const legacy = { ...verdict, level: 'monitor' as const };
+    const gate = vi.fn(() => ({ deny: [], warn: [] }));
+    const admitted = evaluate(request, policy, agent, { ...migrated, verdictFor: () => legacy, buyVerdictGate: gate });
+    expect(admitted.decision).toBe('allow');
+    expect(gate).toHaveBeenCalledWith(legacy, expect.objectContaining({ mode: policy.mode }), ASSET, 4663, NOW);
+    const refused = evaluate(request, policy, agent, { ...migrated, verdictFor: () => legacy, buyVerdictGate: () => ({ deny: ['guard_danger: refused'], warn: [] }) });
+    expect(codes(refused.reasons)).toEqual(['guard_danger']);
+    // Without the hook the same legacy-only verdict meets the Guard v2 gate and is incomplete.
+    expect(codes(evaluate(request, policy, agent, { ...migrated, verdictFor: () => legacy }).reasons)).toEqual(['guard_incomplete']);
+    // A read failure still refuses before any gate, and the exact-account evidence gate still runs.
+    expect(codes(evaluate(request, policy, agent, { ...migrated, verdictFor: () => 'unavailable', buyVerdictGate: gate }).reasons)).toEqual(['sim_unavailable']);
+    const noEvidence = evaluate(request, policy, agent, { ...migrated, verdictFor: () => legacy, buyVerdictGate: gate, actualOrderFor: undefined });
+    expect(codes(noEvidence.reasons)).toContain('actual_order_quote_queued');
+  });
+});
+
 describe('coherent migration and shadow isolation (§7.2)', () => {
   it.each([undefined, false])('migration %s preserves complete legacy results and settings', flag => {
     const legacy = { ...verdict, level: 'danger' as const };

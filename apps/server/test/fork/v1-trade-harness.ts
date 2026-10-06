@@ -3,9 +3,9 @@
  * (`src/exec/live-trade.ts`, installed by `buildApp` from LIVE_TRADING_ENABLED, the RPC URL and ANVIL_FORK_URL);
  * this file supplies only what a fork cannot provide the production way:
  *
- * - indexer-shaped rows (tokens, the WETH/USDG v3 pools, one ETH-priced swap) that the indexer would have written;
- * - `ForkGuard`, a verdict source serving an `active` Guard v2 assessment per coin with a stable receipt id. No
- *   Guard v2 release is active in production, where every buy is refused `guard_incomplete`;
+ * - indexer- and engine-shaped rows the production readers use: tokens, the WETH/USDG v3 pools, one ETH-priced swap,
+ *   current verdicts (`verdicts`, what Radar shows), scan jobs and stored sell-check readings. No Guard v2 rows: trade
+ *   admission runs on the current verdict, as it will at launch;
  * - `anvilNetworkFeeWei`: Anvil has no Arbitrum NodeInterface, so the fee is execution gas at base fee (L2 only);
  * - cache warming, discovery of a recent native-ETH Pons launch, and a loopback relay to the public RPC that retries
  *   its transient refusals (Anvil treats them as final).
@@ -15,10 +15,9 @@ import { createServer } from 'node:http';
 import { keccak256, stringToHex, type Address, type PublicClient } from 'viem';
 import { binary, type SqlClient } from '@eko/db';
 import { loadRegistry } from '@eko/chain';
-import { GUARD_CHECK_IDS, GUARD_CHECK_TIERS, GuardAssessmentV2Schema, type Verdict } from '@eko/shared';
-import { liveTradeSources, type VerdictSource } from '../../src/exec/live-trade.js';
+import type { Verdict } from '@eko/shared';
+import { liveTradeSources } from '../../src/exec/live-trade.js';
 import { FACTORY_ABI, POOL_ABI, QUOTER_V2_ABI, type IndexedV3Pool, type V3TradeSources } from '../../src/exec/v3-routes.js';
-import { assessment, coverage, factor } from '../../../../packages/shared/test/fixtures/contracts/guard-v2.js';
 import { verdict as legacyVerdict } from '../../../../packages/policy/test/fixtures.js';
 
 /** Optional diagnostics: set FORK_DEBUG_LOG to a file path to record quote outcomes and warm-up attempts. */
@@ -103,28 +102,35 @@ export function anvilNetworkFeeWei(chain: () => PublicClient): V3TradeSources['n
   };
 }
 
-type GuardSetting = { level: 'lower' | 'high'; honeypot?: boolean } | 'unavailable';
-/** Stand-in for the Guard read service: an active assessment per coin with a stable receipt id. */
-export class ForkGuard {
-  private readonly coins = new Map<string, GuardSetting>();
-  set(coin: Address, setting: GuardSetting | null) { if (setting) this.coins.set(coin.toLowerCase(), setting); else this.coins.delete(coin.toLowerCase()); }
-  readonly source: VerdictSource = async coin => this.verdict(coin);
-  private verdict(coin: string): Verdict | 'unavailable' | undefined {
-    const setting = this.coins.get(coin.toLowerCase());
-    if (!setting || setting === 'unavailable') return setting;
-    // One second behind the wall clock: a snapshot newer than the request clock is refused as stale.
-    const cursor = { ...assessment.cursor, timestampSec: String(Math.floor(Date.now() / 1000) - 1) };
-    const score = setting.level === 'high' ? 60 : 0;
-    const guardV2 = GuardAssessmentV2Schema.parse({ ...assessment, cursor, availabilityCut: { ...assessment.availabilityCut, cursor }, coin,
-      mode: 'active', observedLevel: setting.level, level: setting.level, levelFloorReason: null,
-      completeness: { buyCriticalComplete: true, lowerTierComplete: true, missing: [] },
-      checks: GUARD_CHECK_IDS.map(id => ({ id, tier: GUARD_CHECK_TIERS[id], status: 'complete', coverage, evidenceIds: [], failureCode: null })),
-      factors: score ? [{ ...factor, eligiblePoints: score, assignedPoints: score, calibration: 'released' }] : [],
-      baseScore: score, score, historyPoints: 0, familyPoints: { E: score, O: 0, Ff: 0, C: 0, I: 0 }, decisiveIds: [], reasons: [],
-      scoreIsLowerBound: false, receipt: { ...assessment.receipt, id: `fork-guard-${coin.toLowerCase()}` } });
-    return { ...legacyVerdict, coin: lower(coin), level: setting.honeypot ? 'danger' : 'clear',
-      playbooks: setting.honeypot ? [{ id: 'honeypot', level: 'danger', confidence: 1, evidence: [] }] : [], guardV2 };
-  }
+let verdictSequence = 0;
+/**
+ * Publish the coin's current verdict the way the engines do: verdict rows are append-only, so earlier rows are marked
+ * orphaned (`verdict_events`) and a new row is appended. `null` leaves the coin with no verdict (never scanned).
+ */
+export async function setVerdict(sql: SqlClient, coin: Address, level: Verdict['level'] | null, block: bigint, playbooks: Verdict['playbooks'] = []) {
+  const n = ++verdictSequence;
+  const current = (await sql.query<{ id: string }>(`SELECT id FROM verdicts v WHERE coin=$1 AND NOT EXISTS
+    (SELECT 1 FROM verdict_events e WHERE e.verdict_id=v.id AND e.kind='orphaned')`, [binary(coin)])).rows;
+  for (const row of current) await sql.query("INSERT INTO verdict_events(id,verdict_id,kind,block,data) VALUES($1,$2,'orphaned',$3,'{}')",
+    [`${row.id}-orphaned-${n}`, row.id, block.toString()]);
+  if (!level) return;
+  const id = `fork-${coin}-${n}`;
+  const data: Verdict = { ...legacyVerdict, coin, level, playbooks, reasons: [`fork fixture: ${level}`], asOfBlock: Number(block),
+    receipt: { ...legacyVerdict.receipt, id } };
+  await sql.query('INSERT INTO verdicts(id,coin,valid_from_block,rules_version,signature,data) VALUES($1,$2,$3,$4,$5,$6)',
+    [id, binary(coin), (block + BigInt(n)).toString(), 'fork-rules', 'fork-signature', JSON.stringify(data)]);
+}
+/** A requested scan of the coin that is queued (a rescan pending), or finished. */
+export async function setScanPending(sql: SqlClient, coin: Address, pending: boolean) {
+  await sql.query(`INSERT INTO scan_jobs(id,query,coin,phase,status) VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(id) DO UPDATE SET phase=excluded.phase,status=excluded.status`, [`fork-scan-${coin}`, coin, binary(coin), pending ? 'queued' : 'done', pending ? 'pending' : 'ready']);
+}
+/** The engines' stored sell-check reading for a coin, checked now (`null`: no usable reading). */
+export async function setStoredSellCheck(sql: SqlClient, coin: Address, status: 'sellable' | 'refused' | null, block: bigint) {
+  const stored = status ?? 'unavailable';
+  await sql.query(`INSERT INTO sell_check_latest(coin,block,checked_at,venue,route_id,status,exit_cost_100_pct,exit_cost_1k_pct,method_version,data,attempted_at,attempt_status)
+    VALUES($1,$2,$3,'uniswap_v3',NULL,$4,1,1,'sell-check-1','{}',$3,$4) ON CONFLICT(coin) DO UPDATE SET block=excluded.block,checked_at=excluded.checked_at,
+    status=excluded.status,attempted_at=excluded.attempted_at,attempt_status=excluded.attempt_status`, [binary(coin), block.toString(), new Date(), stored]);
 }
 
 /**
