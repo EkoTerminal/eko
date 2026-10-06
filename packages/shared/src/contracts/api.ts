@@ -35,6 +35,8 @@ export const PublicConfigSchema = z.object({
     maxTradeUsd: z.number(),
     routers: z.array(AddressSchema),
     spenders: z.array(AddressSchema),
+    /** Permit2, when a listed router settles through it (Uniswap v4 sells): the target of the Permit2 approval step. */
+    permit2: AddressSchema.optional(),
   }),
   contracts: z.object({
     receiptsRegistry: AddressSchema,

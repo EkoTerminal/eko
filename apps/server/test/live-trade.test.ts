@@ -9,6 +9,7 @@ import { buyVerdictGateFor, currentVerdictGate, guardReceiptFor, liveTradeBacken
 import { SellGuard } from '../src/exec/sell-guard.js';
 import type { ChainDb } from '@eko/db';
 import { ROUTER_ABI } from '../src/exec/v3-routes.js';
+import { PonsActualOrderProbe, VenueActualOrderProbe } from '../src/exec/pons-trade.js';
 import { binding, stateFor } from '../../../packages/policy/test/actual-fixtures.js';
 import { verdict as legacyVerdict } from '../../../packages/policy/test/fixtures.js';
 import { guardFixture } from '../../../packages/policy/test/guard-fixtures.js';
@@ -37,7 +38,9 @@ describe('live trade backend wiring (fail-closed)', () => {
   });
   it('builds quote, probe and reconciliation without any request when fully configured', () => {
     const live = liveTradeBackend({ LIVE_TRADING_ENABLED: true, RPC_HTTP_URL: undefined, RH_MAINNET_RPC_URL: 'https://rpc.example.invalid', ANVIL_FORK_URL: 'http://sim.example.invalid:8545' }, deps);
-    expect(live.backend).toMatchObject({ quote: expect.any(Function), capture: expect.any(Function), probe: expect.any(V3ActualOrderProbe), reconciliation: { supports: expect.any(Function) } });
+    // The venue hook: one backend whose probe picks the v3 pool probe or the Pons-curve probe by the order's exact bytes.
+    expect(live.backend).toMatchObject({ quote: expect.any(Function), capture: expect.any(Function), probe: expect.any(VenueActualOrderProbe), reconciliation: { supports: expect.any(Function) } });
+    expect(live.backend!.probe).toMatchObject({ pools: expect.any(V3ActualOrderProbe), pons: expect.any(PonsActualOrderProbe) });
     expect(live.missing).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
   });

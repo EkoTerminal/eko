@@ -86,12 +86,14 @@ function fraction(n: number): [bigint, bigint] {
   const digits = BigInt(whole! + tail);
   return power >= 0 ? [digits * 10n ** BigInt(power), 1n] : [digits, 10n ** BigInt(-power)];
 }
-function rawUsd(usd: number, price: number, decimals: number): bigint {
+/** Raw units of a token worth `usd` at `price` USD per whole token, floored. Shared with the Pons curve route. */
+export function rawUsd(usd: number, price: number, decimals: number): bigint {
   const [u, ud] = fraction(usd);
   const [p, pd] = fraction(price);
   return u * pd * 10n ** BigInt(decimals) / (ud * p);
 }
-function verified(registry: AddressRegistry, key: RegistryKey): Address {
+/** A registry address that is verified and not pending review, else `no_route`. Shared with the v4 route. */
+export function verified(registry: AddressRegistry, key: RegistryKey): Address {
   const entry = registry.entries().find(([k]) => k === key)?.[1];
   if (!entry?.verified || entry.address === 'TODO' || entry.check === 'VERIFY' || entry.check === 'VERIFY_ABI') {
     throw new ChainQuoteError('no_route', `Unverified execution address: ${key}`);

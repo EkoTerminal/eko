@@ -42,6 +42,9 @@ const journalKey = (scope: string) => `${KEY}:${scope}`;
 const warnings = (q: TradeQuote) => [...new Set(q.guard.checks.filter(c => c.status === 'warn').map(c => c.code))];
 const addressEqual = (a?: string | null, b?: string | null) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 const raw = (value: string) => /^(0|[1-9]\d*)$/.test(value);
+/** A Pons-curve quote trades on its coin's own curve: the only extra target (and, for a sell, approval spender) the
+ * flow accepts beyond the configured routers, and only the curve this quote names. */
+const ponsCurve = (q: TradeQuote) => q.route.venue === 'pons_curve' && q.route.poolId && AddressSchema.safeParse(q.route.poolId).success ? q.route.poolId : null;
 export function materiallyChanged(a: TradeQuote, b: TradeQuote) {
   const moved = (x: number, y: number) => Math.abs(x - y) > Math.abs(x) * .25;
   return a.fee.bps !== b.fee.bps || moved(a.exitCostPct, b.exitCostPct) || moved(a.priceImpactBps, b.priceImpactBps) ||
@@ -84,15 +87,24 @@ export class GuardedTradeFlow {
   private approvals(q: TradeQuote, scope: string) {
     const c = this.check(scope);
     for (const step of q.approvals) {
-      if (!AddressSchema.safeParse(step.token).success || !c.config!.trading.spenders.some(a => addressEqual(a, step.spender)) ||
-        !raw(step.amount) || step.amount !== q.amountIn || BigInt(step.amount) <= 0n || BigInt(step.amount) >= (1n << 256n) - 1n) throw new TradeFlowError('calldata_mismatch', 'none');
-      // TODO(spec): CA-7 has no Permit2 verifying contract/nonce/ABI binding. Keep Permit2 unavailable until the accepted route contract supplies it.
+      if (!AddressSchema.safeParse(step.token).success || !raw(step.amount) || step.amount !== q.amountIn || BigInt(step.amount) <= 0n) throw new TradeFlowError('calldata_mismatch', 'none');
+      if (step.kind === 'permit2') {
+        // Uniswap v4 sells settle through Permit2: an exact, short-lived (at most 30 minutes) allowance on the quote's own
+        // coin to a configured router, sent to the configured Permit2. Anything else is refused before the wallet.
+        const nowSec = Math.floor(this.env.now() / 1000), t = c.config!.trading;
+        if (!t.permit2 || !addressEqual(step.token, q.coin) || !t.routers.some(a => addressEqual(a, step.spender)) || step.expiration === undefined ||
+          !Number.isInteger(step.expiration) || step.expiration <= nowSec || step.expiration > nowSec + 1800 || BigInt(step.amount) >= (1n << 160n) - 1n)
+          throw new TradeFlowError('no_route', 'none');
+        continue;
+      }
+      if (!(c.config!.trading.spenders.some(a => addressEqual(a, step.spender)) || (addressEqual(step.spender, ponsCurve(q)) && addressEqual(step.token, q.coin))) ||
+        BigInt(step.amount) >= (1n << 256n) - 1n) throw new TradeFlowError('calldata_mismatch', 'none');
       if (step.kind !== 'erc20' || step.expiration !== undefined) throw new TradeFlowError('no_route', 'none');
     }
   }
   private transaction(tx: UnsignedTx, q: TradeQuote, scope: string) {
     const c = this.check(scope);
-    if (!UnsignedTxSchema.safeParse(tx).success || !c.config!.trading.routers.some(a => addressEqual(a, tx.to)) || !/^0x(?:[0-9a-fA-F]{2})+$/.test(tx.data) ||
+    if (!UnsignedTxSchema.safeParse(tx).success || !(c.config!.trading.routers.some(a => addressEqual(a, tx.to)) || addressEqual(tx.to, ponsCurve(q))) || !/^0x(?:[0-9a-fA-F]{2})+$/.test(tx.data) ||
       !raw(tx.value) || BigInt(tx.value) >= (1n << 256n) || tx.value !== q.valueWei) {
       this.env.mismatch(); throw new TradeFlowError('calldata_mismatch', 'none');
     }

@@ -118,6 +118,46 @@ describe('guarded v1 flow: offline wallet-spy end-to-end', () => {
     if (kind === 'data') f.setTx({ data: '0xabc' });
     await refusal(f.flow.execute(f.handoff())); expect(f.env.send).not.toHaveBeenCalled();
   });
+  it('a Pons-curve sell approves and trades the quote’s own curve, and only that curve', async () => {
+    const curve = '0x00000000000000000000000000000000000000c1';
+    const f = setup(), amount = f.handoff().quote.amountIn, coin = f.handoff().quote.coin;
+    f.setQuote({ side: 'sell', route: { venue: 'pons_curve', poolId: curve, executable: true }, approvals: [{ token: coin, spender: curve, amount, kind: 'erc20' }] });
+    f.setTx({ to: curve });
+    f.env.approve = vi.fn(async (step, _address, check) => { check(); expect(step).toMatchObject({ token: coin, spender: curve }); f.setQuote({ approvals: [] }); return hash; });
+    expect((await f.flow.execute(f.handoff())).status).toBe('submitted');
+    expect(f.env.approve).toHaveBeenCalledOnce(); expect(f.env.send).toHaveBeenCalledWith(expect.objectContaining({ to: curve }), account, expect.any(Function));
+    for (const [step, tx] of [[{ spender: account }, {}], [{ token: account }, {}], [{}, { to: '0x00000000000000000000000000000000000000c2' }]] as const) {
+      const g = setup();
+      g.setQuote({ side: 'sell', route: { venue: 'pons_curve', poolId: curve, executable: true }, approvals: [{ token: coin, spender: curve, amount, kind: 'erc20', ...step }] });
+      g.setTx({ to: curve, ...tx });
+      g.env.approve = vi.fn(async (_s, _a, check) => { check(); g.setQuote({ approvals: [] }); return hash; });
+      await refusal(g.flow.execute(g.handoff())); expect(g.env.send).not.toHaveBeenCalled();
+    }
+  });
+  it('a Uniswap v4 sell approves the coin to Permit2 and Permit2 to the router (exact, expiring), then trades through the router', async () => {
+    const ur = '0x00000000000000000000000000000000000000d1', permit2 = '0x00000000000000000000000000000000000000d2';
+    const v4 = (f: ReturnType<typeof setup>, changes: { erc20?: Record<string, unknown>; permit2?: Record<string, unknown> } = {}) => {
+      const amount = f.handoff().quote.amountIn, coin = f.handoff().quote.coin, expiration = Math.floor(1000000 / 1000) + 1800;
+      f.state.config!.trading = { ...f.state.config!.trading, routers: [router, ur], spenders: [router, permit2], permit2 };
+      f.setQuote({ side: 'sell', route: { venue: 'uniswap_v4', poolId: `0x${'ab'.repeat(32)}`, executable: true }, approvals: [
+        { token: coin, spender: permit2, amount, kind: 'erc20', ...changes.erc20 }, { token: coin, spender: ur, amount, kind: 'permit2', expiration, ...changes.permit2 }] as TradeQuote['approvals'] });
+      f.setTx({ to: ur });
+      const steps: TradeQuote['approvals'] = [];
+      f.env.approve = vi.fn(async (step, _a, check) => { check(); steps.push(step); if (steps.length === 2) f.setQuote({ approvals: [] }); return hash; });
+      return steps;
+    };
+    const f = setup(), steps = v4(f);
+    expect((await f.flow.execute(f.handoff())).status).toBe('submitted');
+    expect(steps.map(s => [s.kind, s.spender])).toEqual([['erc20', permit2], ['permit2', ur]]);
+    expect(f.env.send).toHaveBeenCalledWith(expect.objectContaining({ to: ur }), account, expect.any(Function));
+    for (const changes of [{ permit2: { expiration: Math.floor(1000000 / 1000) + 1801 } }, { permit2: { expiration: undefined } }, { permit2: { spender: permit2 } },
+      { permit2: { token: account } }, { permit2: { amount: '1' } }, { erc20: { spender: ur } }]) {
+      const g = setup(); v4(g, changes);
+      await refusal(g.flow.execute(g.handoff())); expect(g.env.approve).not.toHaveBeenCalled(); expect(g.env.send).not.toHaveBeenCalled();
+    }
+    const h = setup(); v4(h); delete h.state.config!.trading.permit2;
+    await refusal(h.flow.execute(h.handoff()), 'no_route'); expect(h.env.approve).not.toHaveBeenCalled();
+  });
   it('a lost creation response retries the exact body/key after reload with one server order', async () => {
     const f = setup(); f.drop('/trade/order'); await refusal(f.flow.execute(f.handoff()));
     const second = new GuardedTradeFlow(f.env); await second.execute(f.handoff());

@@ -12,6 +12,10 @@ import { v3TradeBackend, type V3TradeAcquisition } from './trade-backend.js';
 import { v3ReconciliationBackend, type ActualFill, type PostFillEvidence, type TradeReceipt } from './trade-reconcile.js';
 import { ERC20_ABI, FACTORY_ABI, POOL_ABI, QUOTER_V2_ABI, ROUTER_ABI, indexedV3Pools, type IndexedV3Pool, type V3TradeSources } from './v3-routes.js';
 import type { RetainedTrade, TradeBackend } from './trades.js';
+import { indexedPonsCurves } from './pons-routes.js';
+import { ponsTradeBackend, venueTradeBackend } from './pons-trade.js';
+import { indexedV4Pools } from './v4-routes.js';
+import { v4TradeBackend } from './v4-trade.js';
 
 // Live trade acquisition for indexed single-hop Uniswap v3 routes (BACKEND §12, packets 052/075/076). Every chain read
 // uses the API's metered mainnet client at a pinned block; every account simulation runs on the private `sim` Anvil.
@@ -465,7 +469,17 @@ export function liveTradeBackend(cfg: Pick<Config, 'LIVE_TRADING_ENABLED' | 'RPC
   let adapter: UniswapV3Adapter | undefined;
   const v3 = () => adapter ??= new UniswapV3Adapter(deps.chains(), 'robinhood-mainnet', () => null);
   const sources: V3TradeSources = { ...liveTradeSources(chain, deps.sql), ...overrides.sources };
-  const acquisition = v3TradeAcquisition({ chain, lease: simulationLease(simulationRpc(cfg.ANVIL_FORK_URL!)), sources,
-    verdict: overrides.verdict ?? deps.verdict, adapter: v3 });
-  return { backend: v3TradeBackend({ quoteTrade: (input, s) => v3().quoteTrade(input, s) }, sources, acquisition), unavailable: '', missing };
+  const lease = simulationLease(simulationRpc(cfg.ANVIL_FORK_URL!)), verdict = overrides.verdict ?? deps.verdict;
+  const acquisition = v3TradeAcquisition({ chain, lease, sources, verdict, adapter: v3 });
+  const pools = v3TradeBackend({ quoteTrade: (input, s) => v3().quoteTrade(input, s) }, sources, acquisition);
+  // Venue hook: open Pons curves trade on the curve (same lease, sources and verdict); everything else, graduated coins
+  // included, goes to the pools: v3, then v4.
+  const pons = ponsTradeBackend({ chain, lease, verdict, adapter: v3,
+    sources: { curve: coin => indexedPonsCurves(deps.sql())(coin), priceUsd: sources.priceUsd, networkFeeWei: sources.networkFeeWei } });
+  // Native v4 pools (graduated Pons coins, hookless pools) when the coin has no v3 route.
+  const v4 = v4TradeBackend({ chain, lease, verdict, adapter: v3,
+    sources: { pools: (coin, block) => indexedV4Pools(deps.sql())(coin, block), priceUsd: sources.priceUsd, networkFeeWei: sources.networkFeeWei } });
+  return { backend: venueTradeBackend(pools, pons, v4), unavailable: '', missing };
 }
+/** Shared with the Pons-curve acquisition (pons-trade.ts). */
+export { digest, erc20, walletAgent, withAccount };

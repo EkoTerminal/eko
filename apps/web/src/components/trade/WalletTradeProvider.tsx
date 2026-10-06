@@ -6,7 +6,7 @@ import type { TradeOrder } from '@eko/shared';
 import { TradeProvider, type TradeAdapter } from './TradeContext';
 import { GuardedTradeFlow, TradeFlowError } from '../../lib/tradeFlow';
 import { guardedTradeClient, guardedOrderHistory } from '../../lib/guardedTradeClient';
-import { approveExactToken } from '../../lib/trade';
+import { approveExactPermit2, approveExactToken } from '../../lib/trade';
 import { wagmiConfig } from '../../lib/wallet';
 import { serverNow } from '../../lib/clock';
 import { useOnboarding } from '../../store/onboarding';
@@ -25,7 +25,9 @@ export function WalletTradeProvider({ children }: { children: ReactNode }) {
   const [feedback, setFeedback] = useState<{ identity: string; message: string; order?: TradeOrder } | null>(null);
   const flow = useMemo(() => new GuardedTradeFlow({
     current, client: guardedTradeClient, storage: localStorage, now: serverNow,
-    approve: (step, account, check) => approveExactToken(step, 4663, account, check),
+    approve: (step, account, check) => step.kind === 'permit2'
+      ? approveExactPermit2(step, current().config?.trading.permit2 ?? '', 4663, account, check)
+      : approveExactToken(step, 4663, account, check),
     send: async (tx, account, check) => {
       check();
       return sendTransaction(wagmiConfig, { account: account as Address, to: tx.to as Address, data: tx.data as Hex, value: BigInt(tx.value), chainId: 4663 });

@@ -63,7 +63,15 @@ describe('config schedule and release boundaries (offline fixtures)', () => {
     const quote = { account: wallet, amountUsd: 20, binding: true, guard: { decision: 'allow', checks: [] }, fee: { bps: 0, usd: 0, destination: null } } as unknown as TradeQuote;
     expect(await access.informationalQuote(quote, true)).toMatchObject({ binding: false, guard: { decision: 'refuse', checks: [{ code: 'forbidden' }] }, fee: quote.fee });
     await expect(access.assertOrder(wallet, 20, true)).rejects.toMatchObject({ code: 'forbidden' });
-    const registry = loadRegistry(); registry.data.uniswapV3.swapRouter02.check = 'VERIFY_ABI';
+    const registry = loadRegistry(), v4 = registry.data.uniswapV4;
+    // Verified manifests: the v3 router, plus the v4 UniversalRouter and Permit2 (whose approval step needs its address).
+    expect(new TradeAccessService(cfg, flags, async () => row, Date.now, registry).verifiedTargets()).toEqual({
+      routers: [registry.requireAddress('uniswapV3.swapRouter02'), v4.universalRouter.address],
+      spenders: [registry.requireAddress('uniswapV3.swapRouter02'), v4.permit2.address], permit2: v4.permit2.address });
+    registry.data.uniswapV3.swapRouter02.check = 'VERIFY_ABI';
+    expect(new TradeAccessService(cfg, flags, async () => row, Date.now, registry).verifiedTargets()).toEqual({
+      routers: [v4.universalRouter.address], spenders: [v4.permit2.address], permit2: v4.permit2.address });
+    v4.permit2.check = 'VERIFY';
     expect(new TradeAccessService(cfg, flags, async () => row, Date.now, registry).verifiedTargets()).toEqual({ routers: [], spenders: [] });
     row.capUsd = NaN;
     expect((await access.refusal(wallet, 1))?.code).toBe('trade_cap_exceeded');
@@ -76,6 +84,7 @@ describe('migrated storage, admin routes and execution revalidation (no chain ca
   let now = Date.now(), enabled = true, readFails = false;
   let access: TradeAccessService, exec: ExecutionService;
   const router = loadRegistry().requireAddress('uniswapV3.swapRouter02');
+  const universalRouter = loadRegistry().requireAddress('uniswapV4.universalRouter'), permit2 = loadRegistry().requireAddress('uniswapV4.permit2');
   const quote = (id: string, side: 'buy' | 'sell', amountIn: number, account = wallet): Quote => ({
     id, mode: 'live', market: 'ETH-USD', side, network: 'robinhood-mainnet', venue: 'uniswap-v3', venueName: 'Uniswap v3',
     assetIn: side === 'buy' ? 'USDG' : 'ETH', assetOut: side === 'buy' ? 'ETH' : 'USDG', amountIn,
@@ -121,7 +130,8 @@ describe('migrated storage, admin routes and execution revalidation (no chain ca
     expect((await call(adminCookie, 'PUT', path, { ...payload, capUsd: 20 })).statusCode).toBe(200);
     expect((await call(adminCookie, 'GET', '/v1/admin/trading/allowlist')).json().rows).toHaveLength(2);
     const config = await call(adminCookie, 'GET', '/v1/config');
-    expect(config.headers['cache-control']).toBe('private, no-store'); expect(config.json().trading).toMatchObject({ maxTradeUsd: 20, routers: [router.toLowerCase()], spenders: [router.toLowerCase()] });
+    expect(config.headers['cache-control']).toBe('private, no-store'); expect(config.json().trading).toMatchObject({ maxTradeUsd: 20,
+      routers: [router.toLowerCase(), universalRouter.toLowerCase()], spenders: [router.toLowerCase(), permit2.toLowerCase()], permit2: permit2.toLowerCase() });
     expect((await built.ctx.dbh.db.select().from(auditLog).where(eq(auditLog.action, 'trading.allowlist_upsert')))).toHaveLength(3);
     expect((await built.ctx.dbh.db.select().from(auditLog).where(eq(auditLog.action, 'trading.config_loaded')))[0]!.data).toMatchObject({ hash: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });

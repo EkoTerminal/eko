@@ -7,7 +7,9 @@
  * returns unsigned bytes, and its reconcile worker confirms fills from receipts. A key generated at test time signs; it
  * is funded with fork-only ETH by `anvil_setBalance`. No real funds, wallets or keys, and no paid RPC: Anvil forks the
  * public RPC only. Admission runs on the current verdict with no Guard v2 release, as at launch. `v1-trade-harness.ts`
- * lists the only test seams (indexer and engine rows, Anvil's L2-only gas, the retrying relay).
+ * lists the only test seams (indexer and engine rows, Anvil's L2-only gas, the retrying relay). Pons coins are real ones
+ * at the fork block, traded under the presets as production runs them: two open native curves and one coin that
+ * graduated to its v4 pool.
  *
  * Anvil processes on fixed ports: the trading chain (8547, forked from the public RPC through a retrying loopback relay
  * on 8546, one block per second like a live chain) and one simulation host per server (8548, 8549; each started with `--fork-url` to the trading chain and
@@ -32,8 +34,11 @@ import { loadConfig } from '../../src/config.js';
 import { tradeOrders } from '../../src/db/schema.js';
 import { SellGuard } from '../../src/exec/sell-guard.js';
 import { seedSanctions } from '../sanctions-fixture.js';
-import { anvilNetworkFeeWei, findPonsLaunch, forkLog, ROUTER, seedIndexedState, setScanPending, setStoredSellCheck, setVerdict, startPublicRpcRelay,
-  USDG, warmForkState, WETH } from './v1-trade-harness.js';
+import { liveTradeSources } from '../../src/exec/live-trade.js';
+import { indexedPonsCurves, PONS_CURVE_ABI, ponsTradeCall, quotePonsTrade, readPonsCurve, type PonsTradeSources } from '../../src/exec/pons-routes.js';
+import { PERMIT2, PERMIT2_ABI, readV4Pool, V4_ROUTER, v4TradeCall } from '../../src/exec/v4-routes.js';
+import { anvilNetworkFeeWei, findGraduatedPons, findOpenPonsLaunches, forkLog, ROUTER, seedIndexedState, setScanPending, setStoredSellCheck, setVerdict,
+  startPublicRpcRelay, USDG, warmForkState, warmPons, WETH, type PonsSeed } from './v1-trade-harness.js';
 
 const ANVIL = process.env.ANVIL_BIN ?? 'anvil';
 const RELAY_PORT = 8546, CHAIN_PORT = 8547, SIM_PORT = 8548, SIM_B_PORT = 8549;
@@ -51,8 +56,11 @@ const patient = createPublicClient({ chain, transport: http(CHAIN_RPC, { retryCo
 const trader = privateKeyToAccount(generatePrivateKey());
 const other = privateKeyToAccount(generatePrivateKey());
 const admin = privateKeyToAccount(generatePrivateKey());
+// Buys out a Pons curve on the fork so it graduates (fork-only ETH).
+const whale = privateKeyToAccount(generatePrivateKey());
 const traderWallet = createWalletClient({ account: trader, chain, transport: transport() });
 const otherWallet = createWalletClient({ account: other, chain, transport: transport() });
+const whaleWallet = createWalletClient({ account: whale, chain, transport: transport() });
 
 const children: ChildProcess[] = [];
 const killAnvils = () => { for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); };
@@ -65,7 +73,9 @@ let srv: Server;
 let primary: Server;
 let forkBlock: bigint;
 let relay: Awaited<ReturnType<typeof startPublicRpcRelay>> | undefined;
-let pons: Awaited<ReturnType<typeof findPonsLaunch>>;
+/** Two open native curves (a buy and sell; a buyout that graduates the curve) and a coin that graduated before the fork block. */
+let pons: { open: PonsSeed[]; graduated: PonsSeed | null } = { open: [], graduated: null };
+let forkEthUsd: number;
 
 const portFree = (port: number) => new Promise<boolean>(resolve => {
   const socket = createConnection({ host: '127.0.0.1', port });
@@ -134,9 +144,10 @@ async function startServer(simPort: number, sellCheck: boolean): Promise<Server 
   // Production-shaped data: OFAC snapshot, indexed tokens/pools/ETH price, Guard verdicts and the runtime switch.
   await seedSanctions(built.ctx.dbh.chain);
   await built.ctx.dbh.chain.ensurePartitions(new Date());
-  const indexed = await seedIndexedState(built.ctx.dbh.chain.sql, patient, forkBlock, pons ? { pons } : {});
-  // Current verdicts as the engines publish them (Radar). The Pons coin is left unscanned.
-  for (const coin of [USDG, WETH]) await setVerdict(built.ctx.dbh.chain.sql, coin, 'clear', forkBlock);
+  const seeds = [...pons.open, ...(pons.graduated ? [pons.graduated] : [])];
+  const indexed = await seedIndexedState(built.ctx.dbh.chain.sql, patient, forkBlock, { pons: seeds });
+  // Current verdicts as the engines publish them (Radar), the Pons coins included.
+  for (const coin of [USDG, WETH, ...seeds.map(p => p.coin)]) await setVerdict(built.ctx.dbh.chain.sql, coin, 'clear', forkBlock);
   await tradingLive(built, true);
   const server = { built, cookie: await signIn(built, trader), indexed };
   // The worker role's reconcile loop (1.5 s ticks), as `APP_ROLE=worker` starts it.
@@ -154,7 +165,7 @@ async function warmApi(server: Server) {
   }, 180_000, 2_000).catch(error => { throw new Error(`Fork warm-up did not converge: ${last}`, { cause: error }); });
 }
 
-type QuoteBody = { coin: Address; side: 'buy' | 'sell'; amountUsd: number; slippageBps?: number };
+type QuoteBody = { coin: Address; side: 'buy' | 'sell'; amountUsd: number; slippageBps?: number; riskMode?: 'safe' | 'balanced' | 'degen' };
 const quoteResponse = (body: QuoteBody) => api(srv.cookie, 'POST', '/trade/quote', { slippageBps: 50, account: trader.address, ...body });
 async function quote(body: QuoteBody): Promise<TradeQuote> {
   const response = await quoteResponse(body);
@@ -185,11 +196,14 @@ const send = async (tx: UnsignedTx, from = traderWallet, gas?: bigint) => {
   return { hash, receipt: await rpc.waitForTransactionReceipt({ hash }) };
 };
 const balanceOf = (token: Address, who: Address = trader.address) => rpc.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [who] });
-const allowanceOf = (token: Address) => rpc.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [trader.address, ROUTER] });
-async function approveExact(token: Address, amount: bigint) {
-  const hash = await traderWallet.writeContract({ address: token, abi: erc20Abi, functionName: 'approve', args: [ROUTER, amount] });
-  expect((await rpc.waitForTransactionReceipt({ hash })).status).toBe('success');
-  expect(await allowanceOf(token)).toBe(amount);
+const allowanceOf = (token: Address, spender: Address = ROUTER) => rpc.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [trader.address, spender] });
+/** Send the exact approval and return its network fee in wei. */
+async function approveExact(token: Address, amount: bigint, spender: Address = ROUTER) {
+  const hash = await traderWallet.writeContract({ address: token, abi: erc20Abi, functionName: 'approve', args: [spender, amount] });
+  const receipt = await rpc.waitForTransactionReceipt({ hash });
+  expect(receipt.status).toBe('success');
+  expect(await allowanceOf(token, spender)).toBe(amount);
+  return receipt.gasUsed * receipt.effectiveGasPrice;
 }
 const refusalCodes = (q: TradeQuote) => q.guard.checks.filter(c => c.status === 'refuse').map(c => c.code);
 
@@ -197,24 +211,35 @@ const refusalCodes = (q: TradeQuote) => q.guard.checks.filter(c => c.status === 
  * The web app's guarded sequence (apps/web/src/lib/tradeFlow.ts): a wallet-bound quote; each listed approval checked
  * as exact and sent; a fresh quote that must list none (else `approval_pending`); then order, sign and report.
  */
-async function tradeLikeTheWebApp(body: QuoteBody, idempotencyKey: string) {
+async function tradeLikeTheWebApp(body: QuoteBody, idempotencyKey: string, target: Address = ROUTER) {
   let q = await quote(body);
   expect(q, JSON.stringify(q.guard)).toMatchObject({ binding: true, route: { executable: true }, guard: { decision: 'allow' } });
   const approved = q.approvals;
+  let approvalFeeWei = 0n;
   for (const step of q.approvals) {
-    expect(step).toMatchObject({ spender: ROUTER, amount: q.amountIn, kind: 'erc20' });
-    await approveExact(step.token, BigInt(step.amount));
+    expect(step).toMatchObject({ amount: q.amountIn });
+    // v3 and Pons curves: one exact ERC-20 approval to the target. Uniswap v4: ERC-20 to Permit2, then Permit2 to the router.
+    if (step.kind === 'permit2') {
+      expect(step).toMatchObject({ token: q.coin, spender: target, expiration: expect.any(Number) });
+      const hash = await traderWallet.writeContract({ address: PERMIT2, abi: PERMIT2_ABI, functionName: 'approve', args: [step.token, step.spender, BigInt(step.amount), step.expiration!] });
+      const receipt = await rpc.waitForTransactionReceipt({ hash });
+      expect(receipt.status).toBe('success');
+      approvalFeeWei += receipt.gasUsed * receipt.effectiveGasPrice;
+    } else {
+      expect(step).toMatchObject({ spender: target === V4_ROUTER ? PERMIT2 : target, kind: 'erc20' });
+      approvalFeeWei += await approveExact(step.token, BigInt(step.amount), step.spender);
+    }
   }
   if (q.approvals.length) {
     q = await quote(body);
     expect(q, JSON.stringify(q.guard)).toMatchObject({ binding: true, approvals: [] });
   }
   const placed = await order(q, idempotencyKey);
-  expect(placed.tx).toMatchObject({ chainId: 4663, to: ROUTER, value: q.valueWei });
+  expect(placed.tx).toMatchObject({ chainId: 4663, to: target, value: q.valueWei });
   const sent = await send(placed.tx);
   expect(sent.receipt.status).toBe('success');
   expect(await submitted(placed.order.id, sent.hash)).toMatchObject({ status: 'submitted', txHash: sent.hash.toLowerCase() });
-  return { q, approved, placed, ...sent };
+  return { q, approved, approvalFeeWei, placed, ...sent };
 }
 
 describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
@@ -227,15 +252,18 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
     relay = await startPublicRpcRelay(RELAY_PORT, PUBLIC_RPC);
     await startAnvil(CHAIN_PORT, ['--fork-url', relay.url, '--fork-block-number', forkBlock.toString(), '--block-time', '1',
       '--retries', '12', '--fork-retry-backoff', '5000', '--compute-units-per-second', '80'], forkBlock);
-    for (const [who, eth] of [[trader.address, '5'], [other.address, '2']] as const)
+    for (const [who, eth] of [[trader.address, '5'], [other.address, '2'], [whale.address, '10']] as const)
       await rpc.request({ method: 'anvil_setBalance' as never, params: [who, `0x${parseEther(eth).toString(16)}`] as never });
-    pons = await findPonsLaunch(rpc, forkBlock);
+    pons = { open: await findOpenPonsLaunches(patient, forkBlock, 2), graduated: await findGraduatedPons(patient, forkBlock) };
+    forkLog('pons coins', pons);
     const started = await startServer(SIM_PORT, true);
     srv = primary = started;
+    forkEthUsd = started.indexed.ethUsd;
     const sellGuard = new SellGuard(started.built.ctx.dbh.chain, { getBlockNumber: () => patient.getBlockNumber(), request: input => patient.request(input as never) });
     await warmForkState(patient, started.indexed.pools, started.indexed.ethUsd, (coin, usd) => sellGuard.check(coin, usd));
+    await warmPons(patient, [...pons.open, ...(pons.graduated ? [pons.graduated] : [])], trader.address, (coin, usd) => sellGuard.check(coin, usd));
     await warmApi(primary);
-  }, 480_000);
+  }, 600_000);
 
   afterAll(async () => {
     primary?.built.ctx.exec.stop();
@@ -402,12 +430,148 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
     expect(unchecked.json()).toMatchObject({ error: 'sim_unavailable' });
   }, 120_000);
 
-  it('Pons-curve coins have no executable v1 route (quote-only until a Pons acquisition is installed)', async () => {
-    expect(pons, 'a native-ETH Pons launch in the scanned range').not.toBeNull();
-    const response = await quoteResponse({ coin: pons!.coin, side: 'sell', amountUsd: 5 });
-    expect(response.statusCode).toBe(422);
-    expect(response.json()).toMatchObject({ error: 'no_route' });
-  }, 60_000);
+  describe('Pons bonding curves', () => {
+    const ponsSources = (): PonsTradeSources => {
+      const chainClient = () => srv.built.ctx.chains.get('robinhood-mainnet'), sql = () => srv.built.ctx.dbh.chain.sql;
+      return { curve: indexedPonsCurves(sql()), priceUsd: liveTradeSources(chainClient, sql).priceUsd, networkFeeWei: anvilNetworkFeeWei(chainClient) };
+    };
+    /** Repeat a Balanced curve buy quote until it binds: every leg of the curve probe has then run once on this fork. */
+    async function warmCurve(coin: Address) {
+      let last = '';
+      await waitFor(async () => {
+        const buy = await quoteResponse({ coin, side: 'buy', amountUsd: 5, riskMode: 'balanced' });
+        last = `${buy.statusCode} ${buy.statusCode === 200 ? JSON.stringify({ binding: buy.json().binding, guard: buy.json().guard }) : buy.body.slice(0, 300)}`;
+        forkLog('pons warm-up quote', coin, last);
+        return buy.statusCode === 200 && (buy.json() as TradeQuote).binding ? true : null;
+      }, 180_000, 2_000).catch(error => { throw new Error(`Pons warm-up did not converge: ${last}`, { cause: error }); });
+    }
+    beforeAll(async () => {
+      expect(pons.open.length, 'two open native Pons curves in the scanned range').toBe(2);
+      for (const p of pons.open) await warmCurve(p.coin);
+    }, 400_000);
+
+    it('a curve buy under the Balanced preset, then a sell of what it bought, both confirmed with the actual fills and a 0% fee', async () => {
+      const [a] = pons.open as [PonsSeed];
+      // Judged by its exact round trip, not depth (a fresh curve's ±2% depth is far below every pool floor): above
+      // Careful's 5% ceiling, within Balanced's 10%. The quote shows the exit cost before anything is signed.
+      const careful = await quote({ coin: a.coin, side: 'buy', amountUsd: 5, riskMode: 'safe' });
+      expect(careful).toMatchObject({ binding: false, route: { venue: 'pons_curve', poolId: a.curve, executable: true }, fee: { bps: 0, usd: 0, destination: null } });
+      expect(careful.exitCostPct).toBeGreaterThan(5);
+      expect(careful.exitCostPct).toBeLessThan(10);
+      expect(careful.guard.checks).toEqual([{ code: 'round_trip_cost', status: 'refuse', label: expect.stringMatching(/Exit cost/), value: careful.exitCostPct }]);
+
+      const coinBefore = await balanceOf(a.coin), ethBefore = await rpc.getBalance({ address: trader.address });
+      const buy = await tradeLikeTheWebApp({ coin: a.coin, side: 'buy', amountUsd: 5, riskMode: 'balanced' }, 'fork-v1-pons-buy-0001', a.curve);
+      expect(buy.q).toMatchObject({ route: { venue: 'pons_curve', poolId: a.curve, executable: true }, approvals: [], valueWei: buy.q.amountIn,
+        fee: { bps: 0, usd: 0, destination: null }, exitCostPct: careful.exitCostPct });
+      // The quote shows the curve's own creator tax (it varies per launch, zero included).
+      const terms = await readPonsCurve(patient, a.coin, a.curve, BigInt(buy.q.asOfBlock));
+      expect(buy.q).toMatchObject({ buyTaxPct: Number(terms.creatorTaxBps) / 100, sellTaxPct: Number(terms.creatorTaxBps) / 100 });
+      const bought = await settled(buy.placed.order.id);
+      expect(bought, JSON.stringify(bought)).toMatchObject({ status: 'confirmed', feeBps: 0, filledIn: buy.q.amountIn });
+      // Nothing else trades this curve on the fork, so the curve math predicted the fill to the token.
+      expect(bought.filledOut).toBe(buy.q.expectedOut);
+      expect(await balanceOf(a.coin) - coinBefore).toBe(BigInt(bought.filledOut!));
+      const swapGas = buy.receipt.gasUsed * buy.receipt.effectiveGasPrice;
+      expect(ethBefore - await rpc.getBalance({ address: trader.address }) - swapGas).toBe(BigInt(bought.filledIn!));
+      const [row] = await srv.built.ctx.dbh.db.select().from(tradeOrders).where(eq(tradeOrders.id, buy.placed.order.id));
+      expect(row!.postFillEvidence).toMatchObject({ status: 'passed', origin: 'measured', amount: bought.filledOut, txHash: buy.hash.toLowerCase() });
+
+      // Sell nearly all of it back at the preset policy (sells have no depth or cost floor), sized at the curve's marginal price.
+      const held = await balanceOf(a.coin);
+      const s = await readPonsCurve(patient, a.coin, a.curve, await patient.getBlockNumber());
+      const amountUsd = Math.floor(Number(held) * Number(s.quoteReserve) / Number(s.tokenReserve) / 1e18 * forkEthUsd * 0.95 * 100) / 100;
+      const first = await quote({ coin: a.coin, side: 'sell', amountUsd });
+      expect(first).toMatchObject({ binding: true, route: { venue: 'pons_curve', poolId: a.curve }, approvals: [{ token: a.coin, spender: a.curve, amount: first.amountIn, kind: 'erc20' }] });
+      expect(BigInt(first.amountIn)).toBeLessThanOrEqual(held);
+      expect(BigInt(first.amountIn) * 10n).toBeGreaterThan(held * 8n);
+      const early = await orderResponse(first, 'fork-v1-pons-sell-0000');
+      expect(early.statusCode).toBe(422);
+      expect(early.json()).toMatchObject({ error: 'approval_required' });
+
+      const ethMid = await rpc.getBalance({ address: trader.address });
+      const sell = await tradeLikeTheWebApp({ coin: a.coin, side: 'sell', amountUsd }, 'fork-v1-pons-sell-0001', a.curve);
+      expect(sell.approved).toEqual(first.approvals);
+      const sold = await settled(sell.placed.order.id);
+      expect(sold, JSON.stringify(sold)).toMatchObject({ status: 'confirmed', feeBps: 0, filledIn: sell.q.amountIn, filledOut: sell.q.expectedOut });
+      expect(held - await balanceOf(a.coin)).toBe(BigInt(sell.q.amountIn));
+      // The native ETH the wallet received is exactly the decoded fill (the curve's quoteOut); approval and swap gas are separate.
+      const gas = sell.receipt.gasUsed * sell.receipt.effectiveGasPrice + sell.approvalFeeWei;
+      expect(await rpc.getBalance({ address: trader.address }) + gas - ethMid).toBe(BigInt(sold.filledOut!));
+      expect(await allowanceOf(a.coin, a.curve)).toBe(0n);
+    }, 240_000);
+
+    it('a curve quote taken just before graduation is refused at order time; the coin then routes to the pools, never the dead curve', async () => {
+      const [, b] = pons.open as [PonsSeed, PonsSeed];
+      // Another wallet's buy larger than the curve's remaining tokens: clamped, refunded, and the curve graduates in it.
+      const buyout = { to: b.curve, data: ponsTradeCall({ side: 'buy', amountIn: parseEther('8'), minOut: 1n, recipient: whale.address }), value: parseEther('8'), gas: 25_000_000n };
+      const stale = await quote({ coin: b.coin, side: 'buy', amountUsd: 5, riskMode: 'balanced' });
+      expect(stale, JSON.stringify(stale.guard)).toMatchObject({ binding: true, route: { venue: 'pons_curve', poolId: b.curve, executable: true } });
+      const hash = await whaleWallet.sendTransaction(buyout);
+      expect((await rpc.waitForTransactionReceipt({ hash, pollingInterval: 250 })).status).toBe('success');
+      const refused = await orderResponse(stale, 'fork-v1-pons-graduated-0001');
+      expect(await rpc.readContract({ address: b.curve, abi: PONS_CURVE_ABI, functionName: 'graduated' })).toBe(true);
+      expect(refused.statusCode, refused.body).toBe(422);
+      expect(refused.json()).toMatchObject({ error: 'quote_changed' });
+      // The re-quote reads the graduated curve and hands the coin to the pool routes; this coin has no pool on the fork yet.
+      await expect(quotePonsTrade(srv.built.ctx.chains.get('robinhood-mainnet'), { coin: b.coin, side: 'sell', amountUsd: 5, slippageBps: 50 }, ponsSources()))
+        .rejects.toMatchObject({ reason: 'graduated' });
+      const requote = await quoteResponse({ coin: b.coin, side: 'sell', amountUsd: 5 });
+      expect(requote.statusCode).toBe(422);
+      expect(requote.json()).toMatchObject({ error: 'no_route' });
+    }, 180_000);
+
+    it('a coin that graduated before the fork block trades on its Uniswap v4 pool, never the dead curve', async () => {
+      const g = pons.graduated;
+      expect(g, 'a native Pons coin graduated to its Pons-hook v4 pool in the scanned range').not.toBeNull();
+      const pool = g!.graduated!;
+      expect(await rpc.readContract({ address: g!.curve, abi: PONS_CURVE_ABI, functionName: 'graduated' })).toBe(true);
+      // The indexer's graduation record hands the coin to the pools without touching the curve; it has no v3 pool, so v4.
+      await expect(quotePonsTrade(srv.built.ctx.chains.get('robinhood-mainnet'), { coin: g!.coin, side: 'sell', amountUsd: 5, slippageBps: 50 }, ponsSources()))
+        .rejects.toMatchObject({ reason: 'graduated' });
+
+      // A buy is quoted, bound and simulated on the v4 pool (round trip measured on the simulation host), then refused by the
+      // pool depth floor that applies to v4 as to v3: a graduated pool holds a few ETH, far below even Degen's $2,000.
+      let buy: TradeQuote | null = null;
+      await waitFor(async () => {
+        const r = await quoteResponse({ coin: g!.coin, side: 'buy', amountUsd: 5, riskMode: 'degen' });
+        forkLog('graduated buy quote', r.statusCode, r.body.slice(0, 400));
+        buy = r.statusCode === 200 ? TradeQuoteSchema.parse(r.json()) : null;
+        return buy && refusalCodes(buy).length === 1 && refusalCodes(buy)[0] === 'thin_liquidity' ? true : null;
+      }, 120_000, 2_000);
+      expect(buy).toMatchObject({ binding: false, route: { venue: 'uniswap_v4', poolId: pool.pool.toLowerCase(), executable: true }, fee: { bps: 0, usd: 0, destination: null },
+        valueWei: buy!.amountIn, approvals: [] });
+
+      // A holder (who bought before, elsewhere) sells through EKO on the v4 pool: exact Permit2 approvals, re-quote, order, confirm.
+      const acquire = v4TradeCall({ side: 'buy', key: pool.key, amountIn: parseEther('0.002'), minOut: 1n, recipient: trader.address, deadline: 2n ** 40n });
+      expect((await send({ chainId: 4663, to: V4_ROUTER, data: acquire, value: parseEther('0.002').toString() })).receipt.status).toBe('success');
+      const held = await balanceOf(g!.coin);
+      expect(held).toBeGreaterThan(0n);
+      const s = await readV4Pool(patient, pool.pool, await patient.getBlockNumber());
+      const amountUsd = Math.floor(Number(held) * 2 ** 192 / Number(s.sqrtPriceX96) ** 2 / 1e18 * forkEthUsd * 0.9 * 100) / 100;
+      const first = await quote({ coin: g!.coin, side: 'sell', amountUsd });
+      expect(first).toMatchObject({ binding: true, route: { venue: 'uniswap_v4', poolId: pool.pool.toLowerCase() }, approvals: [
+        { token: g!.coin, spender: PERMIT2, amount: first.amountIn, kind: 'erc20' },
+        { token: g!.coin, spender: V4_ROUTER, amount: first.amountIn, kind: 'permit2', expiration: expect.any(Number) }] });
+      expect(BigInt(first.amountIn)).toBeLessThanOrEqual(held);
+      const early = await orderResponse(first, 'fork-v1-v4-sell-0000');
+      expect(early.statusCode).toBe(422);
+      expect(early.json()).toMatchObject({ error: 'approval_required' });
+
+      const ethMid = await rpc.getBalance({ address: trader.address });
+      const sell = await tradeLikeTheWebApp({ coin: g!.coin, side: 'sell', amountUsd }, 'fork-v1-v4-sell-0001', V4_ROUTER);
+      expect(sell.approved.map(a => a.kind)).toEqual(['erc20', 'permit2']);
+      const sold = await settled(sell.placed.order.id);
+      expect(sold, JSON.stringify(sold)).toMatchObject({ status: 'confirmed', feeBps: 0, filledIn: sell.q.amountIn });
+      expect(BigInt(sold.filledOut!)).toBeGreaterThanOrEqual(BigInt(sell.q.minOut));
+      expect(held - await balanceOf(g!.coin)).toBe(BigInt(sell.q.amountIn));
+      // The native ETH the wallet received is exactly the decoded fill (the router's WETH unwrap); approval and swap gas are separate.
+      const gas = sell.receipt.gasUsed * sell.receipt.effectiveGasPrice + sell.approvalFeeWei;
+      expect(await rpc.getBalance({ address: trader.address }) + gas - ethMid).toBe(BigInt(sold.filledOut!));
+      const [permit2Left] = await rpc.readContract({ address: PERMIT2, abi: PERMIT2_ABI, functionName: 'allowance', args: [trader.address, g!.coin, V4_ROUTER] });
+      expect(permit2Left).toBe(0n);
+    }, 240_000);
+  });
 
   it('admission: the runtime switch and the published cap refuse at quote and order time', async () => {
     const q = await quote({ coin: USDG, side: 'buy', amountUsd: 5 });

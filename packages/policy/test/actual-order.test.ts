@@ -64,6 +64,30 @@ describe('actual-order cached policy semantics (Guard §§1,3.4,7.2)', () => {
     q.returned = (BigInt(q.spent) + 1n).toString();
     expect(run(p,b,{...deps,actualOrderFor:()=>({status:'ready',observation:q})}).decision).toBe('allow');
   });
+  describe('a bonding-curve buy is judged by its exact round-trip cost, not by depth (owner decision 2026-10-06)', () => {
+    // A fresh curve: ~$70 of ±2% depth (far below every preset floor) and a 7% measured round trip (fee, tax, impact).
+    const curveBuy = (mode: Policy['mode'], costPct: bigint, curve: boolean) => {
+      const p: Policy = { mode, blockPlaybookLevel: null, killed: false, version: 1 }, b = binding(p), q = observationFor(b);
+      q.depthUsdLower = 70; q.returned = (BigInt(q.spent) * (100n - costPct) / 100n).toString();
+      return code(run(p, b, { ...deps, actualOrderFor: () => ({ status: 'ready', observation: q }), ...(curve ? { bondingCurveRoute: () => true } : {}) }).reasons);
+    };
+    it('refuses in Careful (5%) and admits in Balanced (10%) and Degen (25%) at a 7% round trip', () => {
+      expect(curveBuy('safe', 7n, true)).toEqual(['round_trip_cost']);
+      expect(curveBuy('balanced', 7n, true)).toEqual([]);
+      expect(curveBuy('degen', 7n, true)).toEqual([]);
+    });
+    it('still refuses a curve whose round trip exceeds the mode’s ceiling', () => {
+      expect(curveBuy('balanced', 11n, true)).toEqual(['round_trip_cost']);
+      expect(curveBuy('degen', 26n, true)).toEqual(['round_trip_cost']);
+      expect(curveBuy('degen', 24n, true)).toEqual([]);
+    });
+    it('keeps every depth floor for pools (no curve statement, or a host that says false)', () => {
+      for (const mode of ['safe', 'balanced', 'degen'] as const) expect(curveBuy(mode, 1n, false)).toEqual(['thin_liquidity']);
+      const p: Policy = { mode: 'degen', blockPlaybookLevel: null, killed: false, version: 1 }, b = binding(p), q = observationFor(b);
+      q.depthUsdLower = 70;
+      expect(code(run(p, b, { ...deps, actualOrderFor: () => ({ status: 'ready', observation: q }), bondingCurveRoute: () => false }).reasons)).toEqual(['thin_liquidity']);
+    });
+  });
   it('compares very small policy ceilings written in exponent notation', () => {
     const p={...policy,maxRoundTripCostPct:1e-7},b=binding(p),q=observationFor(b);q.returned=q.spent;
     expect(run(p,b,{...deps,actualOrderFor:()=>({status:'ready',observation:q})}).decision).toBe('allow');

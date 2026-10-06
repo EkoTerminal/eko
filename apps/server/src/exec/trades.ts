@@ -172,7 +172,10 @@ export class TradeService {
       const approvalOnly = prepared.status !== 'validated' && prepared.code === 'token_approval_required' && quote.approvals.length > 0;
       if (prepared.status !== 'validated' && !approvalOnly) quote = { ...quote, binding: false, guard: { decision: 'refuse', checks: [...quote.guard.checks,
         { code: prepared.code, status: 'refuse', label: prepared.code === 'scanning' ? 'EKO is still scanning this coin; try again shortly'
-          : 'Current execution checks refused or are unavailable' }] } };
+          : prepared.code === 'round_trip_cost' ? 'Exit cost at this size is above your risk mode’s maximum'
+          : 'Current execution checks refused or are unavailable',
+          // A curve quote's exit cost is the exact round trip the buy was judged on; show it with the refusal.
+          ...(prepared.code === 'round_trip_cost' && quote.route.venue === 'pons_curve' ? { value: quote.exitCostPct } : {}) }] } };
     }
     quote = await this.access.informationalQuote(quote);
     retained.quote = quote;

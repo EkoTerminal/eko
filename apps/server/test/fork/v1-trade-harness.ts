@@ -7,17 +7,19 @@
  *   current verdicts (`verdicts`, what Radar shows), scan jobs and stored sell-check readings. No Guard v2 rows: trade
  *   admission runs on the current verdict, as it will at launch;
  * - `anvilNetworkFeeWei`: Anvil has no Arbitrum NodeInterface, so the fee is execution gas at base fee (L2 only);
- * - cache warming, discovery of a recent native-ETH Pons launch, and a loopback relay to the public RPC that retries
- *   its transient refusals (Anvil treats them as final).
+ * - cache warming, discovery of open native-ETH Pons curves and of a graduated Pons coin, and a loopback relay to the
+ *   public RPC that retries its transient refusals (Anvil treats them as final).
  */
 import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { keccak256, stringToHex, type Address, type PublicClient } from 'viem';
+import { erc20Abi, keccak256, stringToHex, zeroAddress, type Address, type Hex, type PublicClient } from 'viem';
 import { binary, type SqlClient } from '@eko/db';
-import { loadRegistry } from '@eko/chain';
+import { loadRegistry, type V4PoolKey } from '@eko/chain';
 import type { Verdict } from '@eko/shared';
 import { liveTradeSources } from '../../src/exec/live-trade.js';
 import { FACTORY_ABI, POOL_ABI, QUOTER_V2_ABI, type IndexedV3Pool, type V3TradeSources } from '../../src/exec/v3-routes.js';
+import { PONS_CURVE_ABI, ponsOpen, readPonsCurve } from '../../src/exec/pons-routes.js';
+import { readV4Pool, v4Wired } from '../../src/exec/v4-routes.js';
 import { verdict as legacyVerdict } from '../../../../packages/policy/test/fixtures.js';
 
 /** Optional diagnostics: set FORK_DEBUG_LOG to a file path to record quote outcomes and warm-up attempts. */
@@ -28,6 +30,7 @@ export function forkLog(...parts: unknown[]) {
 
 const registry = loadRegistry();
 const lower = (a: string) => a.toLowerCase() as Address;
+const same = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 export const WETH = lower(registry.requireAddress('tokens.WETH'));
 export const USDG = lower(registry.requireAddress('tokens.USDG'));
 export const ROUTER = lower(registry.requireAddress('uniswapV3.swapRouter02'));
@@ -63,7 +66,7 @@ export async function startPublicRpcRelay(port: number, upstream: string) {
 }
 
 /** Indexer-shaped rows: the tokens, v3 pools and one ETH-priced swap that the indexer would have written. */
-export async function seedIndexedState(sql: SqlClient, client: PublicClient, block: bigint, extra: { pons?: { coin: Address; curve: Address; launchBlock: bigint } } = {}) {
+export async function seedIndexedState(sql: SqlClient, client: PublicClient, block: bigint, extra: { pons?: PonsSeed[] } = {}) {
   const pools: IndexedV3Pool[] = [];
   for (const fee of [100, 500, 3000, 10000]) {
     const pool = await client.readContract({ address: FACTORY, abi: FACTORY_ABI, functionName: 'getPool', args: [WETH, USDG, fee], blockNumber: block });
@@ -78,10 +81,18 @@ export async function seedIndexedState(sql: SqlClient, client: PublicClient, blo
     [binary(p.address), binary(p.currency0), binary(p.currency1), p.fee, ({ 100: 1, 500: 10, 3000: 60, 10000: 200 } as Record<number, number>)[p.fee], block.toString()]);
   }
   const tokens: [Address, string, number, string | null, Address | null, bigint][] = [[WETH, 'WETH', 18, null, null, block], [USDG, 'USDG', 6, null, null, block]];
-  if (extra.pons) tokens.push([extra.pons.coin, 'PONS-SAMPLE', 18, 'pons', extra.pons.curve, extra.pons.launchBlock]);
+  for (const [i, p] of (extra.pons ?? []).entries()) tokens.push([p.coin, `PONS-SAMPLE-${i + 1}`, 18, 'pons', p.curve, p.launchBlock]);
   for (const [address, symbol, decimals, launchpad, curve, first] of tokens) {
     await sql.query(`INSERT INTO tokens(address,symbol,name,decimals,launchpad,curve,first_block,block) VALUES($1,$2,$2,$3,$4,$5,$6,$7) ON CONFLICT(address) DO NOTHING`,
       [binary(address), symbol, decimals, launchpad, curve ? binary(curve) : null, first.toString(), block.toString()]);
+  }
+  // The indexer's graduation record: the coin's Pons-hook v4 pool (its Initialize) and the block it was created in.
+  for (const p of extra.pons ?? []) if (p.graduated) {
+    const { pool, block: created, key } = p.graduated;
+    await sql.query(`INSERT INTO pools(id,venue,currency0,currency1,fee,tick_spacing,hooks,created_block,block,creation_verified)
+      VALUES($1,'uniswap_v4',$2,$3,$4,$5,$6,$7,$7,true) ON CONFLICT(id) DO NOTHING`,
+    [binary(pool), binary(key.currency0), binary(key.currency1), key.fee, key.tickSpacing, binary(key.hooks), created.toString()]);
+    await sql.query('UPDATE tokens SET graduated_pool=$2,graduated_block=$3 WHERE address=$1', [binary(p.coin), binary(pool), created.toString()]);
   }
   // The production price source, read once at the fork block.
   const ethUsd = await liveTradeSources(() => client, () => sql).priceUsd(WETH, block);
@@ -150,12 +161,63 @@ export async function warmForkState(client: PublicClient, pools: IndexedV3Pool[]
   for (const usd of [5, 10, 20, 300]) await sellCheck(USDG, usd);
 }
 
-/** Find a native-ETH Pons launch that is at least `minAgeBlocks` old at `block` (TokenLaunched on the Pons factory). */
-export async function findPonsLaunch(client: PublicClient, block: bigint, minAgeBlocks = 30_000n, span = 40_000n) {
-  const factory = registry.requireAddress('pons.factory');
-  const logs = await client.getLogs({ address: factory, fromBlock: block - minAgeBlocks - span, toBlock: block - minAgeBlocks,
-    event: { type: 'event', name: 'TokenLaunched', inputs: [{ type: 'address', name: 'token', indexed: true }, { type: 'address', name: 'curve', indexed: true },
-      { type: 'address', name: 'deployer', indexed: true }, { type: 'address', name: 'pairToken' }, { type: 'uint256', name: 'launchConfigId' }, { type: 'uint256', name: 'graduationThreshold' }] } });
-  const launch = logs.reverse().find(l => /^0x0{40}$/i.test(l.args.pairToken ?? ''));
-  return launch ? { coin: lower(launch.args.token!), curve: lower(launch.args.curve!), launchBlock: launch.blockNumber! } : null;
+/** An indexed Pons coin: its curve and launch block, and, once graduated, the indexer's graduation record. */
+export interface PonsSeed { coin: Address; curve: Address; launchBlock: bigint; graduated?: { pool: Hex; block: bigint; key: V4PoolKey } }
+const launchedEvent = { type: 'event', name: 'TokenLaunched', inputs: [{ type: 'address', name: 'token', indexed: true }, { type: 'address', name: 'curve', indexed: true },
+  { type: 'address', name: 'deployer', indexed: true }, { type: 'address', name: 'pairToken' }, { type: 'uint256', name: 'launchConfigId' }, { type: 'uint256', name: 'graduationThreshold' }] } as const;
+const initializeEvent = { type: 'event', name: 'Initialize', inputs: [{ type: 'bytes32', name: 'id', indexed: true }, { type: 'address', name: 'currency0', indexed: true },
+  { type: 'address', name: 'currency1', indexed: true }, { type: 'uint24', name: 'fee' }, { type: 'int24', name: 'tickSpacing' }, { type: 'address', name: 'hooks' },
+  { type: 'uint160', name: 'sqrtPriceX96' }, { type: 'int24', name: 'tick' }] } as const;
+
+/**
+ * Native-ETH Pons launches at least `minAgeBlocks` old at `block` (TokenLaunched on the Pons factory) whose curves still
+ * trade there: not graduated or graduating, anti-snipe window over, at least half the tokens left to buy, and fee plus
+ * creator tax of 3–4% a leg (the typical launch: a 6–8% round trip at small sizes). Newest first.
+ */
+export async function findOpenPonsLaunches(client: PublicClient, block: bigint, count: number, minAgeBlocks = 30_000n, span = 40_000n): Promise<PonsSeed[]> {
+  const logs = await client.getLogs({ address: registry.requireAddress('pons.factory'), fromBlock: block - minAgeBlocks - span, toBlock: block - minAgeBlocks, event: launchedEvent });
+  const found: PonsSeed[] = [];
+  for (const launch of logs.reverse()) {
+    if (found.length >= count) break;
+    if (!/^0x0{40}$/i.test(launch.args.pairToken ?? '')) continue;
+    const coin = lower(launch.args.token!), curve = lower(launch.args.curve!);
+    const s = await readPonsCurve(client, coin, curve, block).catch(() => null);
+    if (s && ponsOpen(s) && s.snipeTaxBps === 0n && s.feeBps + s.creatorTaxBps >= 300n && s.feeBps + s.creatorTaxBps <= 400n && s.sellable * 2n > s.tokenReserve)
+      found.push({ coin, curve, launchBlock: launch.blockNumber! });
+  }
+  return found;
+}
+
+/**
+ * The newest native Pons coin that graduated within `span` blocks before `block`: its Pons-hook pool's Initialize on the
+ * v4 PoolManager (how the indexer records a graduation) and its curve from the factory's TokenLaunched log.
+ */
+export async function findGraduatedPons(client: PublicClient, block: bigint, span = 250_000n): Promise<PonsSeed | null> {
+  const hook = registry.requireAddress('pons.v4Hook');
+  const inits = await client.getLogs({ address: registry.requireAddress('uniswapV4.poolManager'), fromBlock: block - span, toBlock: block, event: initializeEvent });
+  for (const init of inits.reverse().filter(l => same(l.args.hooks, hook) && /^0x0{40}$/i.test(l.args.currency0 ?? ''))) {
+    const coin = lower(init.args.currency1!);
+    const [launch] = await client.getLogs({ address: registry.requireAddress('pons.factory'), fromBlock: init.blockNumber! - 200_000n, toBlock: init.blockNumber!,
+      event: launchedEvent, args: { token: coin } });
+    if (!launch || !/^0x0{40}$/i.test(launch.args.pairToken ?? '')) continue;
+    const curve = lower(launch.args.curve!);
+    if (await client.readContract({ address: curve, abi: PONS_CURVE_ABI, functionName: 'graduated', blockNumber: block }))
+      return { coin, curve, launchBlock: launch.blockNumber!, graduated: { pool: init.args.id!, block: init.blockNumber!,
+        key: { currency0: zeroAddress, currency1: coin, fee: init.args.fee!, tickSpacing: init.args.tickSpacing!, hooks: lower(init.args.hooks!) } } };
+  }
+  return null;
+}
+
+/** Load each open curve's quote, fingerprint and sell-check state into the trading fork through a patient client (see warmForkState). */
+export async function warmPons(client: PublicClient, coins: PonsSeed[], account: Address, sellCheck: (coin: Address, usd: number) => Promise<unknown>) {
+  const block = await client.getBlockNumber();
+  for (const p of coins) {
+    await readPonsCurve(client, p.coin, p.curve, block);
+    await Promise.all([client.getCode({ address: p.coin, blockNumber: block }), client.getCode({ address: p.curve, blockNumber: block }),
+      client.readContract({ address: p.coin, abi: erc20Abi, functionName: 'balanceOf', args: [account], blockNumber: block }),
+      client.readContract({ address: p.coin, abi: erc20Abi, functionName: 'allowance', args: [account, p.curve], blockNumber: block })]);
+    // A graduated coin's pool and the v4 router wiring (its route since graduation).
+    if (p.graduated) await Promise.all([readV4Pool(client, p.graduated.pool, block), v4Wired(client, block)]);
+    await sellCheck(p.coin, 5);
+  }
 }

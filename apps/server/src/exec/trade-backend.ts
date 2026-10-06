@@ -17,7 +17,7 @@ export interface V3TradeAcquisition extends Pick<TradeBackend, 'capture' | 'prob
 }
 
 /** Concrete handoff to the existing indexed v3 adapter; fresh 052 validation still runs
- * in TradeService at both quote and order time. Unsupported Pons/v4 stay quote-only. */
+ * in TradeService at both quote and order time. Pons curves and v4 pools have their own backends (pons-trade.ts, v4-trade.ts). */
 export function v3TradeBackend(adapter: Pick<UniswapV3Adapter, 'quoteTrade'>, sources: V3TradeSources,
   acquisition: V3TradeAcquisition): TradeBackend {
   return {

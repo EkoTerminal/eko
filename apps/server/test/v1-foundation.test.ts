@@ -221,7 +221,10 @@ describe('v1 config and demo sessions against migrated storage', () => {
     expect(result.headers.vary).toContain('Origin');
     const config = PublicConfigSchema.parse(result.json());
     const router = loadRegistry().requireAddress('uniswapV3.swapRouter02').toLowerCase();
-    expect(config).toMatchObject({ phase: 'launch_week', wallets: { burn, dev }, contracts: { receiptsRegistry: registry }, trading: { liveEnabled: false, maxTradeUsd: 25, routers: [router], spenders: [router] } });
+    // The verified v4 UniversalRouter settles sells through Permit2, so both are listed (with Permit2's address for its approval step).
+    const universalRouter = loadRegistry().requireAddress('uniswapV4.universalRouter').toLowerCase(), permit2 = loadRegistry().requireAddress('uniswapV4.permit2').toLowerCase();
+    expect(config).toMatchObject({ phase: 'launch_week', wallets: { burn, dev }, contracts: { receiptsRegistry: registry },
+      trading: { liveEnabled: false, maxTradeUsd: 25, routers: [router, universalRouter], spenders: [router, permit2], permit2 } });
     const { wallets: { dev: disclosed, ...wallets }, ...rest } = config;
     expect(disclosed).toBe(dev);
     expect(JSON.stringify({ wallets, ...rest })).not.toContain(dev);

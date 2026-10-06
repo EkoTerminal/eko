@@ -208,7 +208,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       live: new UniswapV3Adapter(chains, 'robinhood-mainnet', ethUsd),
     },
     { liveEnabled: cfg.LIVE_TRADING_ENABLED, paperFeeBps: 10, tradeAccess, sanctions,
-      // Indexed v3 only; Pons (072) and v4 (071) acquisition stay quote-only until their probes are installed here.
+      // Open native Pons curves (exec/pons-trade.ts), indexed v3 pools, then native v4 pools (exec/v4-trade.ts) when v3 has no route.
       trades: new TradeService(db, tradeAccess, sanctions, opts.tradeBackend ?? liveTrade.backend, Date.now, { incidents, onOrder: (acc, order) => hub.publishOrder(acc, order),
         unavailable: liveTrade.unavailable || undefined,
         // Live buys always need a sellable reading: a recent stored one, else a quote-time probe when SELL_CHECK_ENABLED.

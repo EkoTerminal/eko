@@ -185,12 +185,13 @@ describe('private bags and persisted public snapshots (offline fixtures)', () =>
     });
     const publish = vi.spyOn(built.ctx.hub, 'publish'), privatePublish = vi.spyOn(built.ctx.hub, 'toAccount');
     await get(a.wallet, a.cookie); await share(a.wallet, a.cookie, {});
-    // Background public market updates (coin/flow ticks and radar rows, from the live read feed) may fire during the
-    // window, for example when a fixture coin crosses an age boundary; nothing about this owner's bags may reach any
-    // channel, public or private.
+    // Background public market updates (coin/flow ticks, radar rows and new-pairs columns, from the live read feed) may
+    // fire during the window, for example when the 2-hour-old fixture coin crosses an age boundary; nothing about this
+    // owner's bags may reach any channel, public or private (the wallet check below covers every publish).
     const isPublicMarketTick = ([channel, type]: unknown[]) =>
       (/^(coin|flow):0x[0-9a-f]{40}$/.test(String(channel)) && ['tick', 'flow'].includes(String(type)))
-      || (channel === 'radar' && ['rerank', 'row_upsert', 'row_remove'].includes(String(type)));
+      || (channel === 'radar' && ['rerank', 'row_upsert', 'row_remove'].includes(String(type)))
+      || (channel === 'pairs' && ['pair_upsert', 'pair_remove'].includes(String(type)));
     expect(publish.mock.calls.filter(call => !isPublicMarketTick(call))).toEqual([]);
     for (const call of publish.mock.calls) expect(JSON.stringify(call).toLowerCase()).not.toContain(a.wallet.toLowerCase());
     expect(privatePublish).not.toHaveBeenCalled();

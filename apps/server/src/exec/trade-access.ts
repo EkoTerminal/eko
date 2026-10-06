@@ -72,17 +72,24 @@ export class TradeAccessService {
   }
 
   /**
-   * Return only a verified, non-TODO v3 router with accepted router02 wiring as both router and
-   * spender. Public configuration read; it neither checks deployed code nor authorizes a wallet.
-   * Ineligible manifests return empty lists.
+   * Return the verified routers and spenders the web may send to: the v3 router with accepted router02 wiring (router and
+   * spender), and, when the v4 PoolManager, quoter, UniversalRouter and Permit2 are all verified, the UniversalRouter as a
+   * router and Permit2 as a spender (its address too, for the Permit2 approval step). Public configuration read; it
+   * neither checks deployed code nor authorizes a wallet. Ineligible manifests return empty lists.
    * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
    */
-  verifiedTargets() {
-    // Only the accepted v3 wiring is exposed. Code-only Pons and unaccepted v4 stay unavailable.
+  verifiedTargets(): { routers: string[]; spenders: string[]; permit2?: string } {
+    // A Pons-curve quote's only other target is the curve it names (web tradeFlow); the v4 route re-checks its wiring per quote.
     const entry = this.registry.data.uniswapV3.swapRouter02;
-    const routers = entry.verified && entry.check === 'router02_wiring' && entry.address !== 'TODO' ? [entry.address] : [];
-    return { routers, spenders: [...routers] };
+    const routers: string[] = entry.verified && entry.check === 'router02_wiring' && entry.address !== 'TODO' ? [entry.address] : [];
+    const spenders = [...routers];
+    const v4 = this.registry.data.uniswapV4, ok = (e: typeof entry) => Boolean(e.verified) && e.check === 'code' && e.address !== 'TODO';
+    if (ok(v4.poolManager) && ok(v4.v4Quoter) && ok(v4.universalRouter) && ok(v4.permit2)) {
+      routers.push(v4.universalRouter.address); spenders.push(v4.permit2.address);
+      return { routers, spenders, permit2: v4.permit2.address };
+    }
+    return { routers, spenders };
   }
 
   /**

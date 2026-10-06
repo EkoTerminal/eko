@@ -66,6 +66,22 @@ export async function approveExactToken(step: { token: string; spender: string; 
   return hash;
 }
 
+const permit2Abi = [{ type: 'function', name: 'approve', stateMutability: 'nonpayable', outputs: [], inputs: [{ type: 'address', name: 'token' },
+  { type: 'address', name: 'spender' }, { type: 'uint160', name: 'amount' }, { type: 'uint48', name: 'expiration' }] }] as const;
+/** Exact, expiring Permit2 allowance (Uniswap v4 sells); guarded callers validated the step, the router and Permit2. */
+export async function approveExactPermit2(step: { token: string; spender: string; amount: string; expiration?: number }, permit2: string, chainId = 4663, account?: string, check?: () => void): Promise<Hex> {
+  if (step.expiration === undefined) throw new Error('Permit2 approval needs an expiration');
+  check?.();
+  const hash = await writeContract(wagmiConfig, {
+    address: permit2 as Address, abi: permit2Abi, functionName: 'approve',
+    args: [step.token as Address, step.spender as Address, BigInt(step.amount), step.expiration], chainId: chainId as SupportedChainId,
+    ...(account ? { account: account as Address } : {}),
+  });
+  const receipt = await waitForTransactionReceipt(wagmiConfig, { hash, chainId: chainId as SupportedChainId });
+  if (receipt.status !== 'success') throw new Error('Approval transaction reverted');
+  return hash;
+}
+
 export function isUserRejection(err: unknown): boolean {
   const e = err as { name?: string; code?: number; shortMessage?: string; message?: string; cause?: unknown };
   if (e?.name === 'UserRejectedRequestError' || e?.code === 4001) return true;
