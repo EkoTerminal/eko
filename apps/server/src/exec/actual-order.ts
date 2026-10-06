@@ -19,8 +19,10 @@ export interface ActualAccountRevalidationInput {
   unsigned: { tx: UnsignedTx; refundRecipient: Address|null; approval: ActualOrderBinding['approval'] };
   orderHash: Hex; policyHash: Hex; guardReceiptId: Hex;
 }
-export type ActualPreparation = { status: 'unavailable'; code: string; reasons?: string[] } |
-  { status: 'validated'; orderHash: Hex; evidenceIds: Hex[] };
+/** A measured buy round trip at the order's size (raw input spent and native returned), when the simulation completed. */
+export interface MeasuredRoundTrip { spent: string; returned: string }
+export type ActualPreparation = { status: 'unavailable'; code: string; reasons?: string[]; roundTrip?: MeasuredRoundTrip } |
+  { status: 'validated'; orderHash: Hex; evidenceIds: Hex[]; roundTrip?: MeasuredRoundTrip };
 export interface ActualOrderProbe {
   observe(binding: ActualOrderBinding, state: ActualOrderState, requestClockMs: number): Promise<ActualOrderObservation>;
 }
@@ -140,12 +142,15 @@ export class ActualOrderService {
         return { status: 'unavailable', code: 'quote_expired' };
       const result = evaluate(current.request, current.policy, current.agent, { ...current.deps, guardPolicyV2: true,
         now: () => finishedAtMs, actualStateFor: () => current.state, actualOrderFor: () => ({ status: 'ready', observation: observed }) });
-      if (result.decision !== 'allow') return { status: 'unavailable', code: result.reasons[0]?.split(':')[0] ?? 'execution_denied', reasons: result.reasons };
+      // The measured round trip the buy was judged on, so the quote can show its exit cost before anything is signed.
+      const roundTrip = observed.status === 'ok' && observed.mode === 'round_trip' && BigInt(observed.spent) > 0n
+        ? { roundTrip: { spent: observed.spent, returned: observed.returned } } : {};
+      if (result.decision !== 'allow') return { status: 'unavailable', code: result.reasons[0]?.split(':')[0] ?? 'execution_denied', reasons: result.reasons, ...roundTrip };
       // A sell spends the coin; a buy with no native value spends a token. Either needs the wallet's exact allowance,
       // which the probe reports in `allowanceBefore` for the token being spent.
       if ((b.side === 'sell' || BigInt(b.tx.value) === 0n) && BigInt(observed.allowanceBefore) < BigInt(b.amountIn))
-        return { status: 'unavailable', code: 'token_approval_required' };
-      return { status: 'validated', orderHash: expectedHash, evidenceIds: [...observed.evidenceIds] };
+        return { status: 'unavailable', code: 'token_approval_required', ...roundTrip };
+      return { status: 'validated', orderHash: expectedHash, evidenceIds: [...observed.evidenceIds], ...roundTrip };
     } catch {
       return { status: 'unavailable', code: 'execution_revalidation_unavailable' };
     }

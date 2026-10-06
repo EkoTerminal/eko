@@ -167,6 +167,11 @@ export class TradeService {
       quotedAt: new Date(quotedAt), expiresAt: new Date(expiresAt), createdAt: new Date(this.now()) };
     if (input.account && checked && quote.route.executable && quote.guard.decision !== 'refuse') {
       const prepared = await this.prepare(retained);
+      // Show the exit cost the buy is judged on: the measured round trip at this size, unless the route models it exactly.
+      if (prepared.roundTrip && quote.side === 'buy' && quote.exitCostPct === 0) {
+        const spent = BigInt(prepared.roundTrip.spent), returned = BigInt(prepared.roundTrip.returned);
+        quote = { ...quote, exitCostPct: returned >= spent ? 0 : Number((spent - returned) * 1_000_000n / spent) / 10_000 };
+      }
       // Every other check passed and only the wallet's exact approval is missing: the quote stays binding and its
       // listed approval is the next step. Orders keep refusing (approval_required) until the allowance is on chain.
       const approvalOnly = prepared.status !== 'validated' && prepared.code === 'token_approval_required' && quote.approvals.length > 0;
@@ -174,8 +179,8 @@ export class TradeService {
         { code: prepared.code, status: 'refuse', label: prepared.code === 'scanning' ? 'EKO is still scanning this coin; try again shortly'
           : prepared.code === 'round_trip_cost' ? 'Exit cost at this size is above your risk mode’s maximum'
           : 'Current execution checks refused or are unavailable',
-          // A curve quote's exit cost is the exact round trip the buy was judged on; show it with the refusal.
-          ...(prepared.code === 'round_trip_cost' && quote.route.venue === 'pons_curve' ? { value: quote.exitCostPct } : {}) }] } };
+          // The exit cost the buy was judged on, shown with the refusal.
+          ...(prepared.code === 'round_trip_cost' && quote.exitCostPct > 0 ? { value: quote.exitCostPct } : {}) }] } };
     }
     quote = await this.access.informationalQuote(quote);
     retained.quote = quote;

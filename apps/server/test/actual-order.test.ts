@@ -61,7 +61,9 @@ describe('052 isolated acquisition queue and separate execution preparation',()=
     const service=new ActualOrderService(async()=>capture(),worker,()=>NOW),req=actualRequest(),hash=orderHash(req.order);
     const stored={preflightId:'p',journalId:'j',decision:'allow' as const,reasons:[],policyVersion:1};
     expect(resolveRepeat({orderHash:hash,result:stored},hash,()=>{throw new Error('Must replay');})).toBe(stored);
-    expect(await service.prepare(req,clocks)).toEqual({status:'validated',orderHash:hash,evidenceIds:[h]});
+    // The measured round trip the buy was judged on travels with the result, so the quote can show its exit cost.
+    const o=observationFor(req.order.execution!);
+    expect(await service.prepare(req,clocks)).toEqual({status:'validated',orderHash:hash,evidenceIds:[h],roundTrip:{spent:o.spent,returned:o.returned}});
     expect(await service.prepare(req,clocks)).toMatchObject({status:'validated'});expect(worker.observe).toHaveBeenCalledTimes(2);
     expect(stored.decision).toBe('allow');
   });
@@ -111,7 +113,8 @@ describe('052 isolated acquisition queue and separate execution preparation',()=
     const tokenPaid={...binding(),tx:{...binding().tx,value:'0'}};
     const worker={observe:vi.fn(async(b:ActualOrderBinding)=>({...observationFor(b),allowanceBefore:'0'}))};
     const service=new ActualOrderService(async()=>capture(tokenPaid),worker,()=>NOW);
-    expect(await service.prepare(capture(tokenPaid).request,clocks)).toEqual({status:'unavailable',code:'token_approval_required'});
+    const paid=observationFor(tokenPaid);
+    expect(await service.prepare(capture(tokenPaid).request,clocks)).toEqual({status:'unavailable',code:'token_approval_required',roundTrip:{spent:paid.spent,returned:paid.returned}});
     worker.observe.mockImplementation(async(b:ActualOrderBinding)=>observationFor(b));
     expect(await service.prepare(capture(tokenPaid).request,clocks)).toMatchObject({status:'validated'});
     // Native ETH pays a native-value buy: the probe's allowance reading is irrelevant there.

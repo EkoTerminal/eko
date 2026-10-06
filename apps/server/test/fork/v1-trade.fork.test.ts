@@ -36,7 +36,8 @@ import { SellGuard } from '../../src/exec/sell-guard.js';
 import { seedSanctions } from '../sanctions-fixture.js';
 import { liveTradeSources } from '../../src/exec/live-trade.js';
 import { indexedPonsCurves, PONS_CURVE_ABI, ponsTradeCall, quotePonsTrade, readPonsCurve, type PonsTradeSources } from '../../src/exec/pons-routes.js';
-import { PERMIT2, PERMIT2_ABI, readV4Pool, V4_ROUTER, v4TradeCall } from '../../src/exec/v4-routes.js';
+import { PERMIT2, PERMIT2_ABI, readV4Pool, V4_ROUTER } from '../../src/exec/v4-routes.js';
+import { ponsGraduationLock } from '../../src/exec/pons-graduation.js';
 import { anvilNetworkFeeWei, findGraduatedPons, findOpenPonsLaunches, forkLog, ROUTER, seedIndexedState, setScanPending, setStoredSellCheck, setVerdict,
   startPublicRpcRelay, USDG, warmForkState, warmPons, WETH, type PonsSeed } from './v1-trade-harness.js';
 
@@ -521,7 +522,7 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
       expect(requote.json()).toMatchObject({ error: 'no_route' });
     }, 180_000);
 
-    it('a coin that graduated before the fork block trades on its Uniswap v4 pool, never the dead curve', async () => {
+    it('a coin that graduated before the fork block is bought (Balanced) and sold on its locked v4 pool, never the dead curve', async () => {
       const g = pons.graduated;
       expect(g, 'a native Pons coin graduated to its Pons-hook v4 pool in the scanned range').not.toBeNull();
       const pool = g!.graduated!;
@@ -530,25 +531,43 @@ describe('v1 trade API on a Robinhood Chain mainnet fork', () => {
       await expect(quotePonsTrade(srv.built.ctx.chains.get('robinhood-mainnet'), { coin: g!.coin, side: 'sell', amountUsd: 5, slippageBps: 50 }, ponsSources()))
         .rejects.toMatchObject({ reason: 'graduated' });
 
-      // A buy is quoted, bound and simulated on the v4 pool (round trip measured on the simulation host), then refused by the
-      // pool depth floor that applies to v4 as to v3: a graduated pool holds a few ETH, far below even Degen's $2,000.
-      let buy: TradeQuote | null = null;
+      // Its graduation position is proven locked at the block (the Pons locker owns it), so like the curve the buy is judged by
+      // its exact simulated round trip, not the ±2% depth floor (a graduated pool holds a few ETH): above Careful's 5%
+      // ceiling, within Balanced's 10%. The quote shows that measured exit cost before anything is signed.
+      expect(await ponsGraduationLock(patient, g!.coin, { id: pool.pool, key: pool.key }, pool.pool, await patient.getBlockNumber()))
+        .toMatchObject({ locked: true, liquidity: expect.any(BigInt) });
+      let careful: TradeQuote | null = null;
       await waitFor(async () => {
-        const r = await quoteResponse({ coin: g!.coin, side: 'buy', amountUsd: 5, riskMode: 'degen' });
-        forkLog('graduated buy quote', r.statusCode, r.body.slice(0, 400));
-        buy = r.statusCode === 200 ? TradeQuoteSchema.parse(r.json()) : null;
-        return buy && refusalCodes(buy).length === 1 && refusalCodes(buy)[0] === 'thin_liquidity' ? true : null;
+        const r = await quoteResponse({ coin: g!.coin, side: 'buy', amountUsd: 5, riskMode: 'safe' });
+        forkLog('graduated careful buy quote', r.statusCode, r.body.slice(0, 400));
+        careful = r.statusCode === 200 ? TradeQuoteSchema.parse(r.json()) : null;
+        return careful && refusalCodes(careful).join() === 'round_trip_cost' ? true : null;
       }, 120_000, 2_000);
-      expect(buy).toMatchObject({ binding: false, route: { venue: 'uniswap_v4', poolId: pool.pool.toLowerCase(), executable: true }, fee: { bps: 0, usd: 0, destination: null },
-        valueWei: buy!.amountIn, approvals: [] });
+      expect(careful).toMatchObject({ binding: false, route: { venue: 'uniswap_v4', poolId: pool.pool.toLowerCase(), executable: true }, fee: { bps: 0, usd: 0, destination: null } });
+      expect(careful!.exitCostPct).toBeGreaterThan(5);
+      expect(careful!.exitCostPct).toBeLessThan(10);
+      expect(careful!.guard.checks).toEqual([{ code: 'round_trip_cost', status: 'refuse', label: expect.stringMatching(/Exit cost/), value: careful!.exitCostPct }]);
 
-      // A holder (who bought before, elsewhere) sells through EKO on the v4 pool: exact Permit2 approvals, re-quote, order, confirm.
-      const acquire = v4TradeCall({ side: 'buy', key: pool.key, amountIn: parseEther('0.002'), minOut: 1n, recipient: trader.address, deadline: 2n ** 40n });
-      expect((await send({ chainId: 4663, to: V4_ROUTER, data: acquire, value: parseEther('0.002').toString() })).receipt.status).toBe('success');
+      const coinBefore = await balanceOf(g!.coin), ethBefore = await rpc.getBalance({ address: trader.address });
+      const buy = await tradeLikeTheWebApp({ coin: g!.coin, side: 'buy', amountUsd: 5, riskMode: 'balanced' }, 'fork-v1-v4-buy-0001', V4_ROUTER);
+      expect(buy.q).toMatchObject({ route: { venue: 'uniswap_v4', poolId: pool.pool.toLowerCase(), executable: true }, approvals: [], valueWei: buy.q.amountIn,
+        fee: { bps: 0, usd: 0, destination: null } });
+      expect(buy.q.exitCostPct).toBeCloseTo(careful!.exitCostPct, 1);
+      const bought = await settled(buy.placed.order.id);
+      expect(bought, JSON.stringify(bought)).toMatchObject({ status: 'confirmed', feeBps: 0, filledIn: buy.q.amountIn });
+      expect(BigInt(bought.filledOut!)).toBeGreaterThanOrEqual(BigInt(buy.q.minOut));
+      // Exact fills: the coin the wallet received and the ETH it paid are the decoded fill.
+      expect(await balanceOf(g!.coin) - coinBefore).toBe(BigInt(bought.filledOut!));
+      expect(ethBefore - await rpc.getBalance({ address: trader.address }) - buy.receipt.gasUsed * buy.receipt.effectiveGasPrice).toBe(BigInt(bought.filledIn!));
+      const [row] = await srv.built.ctx.dbh.db.select().from(tradeOrders).where(eq(tradeOrders.id, buy.placed.order.id));
+      expect(row!.postFillEvidence).toMatchObject({ status: 'passed', origin: 'measured', amount: bought.filledOut, txHash: buy.hash.toLowerCase() });
+
+      // Sell nearly all of what it bought back on the v4 pool (sells have no depth or cost floor): exact Permit2 approvals,
+      // re-quote, order, confirm.
       const held = await balanceOf(g!.coin);
-      expect(held).toBeGreaterThan(0n);
+      expect(held).toBeGreaterThanOrEqual(BigInt(bought.filledOut!));
       const s = await readV4Pool(patient, pool.pool, await patient.getBlockNumber());
-      const amountUsd = Math.floor(Number(held) * 2 ** 192 / Number(s.sqrtPriceX96) ** 2 / 1e18 * forkEthUsd * 0.9 * 100) / 100;
+      const amountUsd = Math.floor(Number(held) * 2 ** 192 / Number(s.sqrtPriceX96) ** 2 / 1e18 * forkEthUsd * 0.85 * 100) / 100;
       const first = await quote({ coin: g!.coin, side: 'sell', amountUsd });
       expect(first).toMatchObject({ binding: true, route: { venue: 'uniswap_v4', poolId: pool.pool.toLowerCase() }, approvals: [
         { token: g!.coin, spender: PERMIT2, amount: first.amountIn, kind: 'erc20' },

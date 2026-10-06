@@ -205,17 +205,17 @@ describe('Pons-curve buy admission under the presets (owner decision 2026-10-06)
   });
   it('only the curve’s own buy bytes on an open curve are judged without depth; pools and closed curves keep every floor', async () => {
     const { deps, binding: b } = await admit('degen', 7n);
-    expect(deps.bondingCurveRoute!(b)).toBe(true);
+    expect(deps.lockedLiquidityRoute!(b)).toBe(true);
     const pool = { ...b, tx: { ...b.tx, to: padHex('0x51', { size: 20 }) } };
-    expect(deps.bondingCurveRoute!(pool)).toBe(false);
-    expect(deps.bondingCurveRoute!({ ...b, tx: { ...b.tx, data: encodeFunctionData({ abi: ROUTER_ABI, functionName: 'multicall', args: [1n, []] }) } })).toBe(false);
+    expect(deps.lockedLiquidityRoute!(pool)).toBe(false);
+    expect(deps.lockedLiquidityRoute!({ ...b, tx: { ...b.tx, data: encodeFunctionData({ abi: ROUTER_ABI, functionName: 'multicall', args: [1n, []] }) } })).toBe(false);
     // The curve closed between quote and order: the state check refuses (quote_changed) and depth would apply again.
     let open = true;
     const backend = ponsTradeBackend({ chain: () => chainFor({ curve: open ? {} : { readyToGraduate: true } }), lease, sources: sources(), verdict: clear, adapter });
     const { quote, checked } = await backend.quote({ id: 'acct-1', wallet }, { ...input('buy'), riskMode: 'degen' }, 'quote-closing');
     open = false;
     const cap = await backend.capture({ accountId: 'acct-1', wallet, input: { ...input('buy'), riskMode: 'degen' }, quote, checked, quotedAt: new Date(), expiresAt: new Date() } as RetainedTrade);
-    expect(cap.deps.bondingCurveRoute!(checked!.order.execution!)).toBe(false);
+    expect(cap.deps.lockedLiquidityRoute!(checked!.order.execution!)).toBe(false);
     expect(cap.state.stateFingerprint).not.toBe(checked!.order.execution!.stateFingerprint);
   });
 });

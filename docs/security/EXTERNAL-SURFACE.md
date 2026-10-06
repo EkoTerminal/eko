@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **584/584 (100.00%)** documented. Minimum: **90%**.
+Measured: **585/585 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -279,12 +279,12 @@ Measured: **584/584 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
 | `buildApp` | function | [apps/server/src/app.ts:112](../../apps/server/src/app.ts#L112) | Yes |
 | `returned.close` | method | [apps/server/src/app.ts:356](../../apps/server/src/app.ts#L356) | Yes |
-| `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:43](../../apps/server/src/exec/actual-order.ts#L43) | Yes |
-| `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:62](../../apps/server/src/exec/actual-order.ts#L62) | Yes |
-| `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:90](../../apps/server/src/exec/actual-order.ts#L90) | Yes |
-| `ActualOrderService.revalidate` | method | [apps/server/src/exec/actual-order.ts:104](../../apps/server/src/exec/actual-order.ts#L104) | Yes |
-| `ActualOrderService.invalidate` | method | [apps/server/src/exec/actual-order.ts:161](../../apps/server/src/exec/actual-order.ts#L161) | Yes |
-| `ActualOrderService.drain` | method | [apps/server/src/exec/actual-order.ts:171](../../apps/server/src/exec/actual-order.ts#L171) | Yes |
+| `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
+| `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
+| `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |
+| `ActualOrderService.revalidate` | method | [apps/server/src/exec/actual-order.ts:106](../../apps/server/src/exec/actual-order.ts#L106) | Yes |
+| `ActualOrderService.invalidate` | method | [apps/server/src/exec/actual-order.ts:166](../../apps/server/src/exec/actual-order.ts#L166) | Yes |
+| `ActualOrderService.drain` | method | [apps/server/src/exec/actual-order.ts:176](../../apps/server/src/exec/actual-order.ts#L176) | Yes |
 | `ChainClients.constructor` | constructor | [apps/server/src/exec/chain.ts:44](../../apps/server/src/exec/chain.ts#L44) | Yes |
 | `ChainClients.get` | method | [apps/server/src/exec/chain.ts:68](../../apps/server/src/exec/chain.ts#L68) | Yes |
 | `ChainClients.checkHealth` | method | [apps/server/src/exec/chain.ts:79](../../apps/server/src/exec/chain.ts#L79) | Yes |
@@ -315,6 +315,7 @@ Measured: **584/584 (100.00%)** documented. Minimum: **90%**.
 | `returned.quote` | method | [apps/server/src/exec/live-trade.ts:402](../../apps/server/src/exec/live-trade.ts#L402) | Yes |
 | `returned.capture` | method | [apps/server/src/exec/live-trade.ts:423](../../apps/server/src/exec/live-trade.ts#L423) | Yes |
 | `liveTradeBackend` | function | [apps/server/src/exec/live-trade.ts:461](../../apps/server/src/exec/live-trade.ts#L461) | Yes |
+| `ponsGraduationLock` | function | [apps/server/src/exec/pons-graduation.ts:34](../../apps/server/src/exec/pons-graduation.ts#L34) | Yes |
 | `indexedPonsCurves` | function | [apps/server/src/exec/pons-routes.ts:50](../../apps/server/src/exec/pons-routes.ts#L50) | Yes |
 | `indexedGraduated` | function | [apps/server/src/exec/pons-routes.ts:60](../../apps/server/src/exec/pons-routes.ts#L60) | Yes |
 | `PonsHandoff.constructor` | constructor | [apps/server/src/exec/pons-routes.ts:68](../../apps/server/src/exec/pons-routes.ts#L68) | Yes |
@@ -387,35 +388,35 @@ Measured: **584/584 (100.00%)** documented. Minimum: **90%**.
 | `preparationError` | function | [apps/server/src/exec/trades.ts:47](../../apps/server/src/exec/trades.ts#L47) | Yes |
 | `TradeService.constructor` | constructor | [apps/server/src/exec/trades.ts:64](../../apps/server/src/exec/trades.ts#L64) | Yes |
 | `TradeService.quote` | method | [apps/server/src/exec/trades.ts:142](../../apps/server/src/exec/trades.ts#L142) | Yes |
-| `TradeService.order` | method | [apps/server/src/exec/trades.ts:191](../../apps/server/src/exec/trades.ts#L191) | Yes |
-| `TradeService.detail` | method | [apps/server/src/exec/trades.ts:254](../../apps/server/src/exec/trades.ts#L254) | Yes |
-| `TradeService.history` | method | [apps/server/src/exec/trades.ts:260](../../apps/server/src/exec/trades.ts#L260) | Yes |
-| `TradeService.submitted` | method | [apps/server/src/exec/trades.ts:273](../../apps/server/src/exec/trades.ts#L273) | Yes |
-| `TradeService.rejected` | method | [apps/server/src/exec/trades.ts:305](../../apps/server/src/exec/trades.ts#L305) | Yes |
-| `TradeService.reconcile` | method | [apps/server/src/exec/trades.ts:315](../../apps/server/src/exec/trades.ts#L315) | Yes |
+| `TradeService.order` | method | [apps/server/src/exec/trades.ts:196](../../apps/server/src/exec/trades.ts#L196) | Yes |
+| `TradeService.detail` | method | [apps/server/src/exec/trades.ts:259](../../apps/server/src/exec/trades.ts#L259) | Yes |
+| `TradeService.history` | method | [apps/server/src/exec/trades.ts:265](../../apps/server/src/exec/trades.ts#L265) | Yes |
+| `TradeService.submitted` | method | [apps/server/src/exec/trades.ts:278](../../apps/server/src/exec/trades.ts#L278) | Yes |
+| `TradeService.rejected` | method | [apps/server/src/exec/trades.ts:310](../../apps/server/src/exec/trades.ts#L310) | Yes |
+| `TradeService.reconcile` | method | [apps/server/src/exec/trades.ts:320](../../apps/server/src/exec/trades.ts#L320) | Yes |
 | `indexedV3Pools` | function | [apps/server/src/exec/v3-routes.ts:66](../../apps/server/src/exec/v3-routes.ts#L66) | Yes |
 | `rawUsd` | function | [apps/server/src/exec/v3-routes.ts:90](../../apps/server/src/exec/v3-routes.ts#L90) | Yes |
 | `verified` | function | [apps/server/src/exec/v3-routes.ts:96](../../apps/server/src/exec/v3-routes.ts#L96) | Yes |
 | `quoteV3Trade` | function | [apps/server/src/exec/v3-routes.ts:118](../../apps/server/src/exec/v3-routes.ts#L118) | Yes |
-| `supportedV4Hook` | function | [apps/server/src/exec/v4-routes.ts:44](../../apps/server/src/exec/v4-routes.ts#L44) | Yes |
-| `indexedV4Pools` | function | [apps/server/src/exec/v4-routes.ts:46](../../apps/server/src/exec/v4-routes.ts#L46) | Yes |
-| `readV4Pool` | function | [apps/server/src/exec/v4-routes.ts:60](../../apps/server/src/exec/v4-routes.ts#L60) | Yes |
-| `coinPerWei` | function | [apps/server/src/exec/v4-routes.ts:69](../../apps/server/src/exec/v4-routes.ts#L69) | Yes |
-| `v4DepthWei` | function | [apps/server/src/exec/v4-routes.ts:76](../../apps/server/src/exec/v4-routes.ts#L76) | Yes |
-| `v4TradeCall` | function | [apps/server/src/exec/v4-routes.ts:114](../../apps/server/src/exec/v4-routes.ts#L114) | Yes |
-| `v4CallTerms` | function | [apps/server/src/exec/v4-routes.ts:129](../../apps/server/src/exec/v4-routes.ts#L129) | Yes |
-| `v4Wired` | function | [apps/server/src/exec/v4-routes.ts:150](../../apps/server/src/exec/v4-routes.ts#L150) | Yes |
-| `v4Allowances` | function | [apps/server/src/exec/v4-routes.ts:161](../../apps/server/src/exec/v4-routes.ts#L161) | Yes |
-| `quoteV4Trade` | function | [apps/server/src/exec/v4-routes.ts:178](../../apps/server/src/exec/v4-routes.ts#L178) | Yes |
-| `decodeV4Fill` | function | [apps/server/src/exec/v4-routes.ts:239](../../apps/server/src/exec/v4-routes.ts#L239) | Yes |
-| `v4Fingerprints` | function | [apps/server/src/exec/v4-trade.ts:28](../../apps/server/src/exec/v4-trade.ts#L28) | Yes |
-| `V4ActualOrderProbe.constructor` | constructor | [apps/server/src/exec/v4-trade.ts:53](../../apps/server/src/exec/v4-trade.ts#L53) | Yes |
-| `V4ActualOrderProbe.observe` | method | [apps/server/src/exec/v4-trade.ts:55](../../apps/server/src/exec/v4-trade.ts#L55) | Yes |
-| `v4PostFillSell` | function | [apps/server/src/exec/v4-trade.ts:111](../../apps/server/src/exec/v4-trade.ts#L111) | Yes |
-| `v4TradeBackend` | function | [apps/server/src/exec/v4-trade.ts:138](../../apps/server/src/exec/v4-trade.ts#L138) | Yes |
-| `returned.quote` | method | [apps/server/src/exec/v4-trade.ts:154](../../apps/server/src/exec/v4-trade.ts#L154) | Yes |
-| `returned.capture` | method | [apps/server/src/exec/v4-trade.ts:175](../../apps/server/src/exec/v4-trade.ts#L175) | Yes |
-| `isV4Binding` | function | [apps/server/src/exec/v4-trade.ts:201](../../apps/server/src/exec/v4-trade.ts#L201) | Yes |
+| `supportedV4Hook` | function | [apps/server/src/exec/v4-routes.ts:46](../../apps/server/src/exec/v4-routes.ts#L46) | Yes |
+| `indexedV4Pools` | function | [apps/server/src/exec/v4-routes.ts:48](../../apps/server/src/exec/v4-routes.ts#L48) | Yes |
+| `readV4Pool` | function | [apps/server/src/exec/v4-routes.ts:62](../../apps/server/src/exec/v4-routes.ts#L62) | Yes |
+| `coinPerWei` | function | [apps/server/src/exec/v4-routes.ts:71](../../apps/server/src/exec/v4-routes.ts#L71) | Yes |
+| `v4DepthWei` | function | [apps/server/src/exec/v4-routes.ts:78](../../apps/server/src/exec/v4-routes.ts#L78) | Yes |
+| `v4TradeCall` | function | [apps/server/src/exec/v4-routes.ts:116](../../apps/server/src/exec/v4-routes.ts#L116) | Yes |
+| `v4CallTerms` | function | [apps/server/src/exec/v4-routes.ts:131](../../apps/server/src/exec/v4-routes.ts#L131) | Yes |
+| `v4Wired` | function | [apps/server/src/exec/v4-routes.ts:152](../../apps/server/src/exec/v4-routes.ts#L152) | Yes |
+| `v4Allowances` | function | [apps/server/src/exec/v4-routes.ts:163](../../apps/server/src/exec/v4-routes.ts#L163) | Yes |
+| `quoteV4Trade` | function | [apps/server/src/exec/v4-routes.ts:180](../../apps/server/src/exec/v4-routes.ts#L180) | Yes |
+| `decodeV4Fill` | function | [apps/server/src/exec/v4-routes.ts:241](../../apps/server/src/exec/v4-routes.ts#L241) | Yes |
+| `v4Fingerprints` | function | [apps/server/src/exec/v4-trade.ts:33](../../apps/server/src/exec/v4-trade.ts#L33) | Yes |
+| `V4ActualOrderProbe.constructor` | constructor | [apps/server/src/exec/v4-trade.ts:58](../../apps/server/src/exec/v4-trade.ts#L58) | Yes |
+| `V4ActualOrderProbe.observe` | method | [apps/server/src/exec/v4-trade.ts:60](../../apps/server/src/exec/v4-trade.ts#L60) | Yes |
+| `v4PostFillSell` | function | [apps/server/src/exec/v4-trade.ts:116](../../apps/server/src/exec/v4-trade.ts#L116) | Yes |
+| `v4TradeBackend` | function | [apps/server/src/exec/v4-trade.ts:143](../../apps/server/src/exec/v4-trade.ts#L143) | Yes |
+| `returned.quote` | method | [apps/server/src/exec/v4-trade.ts:162](../../apps/server/src/exec/v4-trade.ts#L162) | Yes |
+| `returned.capture` | method | [apps/server/src/exec/v4-trade.ts:184](../../apps/server/src/exec/v4-trade.ts#L184) | Yes |
+| `isV4Binding` | function | [apps/server/src/exec/v4-trade.ts:214](../../apps/server/src/exec/v4-trade.ts#L214) | Yes |
 | `parseFlagOverride` | function | [apps/server/src/flags/service.ts:11](../../apps/server/src/flags/service.ts#L11) | Yes |
 | `FlagService.constructor` | constructor | [apps/server/src/flags/service.ts:43](../../apps/server/src/flags/service.ts#L43) | Yes |
 | `FlagService.fromDb` | method | [apps/server/src/flags/service.ts:57](../../apps/server/src/flags/service.ts#L57) | Yes |
@@ -666,8 +667,8 @@ Measured: **584/584 (100.00%)** documented. Minimum: **90%**.
 | `actualBindingHash` | function | [packages/policy/src/actual-order.ts:17](../../packages/policy/src/actual-order.ts#L17) | Yes |
 | `executionPolicyHash` | function | [packages/policy/src/actual-order.ts:25](../../packages/policy/src/actual-order.ts#L25) | Yes |
 | `actualStateHash` | function | [packages/policy/src/actual-order.ts:35](../../packages/policy/src/actual-order.ts#L35) | Yes |
-| `actualOrderGate` | function | [packages/policy/src/actual-order.ts:64](../../packages/policy/src/actual-order.ts#L64) | Yes |
-| `actualNotionalOf` | function | [packages/policy/src/actual-order.ts:139](../../packages/policy/src/actual-order.ts#L139) | Yes |
+| `actualOrderGate` | function | [packages/policy/src/actual-order.ts:65](../../packages/policy/src/actual-order.ts#L65) | Yes |
+| `actualNotionalOf` | function | [packages/policy/src/actual-order.ts:140](../../packages/policy/src/actual-order.ts#L140) | Yes |
 | `orderHash` | function | [packages/policy/src/canonical.ts:15](../../packages/policy/src/canonical.ts#L15) | Yes |
 | `guardBuyGate` | function | [packages/policy/src/guard.ts:14](../../packages/policy/src/guard.ts#L14) | Yes |
 | `evaluate` | function | [packages/policy/src/preflight.ts:34](../../packages/policy/src/preflight.ts#L34) | Yes |

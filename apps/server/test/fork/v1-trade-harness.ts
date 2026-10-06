@@ -20,6 +20,7 @@ import { liveTradeSources } from '../../src/exec/live-trade.js';
 import { FACTORY_ABI, POOL_ABI, QUOTER_V2_ABI, type IndexedV3Pool, type V3TradeSources } from '../../src/exec/v3-routes.js';
 import { PONS_CURVE_ABI, ponsOpen, readPonsCurve } from '../../src/exec/pons-routes.js';
 import { readV4Pool, v4Wired } from '../../src/exec/v4-routes.js';
+import { ponsGraduationLock } from '../../src/exec/pons-graduation.js';
 import { verdict as legacyVerdict } from '../../../../packages/policy/test/fixtures.js';
 
 /** Optional diagnostics: set FORK_DEBUG_LOG to a file path to record quote outcomes and warm-up attempts. */
@@ -217,7 +218,8 @@ export async function warmPons(client: PublicClient, coins: PonsSeed[], account:
       client.readContract({ address: p.coin, abi: erc20Abi, functionName: 'balanceOf', args: [account], blockNumber: block }),
       client.readContract({ address: p.coin, abi: erc20Abi, functionName: 'allowance', args: [account, p.curve], blockNumber: block })]);
     // A graduated coin's pool and the v4 router wiring (its route since graduation).
-    if (p.graduated) await Promise.all([readV4Pool(client, p.graduated.pool, block), v4Wired(client, block)]);
+    if (p.graduated) await Promise.all([readV4Pool(client, p.graduated.pool, block), v4Wired(client, block),
+      ponsGraduationLock(client, p.coin, { id: p.graduated.pool, key: p.graduated.key }, p.graduated.pool, block)]);
     await sellCheck(p.coin, 5);
   }
 }

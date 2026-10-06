@@ -69,7 +69,7 @@ describe('actual-order cached policy semantics (Guard §§1,3.4,7.2)', () => {
     const curveBuy = (mode: Policy['mode'], costPct: bigint, curve: boolean) => {
       const p: Policy = { mode, blockPlaybookLevel: null, killed: false, version: 1 }, b = binding(p), q = observationFor(b);
       q.depthUsdLower = 70; q.returned = (BigInt(q.spent) * (100n - costPct) / 100n).toString();
-      return code(run(p, b, { ...deps, actualOrderFor: () => ({ status: 'ready', observation: q }), ...(curve ? { bondingCurveRoute: () => true } : {}) }).reasons);
+      return code(run(p, b, { ...deps, actualOrderFor: () => ({ status: 'ready', observation: q }), ...(curve ? { lockedLiquidityRoute: () => true } : {}) }).reasons);
     };
     it('refuses in Careful (5%) and admits in Balanced (10%) and Degen (25%) at a 7% round trip', () => {
       expect(curveBuy('safe', 7n, true)).toEqual(['round_trip_cost']);
@@ -85,7 +85,7 @@ describe('actual-order cached policy semantics (Guard §§1,3.4,7.2)', () => {
       for (const mode of ['safe', 'balanced', 'degen'] as const) expect(curveBuy(mode, 1n, false)).toEqual(['thin_liquidity']);
       const p: Policy = { mode: 'degen', blockPlaybookLevel: null, killed: false, version: 1 }, b = binding(p), q = observationFor(b);
       q.depthUsdLower = 70;
-      expect(code(run(p, b, { ...deps, actualOrderFor: () => ({ status: 'ready', observation: q }), bondingCurveRoute: () => false }).reasons)).toEqual(['thin_liquidity']);
+      expect(code(run(p, b, { ...deps, actualOrderFor: () => ({ status: 'ready', observation: q }), lockedLiquidityRoute: () => false }).reasons)).toEqual(['thin_liquidity']);
     });
   });
   it('compares very small policy ceilings written in exponent notation', () => {

@@ -39,6 +39,8 @@ export const PERMIT2_TTL_SEC = 1_800, PERMIT2_MIN_LEFT_SEC = 300;
 export interface IndexedV4Pool { id: Hex; key: V4PoolKey }
 export interface V4TradeSources extends Pick<V3TradeSources, 'priceUsd' | 'networkFeeWei'> {
   pools(coin: Address, block: bigint): Promise<IndexedV4Pool[]>;
+  /** The indexer's graduation pool for a Pons coin (its curve's successor), or null. */
+  graduation?(coin: Address): Promise<Hex | null>;
 }
 /** True for the hooks v1 trades through: none, or the Pons graduation hook. Any other hook is unsupported. */
 export const supportedV4Hook = (hooks: Address) => same(hooks, zeroAddress) || same(hooks, PONS_HOOK);

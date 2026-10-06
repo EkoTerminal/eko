@@ -42,12 +42,13 @@ export interface ActualOrderDeps {
   actualOrderFor?(binding: ActualOrderBinding): ActualOrderLookup;
   actualStateFor?(binding: ActualOrderBinding): ActualOrderState | undefined;
   /**
-   * Trusted host statement that the bound bytes trade an open bonding curve (owner decision 2026-10-06). A curve's price
-   * is deterministic, so the ±2% depth floor (`minLiquidityUsd`) does not apply to it; the exact measured round-trip
-   * cost against `maxRoundTripCostPct`, the sell check and the per-trade simulation still do. Absent or false: a pool,
-   * and every depth floor applies.
+   * Trusted host statement that the bound bytes trade a venue whose liquidity cannot be removed (owner decisions
+   * 2026-10-06): an open bonding curve (its price is deterministic), or a launchpad graduation pool whose position is
+   * proven locked at the block. The ±2% depth floor (`minLiquidityUsd`) does not apply to it; the exact measured
+   * round-trip cost against `maxRoundTripCostPct`, the sell check and the per-trade simulation still do. Absent or
+   * false: an ordinary pool, and every depth floor applies.
    */
-  bondingCurveRoute?(binding: ActualOrderBinding): boolean;
+  lockedLiquidityRoute?(binding: ActualOrderBinding): boolean;
 }
 const fresh = (at: number, now: number, max: number) => Number.isSafeInteger(at) && at >= 0 && at <= now && now - at <= max;
 const raw = (value: string, positive = false) => value.length <= 78 && /^(0|[1-9]\d*)$/.test(value) && BigInt(value) >= (positive ? 1n : 0n) && BigInt(value) < 2n ** 256n;
@@ -105,9 +106,9 @@ export function actualOrderGate(req: PreflightRequest, policy: Policy, agent: Ag
   if (!Number.isFinite(q.notionalUsd) || q.notionalUsd <= 0) return ['actual_order_valuation_unavailable'];
   if (!buying) return [];
   const reasons: string[] = [], p = applyPreset(policy, true);
-  // A bonding curve is judged by its exact round-trip cost below, not by depth.
-  const curve = d.bondingCurveRoute?.(b) === true;
-  if (!curve && p.minLiquidityUsd !== undefined && p.minLiquidityUsd > 0) {
+  // A curve or a proven-locked graduation pool is judged by its exact round-trip cost below, not by depth.
+  const locked = d.lockedLiquidityRoute?.(b) === true;
+  if (!locked && p.minLiquidityUsd !== undefined && p.minLiquidityUsd > 0) {
     if (q.depthUsdLower === null || !Number.isFinite(q.depthUsdLower) || q.depthUsdLower < 0) reasons.push('depth_unavailable');
     else if (q.depthUsdLower < p.minLiquidityUsd) reasons.push('thin_liquidity: ±2% depth below your minimum');
   }

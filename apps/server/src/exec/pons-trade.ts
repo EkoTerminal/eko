@@ -191,7 +191,7 @@ export function ponsTradeBackend(o: { chain: () => PublicClient; lease: MeteredF
         priceFor: () => undefined, approvalFor: () => undefined, approvalsAvailable: false, ...(gate ? { buyVerdictGate: gate } : {}),
         // Owner decision 2026-10-06: an open curve's price is deterministic, so its buy is judged by the exact measured
         // round-trip cost against the mode's ceiling instead of the ±2% depth floor. Only these exact curve bytes qualify.
-        bondingCurveRoute: binding => open && same(binding.tx.to, curve) && ponsCallTerms(binding.tx.data) !== null };
+        lockedLiquidityRoute: binding => open && same(binding.tx.to, curve) && ponsCallTerms(binding.tx.data) !== null };
       return { request: retained.checked!, policy, agent: walletAgent(retained.accountId, retained.wallet!), deps, state,
         admission: { status: 'allowed' }, quoteClocks: { quotedAtMs: retained.quotedAt.getTime(), expiresAtMs: retained.expiresAt.getTime() } };
     },

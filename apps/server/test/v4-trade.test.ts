@@ -6,13 +6,21 @@ import type { SqlClient } from '@eko/db';
 import type { TradeQuote } from '@eko/shared';
 import { decodeV4Fill, indexedV4Pools, PERMIT2, quoteV4Trade, readV4Pool, v4CallTerms, v4DepthWei, V4_MANAGER, V4_MANAGER_ABI, V4_ROUTER, v4TradeCall,
   type V4TradeSources } from '../src/exec/v4-routes.js';
-import { isV4Binding, V4ActualOrderProbe } from '../src/exec/v4-trade.js';
+import { isV4Binding, V4ActualOrderProbe, v4TradeBackend } from '../src/exec/v4-trade.js';
 import { venueTradeBackend, VenueActualOrderProbe } from '../src/exec/pons-trade.js';
 import { ponsTradeCall, PonsHandoff } from '../src/exec/pons-routes.js';
 import { ChainQuoteError, ERC20_ABI, ROUTER_ABI } from '../src/exec/v3-routes.js';
 import type { RetainedTrade, TradeBackend } from '../src/exec/trades.js';
 import type { TradeReceipt } from '../src/exec/trade-reconcile.js';
+import { evaluate } from '@eko/policy';
+import type { ActualOrderObservation } from '@eko/shared';
 import { binding, stateFor, wallet } from '../../../packages/policy/test/actual-fixtures.js';
+import { verdict as legacyVerdict } from '../../../packages/policy/test/fixtures.js';
+
+// The per-pool lock proof has its own tests (pons-graduation.test.ts); here it is a switch.
+const lockProof = vi.hoisted(() => ({ locked: false, calls: [] as unknown[][] }));
+vi.mock('../src/exec/pons-graduation.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/exec/pons-graduation.js')>(),
+  ponsGraduationLock: vi.fn(async (...args: unknown[]) => { lockProof.calls.push(args); return { locked: lockProof.locked, tokenId: 1n, liquidity: 1n, locker: null }; }) }));
 
 // Offline: v4 router calldata, pool state, depth, quoting, fill decoding and the venue order, with injected readers.
 // Fork evidence for the same code lives in test/fork/v1-trade.fork.test.ts.
@@ -196,5 +204,43 @@ describe('the venue order: curve, then v3 pools, then v4 pools', () => {
     const foreignCoin = { ...b, tx: { ...b.tx, to: V4_ROUTER, data: v4TradeCall({ side: 'buy', key, amountIn: BigInt(b.amountIn), minOut: BigInt(b.minOut), recipient: wallet, deadline: 1n }) } };
     expect(await probe.observe(foreignCoin, stateFor(foreignCoin), 1)).toMatchObject({ status: 'unsupported' });
     expect(lease.withExclusive).not.toHaveBeenCalled();
+  });
+});
+
+describe('a proven-locked Pons graduation pool is judged by its exact exit cost (owner direction 2026-10-06)', () => {
+  const lease = { withExclusive: vi.fn() };
+  const adapter = () => ({ receipt: vi.fn(), transaction: vi.fn() }) as never;
+  const clear = vi.fn(async () => ({ verdict: { ...legacyVerdict, coin, level: 'clear' as const, playbooks: [] }, guardV2Active: false, scanPending: false }));
+  /** Quote and capture a $4 buy in `mode`, then run the production policy on a measured round trip of `costPct` with ~$20 of depth. */
+  async function admit(mode: 'safe' | 'balanced' | 'degen', costPct: bigint, locked: boolean) {
+    lockProof.locked = locked;
+    const backend = v4TradeBackend({ chain: () => chainFor(), lease, sources: sources({ graduation: async () => poolId }), verdict: clear, adapter });
+    const request = { ...input('buy'), riskMode: mode };
+    const { quote, checked } = await backend.quote({ id: 'acct-1', wallet }, request, `quote-${mode}`);
+    const retained = { accountId: 'acct-1', wallet, input: request, quote, checked, quotedAt: new Date(), expiresAt: new Date(Date.now() + 15_000) } as RetainedTrade;
+    const cap = await backend.capture(retained), b = checked!.order.execution!, now = Date.now();
+    const observation: ActualOrderObservation = { binding: b, state: cap.state, quotedAtMs: now, refreshedAtMs: now, expiresAtMs: now + 15_000,
+      origin: 'measured', mode: 'round_trip', accountClass: 'eoa', status: 'ok', spent: b.amountIn, returned: (BigInt(b.amountIn) * (100n - costPct) / 100n).toString(),
+      tokens: quote.expectedOut, heldBefore: '0', allowanceBefore: '0', notionalUsd: 4, entryNetworkFee: '0', exitNetworkFee: '0', depthUsdLower: 20, evidenceIds: [hash] };
+    const result = evaluate(cap.request, cap.policy, cap.agent, { ...cap.deps, guardPolicyV2: true, now: () => now,
+      actualStateFor: () => cap.state, actualOrderFor: () => ({ status: 'ready', observation }) });
+    return { codes: result.reasons.map(r => r.split(':')[0]), deps: cap.deps, binding: b, fingerprint: b.stateFingerprint };
+  }
+  it('a 6% round trip on the locked pool is refused in Careful and admitted in Balanced and Degen, with no depth floor', async () => {
+    expect((await admit('safe', 6n, true)).codes).toEqual(['round_trip_cost']);
+    expect((await admit('balanced', 6n, true)).codes).toEqual([]);
+    expect((await admit('degen', 6n, true)).codes).toEqual([]);
+    expect((await admit('balanced', 11n, true)).codes).toEqual(['round_trip_cost']);
+    // The proof ran for the coin's pool against the indexer's graduation record.
+    expect(lockProof.calls.at(-1)).toEqual([expect.anything(), coin.toLowerCase(), { id: poolId, key }, poolId, 100n]);
+  });
+  it('the same pool without a proven lock keeps its depth floor in every mode', async () => {
+    for (const mode of ['safe', 'balanced', 'degen'] as const) expect((await admit(mode, 1n, false)).codes).toEqual(['thin_liquidity']);
+  });
+  it('only the order’s own bytes qualify, and the lock status is part of the state the order is bound to', async () => {
+    const { deps, binding: b, fingerprint } = await admit('degen', 6n, true);
+    expect(deps.lockedLiquidityRoute!(b)).toBe(true);
+    expect(deps.lockedLiquidityRoute!({ ...b, tx: { ...b.tx, data: v4TradeCall({ side: 'buy', key, amountIn: 1n, minOut: 1n, recipient: wallet, deadline: 1n }) } })).toBe(false);
+    expect((await admit('degen', 6n, false)).fingerprint).not.toBe(fingerprint);
   });
 });

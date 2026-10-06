@@ -12,6 +12,7 @@ import type { ActualOrderProbe } from './actual-order.js';
 import type { ActualFill, PostFillEvidence, TradeReceipt, TradeReconciliationBackend } from './trade-reconcile.js';
 import type { RetainedTrade, TradeBackend } from './trades.js';
 import type { UniswapV3Adapter } from './chain.js';
+import { ponsGraduationLock } from './pons-graduation.js';
 
 // Live trade acquisition for native Uniswap v4 pools, the v4 counterpart of live-trade.ts's v3 acquisition. Chain reads
 // use the API's metered mainnet client at a pinned block; every account simulation runs on the same private `sim` Anvil
@@ -24,14 +25,18 @@ const permit2Approve = (coin: Address, amount: bigint, expiration: number) =>
   encodeFunctionData({ abi: PERMIT2_ABI, functionName: 'approve', args: [coin, V4_ROUTER, amount, expiration] });
 const FAR_DEADLINE = 2n ** 48n;
 
-/** Route, code and state fingerprints for one v4 pool and side; stable across blocks unless code or route changes. */
-export async function v4Fingerprints(client: Pick<PublicClient, 'getCode'>, coin: Address, pool: IndexedV4Pool, side: 'buy' | 'sell', block: bigint) {
+/**
+ * Route, code and state fingerprints for one v4 pool and side; stable across blocks unless code or route changes. The
+ * state fingerprint carries whether the pool is a proven-locked Pons graduation pool, so that status cannot change
+ * between quote and order unnoticed.
+ */
+export async function v4Fingerprints(client: Pick<PublicClient, 'getCode'>, coin: Address, pool: IndexedV4Pool, side: 'buy' | 'sell', block: bigint, locked = false) {
   const [coinCode, hookCode] = await Promise.all([client.getCode({ address: coin, blockNumber: block }),
     same(pool.key.hooks, zeroAddress) ? Promise.resolve('0x' as Hex) : client.getCode({ address: pool.key.hooks, blockNumber: block })]);
   return {
     routeFingerprint: digest({ venue: 'uniswap_v4', poolId: pool.id, key: pool.key, router: V4_ROUTER, permit2: PERMIT2, manager: V4_MANAGER, side }),
     profileHash: digest({ coinCode: keccak256(coinCode ?? '0x'), hookCode: keccak256(hookCode ?? '0x') }),
-    stateFingerprint: digest({ coin, poolId: pool.id, manager: V4_MANAGER, accountClass: 'eoa' }),
+    stateFingerprint: digest({ coin, poolId: pool.id, manager: V4_MANAGER, accountClass: 'eoa', lockedGraduation: locked }),
   };
 }
 /** The binding's exact router bytes, checked against the coin, side, amounts and recipient. */
@@ -138,6 +143,9 @@ export async function v4PostFillSell(lease: MeteredForkLease, retained: Retained
 export function v4TradeBackend(o: { chain: () => PublicClient; lease: MeteredForkLease; sources: V4TradeSources; verdict: VerdictSource;
   adapter: () => Pick<UniswapV3Adapter, 'receipt' | 'transaction'> }): TradeBackend {
   const chain = o.chain;
+  /** The pool is the coin's Pons graduation pool and its position is provably locked at the block. */
+  const graduationLock = async (coin: Address, pool: IndexedV4Pool, block: bigint) =>
+    (await ponsGraduationLock(chain(), coin, pool, o.sources.graduation ? await o.sources.graduation(coin) : null, block)).locked;
   const reconciliation: TradeReconciliationBackend = {
     supports: r => r.quote.route.venue === 'uniswap_v4' && r.quote.route.executable && Boolean(r.quote.route.poolId),
     receipt: h => o.adapter().receipt(h), transaction: h => o.adapter().transaction(h),
@@ -152,9 +160,10 @@ export function v4TradeBackend(o: { chain: () => PublicClient; lease: MeteredFor
      * Return a public quote without unsigned bytes. TradeService still runs current admission and policy before bytes.
      */
     async quote(owner, input, id) {
-      const route = await quoteV4Trade(chain(), input, o.sources);
-      const [block, verdict, fp] = await Promise.all([chain().getBlock({ blockNumber: BigInt(route.asOfBlock) }), o.verdict(input.coin),
-        v4Fingerprints(chain(), lower(input.coin), route.pool, input.side, BigInt(route.asOfBlock))]);
+      const route = await quoteV4Trade(chain(), input, o.sources), coin = lower(input.coin), at = BigInt(route.asOfBlock);
+      const lock = await graduationLock(coin, route.pool, at);
+      const [block, verdict, fp] = await Promise.all([chain().getBlock({ blockNumber: at }), o.verdict(input.coin),
+        v4Fingerprints(chain(), coin, route.pool, input.side, at, lock)]);
       const policy = walletPolicy(input.riskMode ?? 'safe');
       const checked: PreflightRequest | null = input.account ? { agentId: walletAgentId(owner.id), clientOrderRef: id,
         order: { venue: 'rhc', instrument: input.coin, side: input.side, orderType: 'market', notionalUsd: input.amountUsd,
@@ -178,8 +187,9 @@ export function v4TradeBackend(o: { chain: () => PublicClient; lease: MeteredFor
       const head = await chain().getBlock(), at = head.number!, now = Date.now();
       const policy = walletPolicy(retained.input.riskMode ?? 'safe');
       const pool = (await o.sources.pools(b.coin, at)).find(p => same(p.id, poolId)) ?? null;
+      const locked = pool !== null && await graduationLock(b.coin, pool, at);
       const [fp, s, wired, native, held, allowances, verdict] = await Promise.all([
-        v4Fingerprints(chain(), b.coin, pool ?? { id: poolId as Hex, key: terms.key }, b.side, at), readV4Pool(chain(), poolId as Hex, at),
+        v4Fingerprints(chain(), b.coin, pool ?? { id: poolId as Hex, key: terms.key }, b.side, at, locked), readV4Pool(chain(), poolId as Hex, at),
         v4Wired(chain(), at), chain().getBalance({ address: b.account, blockNumber: at }),
         chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'balanceOf', args: [b.account], blockNumber: at }),
         v4Allowances(chain(), b.coin, b.account, at, Math.floor(now / 1000)), o.verdict(b.coin),
@@ -191,7 +201,10 @@ export function v4TradeBackend(o: { chain: () => PublicClient; lease: MeteredFor
         routeAvailable: pool !== null && wired && s.sqrtPriceX96 > 0n && s.liquidity > 0n };
       const gate = buyVerdictGateFor(verdict);
       const deps: Deps = { now: Date.now, verdictFor: coin => same(coin, b.coin) ? verdict.verdict : undefined, cardFor: () => undefined,
-        priceFor: () => undefined, approvalFor: () => undefined, approvalsAvailable: false, ...(gate ? { buyVerdictGate: gate } : {}) };
+        priceFor: () => undefined, approvalFor: () => undefined, approvalsAvailable: false, ...(gate ? { buyVerdictGate: gate } : {}),
+        // Owner direction 2026-10-06: a Pons graduation pool whose position is proven locked at this block is judged, like the
+        // curve, by its exact measured round-trip cost instead of the ±2% depth floor. Every other v4 pool keeps its floor.
+        lockedLiquidityRoute: binding => locked && same(binding.tx.to, V4_ROUTER) && same(binding.tx.data, b.tx.data) };
       return { request: retained.checked!, policy, agent: walletAgent(retained.accountId, retained.wallet!), deps, state,
         admission: { status: 'allowed' }, quoteClocks: { quotedAtMs: retained.quotedAt.getTime(), expiresAtMs: retained.expiresAt.getTime() } };
     },

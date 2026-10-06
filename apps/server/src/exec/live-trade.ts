@@ -476,9 +476,11 @@ export function liveTradeBackend(cfg: Pick<Config, 'LIVE_TRADING_ENABLED' | 'RPC
   // included, goes to the pools: v3, then v4.
   const pons = ponsTradeBackend({ chain, lease, verdict, adapter: v3,
     sources: { curve: coin => indexedPonsCurves(deps.sql())(coin), priceUsd: sources.priceUsd, networkFeeWei: sources.networkFeeWei } });
-  // Native v4 pools (graduated Pons coins, hookless pools) when the coin has no v3 route.
+  // Native v4 pools (graduated Pons coins, hookless pools) when the coin has no v3 route; a proven-locked Pons graduation
+  // pool is judged by its exact exit cost, every other pool by its depth floor.
   const v4 = v4TradeBackend({ chain, lease, verdict, adapter: v3,
-    sources: { pools: (coin, block) => indexedV4Pools(deps.sql())(coin, block), priceUsd: sources.priceUsd, networkFeeWei: sources.networkFeeWei } });
+    sources: { pools: (coin, block) => indexedV4Pools(deps.sql())(coin, block), priceUsd: sources.priceUsd, networkFeeWei: sources.networkFeeWei,
+      graduation: async coin => (await indexedPonsCurves(deps.sql())(coin))?.graduatedPool ?? null } });
   return { backend: venueTradeBackend(pools, pons, v4), unavailable: '', missing };
 }
 /** Shared with the Pons-curve acquisition (pons-trade.ts). */
