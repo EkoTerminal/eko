@@ -1,9 +1,12 @@
+import { RpcReplyError } from './reply.js';
 /** Classify transport failures before sanitizing them; never retain provider bodies or URLs. */
 export function isTransientRpcError(error: unknown): boolean {
   const seen = new Set<unknown>();
   let transient = false;
   for (let depth = 0; error && depth < 16 && !seen.has(error); depth++) {
     seen.add(error);
+    // A checked reply carries its own verdict (malformed, incomplete, timed out or an HTTP status).
+    if (error instanceof RpcReplyError) return error.transient;
     const e = error as { status?: unknown; statusCode?: unknown; code?: unknown; name?: unknown; message?: unknown; shortMessage?: unknown; details?: unknown; cause?: unknown };
     const status = Number(e.status ?? e.statusCode);
     if (status >= 400 && status < 500 && status !== 408 && status !== 429) return false;

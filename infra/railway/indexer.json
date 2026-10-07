@@ -7,7 +7,6 @@
   "deploy": {
     "startCommand": "node dist/launch.js",
     "numReplicas": 1,
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 3
+    "restartPolicyType": "ALWAYS"
   }
 }

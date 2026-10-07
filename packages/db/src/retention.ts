@@ -2,9 +2,11 @@ import type { ChainDb } from './client.js';
 import { binary } from './types.js';
 
 /**
- * Retention for chain tables that otherwise grow without bound. Old transfers are not simply deleted: balances and
- * engine holdings are recomputed from transfer history, so each compacted (token, holder) pair keeps its net movement
- * in `transfer_baselines`. Every setting is off unless given; production keeps full history (BACKEND §3.6).
+ * Retention for tables that otherwise grow without bound. Old transfers are not simply deleted: balances and engine
+ * holdings are recomputed from transfer history, so each compacted (token, holder) pair keeps its net movement in
+ * `transfer_baselines`. Derived Feed rows are deleted outright: their sources (verdicts, playbook matches) are kept.
+ * Every setting is off unless given; production keeps full history (BACKEND §3.6). Table-by-table decisions:
+ * docs/operations/retention.md.
  */
 export interface RetentionOptions {
   /** Registry quote tokens (for example WETH and USDG), lower-case hex. Their history is read only through balances. */
@@ -15,15 +17,23 @@ export interface RetentionOptions {
   idleTokenDays?: number;
   /** Delete raw events of pools still unknown after this many days. */
   pendingPoolDays?: number;
-  /** Rows per transaction. */
+  /** Delete verdict, playbook and wash rows of the Feed projection (`read_feed`) older than this many days. */
+  feedDays?: number;
+  /** Rows per transaction (Feed batches are capped lower, see `FEED_BATCH_ROWS`). */
   batchRows?: number;
-  /** Stop starting new batches after this long, in milliseconds. */
+  /** Each enabled rule stops starting new batches after this long, in milliseconds, so one rule's backlog never
+   * starves the rules after it. A pass therefore takes at most about one budget per enabled rule. */
   budgetMs?: number;
   now?: () => number;
 }
-export interface RetentionResult { quoteRows: number; idleTokens: number; idleRows: number; pendingRows: number; finished: boolean }
+export interface RetentionResult { quoteRows: number; idleTokens: number; idleRows: number; pendingRows: number; feedRows: number; finished: boolean }
 
 const DAY_MS = 86_400_000;
+/** Feed deletes share `read_feed` with the API's read-model refresh, which locks the table; keep each batch short. */
+export const FEED_BATCH_ROWS = 5_000;
+/** Feed kinds projected from kept sources and never re-derived by the read-model refresh. `new_pair` and `graduation`
+ * rows are a few per coin and are rewritten on every refresh of their coin, so they stay. */
+const FEED_KINDS = ['verdict', 'playbook', 'wash'];
 
 /** Newest indexed block older than `days`, or null when indexed history does not reach that far back. */
 export async function retentionHorizon(db: ChainDb, days: number, nowMs: number): Promise<bigint | null> {
@@ -32,12 +42,16 @@ export async function retentionHorizon(db: ChainDb, days: number, nowMs: number)
   return row?.n == null ? null : BigInt(row.n);
 }
 
-/** Move up to `limit` of the oldest transfers at or below `through` into per-holder baselines, in one transaction. */
+/**
+ * Move up to `limit` of the oldest transfers at or below `through` into per-holder baselines, in one transaction.
+ * Ordering by (token, block) follows the `token_transfers(token, block)` index, so each batch reads about `limit`
+ * rows; ordering by block alone made every batch scan and sort all eligible transfers of the given tokens.
+ */
 export async function compactTransfers(db: ChainDb, tokens: Uint8Array[], through: bigint, limit: number): Promise<number> {
   if (!tokens.length) return 0;
   return db.tx(async tx => {
     const result = await tx.sql.query<{ rows: string }>(`WITH picked AS (
-        SELECT tableoid, ctid FROM token_transfers WHERE token = ANY($1::bytea[]) AND block <= $2 ORDER BY block LIMIT $3
+        SELECT tableoid, ctid FROM token_transfers WHERE token = ANY($1::bytea[]) AND block <= $2 ORDER BY token, block LIMIT $3
       ), moved AS (
         DELETE FROM token_transfers t USING picked p WHERE t.tableoid = p.tableoid AND t.ctid = p.ctid
         RETURNING t.token, t.from_address, t.to_address, t.amount, t.block, t.kind
@@ -74,26 +88,45 @@ export async function prunePendingPoolEvents(db: ChainDb, through: bigint, limit
     [through.toString(), limit])).rows[0]?.n ?? 0);
 }
 
-/** One bounded retention pass: quote tokens, then idle tokens, then unknown-pool events. */
+/**
+ * Delete up to `limit` verdict, playbook and wash rows of the Feed projection at or below `through`. Each coin's first
+ * verdict row stays: the verdict trigger recomputes `read_first_verdict` (the Feed's time-to-first-verdict) from the
+ * coin's remaining verdict rows, so the earliest one must survive. Coins without a recorded first verdict keep all
+ * their verdict rows.
+ */
+export async function pruneFeed(db: ChainDb, through: bigint, limit: number): Promise<number> {
+  return Number((await db.sql.query<{ n: string }>(`WITH gone AS (DELETE FROM read_feed f USING (
+      SELECT x.id FROM read_feed x WHERE x.kind = ANY($2::text[]) AND x.block <= $1
+        AND (x.kind <> 'verdict' OR EXISTS (SELECT 1 FROM read_first_verdict r WHERE r.coin = x.coin AND r.block < x.block))
+      LIMIT $3
+    ) d WHERE f.id = d.id RETURNING 1) SELECT count(*)::text AS n FROM gone`,
+    [through.toString(), FEED_KINDS, limit])).rows[0]?.n ?? 0);
+}
+
+/** One bounded retention pass: quote tokens, idle tokens, unknown-pool events, then Feed rows, each on its own budget. */
 export async function runRetention(db: ChainDb, options: RetentionOptions): Promise<RetentionResult> {
   const now = options.now ?? Date.now, started = now(), limit = options.batchRows ?? 20_000, budget = options.budgetMs ?? 60_000;
-  const result: RetentionResult = { quoteRows: 0, idleTokens: 0, idleRows: 0, pendingRows: 0, finished: true };
-  const timeLeft = () => now() - started < budget;
+  const result: RetentionResult = { quoteRows: 0, idleTokens: 0, idleRows: 0, pendingRows: 0, feedRows: 0, finished: true };
+  let ruleStarted = started;
+  const startRule = () => { ruleStarted = now(); };
+  const timeLeft = () => now() - ruleStarted < budget;
   const quote = options.quoteTokens.map(token => binary(token as `0x${string}`));
-  const drain = async (step: () => Promise<number>) => {
+  const drain = async (step: () => Promise<number>, size = limit) => {
     let total = 0;
     for (;;) {
       if (!timeLeft()) { result.finished = false; return total; }
       const moved = await step(); total += moved;
-      if (moved < limit) return total;
+      if (moved < size) return total;
     }
   };
   if (options.quoteDays !== undefined && quote.length) {
+    startRule();
     const before = await retentionHorizon(db, options.quoteDays, started);
     if (before !== null) result.quoteRows = await drain(() => compactTransfers(db, quote, before, limit));
   }
   if (options.idleTokenDays !== undefined) {
     if (options.idleTokenDays <= 7) throw new Error('Idle-token retention must exceed the engines idle window');
+    startRule();
     const before = await retentionHorizon(db, options.idleTokenDays, started);
     while (before !== null && timeLeft()) {
       const tokens = await idleTokens(db, before, quote, 200);
@@ -105,8 +138,14 @@ export async function runRetention(db: ChainDb, options: RetentionOptions): Prom
     if (!timeLeft()) result.finished = false;
   }
   if (options.pendingPoolDays !== undefined) {
+    startRule();
     const before = await retentionHorizon(db, options.pendingPoolDays, started);
     if (before !== null) result.pendingRows = await drain(() => prunePendingPoolEvents(db, before, limit));
+  }
+  if (options.feedDays !== undefined) {
+    startRule();
+    const before = await retentionHorizon(db, options.feedDays, started), size = Math.min(limit, FEED_BATCH_ROWS);
+    if (before !== null) result.feedRows = await drain(() => pruneFeed(db, before, size), size);
   }
   return result;
 }

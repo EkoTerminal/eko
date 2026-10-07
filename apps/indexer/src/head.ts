@@ -1,5 +1,5 @@
 import { loadSenderScope } from './sender-scope.js';
-import { rpcStopReason } from '@eko/chain';
+import { rpcStopReason, isTransientRpcUnavailable, backoffDelay } from '@eko/chain';
 import { safeError } from './safe-error.js';
 import { binary, type ChainDb } from '@eko/db';
 import type { BlockDecoder, RemoteInputs } from './decode.js';
@@ -65,13 +65,16 @@ export class ReorgDepthError extends Error {}
 export class HeadFollower {
   private prefetch?: BlockPrefetch;
   private queue: BlockQueue | null = null; private stopRequested = false;
+  private wakeRetry?: () => void;
   /**
    * Retain full-block provider/decoder/storage and reorg/start/prefetch options. Indexer operator
    * construction only; no I/O or validation occurs until lifecycle methods.
    * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
    */
-  constructor(readonly client: ChainClient, readonly db: ChainDb, readonly decoder: BlockDecoder, readonly options: { startBlock?: bigint; prefetchBlocks?: number; reorgDepth: number; logger?: Logger }) {}
+  constructor(readonly client: ChainClient, readonly db: ChainDb, readonly decoder: BlockDecoder, readonly options: { startBlock?: bigint; prefetchBlocks?: number; reorgDepth: number; logger?: Logger;
+    /** Watchdog hooks: announced chain heads and committed blocks. */
+    onHead?: (head: bigint) => void; onProgress?: (block: bigint) => void; random?: () => number }) {}
   private get logger() { return this.options.logger ?? log; }
   /**
    * Require RPC chain id 4663 before running full-block ingest. Indexer operator configures the
@@ -86,7 +89,7 @@ export class HeadFollower {
    * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
    */
-  stop() { this.stopRequested = true; this.queue?.stop(); this.prefetch?.stop(); }
+  stop() { this.stopRequested = true; this.queue?.stop(); this.prefetch?.stop(); this.wakeRetry?.(); }
   /**
    * Search backward within configured reorg depth for a stored canonical ancestor, transactionally
    * delete chain data above it/reset cursor and invalidate decoder caches. Indexer role only;
@@ -194,7 +197,7 @@ export class HeadFollower {
     };
     const announce = (n: bigint) => {
       if (this.stopRequested || this.client.rpcStopped?.() || n < latestHead) return;
-      latestHead = n; this.queue!.upTo(n); prefetch.upTo(n); void sampleHead();
+      latestHead = n; this.options.onHead?.(n); this.queue!.upTo(n); prefetch.upTo(n); void sampleHead();
     };
     const unwatch = this.client.watch?.(announce, error => {
       if ((rpcStopReason(error) === 'rpc_session_budget_reached' || this.client.rpcStopped?.()) && stopGuard(error)) return;
@@ -213,7 +216,8 @@ export class HeadFollower {
       while (!this.stopRequested) {
         const n = await this.queue.next(); if (n == null) break;
         let committed = false;
-        for (let attempt = 1; attempt <= 3 && !committed; attempt++) {
+        // Three attempts for ordinary failures; transient provider outages keep backing off (the watchdog bounds them).
+        for (let attempt = 1, outages = 0; !committed; attempt++) {
           try {
             const { block, receipts, remote } = await prefetch.get(n);
             if (headTimeUnavailable) this.decoder.metrics.setHead(block.timestamp);
@@ -223,14 +227,17 @@ export class HeadFollower {
               await prefetch.reset(firstCanonical, canonicalHead); this.queue.reset(firstCanonical, canonicalHead); break;
             }
             appliedTimestamp = block.timestamp;
-            committed = true; if (this.stopRequested) prefetch.stop(); prefetch.applied(n);
+            committed = true; this.options.onProgress?.(n); if (this.stopRequested) prefetch.stop(); prefetch.applied(n);
           } catch (error) {
             if (rpcStopReason(error)) { this.stop(); throw error; }
             if (this.stopRequested) break;
             if (this.client.rpcStopped?.()) { this.stop(); throw error; }
-            if (error instanceof ReorgDepthError || attempt === 3) throw error;
-            this.logger('block_retry', { n: n.toString(), attempt, error: safeError(error) });
-            await new Promise(resolve => setTimeout(resolve, attempt * 250));
+            const outage = isTransientRpcUnavailable(error);
+            if (error instanceof ReorgDepthError || (attempt >= 3 && !outage)) throw error;
+            const delay = outage ? backoffDelay(outages++, this.options.random, 1000, 60_000) : attempt * 250;
+            this.logger('block_retry', { n: n.toString(), attempt, backoff_ms: Math.round(delay), error: safeError(error) });
+            await new Promise<void>(resolve => { const timer = setTimeout(resolve, delay); this.wakeRetry = () => { clearTimeout(timer); resolve(); }; });
+            this.wakeRetry = undefined;
             if (this.stopRequested) break;
             if (this.client.rpcStopped?.()) { this.stop(); throw error; }
             prefetch.retry(n);

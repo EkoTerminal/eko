@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, hex, migrate, openDb, rebuildBalances, runRetention, type ChainDb } from '../src/index.js';
+import { binary, FEED_BATCH_ROWS, hex, migrate, migrateEngines, openDb, rebuildBalances, runRetention, type ChainDb } from '../src/index.js';
 
 const epoch = Date.parse('2026-10-01T00:00:00Z');
 const DAY = 86_400_000;
@@ -84,7 +84,7 @@ describe('chain retention roll-up', () => {
 
   it('is off unless configured, refuses an idle window inside the engines window, and stops at its time budget', async () => {
     const db = await fixture(), total = await count(db, quote) + await count(db, idle) + await count(db, active);
-    expect(await runRetention(db, { quoteTokens: [quote], now: () => epoch + 20.5 * DAY })).toMatchObject({ quoteRows: 0, idleRows: 0, pendingRows: 0 });
+    expect(await runRetention(db, { quoteTokens: [quote], now: () => epoch + 20.5 * DAY })).toMatchObject({ quoteRows: 0, idleRows: 0, pendingRows: 0, feedRows: 0 });
     expect(await count(db, quote) + await count(db, idle) + await count(db, active)).toBe(total);
     await expect(runRetention(db, { quoteTokens: [quote], idleTokenDays: 7, now: () => epoch + 20.5 * DAY })).rejects.toThrow('idle window');
     let clock = epoch + 20.5 * DAY;
@@ -102,5 +102,82 @@ describe('chain retention roll-up', () => {
     expect(await runRetention(db, { quoteTokens: [], pendingPoolDays: 3, now: () => epoch + 20.5 * DAY })).toMatchObject({ pendingRows: 1 });
     expect((await db.sql.query<{ block: string; emitter: Uint8Array }>('SELECT block::text, emitter FROM pending_pool_events ORDER BY block')).rows
       .map(r => [r.block, hex(r.emitter)])).toEqual([['2', address(0xd1)], ['20', address(0xd2)]]);
+  });
+
+  it('gives every rule its own time budget, so a transfer backlog cannot starve the unknown-pool rule', async () => {
+    const db = await fixture();
+    for (const n of [1, 2, 3]) {
+      await db.sql.query('INSERT INTO pending_pool_events(block,tx_hash,log_index,emitter,currency_hints,data) VALUES($1,$2,0,$3,$4,$5)',
+        ['2', binary(hash(6000 + n)), binary(address(0xe0)), '[]', '{}']);
+    }
+    // One row per batch and a three-tick budget: the quote rule runs out with old quote transfers left over.
+    let clock = epoch + 20.5 * DAY;
+    const result = await runRetention(db, { quoteTokens: [quote], quoteDays: 2, pendingPoolDays: 3, batchRows: 1, budgetMs: 3, now: () => (clock += 1) });
+    expect(result.finished).toBe(false);
+    expect(result.quoteRows).toBeGreaterThan(0);
+    expect(Number((await db.sql.query<{ n: string }>('SELECT count(*)::text AS n FROM token_transfers WHERE token=$1 AND ts < $2', [binary(quote), at(18.5)])).rows[0]!.n)).toBeGreaterThan(0);
+    // The unknown-pool rule still ran in the same pass.
+    expect(result.pendingRows).toBeGreaterThan(0);
+  });
+});
+
+describe('Feed retention', () => {
+  const coin = active, other = idle;
+  const ids = async (db: ChainDb) => (await db.sql.query<{ id: string }>('SELECT id FROM read_feed ORDER BY block, id')).rows.map(r => r.id);
+  const firstVerdict = async (db: ChainDb, c: `0x${string}`) => (await db.sql.query<{ block: string }>('SELECT block::text FROM read_first_verdict WHERE coin=$1', [binary(c)])).rows[0]?.block;
+  const matchId = (c: `0x${string}`, n: number, playbook: string) => `match:${c.slice(2)}:${n}:1.0.0:${playbook}`;
+  async function verdict(db: ChainDb, id: string, c: `0x${string}`, n: number) {
+    await db.sql.query('INSERT INTO verdicts VALUES($1,$2,$3,$4,$5,$6)', [id, binary(c), String(n), '1.0.0', `sample-signature-${id}`, JSON.stringify({ level: 'monitor' })]);
+    await db.sql.query('INSERT INTO verdict_events VALUES($1,$2,$3,$4,$5)', [`${id}:created`, id, 'created', String(n), '{}']);
+  }
+  async function match(db: ChainDb, c: `0x${string}`, n: number, playbook: string, level = 'danger') {
+    await db.sql.query('INSERT INTO playbook_matches VALUES($1,$2,$3,$4,$5)', [binary(c), String(n), '1.0.0', playbook, JSON.stringify({ id: playbook, level })]);
+  }
+  // Chain block n is on day n-1. At day 20.5 a three-day window keeps blocks after 18 (day 17).
+  async function feedFixture() {
+    const db = await database(); await migrateEngines(db);
+    for (const t of [coin, other]) await token(db, t);
+    for (let n = 1; n <= 21; n++) await block(db, n, n - 1);
+    // Projection triggers write the Feed rows, as the engines do.
+    await verdict(db, 'sample-verdict-a1', coin, 2); await verdict(db, 'sample-verdict-a2', coin, 5); await verdict(db, 'sample-verdict-a3', coin, 19);
+    await match(db, coin, 4, 'deployer_dump', 'clear'); await match(db, coin, 6, 'deployer_dump'); await match(db, coin, 7, 'wash_to_trend'); await match(db, coin, 20, 'deployer_dump');
+    await verdict(db, 'sample-verdict-b1', other, 3); await verdict(db, 'sample-verdict-b2', other, 9); await match(db, other, 8, 'deployer_dump', 'monitor');
+    // A coin with no recorded first verdict keeps every verdict row.
+    await db.sql.query('DELETE FROM read_first_verdict WHERE coin=$1', [binary(other)]);
+    await db.sql.query("INSERT INTO read_feed VALUES($1,$2,1,'new_pair','{}',NULL),($3,$2,2,'graduation','{}',NULL)", [`token:${coin.slice(2)}`, binary(coin), `graduation:${coin.slice(2)}:2`]);
+    return db;
+  }
+
+  it('deletes old verdict, playbook and wash rows, keeping recent rows, first verdicts, pair rows and every source', async () => {
+    const db = await feedFixture(), sources = async () => (await db.sql.query<{ n: string }>('SELECT (SELECT count(*) FROM verdicts) || \':\' || (SELECT count(*) FROM verdict_events) || \':\' || (SELECT count(*) FROM playbook_matches) AS n')).rows[0]!.n;
+    const before = await ids(db), counted = await sources();
+    expect(before).toHaveLength(11);
+    expect(await firstVerdict(db, coin)).toBe('2');
+    const result = await runRetention(db, { quoteTokens: [], feedDays: 3, batchRows: 1, now: () => epoch + 20.5 * DAY });
+    expect(result).toMatchObject({ feedRows: 4, finished: true });
+    const deleted = ['sample-verdict-a2:created', matchId(coin, 6, 'deployer_dump'), matchId(coin, 7, 'wash_to_trend'), matchId(other, 8, 'deployer_dump')];
+    expect(await ids(db)).toEqual(before.filter(id => !deleted.includes(id)));
+    expect(await ids(db)).toEqual(expect.arrayContaining(['sample-verdict-a1:created', 'sample-verdict-a3:created', 'sample-verdict-b1:created', 'sample-verdict-b2:created',
+      matchId(coin, 20, 'deployer_dump'), `token:${coin.slice(2)}`, `graduation:${coin.slice(2)}:2`]));
+    expect(await sources()).toBe(counted);
+    // A later verdict recomputes the first verdict from the remaining rows and still finds the original one.
+    await verdict(db, 'sample-verdict-a4', coin, 21);
+    expect(await firstVerdict(db, coin)).toBe('2');
+    expect(await runRetention(db, { quoteTokens: [], feedDays: 3, now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 0, finished: true });
+  });
+
+  it('is off unless configured, caps its batches below the transfer batch size and stops at its time budget', async () => {
+    const db = await feedFixture(), before = await ids(db);
+    expect(await runRetention(db, { quoteTokens: [], now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 0, finished: true });
+    expect(await ids(db)).toEqual(before);
+    let clock = epoch + 20.5 * DAY;
+    expect(await runRetention(db, { quoteTokens: [], feedDays: 3, budgetMs: 1, now: () => (clock += 1) })).toMatchObject({ feedRows: 0, finished: false });
+    expect(await ids(db)).toEqual(before);
+    // Each Feed delete statement removes at most FEED_BATCH_ROWS rows, however large batchRows is.
+    expect(FEED_BATCH_ROWS).toBeLessThan(20_000);
+    const statements: unknown[][] = [], query = db.sql.query.bind(db.sql);
+    db.sql.query = (async (sql: string, params?: unknown[]) => { if (sql.includes('DELETE FROM read_feed')) statements.push(params ?? []); return query(sql, params); }) as typeof db.sql.query;
+    expect(await runRetention(db, { quoteTokens: [], feedDays: 3, batchRows: 50_000, now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 4, finished: true });
+    expect(statements.map(params => params[2])).toEqual([FEED_BATCH_ROWS]);
   });
 });

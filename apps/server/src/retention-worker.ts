@@ -1,12 +1,12 @@
 import { runRetention, type ChainDb, type RetentionResult } from '@eko/db';
 import { loadRegistry } from '@eko/chain';
 
-export interface RetentionSettings { quoteDays?: number; idleTokenDays?: number; pendingPoolDays?: number }
+export interface RetentionSettings { quoteDays?: number; idleTokenDays?: number; pendingPoolDays?: number; feedDays?: number }
 
 /**
- * Run the configured chain-table retention (packages/db/src/retention.ts) on the singleton worker every ten minutes,
- * each pass bounded to about a minute of work. Nothing runs unless a retention setting is configured. Quote tokens are
- * the address registry's verified `tokens.*` entries.
+ * Run the configured retention (packages/db/src/retention.ts) on the singleton worker every ten minutes, each enabled
+ * rule bounded to about a minute of batched work per pass. Nothing runs unless a retention setting is configured. Quote
+ * tokens are the address registry's verified `tokens.*` entries.
  */
 export class RetentionWorker {
   private timer?: NodeJS.Timeout;

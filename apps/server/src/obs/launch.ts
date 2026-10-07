@@ -16,7 +16,13 @@ type Sample = { value: number; at: number };
 type Row = { metric: Metric; samples: Sample[]; updated_at: number };
 export type Check = { state: 'healthy' | 'unhealthy' | 'unavailable' | 'inactive'; value: number | null };
 const latency = new Set<Metric>(['head_lag_ms', 'queue_completion_ms', 'pair_to_complete_verdict_ms', 'quote_ms', 'preflight_ms', 'receipt_commit_lag_s']);
-export const checkNames = ['api', 'indexer', 'engines', 'mcp', 'oauth', 'guard', 'scan', 'telegram', 'x', 'farcaster', 'receipts', 'head', 'queue', 'quote', 'preflight', 'simulation', 'backup', 'daily_burn'] as const;
+export const checkNames = ['api', 'indexer', 'engines', 'mcp', 'oauth', 'guard', 'scan', 'telegram', 'x', 'farcaster', 'receipts', 'head', 'indexer_lag', 'queue', 'quote', 'preflight', 'simulation', 'backup', 'daily_burn'] as const;
+/**
+ * Head lag that is an incident, not a latency miss: the index is stale, so the live sell check (fresh
+ * ETH/USD from indexed swaps) refuses every buy. A stalled indexer keeps raising this measurement:
+ * `collect()` derives it from the newest indexed block and the indexer's watchdog reports it each minute.
+ */
+export const headLagIncidentMs = 600_000;
 export type CheckName = typeof checkNames[number];
 
 export class LaunchMonitor {
@@ -119,7 +125,7 @@ export class LaunchMonitor {
     return { api: role('api'), indexer: role('indexer'), engines: role('engines'), mcp: role('mcp'), oauth: role('oauth'),
       guard: combine(role('guard'), limit('simulation_failure', .05)), scan: combine(role('scan'), limit('pair_to_complete_verdict_ms', 5000)),
       telegram: role('telegram'), x: summonsActive ? role('x') : { state: 'inactive', value: null }, farcaster: burnActive ? role('farcaster') : { state: 'inactive', value: null },
-      receipts: receipt, head: combine(role('indexer'), limit('head_lag_ms', 5000)), queue: combine(role('engines'), limit('queue_completion_ms', Infinity)),
+      receipts: receipt, head: combine(role('indexer'), limit('head_lag_ms', 5000)), indexer_lag: limit('head_lag_ms', headLagIncidentMs), queue: combine(role('engines'), limit('queue_completion_ms', Infinity)),
       quote: limit('quote_ms', 1500), preflight: limit('preflight_ms', 150, false, false), simulation: limit('simulation_failure', .05),
       backup: (() => { const m = s.backup_success; return !m || m.value === null ? { state: 'unavailable', value: null } : { state: m.value === 1 ? 'healthy' : 'unhealthy', value: m.value }; })(), daily_burn: burn };
   }

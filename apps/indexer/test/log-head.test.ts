@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { binary, chainTables, hex, migrate, openDb, ChainDb } from '@eko/db';
-import { AddressRegistry, createMeteredClients, decodeResult, loadRegistry, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, RpcGuardError } from '@eko/chain';
+import { AddressRegistry, createMeteredClients, decodeResult, loadRegistry, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, RpcGuardError, RpcReplyError } from '@eko/chain';
 import { decodeFunctionData, encodeFunctionResult, encodeAbiParameters, encodeEventTopics, parseAbi, toEventSelector, toHex, type AbiEvent, type Address, type Hex } from 'viem';
 import { BlockRows } from '../src/rows.js';
 import { enrichSenders } from '../src/enrich.js';
@@ -788,5 +788,73 @@ describe('logs-first head', () => {
     const timestamp=data.get(1n)!.receipts[0].logs[0].blockTimestamp!;for(const log of data.get(1n)!.receipts[0].logs)delete log.blockTimestamp;const header=vi.spyOn(client,'header').mockResolvedValueOnce(empty(0)).mockRejectedValueOnce(new Error('missing timestamp header'));await expect(live.tick()).rejects.toThrow('missing timestamp header');header.mockRestore();
     for(const log of data.get(1n)!.receipts[0].logs)log.blockTimestamp=timestamp;const insert=ChainDb.prototype.insertMany;const write=vi.spyOn(ChainDb.prototype,'insertMany').mockImplementation(async function(this:ChainDb,table,rows){if(table==='swaps')throw new Error('write failed');return insert.call(this,table,rows);});await expect(live.tick()).rejects.toThrow('write failed');expect(await db.blockHash(1n)).toBeNull();write.mockRestore();
     await live.tick();expect(live.decoder.metrics.blocksBehind).toBe(1);expect(Math.abs(live.decoder.metrics.headLagMs-Math.max(0,Date.now()-Number(BigInt(timestamp))*1000))).toBeLessThan(100);
+  });
+});
+
+describe('head loop through provider outages', () => {
+  const outage = (message = 'RPC reply rejected the whole batch: rate limit hit') => new RpcGuardError('rpc_unavailable', message, true);
+  async function trades(count: number) {
+    const db = await database(); await seed(db);
+    const data: Data = new Map([[0n, { block: empty(0), receipts: [] }], ...Array.from({ length: count }, (_, i) => [BigInt(i + 1), trade(i + 1)] as const)]);
+    return { db, data, client: memory(data) };
+  }
+  it('backs off with capped jittered delays and keeps running instead of halting, reporting heads and committed cursors', async () => {
+    const { db, client } = await trades(2);
+    const logs = client.logs.bind(client); let failures = 0;
+    // As thrown through viem's custom transport: an unknown RPC error whose cause is the meter's verdict.
+    client.logs = vi.fn(async filter => { if (failures++ < 4) throw Object.assign(new Error('An unknown RPC error occurred.'), { code: -1, cause: outage() }); return logs(filter); });
+    const events: { event: string; fields: Record<string, unknown> }[] = [], heads: bigint[] = [], cursors: bigint[] = [];
+    let live!: LogHeadFollower;
+    live = follower(db, client, { tickMs: 1, retryBaseMs: 2, retryCapMs: 8, random: () => .5,
+      logger: (event: string, fields: Record<string, unknown>) => events.push({ event, fields }),
+      onHead: (n: bigint) => heads.push(n), onProgress: (n: bigint) => { cursors.push(n); if (n >= 2n) live.stop(); } });
+    await live.run();
+    const retries = events.filter(e => e.event === 'head_retry').map(e => e.fields);
+    expect(retries.map(r => [r.attempt, r.backoff_ms])).toEqual([[1, 2], [2, 3], [3, 6], [4, 6]]);
+    expect(retries.every(r => r.reason === 'rpc_unavailable' && String(r.error).includes('rate limit hit'))).toBe(true);
+    expect(await db.cursor('head_logs')).toBe(2n);
+    expect((await db.sql.query('SELECT * FROM swaps WHERE block>0')).rows).toHaveLength(2);
+    expect(heads).toEqual([2n, 2n, 2n, 2n, 2n]);
+    expect(cursors).toEqual([0n, 0n, 0n, 0n, 0n, 2n]);
+  });
+  it('recovers through the metered client when both providers keep returning bad batch replies for a while', async () => {
+    const { db, data, client: source } = await trades(1);
+    const clock = virtualClock(), env = { RPC_HTTP_URL: 'https://paid.invalid', RPC_PUBLIC_HTTP_URL: 'https://public.invalid' };
+    const { meter } = createMeteredClients(env, { db, ...clock, transientRetrySec: 1, random: () => .25, log: quiet }); meters.push(meter);
+    let bad = 12;
+    fake.send.mockImplementation(async (r: { method: string; params: unknown[] }) => {
+      if (r.method === 'eth_chainId') return '0x1237';
+      if (r.method === 'eth_blockNumber') return toHex(1);
+      if (r.method === 'eth_getBlockByNumber') return data.get(BigInt(r.params[0] as string))!.block;
+      if (r.method === 'eth_getBlockReceipts') return data.get(1n)!.receipts;
+      if (r.method === 'eth_getLogs') {
+        if (bad-- > 0) throw new RpcReplyError('batch_error', true, 'RPC reply rejected the whole batch: rate limit hit');
+        const f = r.params[0] as { fromBlock: string; toBlock: string; topics: Hex[][] };
+        return source.logs({ from: BigInt(f.fromBlock), to: BigInt(f.toBlock), topics: f.topics[0] });
+      }
+      if (r.method === 'eth_getCode') return '0x'; throw new Error('Unexpected RPC');
+    });
+    const client = createClients(env, registry, meter, { head: true }); client.ethUsdRate = async () => null;
+    const retries: Record<string, unknown>[] = [];
+    let live!: LogHeadFollower;
+    live = follower(db, client, { tickMs: 1, retryBaseMs: 1, retryCapMs: 2, logger: (event: string, fields: Record<string, unknown>) => { if (event === 'head_retry') retries.push(fields); },
+      onProgress: (n: bigint) => { if (n >= 1n) live.stop(); } });
+    await live.run();
+    expect(retries.length).toBeGreaterThan(0);
+    expect(retries.every(r => !String(r.error).includes('Cannot read properties'))).toBe(true);
+    expect(await db.cursor('head_logs')).toBe(1n);
+  });
+  it.each([
+    ['a wrong chain', (client: ChainClient) => { client.chainId = async () => 1; }, 'RPC chain ID must be 4663'],
+    ['a database write failure', () => { const insert = ChainDb.prototype.insertMany; vi.spyOn(ChainDb.prototype, 'insertMany').mockImplementation(async function(this: ChainDb, table, rows) { if (table === 'swaps') throw new Error('write failed'); return insert.call(this, table, rows); }); }, 'write failed'],
+    ['a permanent provider rejection', (client: ChainClient) => { client.logs = async () => { throw new RpcGuardError('rpc_unavailable', 'invalid params'); }; }, 'invalid params'],
+    ['a usage-store failure', (client: ChainClient) => { client.logs = async () => { throw new RpcGuardError('rpc_unavailable', 'RPC usage persistence unavailable'); }; }, 'RPC usage persistence unavailable'],
+    ['the paid daily budget', (client: ChainClient) => { client.logs = async () => { throw new RpcGuardError('rpc_budget_exhausted'); }; }, 'rpc_budget_exhausted'],
+  ] as const)('still halts on %s', async (_name, breakIt, message) => {
+    const { db, client } = await trades(1);
+    breakIt(client);
+    const events: string[] = [];
+    await expect(follower(db, client, { tickMs: 1, logger: (event: string) => events.push(event) }).run()).rejects.toThrow(message);
+    expect(events).not.toContain('head_retry');
   });
 });

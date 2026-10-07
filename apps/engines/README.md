@@ -32,6 +32,8 @@ evaluation slower and new launches waited behind hours of backlog showing "Scann
 - `ENGINE_LIVE_SLICE_MS` (default 60000): after this long, a poll yields once first scans are done if a token was
   indexed beyond its head, so that launch is scanned next. Only coins whose checkpoints all ran advance their progress.
 - The hourly market-rank read is shared by every evaluation at the same block within a poll.
+- `ENGINE_STALL_SEC` (default 600, 60–86400): a live loop with no completed poll and no finished evaluation for
+  this long logs `engines_stalled` and exits 1, so the platform restarts it instead of leaving it hung.
 - `live_planned` logs the task count, first scans and coalesced checkpoints when it coalesces or has more than ten
   first scans queued.
 

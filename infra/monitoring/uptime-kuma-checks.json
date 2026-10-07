@@ -33,6 +33,16 @@
       "active": true
     },
     {
+      "name": "indexer_lag",
+      "type": "http",
+      "url": "https://api.eko.example/v1/health/checks/indexer_lag",
+      "interval": 60,
+      "accepted_statuscodes": [
+        "200-299"
+      ],
+      "active": true
+    },
+    {
       "name": "engines",
       "type": "http",
       "url": "https://api.eko.example/v1/health/checks/engines",

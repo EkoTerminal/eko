@@ -14,8 +14,10 @@ export async function refreshClock(db: ChainDb, cache?:ClockCache) {
     SELECT block,min(ts),NULL,'activity' FROM (
       SELECT block,ts FROM swaps UNION ALL SELECT block,ts FROM token_transfers UNION ALL SELECT block,ts FROM liquidity_events
     ) e GROUP BY block ON CONFLICT(number) DO NOTHING`);
+  // Runs every poll over all of chain_blocks: rewrite only rows that changed, or each poll leaves a dead copy of every row.
   await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source) SELECT number,ts,hash,'head' FROM chain_blocks
-    ON CONFLICT(number) DO UPDATE SET ts=excluded.ts,hash=excluded.hash,source=excluded.source`);
+    ON CONFLICT(number) DO UPDATE SET ts=excluded.ts,hash=excluded.hash,source=excluded.source
+    WHERE (engine_block_times.ts,engine_block_times.hash,engine_block_times.source) IS DISTINCT FROM (excluded.ts,excluded.hash,excluded.source)`);
   // Legacy Pons/pool rows may lack timestamps entirely. Accept actual stored fields
   // when present, including JSON payload timestamps; never infer a block interval.
   const stored=(await db.sql.query<{block:string;data:Record<string,unknown>}>(`SELECT block,data FROM pons_events

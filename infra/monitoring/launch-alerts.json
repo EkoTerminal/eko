@@ -93,6 +93,17 @@
           }
         },
         {
+          "alert": "IndexerHeadLag",
+          "expr": "eko_launch_value{metric=\"head_lag_ms\"} > 600000",
+          "labels": {
+            "severity": "1"
+          },
+          "annotations": {
+            "summary": "Indexed head is more than ten minutes behind: data is stale and live buys are refused; check indexer_stalled and head_retry logs",
+            "runbook_url": "docs/eko/05-GO-PLAN.md#13-incident-runbooks"
+          }
+        },
+        {
           "alert": "CompleteVerdictLatency",
           "expr": "eko_launch_value{metric=\"pair_to_complete_verdict_ms\"} > 5000",
           "labels": {

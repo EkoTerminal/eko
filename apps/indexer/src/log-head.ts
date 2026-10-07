@@ -1,7 +1,7 @@
 import { walletProtocolTopics } from './wallet-protocol.js';
 import { decodePoolEvents } from './pool-events.js';
 import { loadSenderScope, extendSenderScope, needsSender, type SenderScope } from './sender-scope.js';
-import { decodePonsResult, decodeResult, ponsFactoryAbi, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, wethAbi, rpcStopReason } from '@eko/chain';
+import { decodePonsResult, decodeResult, ponsFactoryAbi, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, wethAbi, rpcStopReason, isTransientRpcUnavailable, backoffDelay } from '@eko/chain';
 import { binary, hex, type ChainDb } from '@eko/db';
 import { toHex, toEventSelector, type Address, type Hex } from 'viem';
 import { lower, native } from './clients.js';
@@ -25,7 +25,11 @@ interface WindowData { from:bigint;to:bigint;head:bigint;scope:SenderScope;candi
 type ReceiptReason = 'pons_coin_trade' | 'other_indexed_token' | 'launch' | 'liquidity' | 'other_event';
 const emptyReasons = (): Record<ReceiptReason,number> => ({pons_coin_trade:0,other_indexed_token:0,launch:0,liquidity:0,other_event:0});
 const emptyTimings=()=>({rpcWallMs:0,dbWriteMs:0,logsMs:0,discoveryMs:0,timestampMs:0,receiptsMs:0,headersMs:0,parentHeadersMs:0,timestampHeadersMs:0,enrichmentMs:0,prepareMs:0,windowScopeMs:0,receiptRpcMs:0,receiptMaxMs:0,receiptConcurrency:0,enrichmentConcurrency:0,blocks:0,logs:0,receipts:0,receiptReasons:emptyReasons(),headers:0,cursorReads:0,timestampHeaders:0,parentHeaders:0,timestampScans:0});
-interface Options { pipeline?:boolean; startBlock?: bigint; tickMs?: number; maxRange?: number; codeCacheSec?: number; reorgDepth: number; concurrency?: number; logger?: Logger }
+interface Options { pipeline?:boolean; startBlock?: bigint; tickMs?: number; maxRange?: number; codeCacheSec?: number; reorgDepth: number; concurrency?: number; logger?: Logger;
+  /** Progress hooks for a watchdog: every chain head read, and every committed scan cursor. */
+  onHead?: (head: bigint) => void; onProgress?: (cursor: bigint) => void;
+  /** Backoff after a tick that failed on transient provider unavailability (default 1 s doubling to 60 s, jittered). */
+  retryBaseMs?: number; retryCapMs?: number; random?: () => number; }
 
 /** Sparse head anchor plus a separate scan cursor: empty windows need neither headers nor chain rows. */
 export class LogHeadFollower {
@@ -146,11 +150,13 @@ export class LogHeadFollower {
   }
   private async processTick() {
     const head=await this.remote(()=>this.client.head());
+    this.options.onHead?.(head);
     let previousHash:Hex|undefined;
     let anchored:RpcBlock|undefined;
     let cursor=await this.db.cursor('head');
     let scanned=await this.db.cursor('head_logs')??cursor;
     if(scanned==null){const first=this.options.startBlock??head;if(first>0n){anchored=await this.remote(()=>this.anchor(first-1n));cursor=first-1n;}scanned=first-1n;}
+    this.options.onProgress?.(scanned);
     if(cursor!=null){const canonical=anchored??await this.remote(()=>this.header(cursor));if(!anchored)this.timings.cursorReads++;if(!canonical||BigInt(canonical.number)!==cursor)throw new Error('Invalid cursor header');previousHash=canonical.hash;if(await this.db.blockHash(cursor)!==lower(canonical.hash)){await this.discardAhead();await this.rollback(cursor);return;}}
     if(this.stopping||this.client.rpcStopped?.())return;
     const from=scanned+1n;
@@ -431,20 +437,21 @@ export class LogHeadFollower {
         }
         if (this.stopping || this.client.rpcStopped?.()) { this.decoder.invalidate(); return; }
         const writeBegan=performance.now();
+        // A larger fetch still commits bounded prefixes. Never skip uncommitted suffixes.
+        const covered=offset+batchSize>=entries.length?to:BigInt(last!.number);
         try {
           await this.db.tx(async tx=>{
             for(const date of dates) await tx.ensurePartitions(date);
             await batch.flush(tx);
-            // A larger fetch still commits bounded prefixes. Never skip uncommitted suffixes.
-            const covered=offset+batchSize>=entries.length?to:BigInt(last!.number);
             await tx.setCursor('head_logs',covered,null);
             if(last) { const applied=await tx.cursor('head');if(applied==null||BigInt(last.number)>=applied)await tx.setCursor('head',BigInt(last.number),last.hash); }
           });
         } catch(error) { this.decoder.invalidate();throw error; }
         finally { this.timings.dbWriteMs+=performance.now()-writeBegan; }
+        this.options.onProgress?.(covered);
         this.decoder.metrics.blocks+=states.length;
       }
-      if(!entries.length)await this.db.setCursor('head_logs',to,null);
+      if(!entries.length){await this.db.setCursor('head_logs',to,null);this.options.onProgress?.(to);}
       this.decoder.metrics.observeLogs(newest, head - to);
       this.window=Math.min(this.options.maxRange??200,this.window*2);
   }
@@ -458,11 +465,21 @@ export class LogHeadFollower {
   async run() {
     if (await this.client.chainId() !== 4663) throw new Error('RPC chain ID must be 4663');
     this.pipeline=true;
+    let failures=0;
     try { while (!this.stopping && !this.client.rpcStopped?.()) {
       const began = Date.now();
-      await this.tick();
+      let delay:number;
+      try { await this.tick(); failures=0; delay=Math.max(0, (this.options.tickMs ?? 1000) - (Date.now() - began)); }
+      catch (error) {
+        // Providers that stay unavailable past the meter's own retry window (timeouts, 429/5xx,
+        // malformed replies) back off here instead of halting the process. Wrong chain, database,
+        // reorg-depth, budget and usage-store failures still end the run.
+        if (this.stopping || this.client.rpcStopped?.() || !isTransientRpcUnavailable(error)) throw error;
+        delay=backoffDelay(failures++, this.options.random, this.options.retryBaseMs ?? 1000, this.options.retryCapMs ?? 60_000);
+        this.logger('head_retry', { reason: 'rpc_unavailable', attempt: failures, backoff_ms: Math.round(delay), error: safeError(error) });
+      }
       if (this.stopping || this.client.rpcStopped?.()) break;
-      await new Promise<void>(resolve => { const timer = setTimeout(resolve, Math.max(0, (this.options.tickMs ?? 1000) - (Date.now() - began))); this.wake = () => { clearTimeout(timer); resolve(); }; });
+      await new Promise<void>(resolve => { const timer = setTimeout(resolve, delay); this.wake = () => { clearTimeout(timer); resolve(); }; });
       this.wake = undefined;
     }} finally {await this.discardAhead();this.pipeline=false;}
   }

@@ -164,6 +164,8 @@ const EnvSchema = z.object({
   /** Must exceed the engines' seven-day idle window, so live evaluation never reads compacted coins. */
   RETENTION_IDLE_TOKEN_DAYS: optionalValue(z.coerce.number().int().min(8).max(365)),
   RETENTION_PENDING_POOL_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
+  /** Verdict, playbook and wash rows of the derived Feed projection; their sources are kept (docs/operations/retention.md). */
+  RETENTION_FEED_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
   /** Live sell check (BACKEND §6.2). Off unless true: the engines role measures exit cost, and the API re-checks every
    * buy quote and refuses a coin whose sell fails. SELL_CHECK_DAILY_REQUESTS is read by the engines role; it is parsed
    * here too so the build identity attests the cap for every role. */
@@ -186,7 +188,7 @@ export const identityConfigKeys = {
   AI_TIMEOUT_MS: true, RPC_PAID_MAX_RPM: true, RPC_PUBLIC_MAX_RPM: true,
   RPC_PAID_DAILY_BUDGET: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
   LIVE_TRADING_ENABLED: true, SECURITY_COLLECTORS: true,
-  RETENTION_QUOTE_TRANSFER_DAYS: true, RETENTION_IDLE_TOKEN_DAYS: true, RETENTION_PENDING_POOL_DAYS: true,
+  RETENTION_QUOTE_TRANSFER_DAYS: true, RETENTION_IDLE_TOKEN_DAYS: true, RETENTION_PENDING_POOL_DAYS: true, RETENTION_FEED_DAYS: true,
   SELL_CHECK_ENABLED: true, SELL_CHECK_DAILY_REQUESTS: true,
 } as const;
 // Identity also covers the headless image roles the dispatcher starts (indexer, engines, ...), not only the server's own roles.

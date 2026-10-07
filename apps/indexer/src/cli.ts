@@ -5,7 +5,7 @@ import { enrichSenders } from './enrich.js';
 import { isAddress, type Address } from 'viem';
 import { reportIndexerError } from './guard-stop.js';
 import { z } from 'zod';
-import { loadRegistry, createMeteredClients, RpcGuardError, type RpcEnv } from '@eko/chain';
+import { loadRegistry, createMeteredClients, RpcGuardError, type ProgressWatchdog, type RpcEnv } from '@eko/chain';
 import { openDb, migrate, migrateEngines, rebuildBars, launchEmitter } from '@eko/db';
 import { createClients } from './clients.js';
 import { BlockDecoder } from './decode.js';
@@ -13,6 +13,7 @@ import { LogHeadFollower } from './log-head.js';
 import { HeadFollower } from './head.js';
 import { PonsBackfill, blockAtTime, type Stream } from './backfill.js';
 import { log, Metrics } from './types.js';
+import { indexerWatchdog } from './stall-watch.js';
 const integer = (fallback: number) => z.coerce.number().int().positive().default(fallback);
 const config = z.object({
   APP_ROLE: z.literal('indexer').default('indexer'), DATABASE_URL: z.string().optional(), PGLITE_DIR: z.string().default('.data/indexer'),
@@ -21,6 +22,8 @@ const config = z.object({
   // Wallet-protocol evidence (userops, 7702 delegations, per-transaction coverage) is the largest table group.
   INDEX_WALLET_PROTOCOL: z.enum(['on', 'off']).default('on'),
   INDEX_HEAD_MODE: z.enum(['logs', 'blocks']).default('logs'), INDEX_HEAD_TICK_MS: integer(1000), INDEX_HEAD_MAX_RANGE: integer(200), INDEX_CODE_CACHE_SEC: integer(3600), INDEX_TRANSIENT_RETRY_SEC: integer(300),
+  // Behind an advancing head with no cursor progress for this long: log indexer_stalled and exit 1.
+  INDEX_STALL_SEC: integer(300),
   INDEX_START_BLOCK: z.preprocess(v => v === '' ? undefined : v, z.coerce.bigint().min(0n).optional()), INDEX_PREFETCH_BLOCKS: integer(32).pipe(z.number().max(128)), INDEX_BACKFILL_WORKERS: integer(4), INDEX_LOG_RANGE: integer(2000).pipe(z.number().max(20000)), INDEX_REORG_DEPTH: integer(256),
 });
 async function main() {
@@ -39,6 +42,7 @@ async function main() {
   const db = await openDb({ databaseUrl: env.DATABASE_URL, pgliteDir: env.PGLITE_DIR });
   const telemetry=launchEmitter(db.sql,()=>log('launch_metrics_unavailable'));
   let worker: HeadFollower | LogHeadFollower | PonsBackfill | undefined;
+  let watchdog: ProgressWatchdog | undefined;
   let registryStop:()=>void=()=>{};
   let interrupted = false; let failed = false;
   const stop = (reason: 'shutdown_requested' | 'rpc_session_budget_reached' = 'shutdown_requested') => { interrupted = true; if (reason === 'shutdown_requested') log(reason, { finishing_current_transaction: true }); worker?.stop(); registryStop(); meter.stop(reason); };
@@ -80,9 +84,13 @@ async function main() {
       from = parsed.from; to = parsed.to; stream = parsed.stream;
       worker = new PonsBackfill(client, db, decoder, { workers: parsed.workers, logRange: env.INDEX_LOG_RANGE });
     } else {
+      // An alive process that stops moving exits non-zero so the platform restarts it, and its lag stays visible meanwhile.
+      const stallWatch = watchdog = indexerWatchdog({ stallMs: env.INDEX_STALL_SEC * 1000, client, metrics: liveMetrics, log,
+        emit: (metric, value) => telemetry.emit(metric, value) });
+      const hooks = { onHead: (n: bigint) => stallWatch.observeHead(n), onProgress: (n: bigint) => stallWatch.progress(n) };
       worker = env.INDEX_HEAD_MODE === 'blocks'
-        ? new HeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, prefetchBlocks: env.INDEX_PREFETCH_BLOCKS, reorgDepth: env.INDEX_REORG_DEPTH })
-        : new LogHeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, tickMs: env.INDEX_HEAD_TICK_MS, maxRange: env.INDEX_HEAD_MAX_RANGE, codeCacheSec: env.INDEX_CODE_CACHE_SEC, reorgDepth: env.INDEX_REORG_DEPTH });
+        ? new HeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, prefetchBlocks: env.INDEX_PREFETCH_BLOCKS, reorgDepth: env.INDEX_REORG_DEPTH, ...hooks })
+        : new LogHeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, tickMs: env.INDEX_HEAD_TICK_MS, maxRange: env.INDEX_HEAD_MAX_RANGE, codeCacheSec: env.INDEX_CODE_CACHE_SEC, reorgDepth: env.INDEX_REORG_DEPTH, ...hooks });
     }
     if (interrupted) return;
     try { log('indexer_started', { role: env.APP_ROLE, mode: backfill ? 'backfill' : 'head' }); if (worker instanceof HeadFollower || worker instanceof LogHeadFollower) {
@@ -96,13 +104,15 @@ async function main() {
       const registryLoop=(async()=>{
         while(!interrupted){log('agent_registry_coverage',await agentRegistry.poll());if(!interrupted)await new Promise<void>(resolve=>{const timer=setTimeout(resolve,60000);wakeRegistry=()=>{clearTimeout(timer);resolve();};});}
       })().catch(error=>{stop();throw error;});
+      watchdog?.start();
       const results=await Promise.allSettled([worker.run().finally(()=>{interrupted=true;registryStop();}),scanLoop,registryLoop]);
       for(const result of results)if(result.status==='rejected')throw result.reason;
     } else await worker.run(stream, from, to); }
     finally { process.removeListener('SIGTERM', signalStop); process.removeListener('SIGINT', signalStop); }
   } catch (error) { failed = true; throw error; } finally {
     process.removeListener('SIGTERM', signalStop); process.removeListener('SIGINT', signalStop);
-    try { await telemetry.drain();await meter.close(); } finally { await db.close(); }
+    // The watchdog outlives cleanup: a shutdown that hangs on the database or RPC is a stall too.
+    try { try { await telemetry.drain();await meter.close(); } finally { await db.close(); } } finally { watchdog?.stop(); }
     if (!failed && (meter.stopReason === 'rpc_session_budget_reached' || meter.stopReason === 'shutdown_requested')) reportIndexerError(new RpcGuardError(meter.stopReason), log);
   }
 }

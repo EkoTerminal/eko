@@ -9,13 +9,14 @@ storage and keep a bounded raw history on a 100 GB volume.
 - **Wallet-protocol storage paused** (`INDEX_WALLET_PROTOCOL=off` on the indexer). The indexer still computes
   protocol actors for swap attribution but stores no userops, 7702 delegations or per-transaction coverage. Wallet
   fingerprints then lack account-abstraction and calldata evidence.
-- **Transfer roll-up** (worker, every ten minutes, at most about a minute of work per pass;
+- **Transfer roll-up** (worker, every ten minutes, at most about a minute of work per rule and pass;
   `packages/db/src/retention.ts`, `apps/server/src/retention-worker.ts`):
   - `RETENTION_QUOTE_TRANSFER_DAYS=2`: transfers of the registry quote tokens (WETH, USDG) older than two days.
     They were 52% of all transfers, and nothing reads their history except balances.
   - `RETENTION_IDLE_TOKEN_DAYS=14`: every transfer of a token with no transfer in 14 days. The engines ignore coins
     idle for seven days, so live evaluation never reads a compacted coin.
   - `RETENTION_PENDING_POOL_DAYS=3`: raw events of pools still unknown after three days.
+- **Derived tables** (`RETENTION_FEED_DAYS` and the table-by-table decisions): [retention.md](retention.md).
 
 ## Why compaction and not deletion
 
@@ -32,7 +33,7 @@ before it, and replays across compacted ranges, are not reproducible; that is th
   transfers would be counted on top of their baseline. The live indexer only rewrites its 256-block reorg window.
 - Transfer retention refuses to start when the wallet outflow collectors are configured (they read transfer history
   from a saved cursor).
-- The three `RETENTION_*` settings are part of the attested configuration (`identityConfigKeys`), so the staging
+- The `RETENTION_*` settings are part of the attested configuration (`identityConfigKeys`), so the staging
   verifier only matches the reviewed values. `INDEX_WALLET_PROTOCOL` is an indexer setting and is recorded in
   `infra/railway/staging.json` and `docs/operations/staging-railway-evidence.md`.
 - Tests: `packages/db/test/retention.test.ts`, `apps/engines/test/retention-holdings.test.ts`,

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
+import { binary } from '@eko/db';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
@@ -109,6 +110,32 @@ describe('launch monitoring (offline migrated database, fake delivery)', () => {
     const deliveries = await db.select().from(auditLog).where(eq(auditLog.action, 'ops.incident_delivery'));
     expect(deliveries).toHaveLength(8); expect(deliveries.every(r => (r.data as { outcome: string }).outcome === 'delivered')).toBe(true);
   });
+  it('raises the indexer lag incident above ten minutes, also for a stalled indexer that reports nothing', async () => {
+    const chain = built.ctx.dbh.chain;
+    let now = Date.now(); const monitor = new LaunchMonitor(chain.sql, () => now);
+    try {
+      await monitor.record({ metric: 'head_lag_ms', value: 600_000 });
+      expect((await monitor.checks(false)).indexer_lag).toEqual({ state: 'healthy', value: 600_000 });
+      await monitor.record({ metric: 'head_lag_ms', value: 600_001 });
+      expect((await monitor.checks(false)).indexer_lag).toEqual({ state: 'unhealthy', value: 600_001 });
+      // Ordinary latency misses stay the separate five-second `head` check.
+      await chain.sql.query('DELETE FROM launch_measurements WHERE metric=$1', ['head_lag_ms']);
+      await monitor.record({ metric: 'head_lag_ms', value: 9_000 });
+      const latency = await monitor.checks(false);
+      expect(latency.indexer_lag.state).toBe('healthy'); expect(latency.head.state).not.toBe('healthy');
+      // Stalled: no indexer samples at all, and the newest indexed block is eleven minutes old.
+      await chain.sql.query('DELETE FROM launch_measurements WHERE metric=$1', ['head_lag_ms']);
+      await chain.insert('chain_blocks', { number: '81521420', block: '81521420', hash: binary(`0x${'1'.repeat(64)}`), parent_hash: binary(`0x${'2'.repeat(64)}`), ts: new Date(now - 660_000) });
+      await monitor.collect();
+      const stalled = (await monitor.checks(false)).indexer_lag;
+      expect(stalled.state).toBe('unhealthy'); expect(stalled.value).toBeGreaterThanOrEqual(659_000);
+      expect(await monitor.prometheus(false)).toContain('eko_check_healthy{check="indexer_lag"} 0');
+      const r = await read('indexer_lag'); expect(r.statusCode).toBe(503); expect(r.json().state).toBe('unhealthy');
+    } finally {
+      await chain.sql.query('DELETE FROM chain_blocks WHERE number=81521420');
+      await chain.sql.query('DELETE FROM launch_measurements WHERE metric=$1', ['head_lag_ms']);
+    }
+  });
   it('marks stale data unavailable, computes p95 and failure denominator, and crosses D0 burn boundaries', async () => {
     let now = Date.now(); const monitor = new LaunchMonitor(built.ctx.dbh.chain.sql, () => now);
     await monitor.record({ metric: 'preflight_ms', value: 149 });
@@ -197,6 +224,7 @@ describe('prepared delivery and operational definitions', () => {
     const alerts = (await readJson('launch-alerts')).groups[0].rules as { alert: string; expr: string; labels: { severity: string }; for?: string }[];
     expect(alerts.find(r => r.alert === 'SimulationFailures')).toMatchObject({ expr: 'eko_launch_value{metric="simulation_failure"} > 0.05', for: '5m', labels: { severity: '2' } });
     expect(alerts.find(r => r.alert === 'GuardMiss')!.labels.severity).toBe('1');
+    expect(alerts.find(r => r.alert === 'IndexerHeadLag')).toMatchObject({ expr: 'eko_launch_value{metric="head_lag_ms"} > 600000', labels: { severity: '1' } });
     expect(alerts.find(r => r.alert === 'PreflightLatency')!.labels.severity).toBe('3');
     const kuma = await readJson('uptime-kuma-checks');
     expect(kuma.checks.filter((c: { active: boolean }) => !c.active).map((c: { name: string }) => c.name)).toEqual(['x', 'farcaster', 'daily_burn']);

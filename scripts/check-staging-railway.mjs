@@ -94,7 +94,8 @@ export function validateStaging(catalog, manifests, roleSource) {
     assert.deepEqual(manifest.build, { builder: 'DOCKERFILE', dockerfilePath: 'Dockerfile' });
     assert.deepEqual(manifest.deploy, {
       startCommand: 'node dist/launch.js', numReplicas: 1,
-      restartPolicyType: 'ON_FAILURE', restartPolicyMaxRetries: 3,
+      // Watched live loops (indexer, engines) exit on a stall so the platform restarts them; never stop restarting.
+      ...(['indexer', 'engines'].includes(role) ? { restartPolicyType: 'ALWAYS' } : { restartPolicyType: 'ON_FAILURE', restartPolicyMaxRetries: 3 }),
       ...(healthPaths[role] ? { healthcheckPath: healthPaths[role], healthcheckTimeout: 120 } : {}),
     });
     if (service.volume) {
