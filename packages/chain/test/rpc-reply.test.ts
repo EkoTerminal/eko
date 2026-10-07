@@ -93,6 +93,16 @@ describe('incident reproduction: viem batch replies', () => {
     const kept = checkReply(request, 400, JSON.stringify([{ jsonrpc: '2.0', id: 7, error: { code: -32602, message: 'invalid params' } }]));
     expect(kept.status).toBe(200);
   });
+  it('treats an HTML 403 page (edge or bot protection) as transient, but not an HTML 401 or a JSON 403', () => {
+    const request = JSON.stringify([{ jsonrpc: '2.0', id: 7, method: 'eth_blockNumber' }]);
+    for (const [status, body, transient] of [[403, '<html>Forbidden</html>', true], [401, '<html>Unauthorized</html>', false],
+      [403, JSON.stringify(batchError(-32000, 'forbidden')), false]] as const) {
+      let caught: unknown;
+      try { checkReply(request, status, body); } catch (error) { caught = error; }
+      expect(caught).toMatchObject({ transient, status });
+      expect(isTransientRpcError(caught)).toBe(transient);
+    }
+  });
 });
 
 function meterHarness(replies: Record<'paid' | 'public', (requests: Body, signal?: AbortSignal | null) => Response | Promise<Response>>, transientRetrySec = 300, env: Record<string, string> = {}) {
@@ -125,6 +135,14 @@ describe('metered transport over bad replies', () => {
     const h = meterHarness({ paid: () => json([]), public: ok });
     expect(await h.clients.paid.request({ method: 'eth_getBlockByNumber', params: ['0x10', false] })).toBe('0x10');
     expect(h.sent.map(s => s.provider)).toEqual(['paid', 'public']);
+    await h.meter.close();
+  });
+  it('keeps a head read alive when paid hiccups and the public provider answers an HTML 403 (2026-10-07 production)', async () => {
+    let bad = 1;
+    const forbidden = () => new Response('<html><body>Forbidden</body></html>', { status: 403, headers: { 'Content-Type': 'text/html' } });
+    const h = meterHarness({ paid: requests => bad-- > 0 ? json([]) : ok(requests), public: forbidden });
+    expect(await h.clients.paid.request({ method: 'eth_getBlockByNumber', params: ['0x10', false] })).toBe('0x10');
+    expect(h.sent.map(s => s.provider)).toEqual(['paid', 'public', 'paid']);
     await h.meter.close();
   });
   it('gives up after the retry window with a transient rpc_unavailable the head loop can retry', async () => {

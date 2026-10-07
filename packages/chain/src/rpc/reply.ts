@@ -37,7 +37,9 @@ const validEntry = (entry: unknown): entry is Entry => isObject(entry) && ('resu
  * Check one buffered reply against the JSON-RPC request it answers. A usable reply is returned as
  * a JSON response holding exactly one entry per request id (per-entry errors such as reverts still
  * flow through viem's normal RpcRequestError mapping). Anything else throws RpcReplyError: HTTP
- * 408/425/429/5xx and malformed or incomplete 2xx replies are transient; other HTTP 4xx are not.
+ * 408/425/429/5xx and malformed or incomplete 2xx replies are transient; other HTTP 4xx are not, except a 403 whose
+ * body is not JSON: that is an edge or bot-protection page (seen from the public provider against hosted egress IPs on
+ * 2026-10-06/07), not a JSON-RPC refusal, so the meter retries it on the other lane instead of halting the indexer.
  */
 export function checkReply(requestBody: unknown, status: number, text: string): Response {
   const request = requestIds(requestBody);
@@ -53,7 +55,7 @@ export function checkReply(requestBody: unknown, status: number, text: string): 
     if (!ok) fail('http_status', `failed${parsed ? providerReason(data) : ''}`);
     return new Response(text, { status, headers: { 'Content-Type': parsed ? 'application/json' : 'text/plain' } });
   }
-  if (!parsed) fail('not_json', text.trim() ? 'was not JSON' : 'was empty');
+  if (!parsed) fail('not_json', text.trim() ? 'was not JSON' : 'was empty', ok || transientStatus(status) || status === 403);
   if (!request.batch) {
     if (!ok) fail('http_status', `failed${providerReason(data)}`);
     if (!validEntry(data)) fail('not_batch', 'had no result or error');
