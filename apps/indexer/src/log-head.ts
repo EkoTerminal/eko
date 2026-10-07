@@ -7,11 +7,11 @@ import { toHex, toEventSelector, type Address, type Hex } from 'viem';
 import { lower, native } from './clients.js';
 import { isRangeLimit } from './backfill.js';
 import { budgetedQueries, type LogFilter } from './log-budget.js';
-import { Semaphore } from './concurrency.js';
+import { Semaphore, settle } from './concurrency.js';
 import { ReorgDepthError } from './head.js';
 import type { BlockDecoder, Prepared, TokenRow } from './decode.js';
 import { log, type ChainClient, type Logger, type RpcBlock, type RpcLog, type RpcReceipt, type TokenMetadata } from './types.js';
-import { BlockRows } from './rows.js';
+import { BlockRows, emptyFlushTimings } from './rows.js';
 import { safeError } from './safe-error.js';
 
 const userOpTopics = walletProtocolTopics;
@@ -21,15 +21,41 @@ const v3PoolTopics=new Set(v3Abi.slice(1).map(toEventSelector));
 const identity = (l: RpcLog) => `${lower(l.transactionHash)}:${BigInt(l.logIndex)}`;
 const order = (a: RpcLog, b: RpcLog) => BigInt(a.blockNumber) === BigInt(b.blockNumber) ? Number(BigInt(a.logIndex) - BigInt(b.logIndex)) : BigInt(a.blockNumber) < BigInt(b.blockNumber) ? -1 : 1;
 class ReorgDuringTick extends Error {}
-interface WindowData { from:bigint;to:bigint;head:bigint;scope:SenderScope;candidates:RpcLog[];blocks:Map<bigint,RpcLog[]>;hashes:Map<bigint,Hex>;headers:Map<bigint,RpcBlock>;receiptsByBlock:Map<bigint,RpcReceipt[]>;discoveredPools:Map<string,import('./types.js').PoolMetadata>;timings:LogHeadFollower['timings'];meterBefore:ReturnType<NonNullable<ChainClient['rpcTiming']>>|undefined }
+/** A single block's logs exceed the provider's reply limits even alone. */
+class SpanTooLarge extends Error {}
+/**
+ * Blocks per candidate eth_getLogs request at most (or maxRange, if larger). A larger catch-up window reads several
+ * spans concurrently: smaller replies stay under provider size and result limits, and transfer in parallel instead of
+ * in one long reply.
+ */
+const MAX_LOG_SPAN = 500;
+interface WindowData { deepLinks:Set<bigint>;from:bigint;to:bigint;head:bigint;scope:SenderScope;candidates:RpcLog[];blocks:Map<bigint,RpcLog[]>;hashes:Map<bigint,Hex>;headers:Map<bigint,RpcBlock>;receiptsByBlock:Map<bigint,RpcReceipt[]>;discoveredPools:Map<string,import('./types.js').PoolMetadata>;timings:LogHeadFollower['timings'];meterBefore:ReturnType<NonNullable<ChainClient['rpcTiming']>>|undefined }
 type ReceiptReason = 'pons_coin_trade' | 'other_indexed_token' | 'launch' | 'liquidity' | 'other_event';
 const emptyReasons = (): Record<ReceiptReason,number> => ({pons_coin_trade:0,other_indexed_token:0,launch:0,liquidity:0,other_event:0});
-const emptyTimings=()=>({rpcWallMs:0,dbWriteMs:0,logsMs:0,discoveryMs:0,timestampMs:0,receiptsMs:0,headersMs:0,parentHeadersMs:0,timestampHeadersMs:0,enrichmentMs:0,prepareMs:0,windowScopeMs:0,receiptRpcMs:0,receiptMaxMs:0,receiptConcurrency:0,enrichmentConcurrency:0,blocks:0,logs:0,receipts:0,receiptReasons:emptyReasons(),headers:0,cursorReads:0,timestampHeaders:0,parentHeaders:0,timestampScans:0});
+const emptyTimings=()=>({flush:emptyFlushTimings(),deepLinksSkipped:0,logRequests:0,commits:0,rpcWallMs:0,dbWriteMs:0,logsMs:0,discoveryMs:0,timestampMs:0,receiptsMs:0,headersMs:0,parentHeadersMs:0,timestampHeadersMs:0,enrichmentMs:0,prepareMs:0,windowScopeMs:0,receiptRpcMs:0,receiptMaxMs:0,receiptConcurrency:0,enrichmentConcurrency:0,blocks:0,logs:0,receipts:0,receiptReasons:emptyReasons(),headers:0,cursorReads:0,timestampHeaders:0,parentHeaders:0,timestampScans:0});
 interface Options { pipeline?:boolean; startBlock?: bigint; tickMs?: number; maxRange?: number; codeCacheSec?: number; reorgDepth: number; concurrency?: number; logger?: Logger;
   /** Progress hooks for a watchdog: every chain head read, and every committed scan cursor. */
   onHead?: (head: bigint) => void; onProgress?: (cursor: bigint) => void;
   /** Backoff after a tick that failed on transient provider unavailability (default 1 s doubling to 60 s, jittered). */
-  retryBaseMs?: number; retryCapMs?: number; random?: () => number; }
+  retryBaseMs?: number; retryCapMs?: number; random?: () => number;
+  /**
+   * Window while far behind (default maxRange). Candidate logs are still read in spans the provider accepts, and near
+   * the head windows return to maxRange.
+   */
+  catchUpRange?: number;
+  /** Blocks per write transaction (default min(maxRange, 200)); a larger window commits several bounded prefixes. */
+  commitRange?: number;
+  /**
+   * Parent links of stored blocks deeper than reorgDepth below the head whose parent block had no candidate log:
+   * 'fetch' (default) reads a header per such block; 'skip' stores no link (NULL parent_hash) and saves those reads.
+   * Inside the reorg window every link is fetched and checked either way.
+   */
+  deepParents?: 'fetch' | 'skip';
+  /** Once public logs are known to lack blockTimestamp, read candidates on the paid lane instead of twice (default true). */
+  paidLogs?: boolean;
+  /** Prepare the next commit batch while the previous one writes (default true). */
+  overlapWrites?: boolean; }
+interface StagedBatch { batch: BlockRows; states: Prepared[]; dates: Date[]; last: RpcBlock | null; newest: Hex | null }
 
 /** Sparse head anchor plus a separate scan cursor: empty windows need neither headers nor chain rows. */
 export class LogHeadFollower {
@@ -41,7 +67,17 @@ export class LogHeadFollower {
   private aheadFrom?:bigint;
   private wake?: () => void;
   private rpc: Semaphore;
-  private window: number;
+  private readonly maxRange: number;
+  private readonly catchUpRange: number;
+  private readonly commitRange: number;
+  /** Blocks per candidate eth_getLogs request: halves on a size refusal, then grows back, capped for a while. */
+  private span: number;
+  private readonly maxSpan: number;
+  private spanCeiling = Infinity;
+  private spanSuccesses = 0;
+  /** Public logs lack blockTimestamp and paid logs carry it: read candidates on the paid lane instead of twice. */
+  private paidLogs?: boolean;
+  private budgetSpent = false;
   private timings = emptyTimings();
   private async remote<T>(read:()=>Promise<T>): Promise<T> { const began=performance.now(); try { return await read(); } finally { this.timings.rpcWallMs += performance.now()-began; } }
   /**
@@ -51,9 +87,13 @@ export class LogHeadFollower {
    * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
    */
   constructor(readonly client: ChainClient, readonly db: ChainDb, readonly decoder: BlockDecoder, readonly options: Options) {
-    for (const value of [options.tickMs ?? 1000, options.maxRange ?? 200, options.codeCacheSec ?? 3600, options.reorgDepth]) if (!Number.isInteger(value) || value < 1) throw new Error('Invalid log head configuration');
+    for (const value of [options.tickMs ?? 1000, options.maxRange ?? 200, options.codeCacheSec ?? 3600, options.reorgDepth, options.catchUpRange ?? 1, options.commitRange ?? 1]) if (!Number.isInteger(value) || value < 1) throw new Error('Invalid log head configuration');
     this.pipeline=options.pipeline??false;
-    this.window = options.maxRange ?? 200;
+    this.maxRange = options.maxRange ?? 200;
+    this.catchUpRange = Math.max(this.maxRange, options.catchUpRange ?? this.maxRange);
+    this.commitRange = options.commitRange ?? Math.min(this.maxRange, 200);
+    this.maxSpan = Math.min(this.catchUpRange, Math.max(this.maxRange, MAX_LOG_SPAN));
+    this.span = this.maxSpan;
     this.rpc = new Semaphore(options.concurrency ?? 32);
   }
   /**
@@ -145,12 +185,17 @@ export class LogHeadFollower {
       this.logger('head_tick',{headers_fetched:this.timings.headers+this.timings.cursorReads,headers_by_reason:{cursor:this.timings.cursorReads,missing_timestamp:this.timings.timestampHeaders,missing_parent:this.timings.parentHeaders},timestamp_scans:this.timings.timestampScans, blocks_covered:this.timings.blocks,logs_kept:this.timings.logs,receipts_fetched:this.timings.receipts,receipts_by_reason:this.timings.receiptReasons,tick_ms:performance.now()-began,
         rpc_wait_ms:meterAfter && meterBefore ? meterAfter.rpcMs-meterBefore.rpcMs : this.timings.rpcWallMs,
         rpc_wall_ms:this.timings.rpcWallMs,meter_admission_ms:meterAfter && meterBefore ? meterAfter.admissionMs-meterBefore.admissionMs : 0,
-        meter_rate_wait_ms:meterAfter && meterBefore ? meterAfter.rateWaitMs-meterBefore.rateWaitMs : 0,meter_public_rate_wait_ms:meterAfter&&meterBefore?(meterAfter.publicRateWaitMs??0)-(meterBefore.publicRateWaitMs??0):0,meter_paid_rate_wait_ms:meterAfter&&meterBefore?(meterAfter.paidRateWaitMs??0)-(meterBefore.paidRateWaitMs??0):0,db_write_ms:this.timings.dbWriteMs,logs_ms:this.timings.logsMs,discovery_ms:this.timings.discoveryMs,timestamp_ms:this.timings.timestampMs,receipts_ms:this.timings.receiptsMs,headers_ms:this.timings.headersMs,parent_headers_ms:this.timings.parentHeadersMs,timestamp_headers_ms:this.timings.timestampHeadersMs,enrichment_ms:this.timings.enrichmentMs,prepare_ms:this.timings.prepareMs,window_scope_ms:this.timings.windowScopeMs,receipt_rpc_ms:this.timings.receiptRpcMs,receipt_max_ms:this.timings.receiptMaxMs,receipt_concurrency:this.timings.receiptConcurrency,enrichment_concurrency:this.timings.enrichmentConcurrency });
+        meter_rate_wait_ms:meterAfter && meterBefore ? meterAfter.rateWaitMs-meterBefore.rateWaitMs : 0,meter_public_rate_wait_ms:meterAfter&&meterBefore?(meterAfter.publicRateWaitMs??0)-(meterBefore.publicRateWaitMs??0):0,meter_paid_rate_wait_ms:meterAfter&&meterBefore?(meterAfter.paidRateWaitMs??0)-(meterBefore.paidRateWaitMs??0):0,db_write_ms:this.timings.dbWriteMs,logs_ms:this.timings.logsMs,discovery_ms:this.timings.discoveryMs,timestamp_ms:this.timings.timestampMs,receipts_ms:this.timings.receiptsMs,headers_ms:this.timings.headersMs,parent_headers_ms:this.timings.parentHeadersMs,timestamp_headers_ms:this.timings.timestampHeadersMs,enrichment_ms:this.timings.enrichmentMs,prepare_ms:this.timings.prepareMs,window_scope_ms:this.timings.windowScopeMs,receipt_rpc_ms:this.timings.receiptRpcMs,receipt_max_ms:this.timings.receiptMaxMs,receipt_concurrency:this.timings.receiptConcurrency,enrichment_concurrency:this.timings.enrichmentConcurrency,
+        // Write phases (summed over the window's commits) and how the window was read.
+        db_insert_ms:this.timings.flush.insertMs,db_update_ms:this.timings.flush.updateMs,db_balances_ms:this.timings.flush.balancesMs,db_bars_ms:this.timings.flush.barsMs,db_notify_ms:this.timings.flush.notifyMs,
+        commits:this.timings.commits,log_requests:this.timings.logRequests,log_span:this.span,deep_links_skipped:this.timings.deepLinksSkipped,logs_lane:this.paidLogs===true&&this.options.paidLogs!==false?'paid':'public_first',
+        ...(this.budgetSpent?{paid_budget:'exhausted',lane:'public'}:{}) });
     }
   }
   private async processTick() {
     const head=await this.remote(()=>this.client.head());
     this.options.onHead?.(head);
+    this.observeBudget();
     let previousHash:Hex|undefined;
     let anchored:RpcBlock|undefined;
     let cursor=await this.db.cursor('head');
@@ -167,7 +212,7 @@ export class LogHeadFollower {
       else {await this.discardAhead();data=await this.fetchWindow(from,head,await loadSenderScope(this.db),cursor===from-1n?previousHash:undefined);}
       data.timings.rpcWallMs+=this.timings.rpcWallMs;data.timings.cursorReads+=this.timings.cursorReads;this.timings=data.timings;
       data.head=head;
-      if(this.pipeline && head-data.to>=BigInt(this.window) && !this.stopping){
+      if(this.pipeline && head-data.to>=BigInt(this.maxRange) && !this.stopping){
         this.aheadFrom=data.to+1n;
         const scopeBegan=performance.now();
         const scope=this.windowScope(data);
@@ -182,6 +227,43 @@ export class LogHeadFollower {
     }
   }
   private async discardAhead(){if(this.ahead)await this.ahead;this.ahead=undefined;this.aheadFrom=undefined;}
+  /** Say once when the paid daily budget closes (public-capable reads then continue on the public lane) and when it reopens. */
+  private observeBudget() {
+    const spent=this.client.paidExhausted?.()??false;
+    if(spent===this.budgetSpent)return;
+    this.budgetSpent=spent;
+    this.logger(spent?'head_public_lane':'head_paid_lane_restored',spent?{reason:'rpc_budget_exhausted',lane:'public',note:'logs, receipts and headers continue on the public lane at its rate; pinned archive reads use it where it still holds the state'}:{reason:'paid_budget_available'});
+  }
+  /** Far behind, windows grow to catchUpRange; near the head they stay at maxRange. */
+  private windowSize(from:bigint,head:bigint) { return head-from+1n>BigInt(this.maxRange)*2n?this.catchUpRange:this.maxRange; }
+  /**
+   * Candidate logs for [from,to] in spans the provider accepts. A refused span is halved and retried, and later windows
+   * keep the smaller span for a while instead of repeating the refusal. A single block that is still refused throws
+   * SpanTooLarge (the Transfer topic is then read by token address instead).
+   */
+  private async candidateLogs(from:bigint,to:bigint,topics:Hex[],paid:boolean,timings:LogHeadFollower['timings']):Promise<RpcLog[]> {
+    const read=(a:bigint,b:bigint)=>{timings.logRequests++;return paid?this.client.timestampLogs!({from:a,to:b,topics}):this.client.logs({from:a,to:b,topics});};
+    const piece=async(a:bigint,b:bigint):Promise<RpcLog[]>=>{
+      try { return await read(a,b); }
+      catch(error) {
+        if(rpcStopReason(error)||!isRangeLimit(error))throw error;
+        if(a===b)throw new SpanTooLarge(safeError(error));
+        this.span=Math.min(this.span,Math.max(1,Math.floor(Number(b-a+1n)/2)));this.spanCeiling=this.span;this.spanSuccesses=0;
+        // Re-split the refused range at the current span, which a nested refusal may have narrowed further.
+        const logs:RpcLog[]=[];
+        for(let x=a;x<=b;){const y=x+BigInt(this.span)-1n<b?x+BigInt(this.span)-1n:b;logs.push(...await piece(x,y));x=y+1n;}
+        return logs;
+      }
+    };
+    const spans:[bigint,bigint][]=[];
+    for(let a=from;a<=to;){const b=a+BigInt(this.span)-1n<to?a+BigInt(this.span)-1n:to;spans.push([a,b]);a=b+1n;}
+    // Drain every span before propagating a failure: no request outlives the window it belongs to.
+    const reads=await Promise.allSettled(spans.map(([a,b])=>piece(a,b)));
+    const failed=reads.find(r=>r.status==='rejected');if(failed?.status==='rejected')throw failed.reason;
+    if(++this.spanSuccesses>=32)this.spanCeiling=Infinity;
+    this.span=Math.min(this.maxSpan,this.spanCeiling,this.span*2);
+    return reads.flatMap(r=>r.status==='fulfilled'?r.value:[]);
+  }
   private windowScope(data:WindowData):SenderScope {
     const scope={...data.scope,tokenRows:[...data.scope.tokenRows],poolRows:[...data.scope.poolRows]};
     // Set membership replaces repeated whole-registry .some()/hex conversions.
@@ -201,16 +283,17 @@ export class LogHeadFollower {
     const timings=emptyTimings();
     const meterBefore=this.client.rpcTiming?.();
     const remote=async<T>(read:()=>Promise<T>):Promise<T>=>{const began=performance.now();try{return await read();}finally{timings.rpcWallMs+=performance.now()-began;}};
-    let to=from+BigInt(this.window)-1n<head?from+BigInt(this.window)-1n:head;
+    const size=BigInt(this.windowSize(from,head)),to=from+size-1n<head?from+size-1n:head;
       let candidates: RpcLog[]; let chunkTransfers=false;
       const logsBegan=performance.now();
-      for (;;) {
-        try { candidates=await remote(()=>this.client.logs({from,to,topics:headTopics})); break; }
-        catch(error) {
-          if (rpcStopReason(error) || !isRangeLimit(error)) throw error;
-          if(to===from) { chunkTransfers=true; candidates=await remote(()=>this.logs({from,to,topics:headTopics.filter(t=>t!==transferTopic)}));break; }
-          this.window=Math.max(1,Math.floor(Number(to-from+1n)/2)); to=from+BigInt(this.window)-1n;
-        }
+      // Paid logs carry blockTimestamp: once public logs are known to lack it, one paid read replaces the public read plus
+      // the paid timestamp scan of the same range (the paid request count stays the same, the public one goes away).
+      const paidLogs=this.paidLogs===true&&this.options.paidLogs!==false&&!!this.client.timestampLogs;
+      try { candidates=await remote(()=>this.candidateLogs(from,to,headTopics,paidLogs,timings)); }
+      catch(error) {
+        if(!(error instanceof SpanTooLarge))throw error;
+        // Even one block is too large with every Transfer: read other topics by range and Transfers by tracked token.
+        chunkTransfers=true; candidates=await remote(()=>this.logs({from,to,topics:headTopics.filter(t=>t!==transferTopic)}));
       }
       timings.logsMs=performance.now()-logsBegan;
       timings.blocks=Number(to-from+1n);
@@ -292,12 +375,26 @@ export class LogHeadFollower {
       const rawHashes = new Map(candidates.map(l => [BigInt(l.blockNumber), l.blockHash]));
       if(previousHash)rawHashes.set(from-1n,previousHash);
       const headerBegan=performance.now();
-      const parentRead=Promise.allSettled([...blocks].filter(([n])=>!rawHashes.has(n-1n)).map(([n])=>this.rpc.run(async()=>{
-        // TODO(spec): Logs omit parentHash. Preserve exact sparse parent links until the
-        // spec defines their representation; public-only recovery avoids paid header spill.
-        headers.set(n,await (this.client.parentHeader?.(n)??this.client.timestampHeader?.(n)??this.header(n)));
-        timings.headers++;timings.parentHeaders++;
-      }))).then(reads=>{timings.parentHeadersMs=performance.now()-headerBegan;return reads;});
+      // TODO(spec): Logs omit parentHash and the spec does not define sparse parent links. Inside the reorg window
+      // they stay exact, read on the public lane only (no paid header spill). Blocks deeper than INDEX_REORG_DEPTH
+      // below the head cannot reorg (a deeper one halts the indexer): with deepParents 'skip' (the CLI default) their
+      // missing links are not read and the stored row's parent_hash stays NULL. Those header reads were most of a
+      // catch-up window's public requests.
+      const deepLinks=new Set<bigint>(), deepBelow=head-BigInt(this.options.reorgDepth);
+      const parentNs=[...blocks.keys()].filter(n=>{
+        if(rawHashes.has(n-1n))return false;
+        if(this.options.deepParents==='skip'&&n<deepBelow){deepLinks.add(n);return false;}
+        return true;
+      });
+      timings.deepLinksSkipped=deepLinks.size;
+      const parentRead=(async()=>{
+        try {
+          await settle(parentNs.map(n=>this.rpc.run(async()=>{
+            headers.set(n,await (this.client.parentHeader?.(n)??this.client.timestampHeader?.(n)??this.header(n)));
+            timings.headers++;timings.parentHeaders++;
+          })));
+        } finally {timings.parentHeadersMs=performance.now()-headerBegan;}
+      })();
       const receiptBegan=performance.now();
       let receiptActive=0;
       const receiptRead = Promise.allSettled([...receiptBlocks].map(n => this.rpc.run(async () => {
@@ -318,15 +415,18 @@ export class LogHeadFollower {
       const timestampRead = (async()=>{
         const began=performance.now();
         try {
-          if(this.timestampProbe!==false && this.client.timestampLogs && [...blocks].some(([n,ls])=>!receiptBlocks.has(n)&&ls.every(l=>!l.blockTimestamp||BigInt(l.blockTimestamp)===0n))){
+          // Candidates already read on the paid lane (now served by public: budget spent or paid failing) skip the scan;
+          // header reads below recover their timestamps.
+          if(!paidLogs && this.timestampProbe!==false && this.client.timestampLogs && [...blocks].some(([n,ls])=>!receiptBlocks.has(n)&&ls.every(l=>!l.blockTimestamp||BigInt(l.blockTimestamp)===0n))){
             timings.timestampScans++;
             let stamped:RpcLog[]=[];
-            try {stamped=await this.client.timestampLogs!({from,to,topics:headTopics});}
-            catch(error){if(rpcStopReason(error)||!isRangeLimit(error))throw error;}
+            try {stamped=await this.candidateLogs(from,to,headTopics,true,timings);}
+            catch(error){if(!(error instanceof SpanTooLarge))throw error;}
             validate(stamped);
             const timestamps=new Map<bigint,Hex>();
             for(const l of stamped){const n=BigInt(l.blockNumber);if(candidateHashes.has(n)&&candidateHashes.get(n)!==lower(l.blockHash))throw new ReorgDuringTick('Timestamp provider hash mismatch');if(!l.blockTimestamp||BigInt(l.blockTimestamp)===0n)continue;const prior=timestamps.get(n);if(prior&&BigInt(prior)!==BigInt(l.blockTimestamp))throw new ReorgDuringTick('Conflicting provider timestamps');timestamps.set(n,l.blockTimestamp);}
             this.timestampProbe=timestamps.size>0;
+            if(timestamps.size>0)this.paidLogs=true;
             for(const [n,ls] of blocks){const timestamp=timestamps.get(n);if(timestamp){if(ls.some(l=>l.blockTimestamp&&BigInt(l.blockTimestamp)>0n&&BigInt(l.blockTimestamp)!==BigInt(timestamp)))throw new ReorgDuringTick('Timestamp provider mismatch');blocks.set(n,ls.map(l=>({...l,blockTimestamp:timestamp})));}}
           }
         } finally {timings.timestampMs=performance.now()-began;}
@@ -334,40 +434,67 @@ export class LogHeadFollower {
       // Drain both siblings even on failure before retrying or invalidating caches.
       const results=await remote(()=>Promise.allSettled([receiptRead,timestampRead,parentRead]));
       for(const result of results)if(result.status==='rejected')throw result.reason;
-      const parents=await parentRead;
-      const parentFailure=parents.find(r=>r.status==='rejected');if(parentFailure?.status==='rejected')throw parentFailure.reason;
       const reads=await receiptRead;
       const failed=reads.find(r=>r.status==='rejected');
       if(failed?.status==='rejected')throw failed.reason;
       const receiptsByBlock=new Map(reads.flatMap(r=>r.status==='fulfilled'?[[r.value[0],r.value[1]] as const]:[]));
       const fallbackBegan=performance.now();
       await remote(async()=>{
-        const reads=await Promise.allSettled([...blocks].map(([n,logs])=>this.rpc.run(async()=>{
+        const need:bigint[]=[];
+        for(const [n,logs] of blocks){
           const timestampKnown=[...logs,...(receiptsByBlock.get(n)?.flatMap(r=>r.logs)??[])].some(l=>l.blockTimestamp&&BigInt(l.blockTimestamp)>0n);
-          if(headers.has(n)){if(!timestampKnown)timings.timestampHeaders++;return;}
-          if(timestampKnown)return;
+          if(headers.has(n)){if(!timestampKnown)timings.timestampHeaders++;continue;}
+          if(!timestampKnown)need.push(n);
+        }
+        await settle(need.map(n=>this.rpc.run(async()=>{
           const header=await (this.client.timestampHeader?.(n)??this.header(n));
           headers.set(n,header);timings.headers++;
           timings.timestampHeaders++;
         })));
-        const failure=reads.find(r=>r.status==='rejected');if(failure?.status==='rejected')throw failure.reason;
       });
       timings.timestampHeadersMs=performance.now()-fallbackBegan;
       timings.headersMs=performance.now()-headerBegan;
-      return {from,to,head,scope,candidates,blocks,hashes:rawHashes,headers,receiptsByBlock,discoveredPools,timings,meterBefore};
+      return {deepLinks,from,to,head,scope,candidates,blocks,hashes:rawHashes,headers,receiptsByBlock,discoveredPools,timings,meterBefore};
   }
   private async applyWindow(data:WindowData) {
-      const {from,to,head,scope,candidates,blocks,hashes,headers,receiptsByBlock,discoveredPools}=data;
-      const registry=this.decoder.registry;
+      const {from,to,head,scope,blocks}=data;
       const knownTokens=new Map<string,TokenMetadata>(scope.tokenRows.map(r=>[hex(r.address),{...r,totalSupply:r.total_supply==null?null:BigInt(r.total_supply),supplyBlock:r.supply_block==null?null:BigInt(r.supply_block)}]));
       const storedHashes=new Map((await this.db.sql.query<{number:string;hash:Uint8Array}>('SELECT number,hash FROM chain_blocks WHERE number BETWEEN $1 AND $2',[(from-1n).toString(),to.toString()])).rows.map(r=>[BigInt(r.number),hex(r.hash)]));
       let newest: Hex | null = null;
       const entries=[...blocks];
-      const batchSize=Math.min(this.options.maxRange??200,200);
-      for (let offset=0;offset<entries.length;offset+=batchSize) {
+      const batchSize=this.commitRange;
+      // Two stages: enrichment and preparation of the next batch run while the previous batch commits. Commits stay in
+      // order (each waits for the one before), and preparation reads no rows the pending commit writes: the window scope,
+      // the batch's staged tokens/pools and the decoder's in-memory state carry them, exactly as between committed batches.
+      let writing:Promise<void>|undefined;
+      try {
+        for (let offset=0;offset<entries.length;offset+=batchSize) {
+          const staged=await this.prepareBatch(entries.slice(offset,offset+batchSize),data,knownTokens,storedHashes);
+          if(writing){const previous=writing;writing=undefined;await previous;}
+          // A stop never commits a batch prepared after it; the decoder forgets what that batch staged in memory.
+          if(!staged||this.stopping||this.client.rpcStopped?.()){this.decoder.invalidate();return;}
+          if(staged.newest)newest=staged.newest;
+          // A larger fetch still commits bounded prefixes. Never skip uncommitted suffixes.
+          const covered=offset+batchSize>=entries.length?to:BigInt(staged.last!.number);
+          writing=this.commitBatch(staged,covered);
+          if(this.options.overlapWrites===false){const previous=writing;writing=undefined;await previous;}
+        }
+        if(writing){const previous=writing;writing=undefined;await previous;}
+      } catch(error) {
+        // Drain an in-flight commit before invalidating caches or retrying the window.
+        if(writing)await writing.catch(()=>{});
+        this.decoder.invalidate();throw error;
+      }
+      if(!entries.length){await this.db.setCursor('head_logs',to,null);this.options.onProgress?.(to);}
+      this.decoder.metrics.observeLogs(newest, head - to);
+  }
+  /** Validate, enrich and prepare one commit batch in block order; undefined when the follower is stopping. */
+  private async prepareBatch(slice:[bigint,RpcLog[]][],data:WindowData,knownTokens:Map<string,TokenMetadata>,storedHashes:Map<bigint,Hex>):Promise<StagedBatch|undefined> {
+        const {scope,candidates,hashes,headers,receiptsByBlock,discoveredPools,deepLinks}=data;
+        const registry=this.decoder.registry;
         const batch=new BlockRows(), states:Prepared[]=[], dates:Date[]=[], pending:Pick<Prepared,'tokens'|'pools'>={tokens:new Map(),pools:new Map()};
-        let last:RpcBlock|null=null;
-        const contexts=entries.slice(offset,offset+batchSize).map(([n,logs])=>{
+        let last:RpcBlock|null=null, newest:Hex|null=null;
+        const contexts=slice.map(([n,logs])=>{
           const first = logs[0];
           if (logs.some(l => lower(l.blockHash) !== lower(first.blockHash))) throw new ReorgDuringTick('Inconsistent block logs');
           const storedHash = storedHashes.get(n);
@@ -386,6 +513,8 @@ export class LogHeadFollower {
           if (new Set(times).size>1) throw new ReorgDuringTick('Conflicting block timestamps');
           let timestamp=times[0] == null ? null : toHex(times[0]);
           let parentHash=hashes.get(n-1n) ?? storedHashes.get(n-1n);
+          // A skipped deep link with a known timestamp needs no header; '0x' marks the link as not recorded.
+          if (!parentHash && timestamp && deepLinks.has(n) && !headers.has(n)) parentHash='0x';
           if (!timestamp || !parentHash) {
             const header=headers.get(n);
             if(!header)throw new Error('Missing validated block header');
@@ -406,14 +535,14 @@ export class LogHeadFollower {
           // committed metadata and the new delegation code, never an earlier cache entry.
           let end=start+1;
           if(!barrier(contexts[start]))while(end<contexts.length&&end-start<this.rpc.limit&&!barrier(contexts[end]))end++;
-          if(this.stopping||this.client.rpcStopped?.())return;
+          if(this.stopping||this.client.rpcStopped?.())return undefined;
           const enrichmentBegan=performance.now();
           this.timings.enrichmentConcurrency=Math.max(this.timings.enrichmentConcurrency,end-start);
           const reads=await this.remote(()=>Promise.allSettled(contexts.slice(start,end).map(ctx=>this.decoder.prefetch(ctx.block,ctx.contextReceipts,{head:true,codeCacheSec:this.options.codeCacheSec,knownTokens,discoveredPools,scope:ctx.scope}))));
           this.timings.enrichmentMs+=performance.now()-enrichmentBegan;
           const failed=reads.find(r=>r.status==='rejected');if(failed?.status==='rejected')throw failed.reason;
           for(let i=start;i<end;i++) {
-            if(this.stopping||this.client.rpcStopped?.())return;
+            if(this.stopping||this.client.rpcStopped?.())return undefined;
             const {n,logs,receipts,block,keys,contextReceipts}=contexts[i];
             dates.push(new Date(Number(BigInt(block.timestamp))*1000));
             const read=reads[i-start];if(read.status!=='fulfilled')throw new Error('Missing enrichment');
@@ -423,7 +552,7 @@ export class LogHeadFollower {
             const prepared = await this.decoder.prepare(this.db, block, contextReceipts, { remote,pending:scoped.pending,scope:scoped.scope,tokenRows:scoped.scope.tokenRows,poolRows:scoped.scope.poolRows });
             const filtered = receipts.map(r => ({ ...r, logs: r.logs.filter(l => keys.has(identity(l))) }));
             for(const r of filtered)for(const l of r.logs)if(v3PoolTopics.has(l.topics[0])&&!prepared.pools.has(lower(l.address))&&lower(l.address)!==lower(registry.requireAddress('uniswapV4.poolManager'))){const hints=candidates.filter(t=>lower(t.transactionHash)===lower(l.transactionHash)&&t.topics[0]===transferTopic&&t.topics.slice(1,3).some(a=>lower(`0x${a.slice(-40)}`)===lower(l.address))).map(t=>lower(t.address));(l as RpcLog&{currencyHints?:string[]}).currencyHints=[...new Set(hints)];}
-            batch.add('chain_blocks',{ number:n.toString(),block:n.toString(),hash:binary(block.hash),parent_hash:binary(block.parentHash),ts:new Date(Number(BigInt(block.timestamp))*1000) });
+            batch.add('chain_blocks',{ number:n.toString(),block:n.toString(),hash:binary(block.hash),parent_hash:block.parentHash==='0x'?null:binary(block.parentHash),ts:new Date(Number(BigInt(block.timestamp))*1000) });
             batch.merge(this.decoder.collect(block,filtered,prepared));
             for (const [id,pool] of prepared.pools) pending.pools.set(id,{...pool,currency0:lower(pool.currency0) as Address,currency1:lower(pool.currency1) as Address,...(pool.hooks?{hooks:lower(pool.hooks) as Address}:{})});
             for (const [id,token] of prepared.tokens) pending.tokens.set(id,{...token,address:lower(token.address) as Address,curve:token.curve?lower(token.curve) as Address:null});
@@ -435,30 +564,28 @@ export class LogHeadFollower {
           }
           start=end;
         }
-        if (this.stopping || this.client.rpcStopped?.()) { this.decoder.invalidate(); return; }
+        return {batch,states,dates,last,newest};
+  }
+  /** Commit one prepared batch and both cursors in one transaction. */
+  private async commitBatch(staged:StagedBatch,covered:bigint) {
+        const {batch,states,dates,last}=staged;
         const writeBegan=performance.now();
-        // A larger fetch still commits bounded prefixes. Never skip uncommitted suffixes.
-        const covered=offset+batchSize>=entries.length?to:BigInt(last!.number);
         try {
           await this.db.tx(async tx=>{
             for(const date of dates) await tx.ensurePartitions(date);
-            await batch.flush(tx);
+            await batch.flush(tx,this.timings.flush);
             await tx.setCursor('head_logs',covered,null);
             if(last) { const applied=await tx.cursor('head');if(applied==null||BigInt(last.number)>=applied)await tx.setCursor('head',BigInt(last.number),last.hash); }
           });
-        } catch(error) { this.decoder.invalidate();throw error; }
-        finally { this.timings.dbWriteMs+=performance.now()-writeBegan; }
+        } finally { this.timings.dbWriteMs+=performance.now()-writeBegan;this.timings.commits++; }
         this.options.onProgress?.(covered);
         this.decoder.metrics.blocks+=states.length;
-      }
-      if(!entries.length){await this.db.setCursor('head_logs',to,null);this.options.onProgress?.(to);}
-      this.decoder.metrics.observeLogs(newest, head - to);
-      this.window=Math.min(this.options.maxRange??200,this.window*2);
   }
   /**
    * Require chain 4663, enable bounded look-ahead pipeline and poll until stop or RPC closure,
-   * draining discarded work in finally. Indexer operator only; chain mismatch,
-   * provider/budget/consistency/SQL failures reject rather than continuing on an unverified branch.
+   * draining discarded work in finally. Indexer operator only; chain mismatch, session budget,
+   * consistency/SQL failures reject rather than continuing on an unverified branch; provider
+   * outages and a spent paid daily budget back off and retry (public lane) instead.
    * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
    */
@@ -472,11 +599,14 @@ export class LogHeadFollower {
       try { await this.tick(); failures=0; delay=Math.max(0, (this.options.tickMs ?? 1000) - (Date.now() - began)); }
       catch (error) {
         // Providers that stay unavailable past the meter's own retry window (timeouts, 429/5xx,
-        // malformed replies) back off here instead of halting the process. Wrong chain, database,
-        // reorg-depth, budget and usage-store failures still end the run.
-        if (this.stopping || this.client.rpcStopped?.() || !isTransientRpcUnavailable(error)) throw error;
+        // malformed replies) back off here instead of halting the process. So does a spent paid
+        // budget: public-capable reads already continue on the public lane, and a pinned archive
+        // read the public lane cannot serve waits for the budget instead of ending the run.
+        // Wrong chain, database, reorg-depth, session-budget and usage-store failures still end it.
+        const budget=rpcStopReason(error)==='rpc_budget_exhausted';
+        if (this.stopping || this.client.rpcStopped?.() || !(budget || isTransientRpcUnavailable(error))) throw error;
         delay=backoffDelay(failures++, this.options.random, this.options.retryBaseMs ?? 1000, this.options.retryCapMs ?? 60_000);
-        this.logger('head_retry', { reason: 'rpc_unavailable', attempt: failures, backoff_ms: Math.round(delay), error: safeError(error) });
+        this.logger('head_retry', { reason: budget ? 'rpc_budget_exhausted' : 'rpc_unavailable', ...(budget ? { lane: 'public' } : {}), attempt: failures, backoff_ms: Math.round(delay), error: safeError(error) });
       }
       if (this.stopping || this.client.rpcStopped?.()) break;
       await new Promise<void>(resolve => { const timer = setTimeout(resolve, delay); this.wake = () => { clearTimeout(timer); resolve(); }; });

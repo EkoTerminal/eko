@@ -100,25 +100,31 @@ Current offline results are recorded below. The earlier Playbooks config/spec mi
 
 | Live request | Primary | Fallback |
 |---|---|---|
-| `eth_blockNumber`, OR-topic event/Transfer `eth_getLogs`, bounded concurrent receipts | Public when a token is available | Paid immediately when public is occupied or fails |
+| `eth_blockNumber`, bounded concurrent receipts | Public when a token is available | Paid immediately when public is occupied or fails |
+| OR-topic event/Transfer `eth_getLogs` | Public first; paid once public logs are seen to lack `blockTimestamp` (one paid read replaces the public read plus the paid timestamp scan) | The other lane |
 | Cursor header | Paid | Supported public fallback |
 | Supplemental timestamp headers | Spare public capacity | Paid when public is occupied or fails |
-| Exact sparse parent headers | Public, queued at its cap | None |
-| Numbered code, price samples, static discovery/metadata | Paid archive | None |
+| Exact sparse parent headers inside the reorg window (all of them with `INDEX_HEAD_DEEP_PARENTS=fetch`) | Public, queued at its cap | None |
+| Numbered code, price samples, static discovery/metadata | Paid archive | Public at the same block once the paid budget is spent (it holds recent state); otherwise the read waits for the budget |
 
-A healthy tick issues one topic-only scan containing Transfer and the handled event signatures; tracked tokens are filtered locally. Size errors shrink the catch-up window. If a single block still exceeds the provider response limit, Transfers fall back to address chunks, with adaptive address/range splits. No address list is sent on the healthy path. Queued paid spills re-check for a replenished public token before dispatch, and only the provider actually used is charged. Failure fallback always tries the other eligible provider. Both queues retain capacity-one spacing: 200 ms public and 50 ms paid, with no startup burst. Live contexts switch immediately on provider rate-limit errors; historical backfill retains its existing wait/retry policy. Every attempt and every HTTP batch item is counted.
+A healthy tick issues one topic-only scan containing Transfer and the handled event signatures; tracked tokens are filtered locally. Size errors halve the eth_getLogs span (later windows keep the smaller span for a while). If a single block still exceeds the provider response limit, Transfers fall back to address chunks, with adaptive address/range splits. No address list is sent on the healthy path. Queued paid spills re-check for a replenished public token before dispatch, and only the provider actually used is charged. Failure fallback always tries the other eligible provider. Both queues retain capacity-one spacing: 200 ms public and 50 ms paid, with no startup burst. Live contexts switch immediately on provider rate-limit errors; historical backfill retains its existing wait/retry policy. Every attempt and every HTTP batch item is counted.
 
 | Environment variable | Default | Purpose |
 |---|---|---|
 | `INDEX_HEAD_MODE` | `logs` | `blocks` selects the debug follower |
 | `INDEX_HEAD_TICK_MS` | `1000` | Minimum start-to-start tick spacing |
-| `INDEX_HEAD_MAX_RANGE` | `200` | Maximum fetch window; writes commit at most 200 stored blocks |
+| `INDEX_HEAD_MAX_RANGE` | `200` | Fetch window near the head |
+| `INDEX_HEAD_CATCHUP_RANGE` | `1000` | Fetch window while more than two head windows behind; candidate logs are read in concurrent spans of at most 500 blocks |
+| `INDEX_HEAD_COMMIT_BLOCKS` | `250` | Stored blocks per write transaction; the next batch is prepared while one commits |
+| `INDEX_HEAD_DEEP_PARENTS` | `skip` | `skip`: a block deeper than `INDEX_REORG_DEPTH` below the head whose parent had no candidate log keeps `parent_hash` NULL instead of one public header read; `fetch` reads every link |
 | `INDEX_CODE_CACHE_SEC` | `3600` | Per-target delegation code TTL |
 | `INDEX_TRANSIENT_RETRY_SEC` | `300` | Per-request transient recovery window |
 | `INDEX_STALL_SEC` | `300` | Behind an advancing head with no cursor progress this long: `indexer_stalled`, exit 1 |
 | `INDEX_REORG_DEPTH` | `256` | Maximum rollback distance, including sparse gaps |
 | `INDEX_START_BLOCK` | Current head on first start | Persisted cursors take precedence |
 | `INDEX_PREFETCH_BLOCKS` | `32` | Per-block mode only |
+
+Catch-up (Oct 7): far behind, parent-link headers below the reorg window were most of a window's public requests and paced the whole follower; with `skip` they are not read (no reader uses `parent_hash`; reorg checks compare stored block hashes, and every link inside the window is still read and checked). A spent paid daily budget no longer stops the live follower: public-capable reads continue on the public lane, `head_public_lane` is logged once, and a pinned read the public lane cannot serve backs off as `head_retry` with `reason: rpc_budget_exhausted` until the budget reopens. `head_tick` reports the write phases (`db_insert_ms`, `db_update_ms`, `db_balances_ms`, `db_bars_ms`, `db_notify_ms`), `commits`, `log_requests`, `log_span`, `logs_lane` and `deep_links_skipped`.
 
 `head` anchors the last stored block; `head_logs` records the scanned endpoint. Empty blocks need no row. Cursor mismatches, removed/conflicting logs and inconsistent receipts use bounded rollback, reset both cursors, and clear decoder caches. Parent hashes come from predecessor logs/stored rows or verified headers. Positive log timestamps are preserved; zero/missing timestamps use full receipt logs, then a verified header. Conflicting times fail the tick; times are never interpolated. This matters for the lead's public fixture, whose 1,497 raw logs all have `blockTimestamp: 0x0`, while receipt logs contain real timestamps.
 

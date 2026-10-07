@@ -4,7 +4,9 @@ const block = () => bigint('block', { mode: 'bigint' }).notNull();
 const version = () => text('code_version').notNull().default('indexer-v1');
 const event = () => ({ block: block(), txHash: bytes('tx_hash').notNull(), logIndex: integer('log_index').notNull(), codeVersion: version() });
 export const chainBlocks = pgTable('chain_blocks', {
-  number: bigint('number', { mode: 'bigint' }).primaryKey(), block: block(), hash: bytes('hash').notNull(), parentHash: bytes('parent_hash').notNull(), ts: ts('ts').notNull(),
+  number: bigint('number', { mode: 'bigint' }).primaryKey(), block: block(), hash: bytes('hash').notNull(),
+  // Null only for a sparse log-head row below the reorg window whose parent block had no indexed log (0184).
+  parentHash: bytes('parent_hash'), ts: ts('ts').notNull(),
 });
 // TODO(spec): Persist the selected pricing source so freshness uses the indexer's identity across roles.
 export const ethUsdReferenceSources = pgTable('eth_usd_reference_sources', {

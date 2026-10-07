@@ -8,6 +8,8 @@ export function isTransientRpcError(error: unknown): boolean {
     // A checked reply carries its own verdict (malformed, incomplete, timed out or an HTTP status).
     if (error instanceof RpcReplyError) return error.transient;
     const e = error as { status?: unknown; statusCode?: unknown; code?: unknown; name?: unknown; message?: unknown; shortMessage?: unknown; details?: unknown; cause?: unknown };
+    // An oversized reply repeats on every retry; the caller narrows its range instead (viem wraps it as "HTTP request failed").
+    if (e.name === 'ResponseBodyTooLargeError') return false;
     const status = Number(e.status ?? e.statusCode);
     if (status >= 400 && status < 500 && status !== 408 && status !== 429) return false;
     if (status >= 500 && status < 600 || status === 408 || status === 429) transient = true;

@@ -1,6 +1,11 @@
 import { binary, chainTables, hex, applyBalanceDeltas, rebuildBars, refreshBars, type BusMessage, type ChainDb } from '@eko/db';
 import type { Address, Hex } from 'viem';
 type Row = Record<string, unknown>;
+/** Where a flush spends its time, in milliseconds (callers accumulate across batches). */
+export interface FlushTimings { insertMs: number; updateMs: number; balancesMs: number; barsMs: number; notifyMs: number }
+export const emptyFlushTimings = (): FlushTimings => ({ insertMs: 0, updateMs: 0, balancesMs: 0, barsMs: 0, notifyMs: 0 });
+const eventKey = (r: Row) => `${hex(r.tx_hash as Uint8Array)}:${Number(r.log_index)}:${BigInt(String(r.block))}`;
+const firstSeen = (rows: Row[]) => { const seen = new Set<string>(); return rows.filter(r => { const key = hex(r.address as Uint8Array); if (seen.has(key)) return false; seen.add(key); return true; }); };
 /** A block (or bounded backfill chunk) stages rows, then issues one multi-row insert per table. */
 export class BlockRows {
   private rows = new Map<typeof chainTables[number], Row[]>();
@@ -17,11 +22,24 @@ export class BlockRows {
     this.graduations.push(...other.graduations);
   }
   get(table: typeof chainTables[number]): readonly Row[] {return this.rows.get(table)??[];}
-  async flush(db: ChainDb) {
+  async flush(db: ChainDb, timings?: FlushTimings) {
     const notifications: BusMessage[] = [];
     let insertedTransfers: Record<string, unknown>[] = [];
+    let mark = performance.now();
+    const spent = (phase: keyof FlushTimings) => { const now = performance.now(); if (timings) timings[phase] += now - mark; mark = now; };
     for (const table of chainTables) {
-      const rows = table === 'eth_usd_reference_sources' ? [] : await db.insertMany(table, this.rows.get(table) ?? []);
+      // A wallet row is first-seen only: ON CONFLICT DO NOTHING keeps the first staged row, so later duplicates are dropped before the insert.
+      const staged = table === 'wallets' ? firstSeen(this.rows.get(table) ?? []) : this.rows.get(table) ?? [];
+      const rows = table === 'eth_usd_reference_sources' ? [] : await db.insertMany(table, staged);
+      spent('insertMs');
+      // A row this flush inserted already holds its staged values, so the fill-in updates below would match nothing
+      // for it; they only visit rows that were stored before (replays). A key staged twice keeps the old path.
+      const inserted = new Set<string>();
+      if (table === 'pons_events' || table === 'swaps' || table === 'liquidity_events') {
+        const counts = new Map<string, number>();
+        for (const r of staged) { const key = eventKey(r); counts.set(key, (counts.get(key) ?? 0) + 1); }
+        for (const r of rows) { const key = eventKey(r); if (counts.get(key) === 1) inserted.add(key); }
+      }
       if (table === 'token_transfers') insertedTransfers = rows;
       if (table === 'eth_usd_reference_sources') {
         // Canonical replay may select a different source at the same pricing block.
@@ -41,7 +59,7 @@ export class BlockRows {
       if (table === 'pons_events') {
         // Re-decoding canonical history fills fields omitted by older decoders without
         // replacing existing evidence or producing duplicate insert notifications.
-        const events=this.rows.get(table) ?? [];
+        const events=(this.rows.get(table) ?? []).filter(r=>!inserted.has(eventKey(r)));
         for(let offset=0;offset<events.length;offset+=500) {
           const params:unknown[]=[];
           const values=events.slice(offset,offset+500).map(r=>{
@@ -56,8 +74,8 @@ export class BlockRows {
       }
       if (table === 'swaps') {
         const id = (r: Row) => `${(r.ts instanceof Date ? r.ts : new Date(r.ts as string)).toISOString()}:${hex(r.tx_hash as Uint8Array)}:${r.log_index}`;
-        const inserted = new Set(rows.map(id));
-        const replayed = (this.rows.get('swaps') ?? []).filter(r => !inserted.has(id(r)));
+        const fresh = new Set(rows.map(id));
+        const replayed = (this.rows.get('swaps') ?? []).filter(r => !fresh.has(id(r)));
         // Re-indexing recomputes derived USD, including clearing values whose reference was unverified.
         // Raw amounts, senders and identity remain unchanged; candles are refreshed below.
         for (let offset = 0; offset < replayed.length; offset += 500) {
@@ -74,7 +92,7 @@ export class BlockRows {
       // Canonical re-decoding can fill missing holder actors; never overwrite an attributed row.
       if (table === 'swaps' || table === 'liquidity_events') {
         const field=table==='swaps' ? 'trader' : 'actor';
-        const resolved=(this.rows.get(table) ?? []).filter(r=>r[field]!=null && !r.senders_pending);
+        const resolved=(this.rows.get(table) ?? []).filter(r=>r[field]!=null && !r.senders_pending && !inserted.has(eventKey(r)));
         for(let offset=0;offset<resolved.length;offset+=250) {
           const params:unknown[]=[];
           const values=resolved.slice(offset,offset+250).map(r=>{const i=params.length;params.push(r.tx_hash,r.log_index,r.block,r[field],r.tx_from,r.tx_to);return `($${i+1}::bytea,$${i+2}::integer,$${i+3}::bigint,$${i+4}::bytea,$${i+5}::bytea,$${i+6}::bytea)`;});
@@ -83,6 +101,7 @@ export class BlockRows {
             WHERE e.tx_hash=p.tx_hash AND e.log_index=p.log_index AND e.block=p.block AND (e.${field} IS NULL OR e.senders_pending)`,params);
         }
       }
+      spent('updateMs');
       for (const row of rows) {
         const asHex = (key: string) => hex(row[key] as Uint8Array);
         if (table === 'chain_blocks') notifications.push({ topic:'chain_block',ids:{ n:String(row.number) } });
@@ -120,8 +139,10 @@ export class BlockRows {
         WHERE address=$1 AND (graduated_block IS NULL OR graduated_block > $3) RETURNING address`, [binary(g.token),binary(g.pool),g.block.toString()]);
       if (result.rows.length) changed.add(g.token);
     }
+    spent('updateMs');
     // Only rows this flush actually inserted move balances, so replaying a block never double-counts.
     if (insertedTransfers.length) await applyBalanceDeltas(db, insertedTransfers);
+    spent('balancesMs');
     const swaps = this.rows.get('swaps') ?? [];
     if (swaps.length || changed.size) {
       for (const coin of changed) {
@@ -132,6 +153,8 @@ export class BlockRows {
         await refreshBars(db, swaps.map(r => ({ coin: r.coin as Uint8Array, minute: new Date(Math.floor(new Date(r.ts as Date).getTime() / 60000) * 60000) })));
       }
     }
+    spent('barsMs');
     await db.notifyMany(notifications);
+    spent('notifyMs');
   }
 }

@@ -71,11 +71,21 @@ const summarize = `SELECT coin,minute,(array_agg(price ORDER BY ts,block,log_ind
   max(price) AS high,min(price) AS low,(array_agg(price ORDER BY ts DESC,block DESC,log_index DESC,tx_hash DESC))[1] AS close,
   sum(usd) AS volume_usd,count(*)::integer AS trades,min(block) AS first_block,max(block) AS last_block`;
 interface BarKey { coin: Uint8Array; minute: Date | string }
-async function writeBars(db: ChainDb, keys: string, params: unknown[]) {
+/**
+ * `perKey` reads each touched minute separately through swaps(coin,ts). As a plain join the planner bounds the index
+ * scan by coin only and filters the minute afterwards, so every refreshed minute read the coin's entire swap history:
+ * the per-batch cost grew with history (the largest write phase once coins have thousands of swaps).
+ * OFFSET 0 keeps the lateral subquery from being flattened back into that join. Same rows, same aggregates.
+ */
+async function writeBars(db: ChainDb, keys: string, params: unknown[], perKey = false) {
   await db.sql.query(`DELETE FROM bars_1m b USING (${keys}) k WHERE b.coin=k.coin AND b.minute=k.minute`, params);
+  const priced = perKey
+    ? `SELECT e.*,date_trunc('minute',e.ts) AS minute FROM (SELECT DISTINCT coin,minute FROM (${keys}) keyed) k
+      CROSS JOIN LATERAL (${eligible} AND s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute' OFFSET 0) e`
+    : `SELECT e.*,date_trunc('minute',e.ts) AS minute FROM (${eligible}) e
+      JOIN (${keys}) k ON k.coin=e.coin AND e.ts >= k.minute AND e.ts < k.minute + interval '1 minute'`;
   await db.sql.query(`INSERT INTO bars_1m ${summarize}
-    FROM (SELECT e.*,date_trunc('minute',e.ts) AS minute FROM (${eligible}) e
-      JOIN (${keys}) k ON k.coin=e.coin AND e.ts >= k.minute AND e.ts < k.minute + interval '1 minute') priced GROUP BY coin,minute
+    FROM (${priced}) priced GROUP BY coin,minute
     ON CONFLICT(coin,minute) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,
       volume_usd=excluded.volume_usd,trades=excluded.trades,first_block=excluded.first_block,last_block=excluded.last_block`, params);
 }
@@ -87,7 +97,7 @@ export async function refreshBars(db: ChainDb, touched: BarKey[]) {
   for (let offset=0;offset<unique.length;offset+=250) {
     const params: unknown[]=[];
     const values=unique.slice(offset,offset+250).map(r=>{params.push(r.coin,r.minute);return `($${params.length-1}::bytea,$${params.length}::timestamptz)`;});
-    await writeBars(db,`SELECT DISTINCT * FROM (VALUES ${values.join(',')}) AS touched(coin,minute)`,params);
+    await writeBars(db,`SELECT DISTINCT * FROM (VALUES ${values.join(',')}) AS touched(coin,minute)`,params,true);
   }
 }
 /** Inclusive block range; recompute entire boundary minutes, including swaps outside the range. */

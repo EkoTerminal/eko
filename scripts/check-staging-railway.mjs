@@ -10,6 +10,8 @@ const roles = ['api', 'indexer', 'engines', 'worker', 'mcp', 'receipts', 'bots',
 /** Roles allowed a paid RPC budget, and the owner-approved daily request cap for each. */
 const paidRpcRoles = new Set(['indexer', 'engines']);
 const PAID_RPC_DAILY_CAP = 600_000;
+// Owner-approved 2026-10-07: the indexer may run to 900,000 units of the shared daily count so the scanner can't starve it.
+const PAID_RPC_DAILY_CAPS = { indexer: 900_000 };
 const inert = {
   LIVE_TRADING_ENABLED: 'false', TRADING_ALLOWLIST_ONLY: 'true', TRADE_MAX_USD: '25',
   TRADE_CAPS_FROM: '', FEE_BPS_DEFAULT: '0', FEE_ACTIVE_FROM: '', TIERS_ACTIVE_FROM: '',
@@ -73,7 +75,7 @@ export function validateStaging(catalog, manifests, roleSource) {
     if (paidRpcRoles.has(role)) {
       // Owner-approved dRPC spend (2026-10-04): chain indexing only, bounded per UTC day; no per-session budget.
       assert.match(env.RPC_PAID_DAILY_BUDGET, /^[1-9]\d*$/, `${role}:RPC_PAID_DAILY_BUDGET`);
-      assert.ok(Number(env.RPC_PAID_DAILY_BUDGET) <= PAID_RPC_DAILY_CAP, `${role}: paid RPC budget above the approved cap`);
+      assert.ok(Number(env.RPC_PAID_DAILY_BUDGET) <= (PAID_RPC_DAILY_CAPS[role] ?? PAID_RPC_DAILY_CAP), `${role}: paid RPC budget above the approved cap`);
       assert.equal(env.RPC_SESSION_BUDGET, '', `${role}:RPC_SESSION_BUDGET`);
     }
     assert.equal(env.NODE_ENV, 'production');
@@ -124,7 +126,8 @@ if (process.argv.includes('--self-test')) {
     c => { c.services.worker.environment.RUN_WORKER = 'false'; },
     c => { c.services.api.environment.RUN_WORKER = 'true'; },
     c => { c.commonEnvironment.RPC_SESSION_BUDGET = '100'; },
-    c => { c.services.indexer.environment.RPC_PAID_DAILY_BUDGET = '600001'; },
+    c => { c.services.indexer.environment.RPC_PAID_DAILY_BUDGET = '900001'; },
+    c => { c.services.engines.environment.RPC_PAID_DAILY_BUDGET = '600001'; },
     c => { c.services.engines.environment.RPC_PAID_DAILY_BUDGET = 'unlimited'; },
     c => { c.services.engines.environment.RPC_SESSION_BUDGET = '100'; },
     c => { c.services.api.environment.RPC_PAID_DAILY_BUDGET = '1000'; },

@@ -112,6 +112,8 @@ export class RpcMeter {
   private sessionUnits = 0; private stopped = false;
   private reason?: RpcGuardError['code'];
   get isStopped() { return this.stopped; }
+  /** Today's paid budget is spent: public-capable reads use the public lane until the UTC day changes. */
+  get paidExhausted() { return this.exhaustedDay === this.day(); }
   get stopReason() { return this.reason; }
   private paidDay = ''; private paidTotal = 0;
   private notificationWrites = new Set<Promise<void>>();

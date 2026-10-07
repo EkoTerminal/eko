@@ -20,10 +20,25 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
   const { paid: client, reads, archive, public: backfill, head: live, headTimestamp, headWs } = createMeteredClients(env, { meter });
   const enrichment=createPublicClient({transport:meter.transport('enrich')});
   const publicHeaders=createPublicClient({transport:meter.transport('public')});
-  const stateReads=options.enrich ? enrichment : reads;
-  const metadataReads=options.enrich ? enrichment : archive;
+  type Reader = typeof enrichment;
+  const stateReads=(options.enrich ? enrichment : reads) as unknown as Reader;
+  const metadataReads=(options.enrich ? enrichment : archive) as unknown as Reader;
+  const archiveReads=archive as unknown as Reader;
   const checkGuard = (results: readonly { status: string; error?: unknown }[]) => {
     for (const result of results) if (result.status === 'failure' && (rpcStopReason(result.error) || isRpcUnavailable(result.error))) throw result.error;
+  };
+  /**
+   * Pinned (archive) reads are paid-only. Once the paid daily budget is spent, the same pinned read is tried on the
+   * public lane, which still holds recent state (near the head). When it cannot serve the block either, the paid
+   * budget error stands; the live head loop waits that out instead of halting.
+   */
+  const pinned = async <T>(paid: Reader, read: (c: Reader) => Promise<T>): Promise<T> => {
+    try { return await read(paid); }
+    catch (error) {
+      if (paid === enrichment || rpcStopReason(error) !== 'rpc_budget_exhausted') throw error;
+      try { return await read(enrichment); }
+      catch (fallback) { const reason = rpcStopReason(fallback); if (reason && reason !== 'rpc_budget_exhausted') throw fallback; throw error; }
+    }
   };
   let referenceRead:Promise<EthUsdRate|null>|undefined;
   let referencePool: EthUsdSource & { weth0: boolean } | undefined;
@@ -38,8 +53,7 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
   const tokenMetadataBatch = async (addresses: Address[], blockNumber: bigint): Promise<TokenMetadata[]> => {
     if (!addresses.length) return [];
     const fields = ['decimals', 'symbol', 'name', 'totalSupply'] as const;
-    const results = await metadataReads.multicall({ multicallAddress, blockNumber, allowFailure: true, batchSize: 8192, contracts: addresses.flatMap(address => fields.map(functionName => ({ address, abi: metadataAbi, functionName }))) });
-    checkGuard(results);
+    const results = await pinned(metadataReads, async c => { const read = await c.multicall({ multicallAddress, blockNumber, allowFailure: true, batchSize: 8192, contracts: addresses.flatMap(address => fields.map(functionName => ({ address, abi: metadataAbi, functionName }))) }); checkGuard(read); return read; });
     if (results.every(r => r.status === 'failure')) throw new Error('Token metadata archive read failed');
     return addresses.map((_, i) => {
       const value = (offset: number) => { const result = results[i * 4 + offset]; return result.status === 'success' ? result.result : null; };
@@ -56,6 +70,13 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
      * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
      */
     rpcStopped: () => meter.isStopped,
+    /**
+     * Report whether the meter has closed today's paid budget, without I/O or authentication. Public worker diagnostic
+     * read for lane logging; admission itself enforces the budget.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
+    paidExhausted: () => meter.paidExhausted,
     /**
      * Return a copy of cumulative meter timing without I/O or authentication. Public worker diagnostic
      * read; timing does not authenticate provider data.
@@ -139,7 +160,7 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
      * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
      * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
      */
-    code: async (address, blockNumber) => (await stateReads.getCode({ address, blockNumber })) ?? '0x',
+    code: async (address, blockNumber) => (await pinned(stateReads, c => c.getCode({ address, blockNumber }))) ?? '0x',
     /**
      * Read one token through pinned batch metadata acquisition, retaining null for unavailable
      * optional fields. Indexer host call without wallet auth; full batch failure or transport/budget
@@ -159,10 +180,9 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
     async agentWallets(ids, blockNumber) {
       const result: { owner: Address; wallet: Address; tokenUri: string | null }[] = [];
       for (let offset=0;offset<ids.length;offset+=200) {
-        const results=await archive.multicall({multicallAddress,blockNumber,allowFailure:true,batchSize:8192,
+        const results=await pinned(archiveReads,async c=>{const read=await c.multicall({multicallAddress,blockNumber,allowFailure:true,batchSize:8192,
           contracts:ids.slice(offset,offset+200).flatMap(id=>(['ownerOf','getAgentWallet','tokenURI'] as const).map(functionName=>({
-            address:registry.requireAddress('erc8004.identityRegistry'),abi:agentRegistryReadAbi,functionName,args:[id] as const}))) });
-        checkGuard(results);
+            address:registry.requireAddress('erc8004.identityRegistry'),abi:agentRegistryReadAbi,functionName,args:[id] as const}))) });checkGuard(read);return read;});
         if(results.length!==Math.min(200,ids.length-offset)*3)throw new Error('Incomplete registry batch');
         for(let i=0;i<results.length;i+=3) {
           const owner=results[i],wallet=results[i+1],uri=results[i+2];
@@ -184,20 +204,19 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
       // Adjacent sample periods can prefetch together; discover the reference once.
       if(!referencePool&&referenceRead)await referenceRead;
       if (referencePool) {
-        const slot = await archive.readContract({ address: referencePool.address,blockNumber,abi:priceAbi,functionName:'slot0' });
+        const pool = referencePool;
+        const slot = await pinned(archiveReads, c => c.readContract({ address: pool.address,blockNumber,abi:priceAbi,functionName:'slot0' }));
         return { value:ethUsdFromSlot0(slot[0],referencePool.weth0,registry.data.tokens.WETH.decimals!,registry.data.tokens.USDG.decimals!),block:blockNumber, source: { address: referencePool.address, venue: referencePool.venue, fee: referencePool.fee } };
       }
       const discover=async():Promise<EthUsdRate|null>=>{
         const weth = registry.requireAddress('tokens.WETH'), usdg = registry.requireAddress('tokens.USDG');
         // TODO(spec): No preferred WETH/USDG fee tier is specified; use the deepest initialized standard-fee pool at the sample block.
         const fees = [100, 500, 3000, 10000];
-        const candidates = await archive.multicall({ multicallAddress, blockNumber, allowFailure: true, contracts: fees.map(fee => ({ address: registry.requireAddress('uniswapV3.factory'), abi: factoryAbi, functionName: 'getPool', args: [weth, usdg, fee] as const })) });
-        checkGuard(candidates);
+        const candidates = await pinned(archiveReads, async c => { const read = await c.multicall({ multicallAddress, blockNumber, allowFailure: true, contracts: fees.map(fee => ({ address: registry.requireAddress('uniswapV3.factory'), abi: factoryAbi, functionName: 'getPool', args: [weth, usdg, fee] as const })) }); checkGuard(read); return read; });
         if (candidates.every(r => r.status === 'failure')) throw new Error('ETH/USD archive discovery failed');
         const addresses = [...new Set(candidates.flatMap(r => r.status === 'success' && lower(r.result) !== native ? [r.result] : []))];
         if (!addresses.length) return null; // Before the reference market existed.
-        const reads = await archive.multicall({ multicallAddress, blockNumber, allowFailure: true, contracts: addresses.flatMap(address => (['slot0', 'liquidity', 'token0'] as const).map(functionName => ({ address, abi: priceAbi, functionName }))) });
-        checkGuard(reads);
+        const reads = await pinned(archiveReads, async c => { const read = await c.multicall({ multicallAddress, blockNumber, allowFailure: true, contracts: addresses.flatMap(address => (['slot0', 'liquidity', 'token0'] as const).map(functionName => ({ address, abi: priceAbi, functionName }))) }); checkGuard(read); return read; });
         let best: { liquidity: bigint; value: number; address: Address; weth0: boolean; fee: number } | null = null;
         for (let i = 0; i < addresses.length; i++) {
           const slot = reads[i * 3], liq = reads[i * 3 + 1], token = reads[i * 3 + 2];
@@ -227,9 +246,8 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
     async v3Pool(address, blockNumber) {
       try {
         // One pinned Multicall instead of a serial factory read and four independent calls.
-        const results = await stateReads.multicall({ multicallAddress, blockNumber, allowFailure: true,
-          contracts: (['factory', 'token0', 'token1', 'fee', 'tickSpacing'] as const).map(functionName => ({address, abi: poolAbi, functionName})) });
-        checkGuard(results);
+        const results = await pinned(stateReads, async c => { const read = await c.multicall({ multicallAddress, blockNumber, allowFailure: true,
+          contracts: (['factory', 'token0', 'token1', 'fee', 'tickSpacing'] as const).map(functionName => ({address, abi: poolAbi, functionName})) }); checkGuard(read); return read; });
         const factory = results[0];
         if (factory.status === 'failure') throw factory.error;
         if (lower(factory.result as Address) === native) return null;

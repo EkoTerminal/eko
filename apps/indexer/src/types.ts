@@ -10,6 +10,8 @@ export interface EthUsdRate { value: number; block: bigint; source: EthUsdSource
 export interface PoolMetadata { currency0: Address; currency1: Address; fee: number; tickSpacing: number }
 export interface ChainClient {
   rpcStopped?(): boolean;
+  /** The paid lane's daily budget is spent for today (public-capable reads continue on the public lane). */
+  paidExhausted?(): boolean;
   rpcTiming?(): { admissionMs: number; rpcMs: number; rateWaitMs: number; publicRateWaitMs?:number; paidRateWaitMs?:number };
   chainId(): Promise<number>;
   head(): Promise<bigint>;

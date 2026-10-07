@@ -5,7 +5,7 @@ import { enrichSenders } from './enrich.js';
 import { isAddress, type Address } from 'viem';
 import { reportIndexerError } from './guard-stop.js';
 import { z } from 'zod';
-import { loadRegistry, createMeteredClients, RpcGuardError, type ProgressWatchdog, type RpcEnv } from '@eko/chain';
+import { loadRegistry, createMeteredClients, RpcGuardError, rpcStopReason, isTransientRpcUnavailable, safeError, type ProgressWatchdog, type RpcEnv } from '@eko/chain';
 import { openDb, migrate, migrateEngines, rebuildBars, launchEmitter } from '@eko/db';
 import { createClients } from './clients.js';
 import { BlockDecoder } from './decode.js';
@@ -24,6 +24,10 @@ const config = z.object({
   INDEX_HEAD_MODE: z.enum(['logs', 'blocks']).default('logs'), INDEX_HEAD_TICK_MS: integer(1000), INDEX_HEAD_MAX_RANGE: integer(200), INDEX_CODE_CACHE_SEC: integer(3600), INDEX_TRANSIENT_RETRY_SEC: integer(300),
   // Behind an advancing head with no cursor progress for this long: log indexer_stalled and exit 1.
   INDEX_STALL_SEC: integer(300),
+  // Live catch-up: window while far behind, blocks per write transaction, and whether parent links of blocks below the
+  // reorg window are read ('fetch') or left unrecorded ('skip').
+  INDEX_HEAD_CATCHUP_RANGE: integer(1000).pipe(z.number().max(20000)), INDEX_HEAD_COMMIT_BLOCKS: integer(250).pipe(z.number().max(5000)),
+  INDEX_HEAD_DEEP_PARENTS: z.enum(['fetch', 'skip']).default('skip'),
   INDEX_START_BLOCK: z.preprocess(v => v === '' ? undefined : v, z.coerce.bigint().min(0n).optional()), INDEX_PREFETCH_BLOCKS: integer(32).pipe(z.number().max(128)), INDEX_BACKFILL_WORKERS: integer(4), INDEX_LOG_RANGE: integer(2000).pipe(z.number().max(20000)), INDEX_REORG_DEPTH: integer(256),
 });
 async function main() {
@@ -90,7 +94,8 @@ async function main() {
       const hooks = { onHead: (n: bigint) => stallWatch.observeHead(n), onProgress: (n: bigint) => stallWatch.progress(n) };
       worker = env.INDEX_HEAD_MODE === 'blocks'
         ? new HeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, prefetchBlocks: env.INDEX_PREFETCH_BLOCKS, reorgDepth: env.INDEX_REORG_DEPTH, ...hooks })
-        : new LogHeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, tickMs: env.INDEX_HEAD_TICK_MS, maxRange: env.INDEX_HEAD_MAX_RANGE, codeCacheSec: env.INDEX_CODE_CACHE_SEC, reorgDepth: env.INDEX_REORG_DEPTH, ...hooks });
+        : new LogHeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, tickMs: env.INDEX_HEAD_TICK_MS, maxRange: env.INDEX_HEAD_MAX_RANGE, codeCacheSec: env.INDEX_CODE_CACHE_SEC, reorgDepth: env.INDEX_REORG_DEPTH,
+          catchUpRange: env.INDEX_HEAD_CATCHUP_RANGE, commitRange: env.INDEX_HEAD_COMMIT_BLOCKS, deepParents: env.INDEX_HEAD_DEEP_PARENTS, ...hooks });
     }
     if (interrupted) return;
     try { log('indexer_started', { role: env.APP_ROLE, mode: backfill ? 'backfill' : 'head' }); if (worker instanceof HeadFollower || worker instanceof LogHeadFollower) {
@@ -102,7 +107,12 @@ async function main() {
         }
       })().catch(error=>{stop();throw error;});
       const registryLoop=(async()=>{
-        while(!interrupted){log('agent_registry_coverage',await agentRegistry.poll());if(!interrupted)await new Promise<void>(resolve=>{const timer=setTimeout(resolve,60000);wakeRegistry=()=>{clearTimeout(timer);resolve();};});}
+        while(!interrupted){
+          // A spent paid budget or a provider outage skips this poll instead of stopping the head indexer with it.
+          try { log('agent_registry_coverage',await agentRegistry.poll()); }
+          catch(error){ if(interrupted||!(rpcStopReason(error)==='rpc_budget_exhausted'||isTransientRpcUnavailable(error)))throw error; log('agent_registry_retry',{reason:rpcStopReason(error)??'rpc_unavailable',error:safeError(error)}); }
+          if(!interrupted)await new Promise<void>(resolve=>{const timer=setTimeout(resolve,60000);wakeRegistry=()=>{clearTimeout(timer);resolve();};});
+        }
       })().catch(error=>{stop();throw error;});
       watchdog?.start();
       const results=await Promise.allSettled([worker.run().finally(()=>{interrupted=true;registryStop();}),scanLoop,registryLoop]);

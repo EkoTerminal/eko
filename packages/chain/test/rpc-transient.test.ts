@@ -61,6 +61,9 @@ describe('bounded indexer transport retries', () => {
   it('leaves result-size and invalid-parameter errors to the existing caller', () => {
     expect(isTransientRpcError(new Error('query returned more than 10000 results'))).toBe(false);
     expect(isTransientRpcError(new Error('invalid params'))).toBe(false);
+    // viem wraps an oversized reply as "HTTP request failed"; retrying the same range only repeats it, so the caller narrows it.
+    const tooLarge = Object.assign(new Error('HTTP response body exceeded the size limit.'), { name: 'ResponseBodyTooLargeError' });
+    expect(isTransientRpcError(new Error('HTTP request failed.', { cause: tooLarge }))).toBe(false);
   });
   it('preserves session and daily budget stops during retries', async () => {
     const session=harness({}, {RPC_SESSION_BUDGET:'2'});session.send.public.mockRejectedValue(failures[0][1]);session.send.paid.mockRejectedValue(failures[0][1]);

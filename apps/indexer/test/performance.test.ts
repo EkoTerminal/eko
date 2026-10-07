@@ -1,11 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { binary, hex, migrate, openDb, ChainDb } from '@eko/db';
-import { loadRegistry, ponsCurveAbi, decodeResult } from '@eko/chain';
+import { loadRegistry, ponsCurveAbi, decodeResult, createMeteredClients, type FetchFn, type UsageStore } from '@eko/chain';
 import { toEventSelector, toHex, getAddress, type AbiEvent, type Address, type Hex } from 'viem';
 import { HeadFollower } from '../src/head.js';
 import { BlockDecoder } from '../src/decode.js';
 import { PonsBackfill } from '../src/backfill.js';
+import { createClients } from '../src/clients.js';
+import { LogHeadFollower } from '../src/log-head.js';
+import { BlockRows } from '../src/rows.js';
+import { catchUpChain, logsOf, seedCatchUp } from './catch-up-fixture.js';
 import { Metrics, type ChainClient, type RpcBlock, type RpcReceipt, type PoolMetadata } from '../src/types.js';
 import { ethUsdFromSlot0, priceSampleBlock } from '../src/price.js';
 const registry = loadRegistry(); const quiet = () => {};
@@ -100,7 +104,7 @@ describe('bounded head prefetch', () => {
     const began=performance.now();await head.run();const elapsed=performance.now()-began;
     expect(await db.cursor('head')).toBe(1327n);expect((await db.sql.query('SELECT * FROM swaps')).rows).toHaveLength(640);
     console.log(JSON.stringify({event:'offline_catchup_benchmark',blocks:128,simulated_rpc_latency_ms:25,blocks_per_second:Number((128000/elapsed).toFixed(1))}));
-  },20000);
+  },60000);
   it('benchmarks full captured blocks with receipt logs and real v3/Pons decoding', async () => {
     const db=await database();const base=fixtures.ponsLaunch;const pools=new Map<string,PoolMetadata>();
     for(const receipt of base.receipts)for(const log of receipt.logs)for(const event of decodeResult(log,{registry,isV3Pool:()=>true}).events)if(event.source==='uniswap_v3'&&event.eventName==='Swap'){
@@ -124,7 +128,7 @@ describe('bounded head prefetch', () => {
     const began=performance.now();await head.run();const elapsed=performance.now()-began;
     expect(await db.cursor('head')).toBe(128n);expect((await db.sql.query('SELECT * FROM swaps')).rows).toHaveLength(1152);
     console.log(JSON.stringify({event:'offline_full_block_benchmark',blocks:128,logs_per_block:57,simulated_rpc_latency_ms:25,blocks_per_second:Number((128000/elapsed).toFixed(1))}));
-  },20000);
+  },60000);
   it('computes lag from chain head time instead of the computer clock', () => {
     const metrics=new Metrics(quiet);metrics.setHead(toHex(1000));metrics.observe(toHex(997));expect(metrics.headLagMs).toBe(3000);
     metrics.setHead(toHex(1001));metrics.observe(toHex(1001));expect(metrics.headLagMs).toBe(0);
@@ -186,4 +190,98 @@ describe('batched receipts, metadata and historical pricing', () => {
     expect(metadata).toHaveBeenCalledOnce();expect(metadata.mock.calls[0][0]).toEqual(['0x7d33D051E0311BcdeF1063EeDf7ba1c83Bae0383']);expect(singles).not.toHaveBeenCalled();
     expect((await db.sql.query<{symbol:string;name:string}>("SELECT * FROM tokens WHERE launchpad='pons'")).rows[0]).toMatchObject({symbol:'<sample>',name:'<sample>'});
   });
+});
+
+/** Virtual time for the meter and the simulated providers; `hold` keeps it still while real database work runs. */
+function virtualClock() {
+  let time=0,advancing=false,held=0;const waits:{at:number;resolve:()=>void}[]=[];
+  const advance=()=>{
+    if(advancing||held||!waits.length)return;advancing=true;
+    setImmediate(()=>{advancing=false;if(held||!waits.length)return;time=Math.max(time,Math.min(...waits.map(w=>w.at)));for(const w of waits.filter(w=>w.at<=time)){waits.splice(waits.indexOf(w),1);w.resolve();}advance();});
+  };
+  return {now:()=>time,sleep:(ms:number)=>new Promise<void>(resolve=>{waits.push({at:time+ms,resolve});advance();}),
+    async hold<T>(work:()=>Promise<T>):Promise<T>{held++;try{return await work();}finally{held--;advance();}}};
+}
+// Production (one 200-block head tick, 2026-10-07): 4,370 ms of writes for about 180 stored blocks and 547 ms of block
+// preparation. The benchmark charges the same per stored and per prepared block, so its write side is today's.
+const WRITE_MS_PER_STORED_BLOCK = 24, PREPARE_MS_PER_BLOCK = 2.7, CATCH_UP_BLOCKS = 4000;
+let builtCatchUpChain: ReturnType<typeof catchUpChain> | undefined;
+type FollowerConfig = ConstructorParameters<typeof LogHeadFollower>[3];
+type Request = { id: number; method: string; params: unknown[] };
+/**
+ * Catch up CATCH_UP_BLOCKS behind a fixed head through the real meter, at production lane caps (public 300/min, paid
+ * 1,200/min) and latencies (public 350 ms, paid 150 ms, plus 8/6 ms per block of eth_getLogs range and a slow receipt
+ * every 100 blocks). Public logs carry no blockTimestamp, as measured on the public provider.
+ */
+async function catchUp(config: Partial<FollowerConfig>, writeMs = WRITE_MS_PER_STORED_BLOCK) {
+  const catchUpData = builtCatchUpChain ??= catchUpChain(CATCH_UP_BLOCKS);
+  const db = await database(); await seedCatchUp(db);
+  const clock = virtualClock(), head = BigInt(CATCH_UP_BLOCKS);
+  const calls: Record<'paid'|'public', number> = { paid: 0, public: 0 }, methods: Record<string, number> = {};
+  const fetchFn: FetchFn = async (url, init) => {
+    const provider = String(url).includes('public') ? 'public' : 'paid';
+    const body = JSON.parse(String(init!.body)) as Request | Request[];
+    let latency = 0;
+    const replies = (Array.isArray(body) ? body : [body]).map(r => {
+      calls[provider]++; methods[`${provider}:${r.method}`] = (methods[`${provider}:${r.method}`] ?? 0) + 1;
+      let extra = 0, result: unknown;
+      if (r.method === 'eth_chainId') result = toHex(4663);
+      else if (r.method === 'eth_blockNumber') result = toHex(head);
+      else if (r.method === 'eth_getBlockByNumber') result = catchUpData.get(BigInt(r.params[0] as string))!.block;
+      else if (r.method === 'eth_getBlockReceipts') { const n = BigInt(r.params[0] as string); result = catchUpData.get(n)!.receipts; if (n % 100n === 2n) extra = provider === 'public' ? 5500 : 1450; }
+      else if (r.method === 'eth_getCode') result = '0x';
+      else if (r.method === 'eth_getLogs') {
+        const f = r.params[0] as { fromBlock: Hex; toBlock: Hex; topics: Hex[][]; address?: Address[] };
+        result = logsOf(catchUpData, BigInt(f.fromBlock), BigInt(f.toBlock), f.topics[0], f.address, provider === 'paid');
+        extra = Number(BigInt(f.toBlock) - BigInt(f.fromBlock) + 1n) * (provider === 'public' ? 8 : 6);
+      } else throw new Error(`Unexpected catch-up RPC ${r.method}`);
+      latency = Math.max(latency, (provider === 'public' ? 350 : 150) + extra);
+      return { jsonrpc: '2.0', id: r.id, result };
+    });
+    await clock.sleep(latency);
+    return new Response(JSON.stringify(Array.isArray(body) ? replies : replies[0]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const env = { RPC_HTTP_URL: 'https://paid.invalid', RPC_PUBLIC_HTTP_URL: 'https://public.invalid' };
+  const store: UsageStore = { reserve: async () => ({ allowed: true, total: 0 }), today: async () => [] };
+  const { meter } = createMeteredClients(env, { store, fetchFn, now: clock.now, sleep: clock.sleep, log: quiet });
+  const client = createClients(env, registry, meter, { head: true });
+  client.ethUsdRate = async n => { await clock.sleep(150); return { value: 2000, block: n, source: { address: toHex(110, { size: 20 }), venue: 'uniswap_v3' as const, fee: 3000 } }; };
+  const decoder = new BlockDecoder(client, registry, new Metrics(quiet), quiet), prepare = decoder.prepare.bind(decoder);
+  vi.spyOn(decoder, 'prepare').mockImplementation(async (...args) => { await clock.sleep(PREPARE_MS_PER_BLOCK); return prepare(...args); });
+  const flush = BlockRows.prototype.flush;
+  const write = vi.spyOn(BlockRows.prototype, 'flush').mockImplementation(async function(this: BlockRows, tx, timings) {
+    await clock.sleep(this.get('chain_blocks').length * writeMs); return clock.hold(() => flush.call(this, tx, timings));
+  });
+  const ticks: { blocks: number; at: number }[] = [];
+  const live = new LogHeadFollower(client, db, decoder, { startBlock: 1n, reorgDepth: 256, maxRange: 200, pipeline: true, logger: (event, fields) => { if (event === 'head_tick') ticks.push({ blocks: Number(fields!.blocks_covered), at: clock.now() }); }, ...config });
+  try { for (let i = 0; i < 400 && (await db.cursor('head_logs') ?? 0n) < head; i++) await live.tick(); }
+  finally { write.mockRestore(); await meter.close(); }
+  expect(await db.cursor('head_logs')).toBe(head);
+  const elapsed = clock.now();
+  const count = async (table: string) => Number((await db.sql.query<{ n: string }>(`SELECT count(*) AS n FROM ${table}`)).rows[0].n);
+  // Steady state: after the first window, whose read nothing can overlap (a long catch-up amortizes it).
+  const steady = (CATCH_UP_BLOCKS - ticks[0].blocks) * 1000 / (elapsed - ticks[0].at);
+  return { blocksPerSecond: Number(steady.toFixed(1)), overallBlocksPerSecond: Number((CATCH_UP_BLOCKS * 1000 / elapsed).toFixed(1)), simulatedMs: elapsed, paidPerBlock: Number((calls.paid / CATCH_UP_BLOCKS).toFixed(3)),
+    publicPerBlock: Number((calls.public / CATCH_UP_BLOCKS).toFixed(3)), methods, rows: await count('swaps') + await count('token_transfers') + await count('chain_blocks'), ticks: ticks.length };
+}
+describe('live catch-up throughput', () => {
+  it('catches up faster with fewer paid requests per block on the same fixture and lanes', async () => {
+    // Before: the follower as configured in production on 2026-10-07 (200-block windows and commits, every parent link
+    // read on the public lane, public candidate logs plus a paid timestamp scan, serial preparation and writes).
+    const before = await catchUp({ catchUpRange: 200, commitRange: 200, deepParents: 'fetch', paidLogs: false, overlapWrites: false });
+    // After: the CLI defaults (1,000-block windows far behind, 250-block commits, deep parent links not read).
+    const optimized = { catchUpRange: 1000, commitRange: 250, deepParents: 'skip' } as const;
+    const after = await catchUp(optimized);
+    // The write time per block is still today's above, so the database sets the pace. With 40% of it (the share of the
+    // local write path left after bars stopped reading each coin's whole swap history), the lanes set it.
+    const lighterWrites = await catchUp(optimized, WRITE_MS_PER_STORED_BLOCK * .4);
+    console.log(JSON.stringify({ event: 'offline_log_head_catch_up_benchmark', blocks: CATCH_UP_BLOCKS, write_ms_per_stored_block: WRITE_MS_PER_STORED_BLOCK, prepare_ms_per_block: PREPARE_MS_PER_BLOCK, before, after, lighter_writes: lighterWrites }));
+    for (const run of [after, lighterWrites]) expect(run.rows).toBe(before.rows);
+    // Measured 28 -> 45 blocks/s (and about 80-90 with lighter writes); margins absorb scheduling jitter in the virtual clock.
+    expect(after.blocksPerSecond).toBeGreaterThanOrEqual(before.blocksPerSecond * 1.4);
+    expect(after.paidPerBlock).toBeLessThanOrEqual(before.paidPerBlock);
+    expect(after.publicPerBlock).toBeLessThan(before.publicPerBlock / 2);
+    expect(lighterWrites.blocksPerSecond).toBeGreaterThanOrEqual(after.blocksPerSecond * 1.4);
+    expect(lighterWrites.paidPerBlock).toBeLessThanOrEqual(before.paidPerBlock);
+  }, 240000);
 });

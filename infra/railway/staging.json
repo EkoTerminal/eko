@@ -90,7 +90,7 @@
         "INDEX_WALLET_PROTOCOL": "off",
         "RPC_PAID_MAX_RPM": "1200",
         "RPC_PUBLIC_MAX_RPM": "300",
-        "RPC_PAID_DAILY_BUDGET": "600000",
+        "RPC_PAID_DAILY_BUDGET": "900000",
         "RPC_SESSION_BUDGET": ""
       },
       "secretNames": [

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { binary, chainTables, hex, migrate, openDb, ChainDb } from '@eko/db';
-import { AddressRegistry, createMeteredClients, decodeResult, loadRegistry, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, RpcGuardError, RpcReplyError } from '@eko/chain';
+import { AddressRegistry, createMeteredClients, decodeResult, loadRegistry, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, RpcGuardError, RpcReplyError, rpcStopReason } from '@eko/chain';
 import { decodeFunctionData, encodeFunctionResult, encodeAbiParameters, encodeEventTopics, parseAbi, toEventSelector, toHex, type AbiEvent, type Address, type Hex } from 'viem';
 import { BlockRows } from '../src/rows.js';
 import { enrichSenders } from '../src/enrich.js';
@@ -849,12 +849,50 @@ describe('head loop through provider outages', () => {
     ['a database write failure', () => { const insert = ChainDb.prototype.insertMany; vi.spyOn(ChainDb.prototype, 'insertMany').mockImplementation(async function(this: ChainDb, table, rows) { if (table === 'swaps') throw new Error('write failed'); return insert.call(this, table, rows); }); }, 'write failed'],
     ['a permanent provider rejection', (client: ChainClient) => { client.logs = async () => { throw new RpcGuardError('rpc_unavailable', 'invalid params'); }; }, 'invalid params'],
     ['a usage-store failure', (client: ChainClient) => { client.logs = async () => { throw new RpcGuardError('rpc_unavailable', 'RPC usage persistence unavailable'); }; }, 'RPC usage persistence unavailable'],
-    ['the paid daily budget', (client: ChainClient) => { client.logs = async () => { throw new RpcGuardError('rpc_budget_exhausted'); }; }, 'rpc_budget_exhausted'],
+    // A spent paid daily budget no longer halts (see below); the per-process session budget still ends the run.
+    ['the session budget', (client: ChainClient) => { client.logs = async () => { throw new RpcGuardError('rpc_session_budget_reached'); }; }, 'rpc_session_budget_reached'],
   ] as const)('still halts on %s', async (_name, breakIt, message) => {
     const { db, client } = await trades(1);
     breakIt(client);
     const events: string[] = [];
     await expect(follower(db, client, { tickMs: 1, logger: (event: string) => events.push(event) }).run()).rejects.toThrow(message);
     expect(events).not.toContain('head_retry');
+  });
+  // Replaces "still halts on the paid daily budget": a spent budget used to end the run (exit 0, no restart) for the rest of the UTC day.
+  it('keeps running when the paid daily budget is spent: says so once, and waits out a pinned read the public lane cannot serve', async () => {
+    const { db, client } = await trades(2);
+    client.paidExhausted = () => true;
+    const code = client.code.bind(client); let refusals = 0;
+    client.code = vi.fn(async (a: Address, n: bigint) => { if (refusals++ < 3) throw Object.assign(new Error('An unknown RPC error occurred.'), { cause: new RpcGuardError('rpc_budget_exhausted', 'Paid budget spent; the public lane cannot serve this pinned read') }); return code(a, n); });
+    const events: { event: string; fields: Record<string, unknown> }[] = [];
+    let live!: LogHeadFollower;
+    live = follower(db, client, { tickMs: 1, retryBaseMs: 2, retryCapMs: 8, random: () => .5,
+      logger: (event: string, fields: Record<string, unknown>) => events.push({ event, fields }), onProgress: (n: bigint) => { if (n >= 2n) live.stop(); } });
+    await live.run();
+    expect(events.filter(e => e.event === 'head_public_lane').map(e => e.fields)).toEqual([expect.objectContaining({ reason: 'rpc_budget_exhausted', lane: 'public' })]);
+    const retries = events.filter(e => e.event === 'head_retry').map(e => e.fields);
+    expect(retries.map(r => [r.reason, r.lane, r.backoff_ms])).toEqual([['rpc_budget_exhausted', 'public', 2], ['rpc_budget_exhausted', 'public', 3], ['rpc_budget_exhausted', 'public', 6]]);
+    expect(events.filter(e => e.event === 'head_tick').every(e => e.fields.paid_budget === 'exhausted' && e.fields.lane === 'public')).toBe(true);
+    expect(await db.cursor('head_logs')).toBe(2n);
+    expect((await db.sql.query('SELECT * FROM swaps WHERE block>0')).rows).toHaveLength(2);
+  });
+  it('reads pinned state on the public lane once the paid budget is spent, and keeps the budget error when public cannot serve it', async () => {
+    const env = { RPC_HTTP_URL: 'https://paid.invalid', RPC_PUBLIC_HTTP_URL: 'https://public.invalid' };
+    const store = { reserve: async (_day: string, provider: string) => provider === 'paid' ? { allowed: false, total: 200_000 } : { allowed: true, total: 0 }, today: async () => [] };
+    const { meter } = createMeteredClients(env, { store, log: quiet }); meters.push(meter);
+    const sent: string[] = []; let pruned = false;
+    fake.send.mockImplementation(async (r: { method: string; params: unknown[] }, _options: unknown, url: string) => {
+      sent.push(`${url.includes('public') ? 'public' : 'paid'}:${r.method}`);
+      if (r.method === 'eth_getCode') { if (pruned) throw new Error('missing trie node'); expect(r.params[1]).toBe('0x7b'); return `0xef0100${'9'.repeat(40)}`; }
+      throw new Error(`Unexpected pinned RPC ${r.method}`);
+    });
+    const client = createClients(env, registry, meter, { head: true });
+    expect(await client.code(target, 123n)).toBe(`0xef0100${'9'.repeat(40)}`);
+    expect(client.paidExhausted!()).toBe(true);
+    expect(sent).toEqual(['public:eth_getCode']);
+    pruned = true;
+    const error = await client.code(target, 123n).catch((e: unknown) => e);
+    expect(rpcStopReason(error)).toBe('rpc_budget_exhausted');
+    expect(sent.slice(1)).toEqual(['public:eth_getCode']);
   });
 });

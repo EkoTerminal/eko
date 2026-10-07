@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **585/585 (100.00%)** documented. Minimum: **90%**.
+Measured: **586/586 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -214,24 +214,25 @@ Measured: **585/585 (100.00%)** documented. Minimum: **90%**.
 | `PonsBackfill.run` | method | [apps/indexer/src/backfill.ts:141](../../apps/indexer/src/backfill.ts#L141) | Yes |
 | `blockAtTime` | function | [apps/indexer/src/backfill.ts:334](../../apps/indexer/src/backfill.ts#L334) | Yes |
 | `createClients` | function | [apps/indexer/src/clients.ts:19](../../apps/indexer/src/clients.ts#L19) | Yes |
-| `returned.tokenMetadataBatch` | method | [apps/indexer/src/clients.ts:38](../../apps/indexer/src/clients.ts#L38) | Yes |
-| `returned.rpcStopped` | method | [apps/indexer/src/clients.ts:58](../../apps/indexer/src/clients.ts#L58) | Yes |
-| `returned.rpcTiming` | method | [apps/indexer/src/clients.ts:65](../../apps/indexer/src/clients.ts#L65) | Yes |
-| `returned.chainId` | method | [apps/indexer/src/clients.ts:72](../../apps/indexer/src/clients.ts#L72) | Yes |
-| `returned.head` | method | [apps/indexer/src/clients.ts:78](../../apps/indexer/src/clients.ts#L78) | Yes |
-| `returned.block` | method | [apps/indexer/src/clients.ts:86](../../apps/indexer/src/clients.ts#L86) | Yes |
-| `returned.header` | method | [apps/indexer/src/clients.ts:93](../../apps/indexer/src/clients.ts#L93) | Yes |
-| `returned.parentHeader` | method | [apps/indexer/src/clients.ts:100](../../apps/indexer/src/clients.ts#L100) | Yes |
-| `returned.timestampHeader` | method | [apps/indexer/src/clients.ts:107](../../apps/indexer/src/clients.ts#L107) | Yes |
-| `returned.receipts` | method | [apps/indexer/src/clients.ts:115](../../apps/indexer/src/clients.ts#L115) | Yes |
-| `returned.logs` | method | [apps/indexer/src/clients.ts:123](../../apps/indexer/src/clients.ts#L123) | Yes |
-| `returned.timestampLogs` | method | [apps/indexer/src/clients.ts:135](../../apps/indexer/src/clients.ts#L135) | Yes |
-| `returned.code` | method | [apps/indexer/src/clients.ts:142](../../apps/indexer/src/clients.ts#L142) | Yes |
-| `returned.tokenMetadata` | method | [apps/indexer/src/clients.ts:150](../../apps/indexer/src/clients.ts#L150) | Yes |
-| `returned.agentWallets` | method | [apps/indexer/src/clients.ts:159](../../apps/indexer/src/clients.ts#L159) | Yes |
-| `returned.ethUsdRate` | method | [apps/indexer/src/clients.ts:183](../../apps/indexer/src/clients.ts#L183) | Yes |
-| `returned.v3Pool` | method | [apps/indexer/src/clients.ts:227](../../apps/indexer/src/clients.ts#L227) | Yes |
-| `returned.watch` | method | [apps/indexer/src/clients.ts:254](../../apps/indexer/src/clients.ts#L254) | Yes |
+| `returned.tokenMetadataBatch` | method | [apps/indexer/src/clients.ts:53](../../apps/indexer/src/clients.ts#L53) | Yes |
+| `returned.rpcStopped` | method | [apps/indexer/src/clients.ts:72](../../apps/indexer/src/clients.ts#L72) | Yes |
+| `returned.paidExhausted` | method | [apps/indexer/src/clients.ts:79](../../apps/indexer/src/clients.ts#L79) | Yes |
+| `returned.rpcTiming` | method | [apps/indexer/src/clients.ts:86](../../apps/indexer/src/clients.ts#L86) | Yes |
+| `returned.chainId` | method | [apps/indexer/src/clients.ts:93](../../apps/indexer/src/clients.ts#L93) | Yes |
+| `returned.head` | method | [apps/indexer/src/clients.ts:99](../../apps/indexer/src/clients.ts#L99) | Yes |
+| `returned.block` | method | [apps/indexer/src/clients.ts:107](../../apps/indexer/src/clients.ts#L107) | Yes |
+| `returned.header` | method | [apps/indexer/src/clients.ts:114](../../apps/indexer/src/clients.ts#L114) | Yes |
+| `returned.parentHeader` | method | [apps/indexer/src/clients.ts:121](../../apps/indexer/src/clients.ts#L121) | Yes |
+| `returned.timestampHeader` | method | [apps/indexer/src/clients.ts:128](../../apps/indexer/src/clients.ts#L128) | Yes |
+| `returned.receipts` | method | [apps/indexer/src/clients.ts:136](../../apps/indexer/src/clients.ts#L136) | Yes |
+| `returned.logs` | method | [apps/indexer/src/clients.ts:144](../../apps/indexer/src/clients.ts#L144) | Yes |
+| `returned.timestampLogs` | method | [apps/indexer/src/clients.ts:156](../../apps/indexer/src/clients.ts#L156) | Yes |
+| `returned.code` | method | [apps/indexer/src/clients.ts:163](../../apps/indexer/src/clients.ts#L163) | Yes |
+| `returned.tokenMetadata` | method | [apps/indexer/src/clients.ts:171](../../apps/indexer/src/clients.ts#L171) | Yes |
+| `returned.agentWallets` | method | [apps/indexer/src/clients.ts:180](../../apps/indexer/src/clients.ts#L180) | Yes |
+| `returned.ethUsdRate` | method | [apps/indexer/src/clients.ts:203](../../apps/indexer/src/clients.ts#L203) | Yes |
+| `returned.v3Pool` | method | [apps/indexer/src/clients.ts:246](../../apps/indexer/src/clients.ts#L246) | Yes |
+| `returned.watch` | method | [apps/indexer/src/clients.ts:272](../../apps/indexer/src/clients.ts#L272) | Yes |
 | `enrichSenders` | function | [apps/indexer/src/enrich.ts:23](../../apps/indexer/src/enrich.ts#L23) | Yes |
 | `HeadFollower.constructor` | constructor | [apps/indexer/src/head.ts:75](../../apps/indexer/src/head.ts#L75) | Yes |
 | `HeadFollower.assertChain` | method | [apps/indexer/src/head.ts:85](../../apps/indexer/src/head.ts#L85) | Yes |
@@ -239,11 +240,11 @@ Measured: **585/585 (100.00%)** documented. Minimum: **90%**.
 | `HeadFollower.rollback` | method | [apps/indexer/src/head.ts:101](../../apps/indexer/src/head.ts#L101) | Yes |
 | `HeadFollower.ingest` | method | [apps/indexer/src/head.ts:125](../../apps/indexer/src/head.ts#L125) | Yes |
 | `HeadFollower.run` | method | [apps/indexer/src/head.ts:152](../../apps/indexer/src/head.ts#L152) | Yes |
-| `LogHeadFollower.constructor` | constructor | [apps/indexer/src/log-head.ts:53](../../apps/indexer/src/log-head.ts#L53) | Yes |
-| `LogHeadFollower.stop` | method | [apps/indexer/src/log-head.ts:65](../../apps/indexer/src/log-head.ts#L65) | Yes |
-| `LogHeadFollower.rollback` | method | [apps/indexer/src/log-head.ts:85](../../apps/indexer/src/log-head.ts#L85) | Yes |
-| `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:136](../../apps/indexer/src/log-head.ts#L136) | Yes |
-| `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:465](../../apps/indexer/src/log-head.ts#L465) | Yes |
+| `LogHeadFollower.constructor` | constructor | [apps/indexer/src/log-head.ts:89](../../apps/indexer/src/log-head.ts#L89) | Yes |
+| `LogHeadFollower.stop` | method | [apps/indexer/src/log-head.ts:105](../../apps/indexer/src/log-head.ts#L105) | Yes |
+| `LogHeadFollower.rollback` | method | [apps/indexer/src/log-head.ts:125](../../apps/indexer/src/log-head.ts#L125) | Yes |
+| `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:176](../../apps/indexer/src/log-head.ts#L176) | Yes |
+| `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:592](../../apps/indexer/src/log-head.ts#L592) | Yes |
 | `acquireScanJob` | function | [apps/indexer/src/scan-jobs.ts:13](../../apps/indexer/src/scan-jobs.ts#L13) | Yes |
 | `buildMcpApp` | function | [apps/mcp/src/app.ts:58](../../apps/mcp/src/app.ts#L58) | Yes |
 | `registerHarnessTools` | function | [apps/mcp/src/harness.ts:10](../../apps/mcp/src/harness.ts#L10) | Yes |
