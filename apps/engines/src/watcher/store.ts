@@ -59,13 +59,15 @@ export async function loadFingerprintInput(db:ChainDb,address:Address,block:numb
   // TODO(spec): No reviewed agent-kit implementation list or complete wallet UserOp-history certificate is specified. Missing lists/history remain null; authorizations alone never prove current code.
   const delegated7702=delegation?.data.code ? delegation.data.code.startsWith('0xef0100') ? options.knownDelegates ? options.knownDelegates.some(a=>a.toLowerCase()=== (delegation.implementation?hex(delegation.implementation):null)) : null : false : null;
   // Count each unresolved buy as a possible distinct buyer: this upper bound cannot promote a wallet into the first 50.
+  // A coin whose old swaps retention deleted adds the deleted buys' buyer count (history_prunes), the same kind of bound.
   const reactions=(await db.sql.query<{coin:Uint8Array;first_buy:string;launch:string;rank:string}>(`WITH firsts AS (
     SELECT coin,min(block) AS first_buy FROM swaps WHERE trader=$1 AND side=1 AND block<=$2 AND coin=ANY($3::bytea[]) GROUP BY coin
   ) SELECT f.*,greatest((SELECT p.created_block FROM pools p WHERE p.id=(SELECT s.pool_id FROM swaps s WHERE s.trader=$1 AND s.coin=f.coin AND s.side=1 AND s.block=f.first_buy ORDER BY s.tx_hash,s.log_index LIMIT 1) AND p.created_block<=f.first_buy),
     (SELECT CASE WHEN t.graduated_block<=f.first_buy THEN t.graduated_block ELSE t.first_block END FROM tokens t WHERE t.address=f.coin AND t.first_block<=f.first_buy)) AS launch,
     (SELECT count(DISTINCT s.trader) FILTER (WHERE s.trader IS NOT NULL AND NOT s.senders_pending)
       + count(*) FILTER (WHERE s.trader IS NULL OR s.senders_pending)
-      FROM swaps s WHERE s.coin=f.coin AND s.side=1 AND s.block<=f.first_buy) AS rank
+      FROM swaps s WHERE s.coin=f.coin AND s.side=1 AND s.block<=f.first_buy)
+      + coalesce((SELECT h.buyers FROM history_prunes h WHERE h.coin=f.coin AND h.swaps_through_block<f.first_buy),0) AS rank
     FROM firsts f`,[binary(address),block,rows.filter(r=>r.side===1).map(r=>r.coin)])).rows;
   const history=await options.useropHistoryAt?.(address,sec-14*86400,BigInt(block));
   const input:FeatureInput={block,sec,swaps,knownRouters:knownRouters.length?knownRouters:null,delegated7702,

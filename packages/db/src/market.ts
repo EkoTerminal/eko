@@ -78,7 +78,11 @@ interface BarKey { coin: Uint8Array; minute: Date | string }
  * OFFSET 0 keeps the lateral subquery from being flattened back into that join. Same rows, same aggregates.
  */
 async function writeBars(db: ChainDb, keys: string, params: unknown[], perKey = false) {
-  await db.sql.query(`DELETE FROM bars_1m b USING (${keys}) k WHERE b.coin=k.coin AND b.minute=k.minute`, params);
+  // A bar whose minute has no raw swap left is the summary history retention keeps for a pruned coin (retention.ts
+  // deletes a coin's swaps in whole minutes), so it is never rebuilt from what remains. Reorgs delete their bars first
+  // (deleteAbove), and every other rebuild has the minute's swaps.
+  await db.sql.query(`DELETE FROM bars_1m b USING (${keys}) k WHERE b.coin=k.coin AND b.minute=k.minute
+    AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute')`, params);
   const priced = perKey
     ? `SELECT e.*,date_trunc('minute',e.ts) AS minute FROM (SELECT DISTINCT coin,minute FROM (${keys}) keyed) k
       CROSS JOIN LATERAL (${eligible} AND s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute' OFFSET 0) e`

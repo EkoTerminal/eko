@@ -17,6 +17,9 @@ storage and keep a bounded raw history on a 100 GB volume.
     idle for seven days, so live evaluation never reads a compacted coin.
   - `RETENTION_PENDING_POOL_DAYS=3`: raw events of pools still unknown after three days.
 - **Derived tables** (`RETENTION_FEED_DAYS` and the table-by-table decisions): [retention.md](retention.md).
+- **Per-coin history** (`RETENTION_DANGER_QUIET_DAYS`, `RETENTION_QUIET_COIN_DAYS`, off until set): quiet Danger and
+  dead coins keep a summary instead of raw transfers, liquidity, Pons events and, after 28 quiet days, swaps. Decisions
+  per table and per reader: [retention.md](retention.md#per-coin-history-of-quiet-coins).
 
 ## Why compaction and not deletion
 
@@ -28,11 +31,11 @@ before it, and replays across compacted ranges, are not reproducible; that is th
 
 ## Guards and identity
 
-- Every setting is unset by default. `RETENTION_IDLE_TOKEN_DAYS` must exceed seven days.
+- Every setting is unset by default. `RETENTION_IDLE_TOKEN_DAYS` and `RETENTION_QUIET_COIN_DAYS` must exceed seven days.
 - Do not backfill or re-enrich a block range older than the shortest retention window while retention runs: re-inserted
   transfers would be counted on top of their baseline. The live indexer only rewrites its 256-block reorg window.
-- Transfer retention refuses to start when the wallet outflow collectors are configured (they read transfer history
-  from a saved cursor).
+- Transfer retention, the per-coin history rules included, refuses to start when the wallet outflow collectors are
+  configured (they read transfer history from a saved cursor).
 - The `RETENTION_*` settings are part of the attested configuration (`identityConfigKeys`), so the staging
   verifier only matches the reviewed values. `INDEX_WALLET_PROTOCOL` is an indexer setting and is recorded in
   `infra/railway/staging.json` and `docs/operations/staging-railway-evidence.md`.

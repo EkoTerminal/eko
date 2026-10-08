@@ -128,7 +128,8 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   const sanctionsWorker = new SanctionsWorker(dbh.chain, cfg.OFAC_SDN_URL, undefined, Date.now,
     failed => logger[failed ? 'warn' : 'info']({ failed }, 'Sanctions dataset refresh'));
   const retentionWorker = new RetentionWorker(dbh.chain, { quoteDays: cfg.RETENTION_QUOTE_TRANSFER_DAYS,
-    idleTokenDays: cfg.RETENTION_IDLE_TOKEN_DAYS, pendingPoolDays: cfg.RETENTION_PENDING_POOL_DAYS, feedDays: cfg.RETENTION_FEED_DAYS },
+    idleTokenDays: cfg.RETENTION_IDLE_TOKEN_DAYS, pendingPoolDays: cfg.RETENTION_PENDING_POOL_DAYS, feedDays: cfg.RETENTION_FEED_DAYS,
+    dangerQuietDays: cfg.RETENTION_DANGER_QUIET_DAYS, quietCoinDays: cfg.RETENTION_QUIET_COIN_DAYS },
     result => logger['failed' in result ? 'warn' : 'info']({ retention: result }, 'Chain retention pass'));
 
 

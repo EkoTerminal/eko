@@ -3,6 +3,7 @@ export * from './types.js';
 export * from './schema.js';
 export * from './market.js';
 export * from './retention.js';
+export * from './trending.js';
 export * from './bus.js';
 export * from './engines-schema.js';
 export * from './engines-migrate.js';

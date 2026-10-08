@@ -1,6 +1,6 @@
 import { attributionGap } from './attribution-coverage.js';
 import { loadReferenceInputs } from './reference-simulation.js';
-import { binary, type ChainDb } from '@eko/db';
+import { binary, trendingAt, type ChainDb } from '@eko/db';
 import { loadRegistry, type PonsProfileClient } from '@eko/chain';
 import { toUntrusted } from '@eko/untrusted';
 import { CONFIG_V1, RULES_VERSION, type CardSources, type HistoryView, type PriorLaunch } from '@eko/playbooks';
@@ -12,6 +12,7 @@ import { resolveClock, type ClockCache } from './activity.js';
 import type { ReplayCache } from './replay-cache.js';
 import { upperBlock } from './replay-cache.js';
 import { rowHex, prepareSwap, prepareHolding, isSink, TradeAggregate, HolderAggregate, timeWindow, type TradeView } from './aggregates.js';
+import { historyPrune, prunedGap, revivedBy } from './history-prunes.js';
 
 export interface TokenRow {
   address: Uint8Array; deployer: Uint8Array | null; curve: Uint8Array | null;
@@ -64,6 +65,10 @@ export async function historyAt(db: ChainDb, deployer: Address, coin: Address, b
 /** Reads shared by every coin evaluated in one live poll (most of them at the same head block). */
 export interface SourceMemo { ranks: Map<string, Promise<Map<Address, number>>> }
 async function readSources(db: ChainDb, coin: Address, block: number, client?: PonsProfileClient, clock?:ClockCache,cache?:ReplayCache,retrospective=false,memo?:SourceMemo): Promise<LoadedSources | null> {
+  // A coin whose raw history retention dropped is evaluated again only after it trades or moves again; its earlier
+  // checkpoints and quiet period cannot be rebuilt from what is left (docs/operations/retention.md).
+  const prune=await historyPrune(db,coin);
+  if(prune && (block<=prune.watermark || !(await revivedBy(db,coin,prune,block))))return unavailable(db,coin,block,'history_pruned');
   const token = cache ? cache.tokens.get(coin) : (await db.sql.query<TokenRow>('SELECT * FROM tokens WHERE address=$1 AND first_block<=$2', [binary(coin), block])).rows[0];
   if(token && Number(token.first_block)>block)return unavailable(db,coin,block,'launch_after_checkpoint');
   if (!token?.deployer || token.name == null || token.symbol == null) return unavailable(db,coin,block,'missing_launch_identity');
@@ -220,11 +225,9 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     }
   }
   // TODO(spec): trend onset is not indexed; use the first priced trade in the preceding hourly window.
-  const trending=async():Promise<NonNullable<CardSources['trending']>>=> (await db.sql.query<{ coin: Uint8Array; name: string; symbol: string; created: Date; started: Date; volume: number }>(`SELECT s.coin,t.name,t.symbol,b.ts AS created,min(s.ts) AS started,sum(s.usd) AS volume
-    FROM swaps s JOIN tokens t ON t.address=s.coin JOIN engine_block_times b ON b.number=t.first_block
-    WHERE s.block<=$1 AND s.ts>to_timestamp($2) AND s.usd>0 AND t.name IS NOT NULL AND t.symbol IS NOT NULL
-    GROUP BY s.coin,t.name,t.symbol,b.ts ORDER BY volume DESC,s.coin LIMIT 50`, [s.createdAtBlock, createdAtSec - 3600])).rows.map((r,i) => ({ coin: rowHex(r.coin), name: toUntrusted(r.name,120).text, symbol: toUntrusted(r.symbol,32).text,
-      rank: i+1, createdAtSec: seconds(r.created), trendStartedAtSec: seconds(r.started), evidence: [{ kind:'stat', ref:`${rowHex(r.coin)}:trending:${s.createdAtBlock}`, block:s.createdAtBlock, label:'Hourly USD volume rank', value:i+1 }] }));
+  // Retention saves this list before deleting swaps it reads (trending_snapshots), so it survives pruned coins.
+  const trending=async():Promise<NonNullable<CardSources['trending']>>=> (await trendingAt(db,s.createdAtBlock,createdAtSec - 3600)).map((r,i) => ({ coin: r.coin as Address, name: toUntrusted(r.name,120).text, symbol: toUntrusted(r.symbol,32).text,
+      rank: i+1, createdAtSec: seconds(r.created), trendStartedAtSec: seconds(r.started), evidence: [{ kind:'stat', ref:`${r.coin}:trending:${s.createdAtBlock}`, block:s.createdAtBlock, label:'Hourly USD volume rank', value:i+1 }] }));
   s.trending=cache ? await cache.trending(s.createdAtBlock,trending) : await trending();
   const ranked=cache ? await cache.ranked(block,asOfSec) : memo ? await sharedRanks(db,memo,block,asOfSec) : await liveRanks(db,block,asOfSec);
   const rank=ranked.get(coin);if(rank!=null)s.trendingRank=rank;
@@ -237,12 +240,22 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     totalVolumeUsd:null,unattributedVolumeUsd:null,volumeShare:null,unknownVolumeCount:liquidityMissing+deferred};
   let graduationGap=lifetime;
   if(s.graduation)graduationGap=attributionGap(timeWindow(swaps,s.graduation.atSec-0.001,s.graduation.atSec+300,swapEnd,trade.monotonic),'graduation_to_5m');
-  s.attributionCoverage={holder_concentration:lifetime,insider_sells:graduationGap,deployer_sells:lifetime,bundles:lifetime,fresh_wallet_share:lifetime,
+  const coverage={holder_concentration:lifetime,insider_sells:graduationGap,deployer_sells:lifetime,bundles:lifetime,fresh_wallet_share:lifetime,
     wallet_flow:hour,wash_trading:hour,exempt_insiders:lifetime,liquidity_ownership:liquidityGap};
+  s.attributionCoverage=coverage;
+  if(prune) {
+    // Checks over the coin's whole life or early history lost their raw rows. Holdings stay exact (balances and
+    // baselines) and the trailing-hour checks read only new activity, so those are still measured.
+    if(prune.swaps)for(const key of ['deployer_sells','bundles','fresh_wallet_share','exempt_insiders'] as const)coverage[key]=prunedGap(prune.swaps,swapEnd);
+    if(prune.liquidity)coverage.liquidity_ownership=prunedGap(prune.liquidity,events.length);
+    if(token.graduated_block!=null && Number(token.graduated_block)<=prune.watermark && prune.transfers+prune.swaps>0)coverage.insider_sells=prunedGap(prune.transfers+prune.swaps,swapEnd);
+    // Lifetime curve volume and progress come from the deleted swaps.
+    if(prune.swaps)delete s.curve;
+  }
   if(hour.status==='incomplete'){delete s.wash;delete s.dominantPair;}
-  if(lifetime.status==='incomplete')delete s.pons;
-  if(graduationGap.status==='incomplete')delete s.graduation;
-  if(liquidityGap.status==='incomplete')delete s.liquidity;
+  if(coverage.exempt_insiders.status==='incomplete')delete s.pons;
+  if(coverage.insider_sells.status==='incomplete')delete s.graduation;
+  if(coverage.liquidity_ownership.status==='incomplete')delete s.liquidity;
   await loadReferenceInputs(db,s,retrospective || cache!==undefined);
   return s;
 }

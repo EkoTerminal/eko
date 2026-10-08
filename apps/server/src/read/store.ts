@@ -73,9 +73,11 @@ export class ReadStore {
     this.rankRefresh=this.db.tx(async tx=>{
       const clock=await tx.sql.query<{window_sec:string}>('SELECT window_sec FROM read_rank_clock WHERE singleton=true FOR UPDATE');
       if(Number(clock.rows[0].window_sec)===window)return;
-      await tx.sql.query('UPDATE read_coins SET volume=0 WHERE volume<>0');
-      await tx.sql.query(`UPDATE read_coins r SET volume=b.volume FROM (SELECT coin,sum(volume_usd) AS volume FROM bars_1m
-        WHERE minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision) GROUP BY coin) b WHERE r.coin=b.coin AND NOT r.pricing_pending`,[window]);
+      // One write per coin whose volume changed: zeroing every ranked coin and setting it again rewrote each row twice a minute.
+      await tx.sql.query(`UPDATE read_coins r SET volume=n.volume FROM (SELECT c.coin,CASE WHEN c.pricing_pending THEN 0 ELSE coalesce(b.volume,0) END AS volume
+        FROM read_coins c LEFT JOIN (SELECT coin,sum(volume_usd) AS volume FROM bars_1m
+        WHERE minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision) GROUP BY coin) b ON b.coin=c.coin
+        WHERE c.volume<>0 OR b.coin IS NOT NULL) n WHERE r.coin=n.coin AND r.volume IS DISTINCT FROM n.volume`,[window]);
       await tx.sql.query('UPDATE read_rank_clock SET window_sec=$1 WHERE singleton=true',[window]);
     }).finally(()=>{this.rankRefresh=undefined;});
     return this.rankRefresh;

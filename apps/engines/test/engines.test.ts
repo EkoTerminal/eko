@@ -276,7 +276,8 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
  });
  it('transaction rollback publishes no in-process notification and cursor polling resumes',async()=>{
   const db=await setup(false);const messages:unknown[]=[];await db.bus.subscribe(m=>messages.push(m));await expect(db.tx(async tx=>{await tx.notify('card_updated',{id:'sample-card'});throw new Error('rollback');})).rejects.toThrow('rollback');expect(messages).toEqual([]);
-  const worker=new EngineWorker(db,{bus:new InProcessBus()});expect(await worker.poll()).toBe(1);expect(await worker.poll()).toBe(0);await block(db,2,3601);expect(await new EngineWorker(db).poll()).toBe(1);expect(await count(db,'verdicts')).toBe(1);
+  // A fixed clock: on the wall clock the fixture coin passes the engines' seven-day idle window a week after its epoch.
+  const worker=new EngineWorker(db,{bus:new InProcessBus(),now:()=>epoch+3700});expect(await worker.poll()).toBe(1);expect(await worker.poll()).toBe(0);await block(db,2,3601);expect(await new EngineWorker(db,{now:()=>epoch+3700}).poll()).toBe(1);expect(await count(db,'verdicts')).toBe(1);
  });
  it.each([400,401,2400,2401])('Pons getter %i bps never completes effective taxes without measured charges',async(tax)=>{
   const db=await setup();await new EngineWorker(db,{client:client(tax)}).processBlock(1);

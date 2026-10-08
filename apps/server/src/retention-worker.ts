@@ -1,7 +1,7 @@
 import { runRetention, type ChainDb, type RetentionResult } from '@eko/db';
 import { loadRegistry } from '@eko/chain';
 
-export interface RetentionSettings { quoteDays?: number; idleTokenDays?: number; pendingPoolDays?: number; feedDays?: number }
+export interface RetentionSettings { quoteDays?: number; idleTokenDays?: number; pendingPoolDays?: number; feedDays?: number; dangerQuietDays?: number; quietCoinDays?: number }
 
 /**
  * Run the configured retention (packages/db/src/retention.ts) on the singleton worker every ten minutes, each enabled

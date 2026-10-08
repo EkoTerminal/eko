@@ -166,6 +166,11 @@ const EnvSchema = z.object({
   RETENTION_PENDING_POOL_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
   /** Verdict, playbook and wash rows of the derived Feed projection; their sources are kept (docs/operations/retention.md). */
   RETENTION_FEED_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
+  /** Per-coin history: drop raw history of Danger coins with no swap or transfer for this many days, keeping a summary. */
+  RETENTION_DANGER_QUIET_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
+  /** Per-coin history of every non-quote coin with no swap or transfer for this many days. Must exceed the engines'
+   * seven-day idle window. */
+  RETENTION_QUIET_COIN_DAYS: optionalValue(z.coerce.number().int().min(8).max(365)),
   /** Live sell check (BACKEND §6.2). Off unless true: the engines role measures exit cost, and the API re-checks every
    * buy quote and refuses a coin whose sell fails. SELL_CHECK_DAILY_REQUESTS is read by the engines role; it is parsed
    * here too so the build identity attests the cap for every role. */
@@ -189,6 +194,7 @@ export const identityConfigKeys = {
   RPC_PAID_DAILY_BUDGET: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
   LIVE_TRADING_ENABLED: true, SECURITY_COLLECTORS: true,
   RETENTION_QUOTE_TRANSFER_DAYS: true, RETENTION_IDLE_TOKEN_DAYS: true, RETENTION_PENDING_POOL_DAYS: true, RETENTION_FEED_DAYS: true,
+  RETENTION_DANGER_QUIET_DAYS: true, RETENTION_QUIET_COIN_DAYS: true,
   SELL_CHECK_ENABLED: true, SELL_CHECK_DAILY_REQUESTS: true,
 } as const;
 // Identity also covers the headless image roles the dispatcher starts (indexer, engines, ...), not only the server's own roles.
@@ -241,7 +247,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (c.NODE_ENV === 'production' && !c.DATABASE_URL?.trim()) throw new Error('DATABASE_URL is required in production; PGlite is for local development and tests');
   if (c.NODE_ENV === 'production' && c.APP_ROLE === 'api' && c.RUN_WORKER) throw new Error('API replicas require RUN_WORKER=false; use APP_ROLE=worker for the reconciler');
   if (c.APP_ROLE === 'worker' && !c.RUN_WORKER) throw new Error('APP_ROLE=worker requires RUN_WORKER=true');
-  if ((c.RETENTION_QUOTE_TRANSFER_DAYS ?? c.RETENTION_IDLE_TOKEN_DAYS) !== undefined && c.SECURITY_COLLECTORS.wallets)
+  if ((c.RETENTION_QUOTE_TRANSFER_DAYS ?? c.RETENTION_IDLE_TOKEN_DAYS ?? c.RETENTION_DANGER_QUIET_DAYS ?? c.RETENTION_QUIET_COIN_DAYS) !== undefined && c.SECURITY_COLLECTORS.wallets)
     throw new Error('Transfer retention cannot run with the wallet outflow collectors, which read transfer history');
   if (c.APP_ROLE === 'dev' && (!c.RPC_HTTP_URL || !c.RPC_WS_URL)) throw new Error('APP_ROLE=dev requires RPC_HTTP_URL and RPC_WS_URL');
   if (c.NODE_ENV === 'production' && (!c.SESSION_SECRET || c.SESSION_SECRET.length < 32)) {

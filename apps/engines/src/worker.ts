@@ -17,6 +17,7 @@ import { ReplayCache, type WriteState } from './replay-cache.js';
 import { persistShadowGuardV2 } from './shadow-v2.js';
 import { ReplayMetrics } from './metrics.js';
 import { verdictReceipt } from './receipt.js';
+import { historyPrune, historyPrunes, revivedBy } from './history-prunes.js';
 
 export interface WorkerOptions {
   fingerprints?:FingerprintOptions;
@@ -183,6 +184,12 @@ export class EngineWorker {
         const coin=scanTarget(job)!;
         const header=await resolveClock(this.db,block,this.readBlock,this.clock);
         if(!header)throw new Error('Missing scan block');
+        // A quiet coin whose raw history retention dropped keeps its last card until it trades again: a rescan could
+        // only re-check it with partial history.
+        const prune=await historyPrune(this.db,coin);
+        if(prune && !(await revivedBy(this.db,coin,prune,block)) && (await this.db.sql.query('SELECT 1 FROM coin_card_latest WHERE coin=$1',[binary(coin)])).rows.length) {
+          await jobs.finish(job,'done','ready');completed++;continue;
+        }
         await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);
         await this.options.referenceSimulation?.(coin,block);
         const sources=await loadSources(this.db,coin,block,this.client,this.clock);
@@ -212,6 +219,7 @@ export class EngineWorker {
     const index=new Map(clock.map(point=>[point.number,point]));
     const now=this.options.now?.() ?? Date.now()/1000;
     const states=new Map((await this.db.sql.query<{coin:Uint8Array;revision:string;through_block:string}>('SELECT * FROM engine_activity_state')).rows.map(row=>[hex(row.coin),row]));
+    const prunes=await historyPrunes(this.db);
     const tasks:Checkpoint[]=[];
     const revised=new Set<Address>();
     const pending:typeof coins=[];
@@ -219,6 +227,11 @@ export class EngineWorker {
     let coalesced=0;
     const since=new Map<Address,number>();
     for (const coin of coins) {
+      // Retention removed this coin's raw history up to its watermark (the removed rows also change its revision).
+      // It is evaluated again only from its first swap or transfer after that, never at a checkpoint in the gap.
+      const prune=prunes.get(coin.coin);
+      const revived=prune ? coin.events.find(event=>event.block>prune.watermark && (event.kind==='swap' || event.kind==='transfer'))?.block : undefined;
+      if(prune && (revived===undefined || revived>to))continue;
       const activityInRange=coin.firstBlock>=from || coin.events.some(event=>event.block>=from && event.block<=to);
       if (!activityInRange && !live) continue;
       const lastActivity=coin.events.reduce((latest,event)=>Math.max(latest,event.sec),coin.createdSec);
@@ -234,6 +247,7 @@ export class EngineWorker {
         const head=clock.at(-1)!;
         if(!plan.some(point=>point.block===head.number))plan.push({coin:coin.coin,block:head.number,sec:head.sec});
       }
+      if(revived!==undefined)plan=plan.filter(point=>point.block>=revived);
       if(backlog!==undefined && head) {
         // A lagging live engine replayed every historical checkpoint in block order. Each one reloads the coin's
         // whole history and rebuilds holders, so lag fed itself. TODO(spec): §6.5 triggers assume no lag; skip, then replay.
