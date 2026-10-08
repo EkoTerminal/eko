@@ -10,7 +10,8 @@ import type { PonsProfileClient } from '@eko/chain';
 import type { Address, CoinCard, Verdict } from '@eko/shared';
 import { assembleCard, cardHash, digest, evaluatedPlaybooks } from './card.js';
 import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } from './sources.js';
-import { refreshClock, resolveClock, coinActivity, checkpoints, type BlockReader, type ClockCache, type Checkpoint } from './activity.js';
+import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
+import { LiveActivity, baseColumns, leaveActivityFeed, type LiveActivityStats } from './live-activity.js';
 import { materializeHistory, updateOutcomes } from './outcomes.js';
 import { performance } from 'node:perf_hooks';
 import { ReplayCache, type WriteState } from './replay-cache.js';
@@ -35,15 +36,28 @@ export interface WorkerOptions {
   liveBacklogSec?: number;
   /** Live only. After this long, a poll yields to a newer launch so its first scan is not queued behind backlog. */
   liveSliceMs?: number;
+  /**
+   * Live only. 'incremental' (default) reads only what changed since the previous poll and plans from per-coin progress
+   * (live-activity.ts); 'full' aggregates every coin's whole history on every poll, as replay does.
+   */
+  liveActivity?: 'incremental' | 'full';
+  /** Live, incremental only: what each poll's activity refresh read. */
+  onLiveActivity?: (stats:LiveActivityStats) => void;
+  /** Live only: every planned checkpoint, in execution order (tests compare plans across activity modes). */
+  onLiveTasks?: (tasks:readonly Checkpoint[]) => void;
   onLivePlanned?: (plan:LivePlan) => void }
 export interface LivePlan { tasks:number; coins:number; firstScans:number; coalescedCheckpoints:number; to:number }
 interface Schedule { coin: Uint8Array; first_block: string; last_block: string | null; last_sec: string | null; price: number | null; last_trade: Date | null }
+/** A coin a poll may plan: its newest event time, revision (as stored), progress base and retention revival. */
+interface PlanInput { coin:Address; firstBlock:number; lastSec:number; revision:string; base:ActivityBase | null; revived:(watermark:number)=>number | undefined; inRange:boolean; activity?:CoinActivity }
 /** Blocks commit in order (in live polls, first scans of new launches commit ahead of older backlog). Source reads are
  * bounded; rule/history writes remain serial to preserve prior-launch ordering. */
 export class EngineWorker {
   private stopped=false;
   private clock:ClockCache=new Map();
   private evaluated=new Map<Address,Pick<Verdict, 'level' | 'playbooks'>>();
+  private live:LiveActivity;
+  private feedLeft=false;
   private cache:ReplayCache | undefined;
   private metrics=new ReplayMetrics();
   private completed=0;
@@ -84,6 +98,7 @@ export class EngineWorker {
    */
   constructor(readonly db: ChainDb, readonly options: WorkerOptions = {}) {
     this.client=options.client ? this.metrics.profile(options.client) : undefined;
+    this.live=new LiveActivity(db);
     this.readBlock=options.readBlock ? this.metrics.headers(options.readBlock) : undefined;
     if (!Number.isInteger(options.concurrency ?? 4) || (options.concurrency ?? 4)<1 || (options.concurrency ?? 4)>32) throw new Error('Invalid engine concurrency');
     if (!Number.isFinite(options.pollMs ?? 2000) || (options.pollMs ?? 2000)<1) throw new Error('Invalid engine poll interval');
@@ -214,38 +229,58 @@ export class EngineWorker {
     if(ms!==undefined)this.options.onScanComplete?.(ms);
   }
   private async evaluateActivity(from:number,to:number,live:boolean,startup=false) {
-    const coins=await coinActivity(this.db,to,this.readBlock,this.clock,this.options.concurrency ?? 4,()=>this.stopped);
-    const clock=(await this.db.sql.query<{number:string;ts:Date}>('SELECT number,ts FROM engine_block_times WHERE number<=$1 ORDER BY number',[to])).rows.map(row=>({number:Number(row.number),sec:seconds(row.ts)}));
-    const index=new Map(clock.map(point=>[point.number,point]));
-    const now=this.options.now?.() ?? Date.now()/1000;
-    const states=new Map((await this.db.sql.query<{coin:Uint8Array;revision:string;through_block:string}>('SELECT * FROM engine_activity_state')).rows.map(row=>[hex(row.coin),row]));
+    // Live polls read only what changed since the previous poll (live-activity.ts) and plan exactly what the full
+    // history plans; replay and ENGINE_LIVE_ACTIVITY=full read every coin's whole history.
+    const incremental=live && this.options.liveActivity!=='full';
     const prunes=await historyPrunes(this.db);
+    let inputs:PlanInput[],clock:BlockTime[];
+    if(incremental) {
+      const loaded=await this.live.refresh(to,this.options.now?.() ?? Date.now()/1000,prunes,{readBlock:this.readBlock,cache:this.clock,concurrency:this.options.concurrency ?? 4,stopped:()=>this.stopped});
+      if(!loaded){this.yielded=false;return 0;}
+      clock=loaded.clock;
+      inputs=loaded.coins.map(coin=>({coin:coin.coin,firstBlock:coin.firstBlock,lastSec:coin.lastSec,revision:coin.revision,base:coin.base,revived:()=>coin.revived,inRange:true}));
+      if(this.live.stats)this.options.onLiveActivity?.(this.live.stats);
+    } else {
+      if(live && !this.feedLeft){await leaveActivityFeed(this.db);this.feedLeft=true;}
+      const coins=await coinActivity(this.db,to,this.readBlock,this.clock,this.options.concurrency ?? 4,()=>this.stopped,live);
+      clock=(await this.db.sql.query<{number:string;ts:Date}>('SELECT number,ts FROM engine_block_times WHERE number<=$1 ORDER BY number',[to])).rows.map(row=>({number:Number(row.number),sec:seconds(row.ts)}));
+      inputs=coins.map(coin=>({coin:coin.coin,firstBlock:coin.firstBlock,lastSec:coin.events.reduce((latest,event)=>Math.max(latest,event.sec),coin.createdSec),
+        revision:digest({activity:coin.revision,rulesVersion:RULES_VERSION}),base:coin.base ?? null,
+        revived:watermark=>coin.events.find(event=>event.block>watermark && (event.kind==='swap' || event.kind==='transfer'))?.block,
+        inRange:coin.firstBlock>=from || coin.events.some(event=>event.block>=from && event.block<=to),activity:coin}));
+    }
+    const index=blockIndex(clock);
+    const now=this.options.now?.() ?? Date.now()/1000;
+    const states=new Map((incremental ? await this.db.sql.query<{coin:Uint8Array;revision:string;through_block:string}>('SELECT * FROM engine_activity_state WHERE coin=ANY($1)',[inputs.map(input=>binary(input.coin))])
+      : await this.db.sql.query<{coin:Uint8Array;revision:string;through_block:string}>('SELECT * FROM engine_activity_state')).rows.map(row=>[hex(row.coin),row]));
     const tasks:Checkpoint[]=[];
     const revised=new Set<Address>();
-    const pending:typeof coins=[];
+    const pending:PlanInput[]=[];
     const backlog=live ? this.options.liveBacklogSec : undefined,head=clock.at(-1);
     let coalesced=0;
     const since=new Map<Address,number>();
-    for (const coin of coins) {
+    const decisions:{input:PlanInput;refreshHead:boolean;changed:boolean;planFrom:number;revived?:number}[]=[];
+    for (const input of inputs) {
       // Retention removed this coin's raw history up to its watermark (the removed rows also change its revision).
       // It is evaluated again only from its first swap or transfer after that, never at a checkpoint in the gap.
-      const prune=prunes.get(coin.coin);
-      const revived=prune ? coin.events.find(event=>event.block>prune.watermark && (event.kind==='swap' || event.kind==='transfer'))?.block : undefined;
+      const prune=prunes.get(input.coin);
+      const revived=prune ? input.revived(prune.watermark) : undefined;
       if(prune && (revived===undefined || revived>to))continue;
-      const activityInRange=coin.firstBlock>=from || coin.events.some(event=>event.block>=from && event.block<=to);
-      if (!activityInRange && !live) continue;
-      const lastActivity=coin.events.reduce((latest,event)=>Math.max(latest,event.sec),coin.createdSec);
-      if(live && now-lastActivity>=7*86400)continue;
-      const revision=digest({activity:coin.revision,rulesVersion:RULES_VERSION});
-      const state=states.get(coin.coin);
-      const refreshHead=startup && !this.startupDone.has(coin.coin);
-      if(live && !refreshHead && state?.revision===revision && Number(state.through_block)>=to)continue;
-      if(live && state?.revision!==revision)revised.add(coin.coin);
-      const planFrom=live && state ? Math.max(from,Number(state.through_block)+1) : from;
-      let plan=checkpoints(coin,clock,planFrom,to,index);
-      if(live && (refreshHead || state?.revision!==revision) && clock.length && now-clock.at(-1)!.sec<7*86400) {
+      if (!input.inRange && !live) continue;
+      if(live && now-input.lastSec>=7*86400)continue;
+      const state=states.get(input.coin);
+      const refreshHead=startup && !this.startupDone.has(input.coin);
+      if(live && !refreshHead && state?.revision===input.revision && Number(state.through_block)>=to)continue;
+      if(live && state?.revision!==input.revision)revised.add(input.coin);
+      decisions.push({input,refreshHead,changed:state?.revision!==input.revision,planFrom:live && state ? Math.max(from,Number(state.through_block)+1) : from,revived});
+    }
+    // Incremental plans are read in one batch; they equal checkpoints() over the coin's whole history.
+    const resumed=incremental ? await this.live.plans(decisions.map(decision=>({coin:decision.input.coin,from:decision.planFrom})),to) : undefined;
+    for (const {input,refreshHead,changed,planFrom,revived} of decisions) {
+      let plan=resumed ? resumed.get(input.coin)! : checkpoints(input.activity!,clock,planFrom,to,index);
+      if(live && (refreshHead || changed) && clock.length && now-clock.at(-1)!.sec<7*86400) {
         const head=clock.at(-1)!;
-        if(!plan.some(point=>point.block===head.number))plan.push({coin:coin.coin,block:head.number,sec:head.sec});
+        if(!plan.some(point=>point.block===head.number))plan.push({coin:input.coin,block:head.number,sec:head.sec});
       }
       if(revived!==undefined)plan=plan.filter(point=>point.block>=revived);
       if(backlog!==undefined && head) {
@@ -255,17 +290,18 @@ export class EngineWorker {
         if(recent.length<plan.length) {
           coalesced+=plan.length-recent.length;
           // The coin keeps the queue place of its oldest dropped checkpoint, or newer work would starve it.
-          since.set(coin.coin,plan[0].block);
-          plan=recent.length ? recent : [{coin:coin.coin,block:head.number,sec:head.sec}];
+          since.set(input.coin,plan[0].block);
+          plan=recent.length ? recent : [{coin:input.coin,block:head.number,sec:head.sec}];
         }
       }
-      tasks.push(...plan);pending.push({...coin,revision});
+      tasks.push(...plan);pending.push(input);
     }
     // Live: a coin with no card yet shows "Scanning…"; its first scan goes before any refresh of scanned coins,
     // newest launch first. One deployer's launches run oldest first, so each sees its siblings in deployer history.
     // Each coin's own checkpoints stay in block order. Replay keeps strict block order.
-    const scanned=live ? new Set((await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest')).rows.map(row=>hex(row.coin))) : undefined;
-    const launched=new Map(coins.map(coin=>[coin.coin,coin.firstBlock]));
+    const scanned=!live ? undefined : new Set((incremental ? await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest WHERE coin=ANY($1)',[[...new Set(tasks.map(task=>task.coin))].map(binary)])
+      : await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest')).rows.map(row=>hex(row.coin)));
+    const launched=new Map(inputs.map(input=>[input.coin,input.firstBlock]));
     const first=(coin:Address)=>!!scanned && !scanned.has(coin);
     const firstCoins=[...new Set(tasks.filter(task=>first(task.coin)).map(task=>task.coin))];
     const deployerOf=new Map<Address,string>(firstCoins.map(coin=>[coin,coin]));
@@ -280,6 +316,7 @@ export class EngineWorker {
     const queued=(task:Checkpoint)=>since.get(task.coin) ?? task.block;
     tasks.sort((a,b)=>Number(first(b.coin))-Number(first(a.coin)) || (first(a.coin) ? firstOrder(a,b) : queued(a)-queued(b) || a.coin.localeCompare(b.coin) || a.block-b.block));
     const firstScans=tasks.findIndex(task=>!first(task.coin)),priority=firstScans<0 ? tasks.length : firstScans;
+    if(live)this.options.onLiveTasks?.(tasks);
     if(live)this.options.onLivePlanned?.({tasks:tasks.length,coins:new Set(tasks.map(t=>t.coin)).size,firstScans:new Set(tasks.slice(0,priority).map(t=>t.coin)).size,coalescedCheckpoints:coalesced,to});
     const remaining=new Map<Address,number>();for(const task of tasks)remaining.set(task.coin,(remaining.get(task.coin) ?? 0)+1);
     const memo:SourceMemo|undefined=live ? {ranks:new Map()} : undefined;
@@ -288,7 +325,7 @@ export class EngineWorker {
       this.options.onPlanned?.({tasks:tasks.length,coins:new Set(tasks.map(t=>t.coin)).size,from,to});
       if(this.options.replayCache!==false){const start=performance.now();this.cache=new ReplayCache(this.db,to,this.clock,this.options.marketWindow);await this.cache.initialize();this.metrics.sourceMs+=performance.now()-start;}
     }
-    const idleAt=new Map(coins.map(coin=>[coin.coin,coin.events.reduce((latest,event)=>Math.max(latest,event.sec),coin.createdSec)+7*86400]));
+    const idleAt=new Map(inputs.map(input=>[input.coin,input.lastSec+7*86400]));
     const expiry=[...idleAt].sort((a,b)=>a[1]-b[1]);let expired=0;
     const expire=(sec:number)=>{while(expired<expiry.length && expiry[expired][1]<=sec){this.cache?.evict(expiry[expired][0]);expired++;}};
     const queuedAt=performance.now();
@@ -350,8 +387,12 @@ export class EngineWorker {
     this.yielded=yielded;
     if(!this.stopped && live)for(const coin of pending)if(!yielded || !remaining.get(coin.coin)) {
       if(startup)this.startupDone.add(coin.coin);
-      await this.db.sql.query('INSERT INTO engine_activity_state VALUES($1,$2,$3) ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision,through_block=excluded.through_block',[binary(coin.coin),coin.revision,to]);
-    }
+      // The progress base lets the next poll (or the next process) read only this coin's rows above it.
+      await this.db.sql.query(`INSERT INTO engine_activity_state(coin,revision,through_block,base_block,base_sum,base_sec,last_sec) VALUES($1,$2,$3,$4,$5,$6,$7)
+        ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision,through_block=excluded.through_block,base_block=excluded.base_block,base_sum=excluded.base_sum,
+        base_sec=excluded.base_sec,last_sec=excluded.last_sec`,[binary(coin.coin),coin.revision,to,...baseColumns(coin.base),coin.lastSec]);
+      if(incremental)this.live.written(coin.coin,coin.revision,to);
+    } else await this.db.sql.query('UPDATE engine_activity_state SET last_sec=$2 WHERE coin=$1',[binary(coin.coin),coin.lastSec]);
     return completed;
   }
   /**

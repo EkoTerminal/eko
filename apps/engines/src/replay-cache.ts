@@ -44,11 +44,17 @@ export class ReplayCache {
   outcomeAttempts=new Set<string>();
   private holders=new Map<string,{block:number;cursor:number;aggregate:HolderAggregate}>();
   private trades=new Map<Address,TradeAggregate>();
-  clockPoints:{number:number;sec:number}[];
-  constructor(readonly db:ChainDb,readonly to:number,readonly clock:ClockCache,readonly marketWindow=true) {
-    this.clockPoints=[...clock].map(([number,row])=>({number,sec:new Date(row.ts).getTime()/1000})).sort((a,b)=>a.number-b.number);
-  }
+  /** Every stored block time, by number (initialize): horizon and prior-block searches go by time. */
+  clockPoints:{number:number;sec:number}[]=[];
+  constructor(readonly db:ChainDb,readonly to:number,readonly clock:ClockCache,readonly marketWindow=true) {}
   async initialize() {
+    // The shared clock cache is filled lazily (refreshClock), so it cannot be searched by time. Read every stored time
+    // once; a time the cache already holds wins, and launch-time lookups by block (outcomes.ts) find every block here.
+    for(const row of (await this.db.sql.query<{number:string;ts:Date;hash:Uint8Array|null}>('SELECT number,ts,hash FROM engine_block_times ORDER BY number')).rows){
+      const number=Number(row.number),cached=this.clock.get(number);
+      if(!cached)this.clock.set(number,{ts:row.ts,hash:row.hash});
+      this.clockPoints.push({number,sec:new Date((cached ?? row).ts).getTime()/1000});
+    }
     if(this.marketWindow){const market=(await this.db.sql.query<{coin:Uint8Array;block:string;sec:number;usd:number}>(`SELECT coin,block,extract(epoch FROM ts)::double precision AS sec,usd FROM swaps WHERE block<=$1 AND usd>0 AND usd<'Infinity'::double precision ORDER BY block,ts,tx_hash,log_index`,[this.to])).rows;
     this.market=new MarketWindow(market.map(row=>({coin:rowHex(row.coin),block:Number(row.block),sec:row.sec,usd:row.usd})));}
     for(const t of (await this.db.sql.query<TokenRow>('SELECT * FROM tokens WHERE first_block<=$1',[this.to])).rows){rowHex(t.address);if(t.deployer)rowHex(t.deployer);if(t.curve)rowHex(t.curve);if(t.graduated_pool)rowHex(t.graduated_pool);this.tokens.set(rowHex(t.address),t);}

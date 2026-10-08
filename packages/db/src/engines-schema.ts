@@ -17,7 +17,8 @@ export const coinCards=pgTable('coin_cards',{id:text('id').primaryKey(),coin:byt
 export const coinCardLatest=pgTable('coin_card_latest',{coin:bytes('coin').primaryKey(),cardId:text('card_id').notNull().references(()=>coinCards.id),asOfBlock:bigint('as_of_block',{mode:'bigint'}).notNull(),data:jsonb('data').notNull()});
 
 export const engineBlockTimes=pgTable('engine_block_times',{number:bigint('number',{mode:'bigint'}).primaryKey(),ts:timestamp('ts',{withTimezone:true,mode:'date'}).notNull(),hash:bytes('hash'),source:text('source').notNull()});
-export const engineActivityState=pgTable('engine_activity_state',{coin:bytes('coin').primaryKey(),revision:text('revision').notNull(),throughBlock:bigint('through_block',{mode:'bigint'}).notNull()});
+export const engineActivityState=pgTable('engine_activity_state',{coin:bytes('coin').primaryKey(),revision:text('revision').notNull(),throughBlock:bigint('through_block',{mode:'bigint'}).notNull(),
+  baseBlock:bigint('base_block',{mode:'bigint'}),baseSum:text('base_sum'),baseSec:doublePrecision('base_sec'),lastSec:doublePrecision('last_sec')},t=>[index('engine_activity_state_last_sec').on(t.lastSec)]);
 
 export const enginePonsStatic=pgTable('engine_pons_static',{coin:bytes('coin').primaryKey(),firstReadBlock:bigint('first_read_block',{mode:'bigint'}).notNull(),firstReadHash:bytes('first_read_hash'),data:jsonb('data').notNull()});
 

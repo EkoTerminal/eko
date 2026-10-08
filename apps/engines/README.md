@@ -40,6 +40,43 @@ evaluation slower and new launches waited behind hours of backlog showing "Scann
 `pnpm --filter @eko/engines exec node --import tsx test/live-catchup-benchmark.ts` compares one lagging live poll
 with and without coalescing on a timestamped PGlite fixture (`BENCH_SWAPS`, `BENCH_HOURS` resize it).
 
+Live activity reads (`src/live-activity.ts`, migration 0189). Until 2026-10-08 every live poll aggregated every swap,
+transfer, liquidity and Pons event of every coin and loaded every block time: minutes per poll under load, then an
+out-of-memory crash on the first poll after a restart. A live poll now reads what changed since the previous poll, and
+plans exactly the checkpoints a full-history read plans (`test/live-activity.test.ts` runs both side by side):
+
+- Every coin's rows above the previous poll minus 256 blocks (the indexer's reorg window) are re-read by block.
+  `engine_activity_changes`, written by statement-level triggers, reports every other write: rows written, rewritten or
+  deleted at older blocks (backfills, sender enrichment, retention), pool and launch changes, and block times. Readers
+  follow it by transaction snapshot; it keeps a day of rows and is written only while a live engine follows it
+  (`engine_activity_feed`).
+- A coin's revision is a sum over its activity rows, so `engine_activity_state` keeps the sum and newest event time of
+  its rows below the window (`base_block`, `base_sum`, `base_sec`, `last_sec`) and the next poll, or the next process,
+  adds the rows above. A changed coin without a usable base is summed once in the database.
+- Plans resume after the coin's newest block at or below its previous plan with non-swap activity and a stored time:
+  that checkpoint does not depend on anything earlier, so its state comes from a few indexed reads.
+- A new process takes the watermark from `engine_activity_feed` and the coins active in the last seven days from
+  `last_sec`; it holds eight days of block times, read by block range. The first start without a live log (this
+  deploy, or a day without a live engine) also fills every missing block time once and takes recent coins from the
+  activity tables by time; coins written before this change keep their revision until they next change.
+- The block-time cache keeps the newest re-read range and at most 100,000 entries; every reader falls back to the
+  database. Replay still reads every coin's whole history and every block time, as before.
+- `ENGINE_LIVE_ACTIVITY=full` (default `incremental`) restores the whole-history read for live polls; it only suits
+  small databases. `live_activity` logs a refresh that started cold, summed a base in the database or took 10 s.
+
+`pnpm --filter @eko/engines exec node --import tsx test/live-activity-benchmark.ts` reads one live poll's activity over
+the same recent activity on top of growing older history (`BENCH_SCALES`, default `1,4,16`). On a local PGlite run:
+
+| Older history | History rows | Full read ms / rows | Incremental warm poll ms / rows | New process ms / rows |
+| ---: | ---: | ---: | ---: | ---: |
+| 1x | 25,307 | 160 / 25,407 | 6 / 40 | 7 / 375 |
+| 4x | 85,353 | 541 / 85,644 | 7 / 40 | 7 / 375 |
+| 16x | 325,353 | 2,109 / 326,244 | 12 / 40 | 13 / 375 |
+
+`test/live-bounds.test.ts` requires a warm poll and the first poll of a new process to read the same rows over one and
+five times as much older history. With these reads a normal live poll finishes well within the default
+`ENGINE_STALL_SEC` of 600; the first start after deploying migration 0189 also fills missing block times once.
+
 Live sell checks (BACKEND §6.2, the "probe through `eth_call` with a state-override set" fallback; off by default):
 
 - `SELL_CHECK_ENABLED=true` with `RPC_HTTP_URL`, live mode only. One `eth_call` per size runs the never-deployed probe
@@ -99,7 +136,7 @@ Tables written:
 - Playbooks: `playbook_matches`, `verdicts`, `verdict_events`, `deployer_stats`, `outcomes`.
 - Worker state: `engine_cursors`, `engine_schedule`, `engine_runs` (historical cadence and Signal clock), `engine_reads`
   (Pons reads, including unavailable results), `engine_block_times` (observed times, optional actual header hash),
-  `engine_activity_state` (per-coin activity revision and processed range). `engine_pons_static` (fixed profile facts and canonical first-read anchor). Migrations 0104–0108 are applied automatically.
+  `engine_activity_state` (per-coin activity revision, processed range and live progress base), `engine_activity_feed` and `engine_activity_changes` (live change log, migration 0189). `engine_pons_static` (fixed profile facts and canonical first-read anchor). Migrations 0104–0108 are applied automatically.
 
 `coin_cards` are immutable hash-change versions; `coin_card_latest.data` carries the current observation stamps,
 including when content did not change. `freshness.ageSec` is zero in stored assemblies: task 023 sets it when served.

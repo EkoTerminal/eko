@@ -120,7 +120,9 @@
         "RPC_PAID_MAX_RPM": "400",
         "RPC_PUBLIC_MAX_RPM": "300",
         "RPC_PAID_DAILY_BUDGET": "600000",
-        "RPC_SESSION_BUDGET": ""
+        "RPC_SESSION_BUDGET": "",
+        "ENGINE_STALL_SEC": "3600",
+        "NODE_OPTIONS": "--max-old-space-size=8192"
       },
       "secretNames": [
         "DATABASE_URL",
@@ -141,7 +143,6 @@
         "RETENTION_QUOTE_TRANSFER_DAYS": "2",
         "RETENTION_IDLE_TOKEN_DAYS": "14",
         "RETENTION_PENDING_POOL_DAYS": "3",
-        "RETENTION_FEED_DAYS": "3",
         "APP_ROLE": "worker",
         "RUN_WORKER": "true",
         "SERVE_WEB": "false",
