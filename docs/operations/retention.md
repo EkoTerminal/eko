@@ -36,7 +36,7 @@ Each enabled rule now has its own budget of about a minute, so a pass takes at m
 run in batches of at most 5,000 rows (`FEED_BATCH_ROWS`), because each batch briefly waits on the API's read-model
 refresh lock. Code: `packages/db/src/retention.ts`. Tests: `packages/db/test/retention.test.ts`,
 `packages/db/test/retention-history.test.ts`, `apps/engines/test/history-prunes.test.ts`,
-`apps/server/test/read-model-churn.test.ts`, `apps/server/test/retention-worker.test.ts`.
+`apps/server/test/read-model-churn.test.ts`, `apps/server/test/pruned-danger-trade.test.ts`, `apps/server/test/retention-worker.test.ts`.
 
 ## Per-coin history of quiet coins
 
@@ -60,8 +60,9 @@ only after the trending lists that read them are saved. Swaps are deleted in who
 **What stays**: tokens, pools, exemptions, balances, baselines, minute bars, cards and card versions, verdicts,
 playbook matches, Feed rows, outcomes, deployer statistics, receipts, flow markers, labels and every other derived
 table. Each pruned coin gets one `history_prunes` row (migration 0185): rule, watermark blocks, removed-row counts,
-first and last trade time, and an upper bound on the distinct buyers of the deleted swaps. It is written in the same
-transaction as each deletion batch, so no reader sees missing rows without it.
+first and last trade time, an upper bound on the distinct buyers of the deleted swaps, and (migration 0186) the
+coin's verdict level and Danger playbooks at prune time. A Danger rating, once recorded, survives later prunes. The
+row is written in the same transaction as each deletion batch, so no reader sees missing rows without it.
 
 ### Per-table decisions
 
@@ -78,7 +79,7 @@ transaction as each deletion batch, so no reader sees missing rows without it.
 
 | Reader | Needs | Handling |
 |---|---|---|
-| Engines card evaluation (`sources.ts`, `worker.ts`) | The coin's whole raw history. | **Changed.** A pruned coin is not evaluated again until it has a swap or transfer after its watermark: live scheduling skips it (also inside the 7-day idle window, where Danger coins are), on-demand scans answer with its kept card, and `loadSources` refuses checkpoints at or before the watermark or without new activity (`history_pruned`). Once revived, it is evaluated from balances and baselines plus the new activity. Checks that need deleted rows are reported as not fully checked with reason `history_pruned`: liquidity ownership (liquidity events), deployer sells, bundles, fresh wallets and exempt insiders (swaps), and insider sells when graduation is before the watermark. Their sections are dropped, so they never pass, and the verdict cannot be Clear. Holder concentration, wash trading and the other trailing-hour checks are measured as before. |
+| Engines card evaluation (`sources.ts`, `worker.ts`) | The coin's whole raw history. | **Changed.** A pruned coin is not evaluated again until it has a swap or transfer after its watermark: live scheduling skips it (also inside the 7-day idle window, where Danger coins are), on-demand scans answer with its kept card, and `loadSources` refuses checkpoints at or before the watermark or without new activity (`history_pruned`). Once revived, it is evaluated from balances and baselines plus the new activity. Checks that need deleted rows are reported as not fully checked with reason `history_pruned`: liquidity ownership (liquidity events), deployer sells, bundles, fresh wallets and exempt insiders (swaps), and insider sells when graduation is before the watermark. Their sections are dropped, so they never pass, and the verdict cannot be Clear. Holder concentration, wash trading and the other trailing-hour checks are measured as before. A coin rated Danger at prune time (by level or by a Danger playbook) stays Danger: its verdict leads with "Rated Danger before its history was pruned", the prune-time rating is part of its receipt input, and live trade admission keeps refusing buys while sells stay open (`apps/server/test/pruned-danger-trade.test.ts`). Other coins keep this partial evaluation. |
 | Outcome labels (`outcomes.ts`, horizons 1h, 24h, 7d) | Swaps and liquidity up to each horizon, opening holdings. | Only coins with every horizon decided are pruned (above). `outcome_label_*` jobs carry their inputs and only check block hashes. |
 | Deployer history (`deployer_stats`, prior removals) | Matches and outcomes; the deployer's liquidity removals. | Kept. |
 | clone_swarm trending (`sources.ts`) | Other coins' swaps in the hour before a launch, at every later evaluation of that coin. | **Changed.** Before any swap below the swap horizon is deleted, the list of every launch whose window reaches it is saved in `trending_snapshots`; `trendingAt` (`packages/db/src/trending.ts`) reads it instead of recomputing. Same rows (tested). |
@@ -179,8 +180,5 @@ decision, and stopping growth does not depend on it.
 - `wallet_fingerprint_dependencies`: approve writing dependency rows only for labelled runs. This is now the largest
   derived source of growth. Each new swap by an active wallet adds up to about 200 rows.
 - `guard_shadow_runs`: decide its retention after the Guard 2.0 cutover.
-- Per-coin history: a revived coin is re-checked with the pruned checks marked partial. A coin that was Danger
-  because of, say, removable liquidity then shows that check as not fully checked rather than Danger again; its
-  earlier verdicts and receipts stay. Carrying the last Danger matches forward would need a verdict format change.
 - Per-coin history: run the measurement query above before enabling the two rules, and compare table sizes 48 hours
   after.

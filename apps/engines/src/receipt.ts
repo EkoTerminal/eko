@@ -10,7 +10,8 @@ export function verdictReceipt(s:LoadedSources, verdict:Verdict, blockHash:Hex|n
   const keys = ['coin','deployer','asOfBlock','asOfSec','createdAtSec','createdAtBlock','launchpad','name','symbol',
     'antiSnipeActive','simulations','taxes','liquidity','pools','curve','wash','trending','dominantPair','pons',
     'earlyBuyers','graduation','hook','tokenText','history','supply','profile','sectionBlocks','attributionCoverage'] as const;
-  const deterministicInput=JSON.parse(JSON.stringify(Object.fromEntries(keys.map(k=>[k,s[k] ?? null])),
+  // The prune-time Danger floor is an input only for coins that have one, so every other receipt keeps its shape.
+  const deterministicInput=JSON.parse(JSON.stringify({...Object.fromEntries(keys.map(k=>[k,s[k] ?? null])),...(s.dangerBeforePrune ? {dangerBeforePrune:s.dangerBeforePrune} : {})},
     (_key,value:unknown)=>{
       if(typeof value==='number' && !Number.isFinite(value)) throw new Error('Nonfinite raw receipt input');
       return typeof value==='bigint' ? String(value) : value;

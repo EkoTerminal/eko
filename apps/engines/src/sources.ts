@@ -38,6 +38,8 @@ export interface LoadedSources extends CardSources {
   profile?: { creatorTaxPct: number; feePct: number; antiSnipeActive: boolean; codehash: string; curve: Address; observationVersion: 'pons-getters-2' };
   sectionBlocks: { identity: number; supply?: number; liquidity?: number };
   history: HistoryView; usdComplete: boolean; trendingRank?: number; exemptionWallets: Address[]; previousHolderBlock?: number;
+  /** The coin was rated Danger when retention pruned its raw history; the verdict keeps that floor (worker.ts). */
+  dangerBeforePrune?: { playbooks: string[] };
 }
 export const seconds = (date: string | Date) => new Date(date).getTime() / 1000;
 export const evidence = (r: { tx_hash: Uint8Array; log_index: number; block: string }, label: string): EvidenceRef =>
@@ -251,6 +253,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     if(token.graduated_block!=null && Number(token.graduated_block)<=prune.watermark && prune.transfers+prune.swaps>0)coverage.insider_sells=prunedGap(prune.transfers+prune.swaps,swapEnd);
     // Lifetime curve volume and progress come from the deleted swaps.
     if(prune.swaps)delete s.curve;
+    if(prune.dangerBeforePrune)s.dangerBeforePrune=prune.dangerBeforePrune;
   }
   if(hour.status==='incomplete'){delete s.wash;delete s.dominantPair;}
   if(coverage.exempt_insiders.status==='incomplete')delete s.pons;

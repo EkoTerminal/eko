@@ -6,10 +6,18 @@ import type { Address, AttributionCoverageGap } from '@eko/shared';
  * `watermark` its transfers survive only as baselines (balances stay exact) and its liquidity, Pons events and, when
  * `swaps` is non-zero, swaps are gone. Such a coin was quiet: nothing about it changes until it trades or moves again.
  */
-export interface HistoryPrune { watermark: number; transfers: number; liquidity: number; pons: number; swaps: number }
-interface Row { watermark: string; transfers: string; liquidity: string; pons: string; swaps: string }
-const columns = 'greatest(through_block,coalesce(swaps_through_block,0))::text AS watermark,transfers::text,liquidity::text,pons::text,swaps::text';
-const parse = (r: Row): HistoryPrune => ({ watermark: Number(r.watermark), transfers: Number(r.transfers), liquidity: Number(r.liquidity), pons: Number(r.pons), swaps: Number(r.swaps) });
+export interface HistoryPrune {
+  watermark: number; transfers: number; liquidity: number; pons: number; swaps: number;
+  /** Set when the coin was rated Danger (by level or by a Danger playbook) when pruned, with those playbook ids. */
+  dangerBeforePrune?: { playbooks: string[] };
+}
+interface Row { watermark: string; transfers: string; liquidity: string; pons: string; swaps: string; verdict_level: string | null; danger_playbooks: unknown }
+const columns = 'greatest(through_block,coalesce(swaps_through_block,0))::text AS watermark,transfers::text,liquidity::text,pons::text,swaps::text,verdict_level,danger_playbooks';
+const parse = (r: Row): HistoryPrune => {
+  const playbooks = Array.isArray(r.danger_playbooks) ? r.danger_playbooks.filter((id): id is string => typeof id === 'string') : [];
+  return { watermark: Number(r.watermark), transfers: Number(r.transfers), liquidity: Number(r.liquidity), pons: Number(r.pons), swaps: Number(r.swaps),
+    ...(r.verdict_level === 'danger' || playbooks.length ? { dangerBeforePrune: { playbooks } } : {}) };
+};
 
 export async function historyPrune(db: ChainDb, coin: Address): Promise<HistoryPrune | undefined> {
   const row = (await db.sql.query<Row>(`SELECT ${columns} FROM history_prunes WHERE coin=$1`, [binary(coin)])).rows[0];

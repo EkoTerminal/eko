@@ -170,11 +170,21 @@ export async function quietCoins(db: ChainDb, rule: HistoryRule, through: bigint
     ORDER BY t.address LIMIT $7`, [through.toString(), swapsThrough?.toString() ?? null, exclude, pairQuotes, after, rule, limit])).rows;
 }
 type PruneCounts = Partial<Record<'transfers' | 'liquidity' | 'pons' | 'swaps', number>>;
+/** The coin's current verdict level and Danger playbook ids (coin $1), recorded with every prune (0186). */
+const rating = `(SELECT c.data->'verdict'->>'level' FROM coin_card_latest c WHERE c.coin=$1),
+  (SELECT coalesce(jsonb_agg(DISTINCT m->>'id' ORDER BY m->>'id'),'[]'::jsonb) FROM coin_card_latest c
+    CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.data->'verdict'->'playbooks')='array' THEN c.data->'verdict'->'playbooks' ELSE '[]'::jsonb END) m
+    WHERE c.coin=$1 AND m->>'level'='danger')`;
+/** A Danger rating, once recorded, survives later prunes: the engines keep a revived Danger coin Danger, so a later card
+ * says Danger too, but its Danger playbooks may be ones the deleted history no longer lets them re-run. */
+const keepRating = `verdict_level=CASE WHEN history_prunes.verdict_level='danger' THEN 'danger' ELSE coalesce(excluded.verdict_level,history_prunes.verdict_level) END,
+  danger_playbooks=(SELECT coalesce(jsonb_agg(DISTINCT v ORDER BY v),'[]'::jsonb) FROM jsonb_array_elements_text(history_prunes.danger_playbooks||excluded.danger_playbooks) v)`;
 /** Record what a batch removed, in the batch's transaction, so no reader sees missing rows without the summary row. */
 async function recordPrune(db: ChainDb, coin: Uint8Array, rule: HistoryRule, through: bigint, counts: PruneCounts) {
-  await db.sql.query(`INSERT INTO history_prunes(coin,rule,through_block,transfers,liquidity,pons,swaps) VALUES($1,$2,$3,$4,$5,$6,$7)
+  await db.sql.query(`INSERT INTO history_prunes(coin,rule,through_block,transfers,liquidity,pons,swaps,verdict_level,danger_playbooks)
+    SELECT $1,$2,$3,$4,$5,$6,$7,${rating}
     ON CONFLICT(coin) DO UPDATE SET through_block=greatest(history_prunes.through_block,excluded.through_block),transfers=history_prunes.transfers+excluded.transfers,
-      liquidity=history_prunes.liquidity+excluded.liquidity,pons=history_prunes.pons+excluded.pons,swaps=history_prunes.swaps+excluded.swaps,updated_at=now()`,
+      liquidity=history_prunes.liquidity+excluded.liquidity,pons=history_prunes.pons+excluded.pons,swaps=history_prunes.swaps+excluded.swaps,${keepRating},updated_at=now()`,
   [coin, rule, through.toString(), counts.transfers ?? 0, counts.liquidity ?? 0, counts.pons ?? 0, counts.swaps ?? 0]);
 }
 /** Delete up to `limit` of a coin's prunable liquidity events at or below `through`. */
@@ -209,12 +219,12 @@ export async function pruneSwaps(db: ChainDb, coin: Uint8Array, through: bigint,
 }
 /** Summarise the swaps about to be deleted (trade times and an upper bound on distinct buyers) before the first batch. */
 async function recordSwapSummary(db: ChainDb, coin: Uint8Array, rule: HistoryRule, through: bigint) {
-  await db.sql.query(`INSERT INTO history_prunes(coin,rule,through_block,swaps_through_block,first_trade_ts,last_trade_ts,buyers)
+  await db.sql.query(`INSERT INTO history_prunes(coin,rule,through_block,swaps_through_block,first_trade_ts,last_trade_ts,buyers,verdict_level,danger_playbooks)
     SELECT $1,$2,$3,$3,min(ts),max(ts),count(DISTINCT trader) FILTER(WHERE side=1 AND trader IS NOT NULL AND NOT senders_pending)
-      +count(*) FILTER(WHERE side=1 AND (trader IS NULL OR senders_pending)) FROM swaps WHERE coin=$1 AND block<=$3
+      +count(*) FILTER(WHERE side=1 AND (trader IS NULL OR senders_pending)),${rating} FROM swaps WHERE coin=$1 AND block<=$3
     ON CONFLICT(coin) DO UPDATE SET through_block=greatest(history_prunes.through_block,excluded.through_block),
       swaps_through_block=greatest(history_prunes.swaps_through_block,excluded.swaps_through_block),first_trade_ts=least(history_prunes.first_trade_ts,excluded.first_trade_ts),
-      last_trade_ts=greatest(history_prunes.last_trade_ts,excluded.last_trade_ts),buyers=history_prunes.buyers+excluded.buyers,updated_at=now()`,
+      last_trade_ts=greatest(history_prunes.last_trade_ts,excluded.last_trade_ts),buyers=history_prunes.buyers+excluded.buyers,${keepRating},updated_at=now()`,
   [coin, rule, through.toString()]);
 }
 interface HistoryPass { limit: number; timeLeft: () => boolean; result: RetentionResult }

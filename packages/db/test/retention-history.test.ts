@@ -53,8 +53,11 @@ async function pons(db: ChainDb, n: number, coin: `0x${string}`, kind: string) {
   await db.insert('pons_events', { block: String(n), tx_hash: binary(hash(++event)), log_index: 0, token: binary(coin), emitter: binary(address(0xfa)), kind, data: '{}' });
 }
 async function card(db: ChainDb, coin: `0x${string}`, level: string) {
-  await db.sql.query('INSERT INTO coin_cards VALUES($1,$2,1,$3,$4,$5)', [`card:${coin}`, binary(coin), 'sample-hash', JSON.stringify({ verdict: { level } }), '1.0.0']);
-  await db.sql.query('INSERT INTO coin_card_latest VALUES($1,$2,1,$3)', [binary(coin), `card:${coin}`, JSON.stringify({ verdict: { level } })]);
+  // A Danger card names its Danger playbooks (one listed twice, and a Monitor one that is not recorded).
+  const playbooks = level === 'danger' ? [{ id: 'honeypot', level: 'danger' }, { id: 'wash_to_trend', level: 'monitor' }, { id: 'bundle_dump', level: 'danger' }, { id: 'honeypot', level: 'danger' }] : [];
+  const data = JSON.stringify({ verdict: { level, playbooks } });
+  await db.sql.query('INSERT INTO coin_cards VALUES($1,$2,1,$3,$4,$5)', [`card:${coin}`, binary(coin), 'sample-hash', data, '1.0.0']);
+  await db.sql.query('INSERT INTO coin_card_latest VALUES($1,$2,1,$3) ON CONFLICT(coin) DO UPDATE SET data=excluded.data', [binary(coin), `card:${coin}`, data]);
 }
 async function outcomes(db: ChainDb, coin: `0x${string}`, horizons = ['1h', '24h', '7d']) {
   for (const horizon of horizons) await db.sql.query("INSERT INTO outcomes VALUES($1,$2,1,'rugged','{}')", [binary(coin), horizon]);
@@ -102,8 +105,9 @@ const table = async (db: ChainDb, sql: string) => (await db.sql.query(sql)).rows
 const kept = (db: ChainDb) => Promise.all(['balances', 'bars_1m', 'coin_card_latest', 'coin_cards', 'outcomes', 'pools', 'tokens', 'read_buyers', 'read_coins']
   .map(name => table(db, `SELECT * FROM ${name} ORDER BY 1,2`)));
 const prune = async (db: ChainDb, coin: `0x${string}`) => (await db.sql.query<{ rule: string; through_block: string; swaps_through_block: string | null; first_trade_ts: Date | null;
-  last_trade_ts: Date | null; buyers: string; transfers: string; swaps: string; liquidity: string; pons: string }>(`SELECT rule,through_block::text,swaps_through_block::text,
-  first_trade_ts,last_trade_ts,buyers::text,transfers::text,swaps::text,liquidity::text,pons::text FROM history_prunes WHERE coin=$1`, [binary(coin)])).rows[0];
+  last_trade_ts: Date | null; buyers: string; transfers: string; swaps: string; liquidity: string; pons: string; verdict_level: string | null; danger_playbooks: string[] }>(`SELECT
+  rule,through_block::text,swaps_through_block::text,first_trade_ts,last_trade_ts,buyers::text,transfers::text,swaps::text,liquidity::text,pons::text,verdict_level,danger_playbooks
+  FROM history_prunes WHERE coin=$1`, [binary(coin)])).rows[0];
 const refreshReads = (db: ChainDb) => db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)', [Object.values(coins).map(binary), Math.floor(now() / 1000)]);
 
 describe('per-coin history retention', () => {
@@ -118,14 +122,16 @@ describe('per-coin history retention', () => {
     expect(result).toMatchObject({ finished: true, dangerCoins: 1, quietCoins: 2 });
     // Dead for 37 days: transfers rolled into baselines, liquidity, Pons and swaps gone, except the deployer's removal.
     expect(await counts(db, coins.dead)).toEqual({ transfers: 0, swaps: 0, liquidity: 1, pons: 0, bars: before.dead.bars });
-    expect(await prune(db, coins.dead)).toMatchObject({ rule: 'quiet_coin', buyers: '2', transfers: String(before.dead.transfers), swaps: String(before.dead.swaps),
+    expect(await prune(db, coins.dead)).toMatchObject({ rule: 'quiet_coin', verdict_level: 'monitor', danger_playbooks: [], buyers: '2', transfers: String(before.dead.transfers), swaps: String(before.dead.swaps),
       liquidity: '2', pons: '2', first_trade_ts: at(0.001), last_trade_ts: at(3) });
     expect((await prune(db, coins.dead))!.swaps_through_block).not.toBeNull();
     // Danger and quiet for three days: transfers and events go now, swaps stay until they are 28 days quiet.
     expect(await counts(db, coins.danger)).toEqual({ ...before.danger, transfers: 0, liquidity: 1, pons: 0 });
-    expect(await prune(db, coins.danger)).toMatchObject({ rule: 'danger_quiet', swaps_through_block: null });
+    // The verdict at prune time is recorded: Danger, with its Danger playbooks.
+    expect(await prune(db, coins.danger)).toMatchObject({ rule: 'danger_quiet', swaps_through_block: null, verdict_level: 'danger', danger_playbooks: ['bundle_dump', 'honeypot'] });
     // Never traded, so its outcomes are decided without labels: only its mint transfers existed.
     expect(await counts(db, coins.untraded)).toMatchObject({ transfers: 0, swaps: 0 });
+    expect(await prune(db, coins.untraded)).toMatchObject({ verdict_level: null, danger_playbooks: [] });
     // Untouched: a Monitor coin quiet for three days, an active coin, a coin with an unlabeled 24h outcome and a coin
     // with a swap still waiting for sender enrichment.
     for (const coin of ['calm', 'active', 'unlabeled', 'pending'] as const) {
@@ -145,6 +151,12 @@ describe('per-coin history retention', () => {
     // Nothing is left to do on the next pass.
     expect(await runRetention(db, { quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, now })).toMatchObject({ finished: true, dangerCoins: 0, quietCoins: 0,
       historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0 });
+    // A Danger rating survives a later prune made under a weaker card, and Danger playbooks accumulate.
+    await db.sql.query(`UPDATE coin_card_latest SET data='{"verdict":{"level":"monitor","playbooks":[{"id":"fee_trap_pool","level":"danger"}]}}' WHERE coin=$1`, [binary(coins.danger)]);
+    await pons(db, blockOf(37), coins.danger, 'trade');
+    await runRetention(db, { quoteTokens: [weth], quietCoinDays: 8, now: () => epoch + 46 * DAY });
+    expect(await counts(db, coins.danger)).toMatchObject({ pons: 0 });
+    expect(await prune(db, coins.danger)).toMatchObject({ rule: 'danger_quiet', verdict_level: 'danger', danger_playbooks: ['bundle_dump', 'fee_trap_pool', 'honeypot'] });
   });
 
   it('stops at its time budget and finishes over later passes with the same result', async () => {

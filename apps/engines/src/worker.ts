@@ -475,6 +475,13 @@ export class EngineWorker {
     const incomplete=Object.entries(s.attributionCoverage ?? {}).filter(([,gap])=>gap.status==='incomplete');
     if(incomplete.length)assembled.reasons.push(`Not fully checked: ${incomplete.map(([key,gap])=>`${key.replaceAll('_',' ')} (${gap.reason.replaceAll('_',' ')})`).join(', ')}`);
     if (assembled.level==='clear' && (evaluated.length<13 || incomplete.length>0)) assembled.level='pending';
+    // Rated Danger when retention pruned its history: the checks behind that rating cannot be re-run on what is left,
+    // so a revived coin is never published as less severe than Danger.
+    if(s.dangerBeforePrune) {
+      const playbooks=s.dangerBeforePrune.playbooks.map(id=>id.replaceAll('_',' '));
+      assembled.reasons.unshift(`Rated Danger before its history was pruned${playbooks.length ? ` (${playbooks.join(', ')})` : ''}`);
+      assembled.level='danger';
+    }
     assembled.evaluatedPlaybooks=evaluated;
     const signature=digest({ level:assembled.level,playbooks:matches,reasons:assembled.reasons,rulesVersion:RULES_VERSION,evaluated,attributionCoverage:s.attributionCoverage });
     const prior=state ? state.prior : (await tx.sql.query<{ id:string; signature:string; data:Verdict }>('SELECT v.id,v.signature,v.data FROM verdicts v LEFT JOIN receipt_publications p ON p.id=v.id WHERE v.coin=$1 AND valid_from_block<=$2 ORDER BY (v.rules_version=$3) DESC,valid_from_block DESC,v.rules_version DESC,p.publication_sequence DESC NULLS LAST,v.id DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION])).rows[0];

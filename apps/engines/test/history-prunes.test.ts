@@ -53,6 +53,7 @@ const cards = async (db: ChainDb) => Number((await db.sql.query<{ n: string }>('
 const latest = async (db: ChainDb): Promise<CoinCard> => CoinCardSchema.parse((await db.sql.query<{ data: unknown }>('SELECT data FROM coin_card_latest WHERE coin=$1', [binary(coin)])).rows[0]!.data);
 const failure = async (db: ChainDb) => (await db.sql.query<{ reason: string }>('SELECT reason FROM engine_card_failures WHERE coin=$1', [binary(coin)])).rows[0]?.reason;
 /** Holders with a positive balance, from balances (kept exact through baselines), excluding sinks. */
+const rating = async (db: ChainDb) => (await db.sql.query('SELECT verdict_level,danger_playbooks FROM history_prunes WHERE coin=$1', [binary(coin)])).rows[0];
 const holders = async (db: ChainDb) => Number((await db.sql.query<{ n: string }>(`SELECT count(*) AS n FROM balances WHERE token=$1 AND amount>0
   AND holder<>$1 AND holder<>decode(repeat('00',20),'hex')`, [binary(coin)])).rows[0]!.n);
 
@@ -68,6 +69,7 @@ describe('engines over pruned coin history', () => {
     for (const horizon of ['1h', '24h', '7d']) await db.sql.query("INSERT INTO outcomes VALUES($1,$2,1,'rugged','{}') ON CONFLICT DO NOTHING", [binary(coin), horizon]);
     await block(db, 20, 8 * DAY);
     expect(await runRetention(db, { quoteTokens: [], dangerQuietDays: 2, now: () => (epoch + 8 * DAY) * 1000 })).toMatchObject({ dangerCoins: 1, historyLiquidity: 2, historySwaps: 0 });
+    expect(await rating(db)).toEqual({ verdict_level: 'danger', danger_playbooks: [] });
     const before = await cards(db), card = await latest(db);
     // Still inside the engines' seven-day window, but nothing new happened: no re-evaluation, no failure, same card.
     await worker(8 * DAY).poll();
@@ -92,7 +94,10 @@ describe('engines over pruned coin history', () => {
     expect(revived.meta?.liquidity?.coverageGaps?.liquidity_ownership?.reason).toBe('history_pruned');
     expect(revived.meta?.liquidity?.unavailable).toBe(true);
     expect(revived.verdict.reasons.join(' ')).toContain('liquidity ownership (history pruned)');
-    expect(revived.verdict.level).not.toBe('clear');
+    // Rated Danger when pruned: it stays Danger, although no Danger match can be re-run from what is left.
+    expect(revived.verdict.level).toBe('danger');
+    expect(revived.verdict.reasons[0]).toBe('Rated Danger before its history was pruned');
+    expect(revived.verdict.playbooks.some(m => m.level === 'danger')).toBe(false);
     const sources = (await loadSources(db, coin, 21))!;
     expect(sources.holderSummary.count).toBe(await holders(db));
     expect(sources.liquidity).toBeUndefined();
@@ -109,9 +114,31 @@ describe('engines over pruned coin history', () => {
     await block(db, 31, 41 * DAY); await swap(db, 31, 41 * DAY, latecomer, 1); await transfer(db, 31, 41 * DAY, traders[2]!, latecomer, 5);
     const late = (await loadSources(db, coin, 31))!;
     for (const key of ['deployer_sells', 'bundles', 'fresh_wallet_share', 'exempt_insiders']) expect(late.attributionCoverage?.[key]?.reason).toBe('history_pruned');
+    // Still Danger after a second prune and revival.
+    expect(await rating(db)).toEqual({ verdict_level: 'danger', danger_playbooks: [] });
+    expect(await worker(41 * DAY + 100).poll()).toBeGreaterThan(0);
+    expect((await latest(db)).verdict.level).toBe('danger');
     expect(late.holderSummary.count).toBe(await holders(db));
     const reactions = (await loadFingerprintInput(db, latecomer, 31)).input.reactions;
     // Three distinct buyers were deleted (two original ones and the first revival's newcomer); the latecomer is fourth at best.
     expect(reactions.find(r => r.coin === hex(binary(coin)))?.buyerRank).toBe(4);
+  });
+
+  it('does not carry a non-Danger rating forward: a revived coin pruned as Clear is not Clear while checks are partial', async () => {
+    const db = await fixture();
+    await block(db, 11, 5 * DAY + 600);
+    const worker = (sec: number) => new EngineWorker(db, { now: () => epoch + sec });
+    expect(await worker(5 * DAY + 600).poll()).toBeGreaterThan(0);
+    await db.sql.query(`UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','"clear"') WHERE coin=$1`, [binary(coin)]);
+    for (const horizon of ['1h', '24h', '7d']) await db.sql.query("INSERT INTO outcomes VALUES($1,$2,1,'survived','{}') ON CONFLICT DO NOTHING", [binary(coin), horizon]);
+    await block(db, 20, 14 * DAY);
+    expect(await runRetention(db, { quoteTokens: [], quietCoinDays: 8, now: () => (epoch + 14 * DAY) * 1000 })).toMatchObject({ quietCoins: 1, historyLiquidity: 2 });
+    expect(await rating(db)).toEqual({ verdict_level: 'clear', danger_playbooks: [] });
+    await block(db, 21, 14 * DAY + 3600); await swap(db, 21, 14 * DAY + 3600, newcomer, 1); await transfer(db, 21, 14 * DAY + 3600, traders[2]!, newcomer, 5);
+    expect(await worker(14 * DAY + 3700).poll()).toBeGreaterThan(0);
+    const revived = await latest(db);
+    expect(['clear', 'danger']).not.toContain(revived.verdict.level);
+    expect(revived.verdict.reasons.join(' ')).toContain('liquidity ownership (history pruned)');
+    expect(revived.verdict.reasons.join(' ')).not.toContain('Rated Danger');
   });
 });
