@@ -143,10 +143,10 @@ export class EngineWorker {
     await this.refreshRegistryLabels();
     await refreshClock(this.db,this.clock);
     await this.reconcile();
-    const head=(await this.db.sql.query<{number:string | null}>(`SELECT max(block) AS number FROM (
-      SELECT number AS block FROM engine_block_times UNION ALL SELECT first_block FROM tokens
-      UNION ALL SELECT block FROM pons_events UNION ALL SELECT block FROM pons_exemptions UNION ALL SELECT created_block FROM pools
-    ) activity`)).rows[0];
+    // One indexed max per table: a max over their UNION read every row of every table on each poll.
+    const head=(await this.db.sql.query<{number:string | null}>(`SELECT greatest(
+      (SELECT max(number) FROM engine_block_times), (SELECT max(first_block) FROM tokens), (SELECT max(block) FROM pons_events),
+      (SELECT max(block) FROM pons_exemptions), (SELECT max(created_block) FROM pools)) AS number`)).rows[0];
     if (head.number==null) return 0;
     const to=Number(head.number);
     await refreshFingerprints(this.db,to,this.options.fingerprints);

@@ -9,19 +9,35 @@ export type ClockCache = Map<number,ClockRow>;
 export interface Activity { coin: Address; block: number; sec: number; kind: string; low: number | null; high: number | null; price: number | null }
 export interface CoinActivity { coin: Address; firstBlock: number; createdSec: number; events: Activity[]; revision: string }
 /** Timestamped event rows establish real block times; never populate the indexer's head-follower table. */
+/** Blocks re-read below the last synced block on every incremental pass: covers the indexer's reorg window. */
+export const CLOCK_LOOKBACK_BLOCKS = 512;
+const clockSynced = new WeakMap<ChainDb, number>();
+/**
+ * The first call in a process copies every block time; later calls only read blocks above the previous pass minus
+ * CLOCK_LOOKBACK_BLOCKS. Scanning all swaps, transfers, liquidity and Pons events on every poll held the database's
+ * disk most of the time in production (2026-10-08) and starved the indexer. A row written later for an older block is
+ * still found by resolveClock, which falls back to chain_blocks and then the archive.
+ */
 export async function refreshClock(db: ChainDb, cache?:ClockCache) {
+  const prior = clockSynced.get(db);
+  const from = prior === undefined ? -1 : Math.max(-1, prior - CLOCK_LOOKBACK_BLOCKS);
+  // Transfers are indexed by time, not block: bound them by the time of the first re-read block (minus a margin).
+  const since = from < 0 ? null : (await db.sql.query<{ ts: Date }>(
+    `SELECT ts - interval '10 minutes' AS ts FROM engine_block_times WHERE number<=$1 ORDER BY number DESC LIMIT 1`, [from])).rows[0]?.ts ?? null;
   await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source)
     SELECT block,min(ts),NULL,'activity' FROM (
-      SELECT block,ts FROM swaps UNION ALL SELECT block,ts FROM token_transfers UNION ALL SELECT block,ts FROM liquidity_events
-    ) e GROUP BY block ON CONFLICT(number) DO NOTHING`);
-  // Runs every poll over all of chain_blocks: rewrite only rows that changed, or each poll leaves a dead copy of every row.
-  await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source) SELECT number,ts,hash,'head' FROM chain_blocks
+      SELECT block,ts FROM swaps WHERE block>$1
+      UNION ALL SELECT block,ts FROM token_transfers WHERE block>$1 AND ($2::timestamptz IS NULL OR ts>=$2)
+      UNION ALL SELECT block,ts FROM liquidity_events WHERE block>$1
+    ) e GROUP BY block ON CONFLICT(number) DO NOTHING`, [from, since]);
+  // Rewrite only rows that changed, or each poll leaves a dead copy of every row.
+  await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source) SELECT number,ts,hash,'head' FROM chain_blocks WHERE number>$1
     ON CONFLICT(number) DO UPDATE SET ts=excluded.ts,hash=excluded.hash,source=excluded.source
-    WHERE (engine_block_times.ts,engine_block_times.hash,engine_block_times.source) IS DISTINCT FROM (excluded.ts,excluded.hash,excluded.source)`);
+    WHERE (engine_block_times.ts,engine_block_times.hash,engine_block_times.source) IS DISTINCT FROM (excluded.ts,excluded.hash,excluded.source)`, [from]);
   // Legacy Pons/pool rows may lack timestamps entirely. Accept actual stored fields
   // when present, including JSON payload timestamps; never infer a block interval.
-  const stored=(await db.sql.query<{block:string;data:Record<string,unknown>}>(`SELECT block,data FROM pons_events
-    UNION ALL SELECT created_block,to_jsonb(p) FROM pools p`)).rows;
+  const stored=(await db.sql.query<{block:string;data:Record<string,unknown>}>(`SELECT block,data FROM pons_events WHERE block>$1
+    UNION ALL SELECT created_block,to_jsonb(p) FROM pools p WHERE created_block>$1`, [from])).rows;
   const timestamps=new Map<number,Date>();
   for(const row of stored) {
     const raw=row.data.ts ?? row.data.timestamp ?? row.data.blockTimestamp;
@@ -36,9 +52,12 @@ export async function refreshClock(db: ChainDb, cache?:ClockCache) {
     await db.sql.query(`INSERT INTO engine_block_times VALUES ${values.join(',')} ON CONFLICT(number) DO NOTHING`,params);
   }
   if(cache) {
-    cache.clear();
-    for(const row of (await db.sql.query<ClockRow & {number:string}>('SELECT number,ts,hash FROM engine_block_times')).rows)cache.set(Number(row.number),{ts:row.ts,hash:row.hash});
+    // A full pass reloads the cache; an incremental one only refreshes the re-read range.
+    if (from < 0) cache.clear();
+    for(const row of (await db.sql.query<ClockRow & {number:string}>('SELECT number,ts,hash FROM engine_block_times WHERE number>$1',[from])).rows)cache.set(Number(row.number),{ts:row.ts,hash:row.hash});
   }
+  const top=(await db.sql.query<{ n: string | null }>('SELECT max(number)::text AS n FROM engine_block_times')).rows[0]?.n;
+  if (top != null) clockSynced.set(db, Math.max(prior ?? -1, Number(top)));
 }
 export async function resolveClock(db: ChainDb, block: number, readBlock?: BlockReader, cache?:ClockCache) {
   if(cache?.has(block))return cache.get(block);

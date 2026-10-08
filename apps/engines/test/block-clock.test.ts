@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { binary, migrate, migrateEngines, openDb } from '@eko/db';
-import { refreshClock } from '../src/activity.js';
+import { CLOCK_LOOKBACK_BLOCKS, refreshClock, resolveClock, type ClockCache } from '../src/activity.js';
 
 const epoch = Date.parse('2026-10-01T00:00:00Z');
 const hash = (n: number) => binary(`0x${n.toString(16).padStart(64, '0')}`);
@@ -31,6 +31,40 @@ describe('engine block clock', () => {
       expect(after.slice(2).map(r => [r.number, r.source, Buffer.from(r.hash!).toString('hex')])).toEqual([
         ['3', 'head', Buffer.from(hash(33)).toString('hex')], ['4', 'head', Buffer.from(hash(4)).toString('hex')]]);
       expect(after[2]!.version).not.toBe(first[2]!.version);
+    } finally { await db.close(); }
+  });
+  it('re-reads only blocks above the previous pass minus the lookback, and still resolves a late old block', async () => {
+    const db = await openDb({ pgliteDir: ':memory:' });
+    try {
+      await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(epoch));
+      const seconds = epoch / 1000;
+      // Blocks 1..2000 have headers, except block 100.
+      await db.sql.query(`INSERT INTO chain_blocks(number,block,hash,parent_hash,ts)
+        SELECT n,n,decode(lpad(to_hex(n),64,'0'),'hex'),decode(lpad(to_hex(n-1),64,'0'),'hex'),to_timestamp($1::double precision+n)
+        FROM generate_series(1,2000) n WHERE n<>100`, [seconds]);
+      const cache: ClockCache = new Map();
+      await refreshClock(db, cache);
+      expect(cache.size).toBe(1999);
+      const count = async () => Number((await db.sql.query<{ n: string }>('SELECT count(*)::text AS n FROM engine_block_times')).rows[0]!.n);
+      expect(await count()).toBe(1999);
+      // Later activity: a new header, a transfer in a block with no header yet, a changed header inside the lookback,
+      // and a transfer for old block 100 (below the lookback) written late.
+      await db.insert('chain_blocks', { number: '2001', block: '2001', hash: hash(2001), parent_hash: hash(2000), ts: new Date(epoch + 2001_000) });
+      await db.insert('token_transfers', { ts: new Date(epoch + 2002_000), block: '2002', tx_hash: hash(9002), log_index: 0, token: sample, from_address: sample, to_address: sample, amount: '1', kind: 'Transfer' });
+      await db.sql.query('UPDATE chain_blocks SET hash=$1 WHERE number=$2', [hash(77), 2000 - CLOCK_LOOKBACK_BLOCKS + 10]);
+      await db.insert('token_transfers', { ts: new Date(epoch + 100_000), block: '100', tx_hash: hash(9100), log_index: 0, token: sample, from_address: sample, to_address: sample, amount: '1', kind: 'Transfer' });
+      await refreshClock(db, cache);
+      const row = async (n: number) => (await db.sql.query<{ source: string; hash: Uint8Array | null }>('SELECT source, hash FROM engine_block_times WHERE number=$1', [n])).rows[0];
+      expect((await row(2001))?.source).toBe('head');
+      expect((await row(2002))?.source).toBe('activity');
+      expect(Buffer.from((await row(2000 - CLOCK_LOOKBACK_BLOCKS + 10))!.hash!).toString('hex')).toBe(Buffer.from(hash(77)).toString('hex'));
+      // The incremental pass does not look below the lookback, so block 100 is not copied...
+      expect(await row(100)).toBeUndefined();
+      expect(cache.has(2002) && cache.has(1)).toBe(true);
+      // ...but resolving it falls back to a header read and records it.
+      const resolved = await resolveClock(db, 100, async () => ({ timestamp: BigInt(seconds + 100), hash: null }), cache);
+      expect(resolved?.ts.getTime()).toBe(epoch + 100_000);
+      expect((await row(100))?.source).toBe('archive');
     } finally { await db.close(); }
   });
 });

@@ -88,7 +88,7 @@
         "INDEX_LOG_RANGE": "2000",
         "INDEX_REORG_DEPTH": "256",
         "INDEX_WALLET_PROTOCOL": "off",
-        "RPC_PAID_MAX_RPM": "1200",
+        "RPC_PAID_MAX_RPM": "3000",
         "RPC_PUBLIC_MAX_RPM": "300",
         "RPC_PAID_DAILY_BUDGET": "900000",
         "RPC_SESSION_BUDGET": ""
