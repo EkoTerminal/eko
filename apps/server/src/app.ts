@@ -285,7 +285,9 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   await fixtureRoutes(app, cfg, flags, cfg.JOURNAL_KEK && cfg.JOURNAL_KEK_ID && cfg.JOURNAL_TOMBSTONE_PATH
     ? { journal: journalFixtureProducer(journal) } : {}, auth);
   const live = new ReadLive(reads, hub);
-  await live.start(cfg.DATABASE_URL ? new PostgresBus(cfg.DATABASE_URL) : dbh.chain.bus);
+  // The worker serves no sockets. Without the background refresher, each bus message's live upsert refreshed the whole
+  // read-model backlog inline there, under the locks every scanner card write needs (2026-10-09: about 7 cards a minute).
+  if (cfg.APP_ROLE !== 'worker') await live.start(cfg.DATABASE_URL ? new PostgresBus(cfg.DATABASE_URL) : dbh.chain.bus);
   await alerts.start(cfg.DATABASE_URL ? new PostgresBus(cfg.DATABASE_URL) : dbh.chain.bus, opts.startBackground !== false);
   await guardReadRoutes(app,reads.guard,reads);
   await reviewApiRoutes(app, new ReviewStore(dbh.chain), auth);
