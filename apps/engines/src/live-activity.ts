@@ -190,7 +190,7 @@ export class LiveActivity {
 
     // Coins a poll may plan.
     const candidates = new Set<Address>(this.known.keys());
-    if (cold) for (const coin of await (this.trusted ? this.active(now - IDLE_SEC - IDLE_MARGIN_SEC) : this.recent(now - IDLE_SEC - IDLE_MARGIN_SEC, to))) candidates.add(coin);
+    if (cold) for (const coin of await (this.trusted ? this.active(now - IDLE_SEC - IDLE_MARGIN_SEC, to) : this.recent(now - IDLE_SEC - IDLE_MARGIN_SEC, to))) candidates.add(coin);
     for (const coin of [...changed.keys(), ...this.window.keys(), ...this.pending]) candidates.add(coin);
     for (const row of (await this.db.sql.query<{ address: Uint8Array }>('SELECT address FROM tokens WHERE first_block>$1 AND first_block<=$2', [after, to])).rows) candidates.add(hex(row.address) as Address);
     // Launch rows and stored progress for coins not held, or whose launch row changed.
@@ -373,9 +373,16 @@ export class LiveActivity {
     return plans;
   }
 
-  /** Coins whose stored state was active at or after `cutoff` (seconds). */
-  private async active(cutoff: number) {
-    return (await this.db.sql.query<{ coin: Uint8Array }>('SELECT coin FROM engine_activity_state WHERE last_sec>=$1', [cutoff])).rows.map(row => hex(row.coin) as Address);
+  /**
+   * Coins whose stored state was active at or after `cutoff` (seconds), and coins launched since then that have no stored
+   * state: a process that stopped before their first state write (a yielded poll, a restart, a crash) left them behind,
+   * and nothing else names them once the watermark passed their launch. Tokens without a deployer never get a card.
+   */
+  private async active(cutoff: number, to: number) {
+    return (await this.db.sql.query<{ coin: Uint8Array }>(`SELECT coin FROM engine_activity_state WHERE last_sec>=$1
+      UNION SELECT t.address FROM tokens t WHERE t.deployer IS NOT NULL AND t.first_block<=$2 AND t.first_block>coalesce((SELECT number FROM engine_block_times
+          WHERE ts<to_timestamp($1) ORDER BY ts DESC,number DESC LIMIT 1),-1)
+        AND NOT EXISTS (SELECT 1 FROM engine_activity_state s WHERE s.coin=t.address)`, [cutoff, to])).rows.map(row => hex(row.coin) as Address);
   }
   /** Launched coins with any activity at or after `cutoff` (seconds), or launched then: the first start's candidates. */
   private async recent(cutoff: number, to: number) {

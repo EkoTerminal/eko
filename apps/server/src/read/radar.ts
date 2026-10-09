@@ -21,9 +21,9 @@ export function rankRadar(rows: ReadRow[]): RadarRow[] {
 }
 export class RadarService {
   constructor(readonly store: ReadStore) {}
-  async order() {await this.store.refreshRanks();return (await this.store.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>$1 ORDER BY tier,-volume,coin',[new Date(this.store.now()-7*86400000)])).rows.map(r=>hex(r.coin));}
+  async order() {await this.store.currentRanks();return (await this.store.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>$1 ORDER BY tier,-volume,coin',[new Date(this.store.now()-7*86400000)])).rows.map(r=>hex(r.coin));}
   async list(cursor?:string) {
-    await this.store.refreshRanks();
+    await this.store.currentRanks();
     const key=decodeCursor(cursor,'radar');
     if(key && (key.length!==4 || !Number.isInteger(key[0]) || typeof key[1]!=='number' || typeof key[2]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[2]) || !Number.isInteger(key[3])))throw new InputError('Invalid radar cursor');
     const cutoff=new Date(this.store.now()-7*86400000),params:unknown[]=[cutoff];

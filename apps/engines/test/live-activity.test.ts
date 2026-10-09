@@ -269,4 +269,18 @@ describe('incremental live activity', () => {
     await both(async chain => { await chain.header(at(9.2)); await chain.swap(B, at(9.2), 1, t1, 1.4); });
     expect(await logged()).toBeGreaterThan(before);
   });
+  it('takes recent launches without stored progress on a cold start that follows the log', async () => {
+    const chain = new Chain(await database());
+    for (const n of [at(8), at(8.5), at(9)]) await chain.header(n);
+    await chain.token(B, at(8)); await chain.swap(B, at(8), 1, t1);
+    await chain.token(C, at(8.5)); await chain.transfer(C, at(8.5), zero, t2);
+    const now = secOf(at(9)) + 30;
+    expect(await new EngineWorker(chain.db, { now: () => now, readBlock, liveBacklogSec: 900 }).poll()).toBe(2);
+    // A process stopped before C's first state write (a yielded poll, then a restart). Nothing has changed since.
+    await chain.db.sql.query('DELETE FROM engine_activity_state WHERE coin=$1', [binary(C)]);
+    const probe = new LiveActivity(reopen(chain.db));
+    const coins = (await probe.refresh(at(9), now, new Map(), { cache: new Map(), readBlock, concurrency: 4, stopped: () => false }))!.coins;
+    expect(probe.stats).toMatchObject({ cold: true });
+    expect(coins.map(coin => coin.coin)).toEqual(expect.arrayContaining([B, C]));
+  });
 });

@@ -161,6 +161,19 @@ describe('read-model refresh churn', () => {
       const within = <T>(work: Promise<T>) => Promise.race([work.then(() => 'done', () => 'done'), new Promise<string>(r => setTimeout(() => r('timeout'), 2000))]);
       expect(await within(store.rows(undefined, [coinA]))).toBe('done');
       expect(await within(store.refreshRanks())).toBe('done');
+      // A rank refresh in progress must not hold up a request either: the background timer owns it.
+      store.refreshRanks = () => blocked;
+      expect(await within(store.currentRanks())).toBe('done');
     } finally { release(); await store.close(); }
+  });
+  it('re-ranks volumes from the background timer, not from the first request of the minute', async () => {
+    const db = await fixture(), store = new ReadStore(db, () => now);
+    await store.refreshModels();
+    await db.sql.query('UPDATE read_rank_clock SET window_sec=0');
+    store.start(20);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(Number((await db.sql.query<{ window_sec: string }>('SELECT window_sec FROM read_rank_clock WHERE singleton=true')).rows[0].window_sec)).toBe(Math.floor(now / 60000) * 60);
+    } finally { await store.close(); }
   });
 });

@@ -42,14 +42,25 @@ export class ReadStore {
   private listeners=new Set<(coins:Address[])=>void>();
   onRefreshed(listener:(coins:Address[])=>void) {this.listeners.add(listener);return ()=>{this.listeners.delete(listener);};}
   private modelTimer?:ReturnType<typeof setInterval>;
-  start() {this.modelTimer=setInterval(()=>{void this.refreshModels().catch(error=>reportError(error,{where:'read model refresh'}));},250);this.modelTimer.unref();}
-  async close() {clearInterval(this.modelTimer);await this.modelRefresh;}
+  private rankTimer?:ReturnType<typeof setInterval>;
+  /** Background refreshers: projections every 250 ms, the per-minute volume ranks every `rankMs` (production). */
+  start(rankMs=5000) {
+    this.modelTimer=setInterval(()=>{void this.refreshModels().catch(error=>reportError(error,{where:'read model refresh'}));},250);this.modelTimer.unref();
+    this.rankTimer=setInterval(()=>{void this.refreshRanks().catch(error=>reportError(error,{where:'read rank refresh'}));},rankMs);this.rankTimer.unref();
+  }
+  async close() {clearInterval(this.modelTimer);clearInterval(this.rankTimer);await this.modelRefresh;await this.rankRefresh;}
   /**
    * Requests read the current projection. With the background refresher running (every 250 ms) they never wait on its
    * backlog: during the 2026-10-09 scanner catch-up a radar request waited 40+ s behind refresh batches contending for
    * the read_feed lock. Without the refresher (tests, one-off tools) a request still refreshes first.
    */
   private async currentModels() { if (!this.modelTimer) await this.refreshModels(); }
+  /**
+   * Requests read the ranks as they stand. The per-minute volume re-rank updates read_coins under the same lock the
+   * refresher takes every 250 ms, so the first request of each minute used to run it and wait behind refresh batches
+   * (10–20 s radar loads on 2026-10-09). The background timer runs it instead; without it a request refreshes first.
+   */
+  async currentRanks() { if (!this.rankTimer) await this.refreshRanks(); }
   /** True once start() runs the background refresher (production); tests and tools refresh inline instead. */
   get background() { return this.modelTimer !== undefined; }
   /** Durable coin revisions coalesce inserts, enrichment updates and reorg deletes after commit. */
