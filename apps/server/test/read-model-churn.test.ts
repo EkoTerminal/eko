@@ -1,12 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, pruneSwaps, type ChainDb } from '@eko/db';
+import { binary, ChainDb, migrate, migrateEngines, openDb, pruneSwaps, type SqlClient } from '@eko/db';
 import { CoinsService } from '../src/read/coins.js';
 import { FeedService } from '../src/read/feed.js';
 import { GuardReadStore } from '../src/read/guard-store.js';
 import { PairsService } from '../src/read/pairs.js';
 import { ScanService } from '../src/read/scan.js';
-import { ReadStore } from '../src/read/store.js';
+import { ReadStore, REFRESH_BATCH } from '../src/read/store.js';
 
 // Read-model refreshes must leave unchanged projection rows alone (no new row versions) and produce exactly the rows
 // the 0114 refresh produced. The 0114 function is loaded from its migration file and run side by side.
@@ -174,6 +174,19 @@ describe('read-model refresh churn', () => {
       store.refreshRanks = () => blocked;
       expect(await within(store.currentRanks())).toBe('done');
     } finally { release(); await store.close(); }
+  });
+  it('refreshes a large backlog in short transactions, so card writes never wait behind a long one', async () => {
+    const db = await fixture();
+    await db.sql.query("INSERT INTO read_dirty(coin) SELECT decode(lpad(to_hex(4096+n),40,'0'),'hex') FROM generate_series(1,$1::int) n", [REFRESH_BATCH * 2 + 7]);
+    const batches: number[] = [];
+    const wrap = (sql: SqlClient): SqlClient => ({ query: async <T,>(text: string, params?: unknown[]) => {
+      if (text.startsWith('SELECT refresh_read_models')) batches.push((params![0] as unknown[]).length);
+      return sql.query<T>(text, params);
+    } });
+    await new ReadStore(new ChainDb(wrap(db.sql), fn => db.tx(tx => fn(wrap(tx.sql)))), () => now).refreshModels();
+    expect(batches.length).toBeGreaterThanOrEqual(3);expect(Math.max(...batches)).toBeLessThanOrEqual(REFRESH_BATCH);
+    expect(batches.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(REFRESH_BATCH * 2 + 7);
+    expect((await db.sql.query('SELECT 1 FROM read_dirty')).rows).toHaveLength(0);
   });
   it('re-ranks volumes from the background timer, not from the first request of the minute', async () => {
     const db = await fixture(), store = new ReadStore(db, () => now);

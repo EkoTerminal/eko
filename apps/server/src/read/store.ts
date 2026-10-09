@@ -3,6 +3,8 @@ import { readSellChecks, type SellCheckReading } from '@eko/engines';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
+/** Coins per read-model refresh transaction (see refreshModels). */
+export const REFRESH_BATCH=25;
 
 interface Stored {
   buyers_pending:boolean;pricing_pending:boolean;eligible:boolean;address: Uint8Array; name: string | null; symbol: string | null; launchpad: string | null;
@@ -71,7 +73,9 @@ export class ReadStore {
       const cutoff=(await this.db.sql.query<{revision:string|null}>('SELECT max(revision) AS revision FROM read_dirty')).rows[0].revision;
       if(cutoff==null)return;
       for(;;) {
-        const pending=(await this.db.sql.query<{coin:Uint8Array;revision:string}>('SELECT coin,revision FROM read_dirty WHERE revision<=$1 ORDER BY revision LIMIT 250',[cutoff])).rows;
+        // Each batch holds read_feed and read_coins for its whole transaction, and every card write's verdict trigger
+        // writes read_feed. 250 coins held them 14-27 s per batch (2026-10-09) and the scanner wrote four cards a minute.
+        const pending=(await this.db.sql.query<{coin:Uint8Array;revision:string}>('SELECT coin,revision FROM read_dirty WHERE revision<=$1 ORDER BY revision LIMIT $2',[cutoff,REFRESH_BATCH])).rows;
         if(!pending.length)return;
         await this.db.tx(async tx=>{
           // Multiple API processes serialize projection refreshes, never lock ingest source rows.
