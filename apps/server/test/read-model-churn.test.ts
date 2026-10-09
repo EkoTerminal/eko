@@ -148,4 +148,19 @@ describe('read-model refresh churn', () => {
     expect(await range()).toEqual(traded);
     expect((await rows(db)).read_buyers).toEqual(buyers);
   });
+  it('serves requests from the current projection while the background refresher works', async () => {
+    const db = await fixture(), store = new ReadStore(db, () => now);
+    await store.refreshModels();
+    store.start();
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    try {
+      // A refresh that has not finished must not hold up a request (production saw 40+ s waits on 2026-10-09).
+      store.refreshModels = () => blocked;
+      // Settling at all (the fixture's minimal cards fail the row schema) proves the request did not wait on the refresh.
+      const within = <T>(work: Promise<T>) => Promise.race([work.then(() => 'done', () => 'done'), new Promise<string>(r => setTimeout(() => r('timeout'), 2000))]);
+      expect(await within(store.rows(undefined, [coinA]))).toBe('done');
+      expect(await within(store.refreshRanks())).toBe('done');
+    } finally { release(); await store.close(); }
+  });
 });

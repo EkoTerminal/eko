@@ -195,7 +195,10 @@ describe('private bags and persisted public snapshots (offline fixtures)', () =>
     expect(publish.mock.calls.filter(call => !isPublicMarketTick(call))).toEqual([]);
     for (const call of publish.mock.calls) expect(JSON.stringify(call).toLowerCase()).not.toContain(a.wallet.toLowerCase());
     expect(privatePublish).not.toHaveBeenCalled();
-    expect(sockets.flatMap(s => s.messages)).toEqual([]);
+    // The same public market updates may reach sockets subscribed to radar; nothing else may, and none may carry the wallet.
+    const received = sockets.flatMap(s => s.messages) as { ch?: unknown; kind?: unknown }[];
+    expect(received.filter(m => !isPublicMarketTick([m.ch, m.kind]))).toEqual([]);
+    for (const message of received) expect(JSON.stringify(message).toLowerCase()).not.toContain(a.wallet.toLowerCase());
     for (const socket of sockets) socket.close(); publish.mockRestore(); privatePublish.mockRestore();
   });
   it('limits each owner route and keeps refusal responses uncached', async () => {

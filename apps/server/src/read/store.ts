@@ -44,6 +44,12 @@ export class ReadStore {
   private modelTimer?:ReturnType<typeof setInterval>;
   start() {this.modelTimer=setInterval(()=>{void this.refreshModels().catch(error=>reportError(error,{where:'read model refresh'}));},250);this.modelTimer.unref();}
   async close() {clearInterval(this.modelTimer);await this.modelRefresh;}
+  /**
+   * Requests read the current projection. With the background refresher running (every 250 ms) they never wait on its
+   * backlog: during the 2026-10-09 scanner catch-up a radar request waited 40+ s behind refresh batches contending for
+   * the read_feed lock. Without the refresher (tests, one-off tools) a request still refreshes first.
+   */
+  private async currentModels() { if (!this.modelTimer) await this.refreshModels(); }
   /** Durable coin revisions coalesce inserts, enrichment updates and reorg deletes after commit. */
   async refreshModels() {
     if(this.modelRefresh)return this.modelRefresh;
@@ -67,7 +73,7 @@ export class ReadStore {
   }
   // Only API-owned projections change here; source chain/engine tables stay read-only.
   async refreshRanks() {
-    await this.refreshModels();
+    await this.currentModels();
     if(this.rankRefresh)return this.rankRefresh;
     const window=Math.floor(this.now()/60000)*60;
     this.rankRefresh=this.db.tx(async tx=>{
@@ -83,7 +89,7 @@ export class ReadStore {
     return this.rankRefresh;
   }
   async rows(address?: Address, addresses?: Address[]): Promise<ReadRow[]> {
-    await this.refreshModels();
+    await this.currentModels();
     const now = this.now() / 1000;
     const params:unknown[]=[now];
     const bounded=address ? [address] : addresses;
