@@ -194,8 +194,8 @@ Measured: **587/587 (100.00%)** documented. Minimum: **90%**.
 | `EngineWorker.replay` | method | [apps/engines/src/worker.ts:139](../../apps/engines/src/worker.ts#L139) | Yes |
 | `EngineWorker.poll` | method | [apps/engines/src/worker.ts:174](../../apps/engines/src/worker.ts#L174) | Yes |
 | `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:211](../../apps/engines/src/worker.ts#L211) | Yes |
-| `EngineWorker.run` | method | [apps/engines/src/worker.ts:454](../../apps/engines/src/worker.ts#L454) | Yes |
-| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:479](../../apps/engines/src/worker.ts#L479) | Yes |
+| `EngineWorker.run` | method | [apps/engines/src/worker.ts:455](../../apps/engines/src/worker.ts#L455) | Yes |
+| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:480](../../apps/engines/src/worker.ts#L480) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |

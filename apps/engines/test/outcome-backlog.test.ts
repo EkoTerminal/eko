@@ -39,10 +39,14 @@ const outcomes = async (db: ChainDb) => (await db.sql.query<{ row: string }>("SE
 describe('live outcome catch-up', () => {
   it('commits the first card after a bounded number of outcome evaluations and catches up over later writes', async () => {
     const db = await backlog(), reference = await backlog();
-    // Count outcome inserts until the first card commits.
-    let cardAt: number | undefined, inserts = 0;
+    // A non-launchpad token (no deployer, as WETH) launched with the backlog never loads sources, so it is never due.
+    const junk = Buffer.from('ab'.repeat(20), 'hex');
+    await db.sql.query("INSERT INTO tokens(address,name,symbol,decimals,first_block,block) VALUES($1,'Wrapped sample','WSAMPLE',18,$2,$2)", [junk, B0 + (86400 + 60) / 2]);
+    // Count outcome inserts until the first card commits, and reads of the due launches.
+    let cardAt: number | undefined, inserts = 0, dueReads = 0;
     const wrap = (sql: SqlClient): SqlClient => ({ query: async <T,>(text: string, params?: unknown[]) => {
       if (text.startsWith('INSERT INTO outcomes')) inserts++;
+      if (text.includes('AS done FROM tokens t')) dueReads++;
       if (text.startsWith('INSERT INTO engine_runs') && cardAt === undefined) cardAt = inserts;
       return sql.query<T>(text, params);
     } });
@@ -52,6 +56,10 @@ describe('live outcome catch-up', () => {
     expect(await worker.poll()).toBeGreaterThan(0);
     expect(cardAt).toBeDefined();
     expect(cardAt!).toBeLessThanOrEqual(OUTCOME_LOADS_PER_WRITE);
+    // One read of the due launches serves the poll's writes until a call has tried them all (it read every launch per write).
+    const runs = Number((await db.sql.query<{ n: string }>('SELECT count(*)::text AS n FROM engine_runs')).rows[0]!.n);
+    expect(runs).toBeGreaterThan(10);
+    expect(dueReads).toBeLessThanOrEqual(2);
     // Later polls finish the catch-up; the outcomes equal one unbounded pass over the same rows.
     for (let poll = 0; poll < 40 && reports.at(-1)!.outcomesPending; poll++) await worker.poll();
     expect(reports.at(-1)).toMatchObject({ phase: 'done', outcomesPending: false });
@@ -61,6 +69,7 @@ describe('live outcome catch-up', () => {
     const expected = await outcomes(reference);
     expect(expected.length).toBeGreaterThanOrEqual(LAUNCHES);
     expect(await outcomes(db)).toEqual(expected);
+    expect((await db.sql.query('SELECT 1 FROM engine_card_failures WHERE coin=$1', [junk])).rows).toHaveLength(0);
   }, 120_000);
 
   it('reports the evaluation phase while no card has completed yet', async () => {

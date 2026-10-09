@@ -27,6 +27,12 @@ export const OUTCOME_LOADS_PER_WRITE = 8;
 /** Bounds one updateOutcomes call: `loads` horizon evaluations may still start; `used` counts the ones started. */
 export interface OutcomeBudget { loads: number; used: number }
 /**
+ * Live: the due launches one call read, kept for the following calls of a poll until a call has tried every one. The
+ * query reads every launch (about 8 s in production on 2026-10-09) and ran on every card write while outcomes were
+ * behind, so it took most of each write.
+ */
+export interface OutcomeQueue { rows?: { address: Uint8Array; ts: Date; done: string[] }[] }
+/**
  * `skips` (live mode) remembers outcomes that could not be decided yet. Without it, every coin that never traded was
  * reloaded on every write while the engine held its write lock, so evaluations slowed to minutes each.
  *
@@ -36,12 +42,14 @@ export interface OutcomeBudget { loads: number; used: number }
  * transaction before any card committed. Replay (`cache`) is never bounded. Returns true when every due horizon was
  * tried.
  */
-export async function updateOutcomes(db: ChainDb, block: number, nowSec: number, clock?:ClockCache,cache?:ReplayCache,skips?:Map<string,number>,budget?:OutcomeBudget) {
-  // Live: only launches with a passed horizon that has no outcome yet, with the horizons they have.
-  const tokens = cache ? [...cache.tokens.values()].filter(t=>Number(t.first_block)<=block && seconds(cache.clock.get(Number(t.first_block))!.ts)<=nowSec-3600 && cache.outcomesAt(rowHex(t.address),Infinity).length<3).sort((a,b)=>Number(a.first_block)-Number(b.first_block) || rowHex(a.address).localeCompare(rowHex(b.address))).map(t=>({address:t.address,ts:cache.clock.get(Number(t.first_block))!.ts,done:undefined})) : (await db.sql.query<{ address: Uint8Array; ts: Date; done: string[] }>(`SELECT t.address,b.ts,
+export async function updateOutcomes(db: ChainDb, block: number, nowSec: number, clock?:ClockCache,cache?:ReplayCache,skips?:Map<string,number>,budget?:OutcomeBudget,queue?:OutcomeQueue) {
+  // Live: only launches with a passed horizon that has no outcome yet, with the horizons they have. A token without a
+  // deployer never loads sources (WETH and other non-launchpad tokens: 21,000 of 38,000 in production), so it has none.
+  const tokens = cache ? [...cache.tokens.values()].filter(t=>t.deployer!=null && Number(t.first_block)<=block && seconds(cache.clock.get(Number(t.first_block))!.ts)<=nowSec-3600 && cache.outcomesAt(rowHex(t.address),Infinity).length<3).sort((a,b)=>Number(a.first_block)-Number(b.first_block) || rowHex(a.address).localeCompare(rowHex(b.address))).map(t=>({address:t.address,ts:cache.clock.get(Number(t.first_block))!.ts,done:undefined as string[] | undefined})) : queue?.rows ?? (await db.sql.query<{ address: Uint8Array; ts: Date; done: string[] }>(`SELECT t.address,b.ts,
       coalesce((SELECT array_agg(o.horizon) FROM outcomes o WHERE o.coin=t.address),'{}') AS done FROM tokens t JOIN engine_block_times b ON b.number=t.first_block
-    WHERE t.first_block<=$1 AND b.ts<=to_timestamp($2-3600) AND EXISTS(SELECT 1 FROM (VALUES ('1h',3600),('24h',86400),('7d',604800)) h(horizon,sec)
+    WHERE t.deployer IS NOT NULL AND t.first_block<=$1 AND b.ts<=to_timestamp($2-3600) AND EXISTS(SELECT 1 FROM (VALUES ('1h',3600),('24h',86400),('7d',604800)) h(horizon,sec)
       WHERE b.ts<=to_timestamp($2-h.sec) AND NOT EXISTS(SELECT 1 FROM outcomes o WHERE o.coin=t.address AND o.horizon=h.horizon)) ORDER BY t.first_block,t.address`, [block,nowSec])).rows;
+  if(queue && !cache)queue.rows=tokens as OutcomeQueue['rows'];
   for (const token of tokens) for (const [horizon,duration] of [['1h',3600],['24h',86400],['7d',604800]] as const) {
     if (nowSec<seconds(token.ts)+duration) continue;
     const coin=rowHex(token.address);
@@ -90,9 +98,11 @@ export async function updateOutcomes(db: ChainDb, block: number, nowSec: number,
       ...sells.map(r=>evidence(r,'Outcome insider sell'))];
     const data={ evidence:refs,attributionCoverage:s.attributionCoverage,priceDrop:drop,liquidityRug,firstHourSoldShare:denominator ? firstHourSold/denominator : null };
     await db.sql.query('INSERT INTO outcomes VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [token.address,horizon,end.number,outcome,JSON.stringify(data)]);
+    if(!cache)token.done=[...token.done ?? [],horizon];
     skips?.delete(attempt);
     cache?.recordOutcome(coin,{horizon,valid_from_block:String(end.number),outcome,data});
     await materializeHistory(db,coin,block,cache);
   }
+  if(queue)queue.rows=undefined;
   return true;
 }

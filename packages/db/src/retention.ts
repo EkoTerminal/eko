@@ -59,9 +59,12 @@ export const SWAP_EVIDENCE_DAYS = 28;
  * rows are a few per coin and are re-derived by every refresh of their coin, so they stay. */
 const FEED_KINDS = ['verdict', 'playbook', 'wash'];
 
-/** Newest indexed block older than `days`, or null when indexed history does not reach that far back. */
+/**
+ * Newest indexed block older than `days`, or null when indexed history does not reach that far back. Block times never
+ * decrease with height, so the newest time below the cutoff (chain_blocks_ts) holds it; max(number) read every row.
+ */
 export async function retentionHorizon(db: ChainDb, days: number, nowMs: number): Promise<bigint | null> {
-  const row = (await db.sql.query<{ n: string | null }>('SELECT max(number)::text AS n FROM chain_blocks WHERE ts < $1',
+  const row = (await db.sql.query<{ n: string | null }>('SELECT number::text AS n FROM chain_blocks WHERE ts < $1 ORDER BY ts DESC, number DESC LIMIT 1',
     [new Date(nowMs - days * DAY_MS)])).rows[0];
   return row?.n == null ? null : BigInt(row.n);
 }

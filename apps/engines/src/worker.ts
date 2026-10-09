@@ -12,7 +12,7 @@ import { assembleCard, cardHash, digest, evaluatedPlaybooks } from './card.js';
 import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } from './sources.js';
 import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
 import { LiveActivity, baseColumns, leaveActivityFeed, type LiveActivityStats } from './live-activity.js';
-import { materializeHistory, updateOutcomes, OUTCOME_LOADS_PER_WRITE, type OutcomeBudget } from './outcomes.js';
+import { materializeHistory, updateOutcomes, OUTCOME_LOADS_PER_WRITE, type OutcomeBudget, type OutcomeQueue } from './outcomes.js';
 /** Blocks to wait before reloading a coin whose sources were unavailable: doubles per attempt, from about two minutes to about twelve hours. */
 export const retryAfterBlocks=(attempts:number)=>Math.min(2**Math.max(1,Math.min(attempts,10)),1024)*600;
 import { performance } from 'node:perf_hooks';
@@ -371,10 +371,11 @@ export class EngineWorker {
     const progress:EvaluationProgress={to,tasks:tasks.length,attempted:0,skipped:0,failed:0,completed:0,outcomeLoads:0,outcomesPending:false,phase:'sources',sec:0};
     const report=()=>{progress.sec=Math.round((performance.now()-queuedAt)/1000);progress.outcomesPending=!outcomesDone;this.options.onEvaluation?.({...progress});};
     const reporter=live && this.options.onEvaluation ? setInterval(report,this.options.evaluationReportMs ?? 60_000) : undefined;
+    const queue:OutcomeQueue={};
     const outcomes=async (tx:ChainDb,block:number,sec:number)=>{
       const budget:OutcomeBudget|undefined=live ? {loads:this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE,used:0} : undefined,phase=progress.phase;
       progress.phase='outcomes';
-      try{outcomesDone=await updateOutcomes(tx,block,sec,this.clock,this.cache,this.outcomeSkips,budget);}
+      try{outcomesDone=await updateOutcomes(tx,block,sec,this.clock,this.cache,this.outcomeSkips,budget,live ? queue : undefined);}
       finally{progress.phase=phase;progress.outcomeLoads+=budget?.used ?? 0;}
       outcomesBlock=Math.max(outcomesBlock,block);
     };
