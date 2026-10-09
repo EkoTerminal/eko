@@ -34,6 +34,19 @@ describe('bounded indexer transport retries', () => {
     expect(h.rows).toHaveLength(3);expect(h.sleeps).toContain(312.5);
     await h.meter.close();
   });
+  it('reads parent headers on public and goes to paid only when public fails, never waiting out a public rate limit',async()=>{
+    const h=harness(),request={method:'eth_getBlockByNumber',params:['0x123',false]} as const;
+    expect(await h.meter.request(request,h.send,'parent')).toBe('public');expect(h.send.paid).not.toHaveBeenCalled();
+    h.send.public.mockRejectedValueOnce(failures[0][1]);
+    expect(await h.meter.request(request,h.send,'parent')).toBe('paid');
+    h.send.public.mockRejectedValueOnce(new Error('rate limit hit, reset in 60 seconds'));
+    expect(await h.meter.request(request,h.send,'parent')).toBe('paid');
+    expect(h.sleeps.filter(ms=>ms>=60_000)).toHaveLength(0);expect(h.send.paid).toHaveBeenCalledTimes(2);
+    // The public-only lane keeps retrying public instead.
+    h.send.public.mockRejectedValueOnce(failures[0][1]);
+    expect(await h.meter.request(request,h.send,'public')).toBe('public');expect(h.send.paid).toHaveBeenCalledTimes(2);
+    await h.meter.close();
+  });
   it('tries paid after a slow public failure even if the public token has replenished',async()=>{
     const h=harness();h.send.public.mockImplementationOnce(async()=>{h.advance(500);throw failures[0][1];});
     expect(await h.meter.request({method:'eth_getBlockReceipts'},h.send,'head')).toBe('paid');

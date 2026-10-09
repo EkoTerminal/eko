@@ -403,7 +403,7 @@ export class RpcMeter {
           transientSince ??= this.now();
           if (this.now() - transientSince >= this.transientRetryMs) throw new RpcGuardError('rpc_unavailable',reason,true);
         }
-        if (!(transient && this.transientRetryMs > 0) && context !== 'head' && context !== 'head_timestamp' && provider === 'public' && /rate limit hit.*reset in 60 seconds/i.test(reason)) {
+        if (!(transient && this.transientRetryMs > 0) && context !== 'head' && context !== 'head_timestamp' && context !== 'parent' && provider === 'public' && /rate limit hit.*reset in 60 seconds/i.test(reason)) {
           await this.wait(60_000 + Math.floor(this.random() * 1000)); continue;
         }
         if (!switched && provider === 'paid' && supportsPublic(r, context)) { provider = 'public'; switched = true; continue; }

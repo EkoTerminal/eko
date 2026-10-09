@@ -19,7 +19,9 @@ const poolAbi = parseAbi(['function factory() view returns (address)', 'function
 export function createClients(env: RpcEnv, registry: AddressRegistry, meter: RpcMeter, options: { head?: boolean; enrich?: boolean } = {}): ChainClient {
   const { paid: client, reads, archive, public: backfill, head: live, headTimestamp, headWs } = createMeteredClients(env, { meter });
   const enrichment=createPublicClient({transport:meter.transport('enrich')});
-  const publicHeaders=createPublicClient({transport:meter.transport('public')});
+  // Public first; a failed read goes to paid. Public-only parent reads stalled the indexer for minutes whenever the
+  // public RPC throttled (2026-10-09: 870 retries in 12 minutes, a stall restart, 5-8 minutes behind the chain).
+  const publicHeaders=createPublicClient({transport:meter.transport('parent')});
   type Reader = typeof enrichment;
   const stateReads=(options.enrich ? enrichment : reads) as unknown as Reader;
   const metadataReads=(options.enrich ? enrichment : archive) as unknown as Reader;

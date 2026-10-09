@@ -376,7 +376,7 @@ export class LogHeadFollower {
       if(previousHash)rawHashes.set(from-1n,previousHash);
       const headerBegan=performance.now();
       // TODO(spec): Logs omit parentHash and the spec does not define sparse parent links. Inside the reorg window
-      // they stay exact, read on the public lane only (no paid header spill). Blocks deeper than INDEX_REORG_DEPTH
+      // they stay exact, read public first and paid only when public fails (no spill). Blocks deeper than INDEX_REORG_DEPTH
       // below the head cannot reorg (a deeper one halts the indexer): with deepParents 'skip' (the CLI default) their
       // missing links are not read and the stored row's parent_hash stays NULL. Those header reads were most of a
       // catch-up window's public requests.
