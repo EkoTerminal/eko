@@ -118,7 +118,9 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   const points = new PointsService(dbh.chain,cfg.POINTS_RATES,cfg.POINTS_ACTIVE_FROM);
   const reads = readServices(new ReadStore(dbh.chain),points,()=>phaseAt(cfg,Date.now()));
   reads.store.sellCheckQuotes = cfg.SELL_CHECK_ENABLED;
-  await reads.store.refreshModels();
+  // Not refreshed here: the API's background refresher catches the projection up while requests read it as it stands,
+  // and processes without one refresh on their first read. A startup refresh held every deploy (and the worker, which
+  // serves no reads) on the whole backlog, 45 minutes after a scanner catch-up on 2026-10-09, under the refresh lock.
   const db = dbh.db;
   const flags = FlagService.fromDb(db, cfg.FLAGS);
   await flags.all();

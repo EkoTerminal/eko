@@ -11,7 +11,7 @@ export class ScanService {
   }
   async scan(query:string):Promise<ScanResult> {return this.resolve(query.trim().replace(/^\$/,'').toLowerCase());}
   private async resolve(query:string,job?:ScanJob):Promise<ScanResult> {
-    await this.store.refreshModels();
+    await this.store.currentModels();
     const q=query.replace(/^\$/,'').toLowerCase();
     const isAddress=/^0x[0-9a-f]{40}$/.test(q);
     let ids:Uint8Array[];

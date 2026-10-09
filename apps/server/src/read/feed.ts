@@ -7,7 +7,7 @@ import { decodeCursor, encodeCursor } from './pagination.js';
 export class FeedService {
   constructor(readonly store:ReadStore) {}
   private async page(kinds?:FeedItem['kind'][],coin?:Address,block?:number,cursor?:string) {
-    await this.store.refreshModels();
+    await this.store.currentModels();
     const scope=`feed:${[...(kinds ?? [])].sort().join(',')}`,key=decodeCursor(cursor,scope);
     if(key && (key.length!==2 || !Number.isSafeInteger(key[0]) || typeof key[1]!=='string'))throw new InputError('Invalid feed cursor');
     const model=await flowModel(this.store.db),gate=await censusGate(this.store.db,model);

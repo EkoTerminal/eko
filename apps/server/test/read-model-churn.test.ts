@@ -2,6 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { binary, migrate, migrateEngines, openDb, pruneSwaps, type ChainDb } from '@eko/db';
 import { CoinsService } from '../src/read/coins.js';
+import { FeedService } from '../src/read/feed.js';
+import { GuardReadStore } from '../src/read/guard-store.js';
+import { PairsService } from '../src/read/pairs.js';
+import { ScanService } from '../src/read/scan.js';
 import { ReadStore } from '../src/read/store.js';
 
 // Read-model refreshes must leave unchanged projection rows alone (no new row versions) and produce exactly the rows
@@ -161,6 +165,11 @@ describe('read-model refresh churn', () => {
       const within = <T>(work: Promise<T>) => Promise.race([work.then(() => 'done', () => 'done'), new Promise<string>(r => setTimeout(() => r('timeout'), 2000))]);
       expect(await within(store.rows(undefined, [coinA]))).toBe('done');
       expect(await within(store.refreshRanks())).toBe('done');
+      // New pairs, the feed, scans and Guard lists waited on it too.
+      const guard = new GuardReadStore(store);
+      const reads: Promise<unknown>[] = [new PairsService(store).list('new'), new FeedService(store).all(), new ScanService(store).scan(coinA), guard.list(), guard.totals()];
+      for (const read of reads)
+        expect(await within(read)).toBe('done');
       // A rank refresh in progress must not hold up a request either: the background timer owns it.
       store.refreshRanks = () => blocked;
       expect(await within(store.currentRanks())).toBe('done');

@@ -23,7 +23,7 @@ export class PairsService {
       verdictPending:entry.row.verdictPending ?? false};
   }
   async list(stage:PairRow['column'],cursor?:string) {
-    await this.store.refreshModels();
+    await this.store.currentModels();
     const key=decodeCursor(cursor,`pairs:${stage}`);
     if(key && (key.length!==2 || !Number.isSafeInteger(key[0]) || typeof key[1]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[1])))throw new InputError('Invalid pairs cursor');
     const params:unknown[]=[stage];if(key)params.push(key[0],binary(key[1] as Hex));

@@ -103,7 +103,7 @@ export class GuardReadStore {
     return {address:coin,name:toUntrusted(token?.name,120),symbol:toUntrusted(token?.symbol,32),level:a?.level ?? null,verdictPending:a===null,incompleteCoverage:a!==null && (!a.completeness.buyCriticalComplete || !a.completeness.lowerTierComplete),mode:a?.mode ?? null};
   }
   async list(cursor?:string) {
-    await this.legacy.refreshModels();
+    await this.legacy.currentModels();
     const key=decodeCursor(cursor,'guard-coins');
     if(key && (key.length!==1 || typeof key[0]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[0])))throw new InputError('Invalid Guard cursor');
     const rows=(await this.db.sql.query<{coin:Uint8Array}>(`${liveSource} SELECT coin FROM live WHERE activity>$1 ${key?'AND coin>$2':''} ORDER BY coin LIMIT 101`,key?[new Date(this.legacy.now()-7*86400000),binary(String(key[0]))]:[new Date(this.legacy.now()-7*86400000)])).rows;
@@ -119,7 +119,7 @@ export class GuardReadStore {
     return GuardScanResponseSchema.parse({version:2,status:!rows.length?'not_found':rows.length>1?'ambiguous':card?.verdict?'ready':'pending',cards:card?[card]:[],candidates});
   }
   async totals():Promise<GuardTotals> {
-    await this.legacy.refreshModels();
+    await this.legacy.currentModels();
     const cutoff=new Date(this.legacy.now()-7*86400000),day=Math.floor(this.legacy.now()/86400000)*86400;
     const source=(await this.db.sql.query('SELECT 1 FROM chain_blocks LIMIT 1')).rows.length;
     if(!source)return GuardTotalsSchema.parse({status:'unavailable',activeVersion:GUARD_READ_ACTIVE_VERSION,failureCode:'missing'});

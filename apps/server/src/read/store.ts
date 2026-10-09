@@ -52,9 +52,10 @@ export class ReadStore {
   /**
    * Requests read the current projection. With the background refresher running (every 250 ms) they never wait on its
    * backlog: during the 2026-10-09 scanner catch-up a radar request waited 40+ s behind refresh batches contending for
-   * the read_feed lock. Without the refresher (tests, one-off tools) a request still refreshes first.
+   * the read_feed lock, and pairs, feed, scan and Guard reads did the same. Without the refresher (tests, one-off tools,
+   * the worker role) a request still refreshes first.
    */
-  private async currentModels() { if (!this.modelTimer) await this.refreshModels(); }
+  async currentModels() { if (!this.modelTimer) await this.refreshModels(); }
   /**
    * Requests read the ranks as they stand. The per-minute volume re-rank updates read_coins under the same lock the
    * refresher takes every 250 ms, so the first request of each minute used to run it and wait behind refresh batches
