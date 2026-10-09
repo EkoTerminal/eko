@@ -12,7 +12,7 @@ import { assembleCard, cardHash, digest, evaluatedPlaybooks } from './card.js';
 import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } from './sources.js';
 import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
 import { LiveActivity, baseColumns, leaveActivityFeed, type LiveActivityStats } from './live-activity.js';
-import { materializeHistory, updateOutcomes } from './outcomes.js';
+import { materializeHistory, updateOutcomes, OUTCOME_LOADS_PER_WRITE, type OutcomeBudget } from './outcomes.js';
 import { performance } from 'node:perf_hooks';
 import { ReplayCache, type WriteState } from './replay-cache.js';
 import { persistShadowGuardV2 } from './shadow-v2.js';
@@ -45,8 +45,23 @@ export interface WorkerOptions {
   onLiveActivity?: (stats:LiveActivityStats) => void;
   /** Live only: every planned checkpoint, in execution order (tests compare plans across activity modes). */
   onLiveTasks?: (tasks:readonly Checkpoint[]) => void;
+  /**
+   * Live only: evaluation-phase progress, every `evaluationReportMs` (default 60000) while a poll evaluates, whether or
+   * not any card completed, and once when the phase ends.
+   */
+  onEvaluation?: (progress:EvaluationProgress) => void;
+  evaluationReportMs?: number;
   onLivePlanned?: (plan:LivePlan) => void }
 export interface LivePlan { tasks:number; coins:number; firstScans:number; coalescedCheckpoints:number; to:number }
+/**
+ * One live poll's evaluation phase so far: tasks attempted, skipped (a run already exists), failed (sources
+ * unavailable) and completed (cards written), outcome horizons evaluated in write transactions and whether outcomes are
+ * still being caught up, and what the poll is doing now.
+ */
+export interface EvaluationProgress {
+  to:number; tasks:number; attempted:number; skipped:number; failed:number; completed:number;
+  outcomeLoads:number; outcomesPending:boolean; phase:'sources'|'write'|'outcomes'|'done'; sec:number;
+}
 interface Schedule { coin: Uint8Array; first_block: string; last_block: string | null; last_sec: string | null; price: number | null; last_trade: Date | null }
 /** A coin a poll may plan: its newest event time, revision (as stored), progress base and retention revival. */
 interface PlanInput { coin:Address; firstBlock:number; lastSec:number; revision:string; base:ActivityBase | null; revived:(watermark:number)=>number | undefined; inRange:boolean; activity?:CoinActivity }
@@ -215,7 +230,7 @@ export class EngineWorker {
           await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
           const canonicalHash=await tx.blockHash(BigInt(block));
           if(header.hash && canonicalHash!=null && canonicalHash!==hex(header.hash))throw new Error('Indexed block changed during scan preparation');
-          await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,undefined,this.outcomeSkips);
+          await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,undefined,this.outcomeSkips,{loads:OUTCOME_LOADS_PER_WRITE,used:0});
           sources.history=await historyAt(tx,sources.deployer,coin,sources.asOfBlock);
           return this.persistRun(tx,sources);
         });
@@ -332,21 +347,35 @@ export class EngineWorker {
     const width=this.options.concurrency ?? 4;
     let completed=0;
     let outcomesBlock=-1;
+    // Live writes catch up outcomes a bounded number of horizons at a time (updateOutcomes) until one call finishes.
+    let outcomesDone=true;
+    const progress:EvaluationProgress={to,tasks:tasks.length,attempted:0,skipped:0,failed:0,completed:0,outcomeLoads:0,outcomesPending:false,phase:'sources',sec:0};
+    const report=()=>{progress.sec=Math.round((performance.now()-queuedAt)/1000);progress.outcomesPending=!outcomesDone;this.options.onEvaluation?.({...progress});};
+    const reporter=live && this.options.onEvaluation ? setInterval(report,this.options.evaluationReportMs ?? 60_000) : undefined;
+    const outcomes=async (tx:ChainDb,block:number,sec:number)=>{
+      const budget:OutcomeBudget|undefined=live ? {loads:OUTCOME_LOADS_PER_WRITE,used:0} : undefined,phase=progress.phase;
+      progress.phase='outcomes';
+      try{outcomesDone=await updateOutcomes(tx,block,sec,this.clock,this.cache,this.outcomeSkips,budget);}
+      finally{progress.phase=phase;progress.outcomeLoads+=budget?.used ?? 0;}
+      outcomesBlock=Math.max(outcomesBlock,block);
+    };
+    try {
     for(let offset=0;offset<tasks.length && !this.stopped;) {
       if(live && offset>=priority && this.options.liveSliceMs!==undefined && performance.now()-sliceStart>=this.options.liveSliceMs
         && (await this.db.sql.query('SELECT 1 FROM tokens WHERE first_block>$1 LIMIT 1',[to])).rows.length) {yielded=true;break;}
       // First scans never share a batch with backlog, so a yield happens right after them.
       const batch=tasks.slice(offset,Math.min(offset+width,offset<priority ? priority : tasks.length));offset+=batch.length;
-      const sourceStart=performance.now();
+      const sourceStart=performance.now();progress.phase='sources';
       // Prepare the shared market lane in task order before asynchronous coin loads.
       if(this.cache)for(const point of batch)await this.cache.ranked(point.block,point.sec);
       const loaded=await Promise.all(batch.map(async point=>{
+        progress.attempted++;
         const existing=this.cache ? this.cache.runs.has(`${point.coin}:${point.block}`) : (await this.db.sql.query('SELECT 1 FROM engine_runs WHERE coin=$1 AND block=$2 AND rules_version=$3',[binary(point.coin),point.block,RULES_VERSION])).rows.length;
-        if(existing && !(live && revised.has(point.coin) && point.block===to))return null;
+        if(existing && !(live && revised.has(point.coin) && point.block===to)){progress.skipped++;return null;}
         await resolveClock(this.db,point.block,this.readBlock,this.clock);
         if(live){await recordScanStart(this.db,point.coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.options.referenceSimulation?.(point.coin,point.block);}
         const sources=await loadSources(this.db,point.coin,point.block,this.client,this.clock,this.cache,!live,memo);
-        if(!sources)this.cardFailures++;
+        if(!sources){this.cardFailures++;progress.failed++;}
         return sources;
       }));
       this.metrics.sourceMs+=performance.now()-sourceStart;
@@ -354,21 +383,21 @@ export class EngineWorker {
         if(i>0 && this.stopped)break;
         remaining.set(batch[i].coin,remaining.get(batch[i].coin)!-1);
         const sources=loaded[i];if(!sources){this.cache?.writes.delete(batch[i].coin);expire(batch[i].sec);continue;}
+        progress.phase='write';
         const writeStart=performance.now();const card=await this.db.tx(async tx=>{
           await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
           if(!this.cache && !(live && revised.has(sources.coin) && sources.asOfBlock===to) && (await tx.sql.query('SELECT 1 FROM engine_runs WHERE coin=$1 AND block=$2 AND rules_version=$3',[binary(sources.coin),sources.asOfBlock,RULES_VERSION])).rows.length)return;
           // Outcomes are keyed by horizon time, so a later block covers every earlier one. Replay runs in block
           // order (unchanged); live first scans run ahead of older backlog, which must not re-run this per write.
-          if(sources.asOfBlock>outcomesBlock) {
-            await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,this.cache,this.outcomeSkips);
-            outcomesBlock=sources.asOfBlock;
-          }
+          // A live call stops after a few horizons, so the next write continues it instead of the card waiting for all.
+          if(sources.asOfBlock>outcomesBlock || !outcomesDone)await outcomes(tx,sources.asOfBlock,sources.asOfSec);
           const {historyAt}=await import('./sources.js');sources.history=await historyAt(tx,sources.deployer,sources.coin,sources.asOfBlock,this.cache);
           return this.persistRun(tx,sources,!live);
         });
         this.metrics.writeMs+=performance.now()-writeStart;
         expire(sources.asOfSec);
-        if(!card)continue;
+        if(!card){progress.skipped++;continue;}
+        progress.completed++;
         this.evaluated.set(sources.coin,{level:card.verdict.level,playbooks:card.playbooks});
         if(live){await this.recordScan(card);this.options.onQueueCompletion?.(performance.now()-queuedAt);}
         completed++;this.completed++;this.options.onProgress?.(completed,sources.asOfBlock);
@@ -379,10 +408,11 @@ export class EngineWorker {
     }
     // Outcome horizons still mature after a coin stops receiving card evaluations.
     const end=clock.at(-1);
-    if(!this.stopped && end && outcomesBlock<end.number){const start=performance.now();await this.db.tx(async tx=>{
+    if(!this.stopped && end && (outcomesBlock<end.number || !outcomesDone)){const start=performance.now();await this.db.tx(async tx=>{
       await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
-      await updateOutcomes(tx,end.number,end.sec,this.clock,this.cache,this.outcomeSkips);
+      await outcomes(tx,end.number,end.sec);
     });this.metrics.writeMs+=performance.now()-start;}
+    } finally {clearInterval(reporter);progress.phase='done';if(live)report();}
     // A yielded poll records only coins whose checkpoints all ran; the rest are planned again next poll.
     this.yielded=yielded;
     if(!this.stopped && live)for(const coin of pending)if(!yielded || !remaining.get(coin.coin)) {

@@ -34,6 +34,12 @@ evaluation slower and new launches waited behind hours of backlog showing "Scann
 - The hourly market-rank read is shared by every evaluation at the same block within a poll.
 - `ENGINE_STALL_SEC` (default 600, 60–86400): a live loop with no completed poll and no finished evaluation for
   this long logs `engines_stalled` and exits 1, so the platform restarts it instead of leaving it hung.
+- `engine_evaluation` logs a live poll's evaluation phase every minute, with or without completed cards, and at its
+  end: tasks attempted, skipped (run exists), failed (sources unavailable) and completed, outcome horizons evaluated,
+  whether outcomes are still catching up, and the current phase (`sources`, `write`, `outcomes`).
+- Outcomes catch up at most eight horizon evaluations per card write (oldest launches first; later writes and polls
+  continue). After an outage the first write used to evaluate every launch's passed horizons inside its transaction
+  (2026-10-09: about 34,000 coins), so no card committed for hours.
 - `live_planned` logs the task count, first scans and coalesced checkpoints when it coalesces or has more than ten
   first scans queued.
 

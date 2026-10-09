@@ -22,25 +22,40 @@ export async function materializeHistory(db: ChainDb, coin: Address, block: numb
 }
 /** A live engine retries a skipped outcome (no end block, no trades, no price yet) at most this often. */
 export const OUTCOME_SKIP_RETRY_SEC = 1800;
+/** Horizon evaluations (a full source load each) a live write may make before it commits; the rest wait for later writes. */
+export const OUTCOME_LOADS_PER_WRITE = 8;
+/** Bounds one updateOutcomes call: `loads` horizon evaluations may still start; `used` counts the ones started. */
+export interface OutcomeBudget { loads: number; used: number }
 /**
  * `skips` (live mode) remembers outcomes that could not be decided yet. Without it, every coin that never traded was
  * reloaded on every write while the engine held its write lock, so evaluations slowed to minutes each.
+ *
+ * `budget` (live mode) bounds the horizon evaluations of one call, oldest launches first, and the call returns false
+ * when it stopped with evaluations left; the caller calls again on a later write. Unbounded, the first write after an
+ * outage evaluated every launch's passed horizons (production 2026-10-09: about 34,000 coins, hours) inside its write
+ * transaction before any card committed. Replay (`cache`) is never bounded. Returns true when every due horizon was
+ * tried.
  */
-export async function updateOutcomes(db: ChainDb, block: number, nowSec: number, clock?:ClockCache,cache?:ReplayCache,skips?:Map<string,number>) {
-  const tokens = cache ? [...cache.tokens.values()].filter(t=>Number(t.first_block)<=block && seconds(cache.clock.get(Number(t.first_block))!.ts)<=nowSec-3600 && cache.outcomesAt(rowHex(t.address),Infinity).length<3).sort((a,b)=>Number(a.first_block)-Number(b.first_block) || rowHex(a.address).localeCompare(rowHex(b.address))).map(t=>({address:t.address,ts:cache.clock.get(Number(t.first_block))!.ts})) : (await db.sql.query<{ address: Uint8Array; ts: Date }>(`SELECT t.address,b.ts FROM tokens t JOIN engine_block_times b ON b.number=t.first_block
-    WHERE t.first_block<=$1 AND b.ts<=to_timestamp($2-3600) AND (SELECT count(*) FROM outcomes o WHERE o.coin=t.address)<3 ORDER BY t.first_block,t.address`, [block,nowSec])).rows;
+export async function updateOutcomes(db: ChainDb, block: number, nowSec: number, clock?:ClockCache,cache?:ReplayCache,skips?:Map<string,number>,budget?:OutcomeBudget) {
+  // Live: only launches with a passed horizon that has no outcome yet, with the horizons they have.
+  const tokens = cache ? [...cache.tokens.values()].filter(t=>Number(t.first_block)<=block && seconds(cache.clock.get(Number(t.first_block))!.ts)<=nowSec-3600 && cache.outcomesAt(rowHex(t.address),Infinity).length<3).sort((a,b)=>Number(a.first_block)-Number(b.first_block) || rowHex(a.address).localeCompare(rowHex(b.address))).map(t=>({address:t.address,ts:cache.clock.get(Number(t.first_block))!.ts,done:undefined})) : (await db.sql.query<{ address: Uint8Array; ts: Date; done: string[] }>(`SELECT t.address,b.ts,
+      coalesce((SELECT array_agg(o.horizon) FROM outcomes o WHERE o.coin=t.address),'{}') AS done FROM tokens t JOIN engine_block_times b ON b.number=t.first_block
+    WHERE t.first_block<=$1 AND b.ts<=to_timestamp($2-3600) AND EXISTS(SELECT 1 FROM (VALUES ('1h',3600),('24h',86400),('7d',604800)) h(horizon,sec)
+      WHERE b.ts<=to_timestamp($2-h.sec) AND NOT EXISTS(SELECT 1 FROM outcomes o WHERE o.coin=t.address AND o.horizon=h.horizon)) ORDER BY t.first_block,t.address`, [block,nowSec])).rows;
   for (const token of tokens) for (const [horizon,duration] of [['1h',3600],['24h',86400],['7d',604800]] as const) {
     if (nowSec<seconds(token.ts)+duration) continue;
     const coin=rowHex(token.address);
     const attempt=`${coin}:${horizon}`;
     if(!cache && skips && (skips.get(attempt) ?? -Infinity)>nowSec-OUTCOME_SKIP_RETRY_SEC)continue;
     const skip=()=>{skips?.set(attempt,nowSec);};
-    if(cache ? cache.outcomesAt(coin,Infinity).some(o=>o.horizon===horizon) || cache.outcomeAttempts.has(attempt) : (await db.sql.query('SELECT 1 FROM outcomes WHERE coin=$1 AND horizon=$2', [token.address,horizon])).rows.length) continue;
+    if(cache ? cache.outcomesAt(coin,Infinity).some(o=>o.horizon===horizon) || cache.outcomeAttempts.has(attempt) : token.done?.includes(horizon)) continue;
+    if(budget && budget.loads<=0)return false;
     const end = cache ? cache.endBlock(seconds(token.ts)+duration,block) : (await db.sql.query<{ number:string; ts:Date }>('SELECT number,ts FROM engine_block_times WHERE ts>=to_timestamp($2) AND number<=$1 ORDER BY ts,number LIMIT 1', [block,seconds(token.ts)+duration])).rows[0];
     // Block times never decrease with height, so the earliest time at or after the horizon is its first block; this
     // order uses the (ts, number) index instead of scanning every earlier block.
     if (!end) { skip(); continue; }
     cache?.outcomeAttempts.add(attempt);
+    if(budget){budget.loads--;budget.used++;}
     const s=await loadSources(db,coin,Number(end.number),undefined,clock,cache,true);
     if (!s || !s.swaps.length) { skip(); continue; }
     const insiders=new Set([s.deployer,...s.exemptionWallets]);
@@ -79,4 +94,5 @@ export async function updateOutcomes(db: ChainDb, block: number, nowSec: number,
     cache?.recordOutcome(coin,{horizon,valid_from_block:String(end.number),outcome,data});
     await materializeHistory(db,coin,block,cache);
   }
+  return true;
 }
