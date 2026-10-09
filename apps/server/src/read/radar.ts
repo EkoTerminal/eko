@@ -37,7 +37,19 @@ export class RadarService {
     const last=page.at(-1);
     return {rows,cursor:selected.rows.length>100 && last ? encodeCursor('radar',[last.tier,last.volume,hex(last.coin),(key ? Number(key[3]) : 0)+page.length]) : null,delayedSec:0,totals};
   }
-  async totals() {
+  private cachedTotals?: { at: number; value: ReturnType<RadarService['computeTotals']> };
+  /** Header counts change slowly; serve them from a 30-second cache so a radar request never recomputes them inline. */
+  totals() {
+    if(!this.store.background)return this.computeTotals();
+    const now=this.store.now();
+    if(!this.cachedTotals || now-this.cachedTotals.at>=30_000) {
+      const value=this.computeTotals();
+      this.cachedTotals={at:now,value};
+      value.catch(()=>{ if(this.cachedTotals?.value===value)this.cachedTotals=undefined; });
+    }
+    return this.cachedTotals.value;
+  }
+  private async computeTotals() {
     const result=await this.store.db.sql.query<{tier:number;n:string}>('SELECT tier,count(*) AS n FROM read_coins WHERE activity>$1 GROUP BY tier',[new Date(this.store.now()-7*86400000)]);
     const midnight=Math.floor(this.store.now()/86400000)*86400;
     const today=await this.store.db.sql.query<{n:string}>('SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN read_coins r ON r.coin=e.coin WHERE e.sec>=$1 AND e.sec<$2 AND r.activity>$3',[midnight,midnight+86400,new Date(this.store.now()-7*86400000)]);

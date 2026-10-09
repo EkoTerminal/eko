@@ -50,6 +50,8 @@ export class ReadStore {
    * the read_feed lock. Without the refresher (tests, one-off tools) a request still refreshes first.
    */
   private async currentModels() { if (!this.modelTimer) await this.refreshModels(); }
+  /** True once start() runs the background refresher (production); tests and tools refresh inline instead. */
+  get background() { return this.modelTimer !== undefined; }
   /** Durable coin revisions coalesce inserts, enrichment updates and reorg deletes after commit. */
   async refreshModels() {
     if(this.modelRefresh)return this.modelRefresh;
