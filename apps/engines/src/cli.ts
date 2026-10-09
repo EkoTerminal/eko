@@ -19,6 +19,8 @@ const config=z.object({
   ENGINE_LIVE_ACTIVITY:z.enum(['incremental','full']).default('incremental'),
   // Live loop silent (no poll completed, no evaluation finished) this long: log engines_stalled and exit 1.
   ENGINE_STALL_SEC:z.coerce.number().int().min(60).max(86400).default(600),
+  // Overdue outcome horizons evaluated per live card write while a backlog clears (0 defers them to the end of the poll).
+  ENGINE_OUTCOME_LOADS_PER_WRITE:z.coerce.number().int().min(0).max(64).default(8),
   // Live sell checks (BACKEND §6.2, eth_call probe). Off unless set; needs RPC_HTTP_URL and runs in live mode only.
   SELL_CHECK_ENABLED:flag,
   SELL_CHECK_POLL_MS:z.coerce.number().int().min(1000).max(600000).default(5000),
@@ -62,7 +64,7 @@ async function main() {
     // Every probe goes through the process meter (paid archive route, pinned block) and the daily cap below.
     const sellChecks=env.SELL_CHECK_ENABLED && rpc && env.ENGINE_MODE==='live' ? new SellCheckScheduler(db,new SellChecker(db,{request:request=>rpc.archive.request(request as never)}),
       {batch:env.SELL_CHECK_BATCH,dailyRequests:env.SELL_CHECK_DAILY_REQUESTS,minIntervalSec:env.SELL_CHECK_MIN_INTERVAL_SEC,maxAgeSec:env.SELL_CHECK_MAX_AGE_SEC},log) : undefined;
-    const worker=new EngineWorker(db,{ client,readBlock,onScanComplete:ms=>telemetry.emit('pair_to_complete_verdict_ms',ms),onQueueCompletion:ms=>telemetry.emit('queue_completion_ms',ms),onHeartbeat:()=>{stallWatch?.progress();if(Date.now()-heartbeatAt>=30000){telemetry.emit('role_engines',1);heartbeatAt=Date.now();}},onPlanned:plan=>console.log(JSON.stringify({event:'replay_planned',...plan})),onProgress:(evaluations,block)=>{stallWatch?.progress();if(evaluations%100===0 || Date.now()-progressAt>=30000){console.log(JSON.stringify({event:'engine_progress',evaluations,block,...worker.telemetry()}));progressAt=Date.now();}},concurrency:env.ENGINE_CONCURRENCY,pollMs:env.ENGINE_POLL_MS,liveBacklogSec:env.ENGINE_LIVE_BACKLOG_SEC,liveSliceMs:env.ENGINE_LIVE_SLICE_MS,liveActivity:env.ENGINE_LIVE_ACTIVITY,
+    const worker=new EngineWorker(db,{ client,readBlock,outcomeLoadsPerWrite:env.ENGINE_OUTCOME_LOADS_PER_WRITE,onScanComplete:ms=>telemetry.emit('pair_to_complete_verdict_ms',ms),onQueueCompletion:ms=>telemetry.emit('queue_completion_ms',ms),onHeartbeat:()=>{stallWatch?.progress();if(Date.now()-heartbeatAt>=30000){telemetry.emit('role_engines',1);heartbeatAt=Date.now();}},onPlanned:plan=>console.log(JSON.stringify({event:'replay_planned',...plan})),onProgress:(evaluations,block)=>{stallWatch?.progress();if(evaluations%100===0 || Date.now()-progressAt>=30000){console.log(JSON.stringify({event:'engine_progress',evaluations,block,...worker.telemetry()}));progressAt=Date.now();}},concurrency:env.ENGINE_CONCURRENCY,pollMs:env.ENGINE_POLL_MS,liveBacklogSec:env.ENGINE_LIVE_BACKLOG_SEC,liveSliceMs:env.ENGINE_LIVE_SLICE_MS,liveActivity:env.ENGINE_LIVE_ACTIVITY,
       onLiveActivity:stats=>{if(stats.cold || stats.summedCoins || stats.ms>=10000)log('live_activity',{...stats,ms:Math.round(stats.ms)});},
       // Every minute of a live evaluation phase, with or without completed cards, and at its end.
       onEvaluation:progress=>log('engine_evaluation',{...progress}),onLivePlanned:plan=>{if(plan.coalescedCheckpoints || plan.firstScans>10)console.log(JSON.stringify({event:'live_planned',...plan}));},bus:env.DATABASE_URL ? new PostgresBus(env.DATABASE_URL) : db.bus });

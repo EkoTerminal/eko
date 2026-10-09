@@ -36,6 +36,8 @@ export interface WorkerOptions {
   liveBacklogSec?: number;
   /** Live only. After this long, a poll yields to a newer launch so its first scan is not queued behind backlog. */
   liveSliceMs?: number;
+  /** Overdue outcome horizons per live card write; defaults to OUTCOME_LOADS_PER_WRITE. */
+  outcomeLoadsPerWrite?: number;
   /**
    * Live only. 'incremental' (default) reads only what changed since the previous poll and plans from per-coin progress
    * (live-activity.ts); 'full' aggregates every coin's whole history on every poll, as replay does.
@@ -230,7 +232,7 @@ export class EngineWorker {
           await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
           const canonicalHash=await tx.blockHash(BigInt(block));
           if(header.hash && canonicalHash!=null && canonicalHash!==hex(header.hash))throw new Error('Indexed block changed during scan preparation');
-          await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,undefined,this.outcomeSkips,{loads:OUTCOME_LOADS_PER_WRITE,used:0});
+          await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,undefined,this.outcomeSkips,{loads:this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE,used:0});
           sources.history=await historyAt(tx,sources.deployer,coin,sources.asOfBlock);
           return this.persistRun(tx,sources);
         });
@@ -353,7 +355,7 @@ export class EngineWorker {
     const report=()=>{progress.sec=Math.round((performance.now()-queuedAt)/1000);progress.outcomesPending=!outcomesDone;this.options.onEvaluation?.({...progress});};
     const reporter=live && this.options.onEvaluation ? setInterval(report,this.options.evaluationReportMs ?? 60_000) : undefined;
     const outcomes=async (tx:ChainDb,block:number,sec:number)=>{
-      const budget:OutcomeBudget|undefined=live ? {loads:OUTCOME_LOADS_PER_WRITE,used:0} : undefined,phase=progress.phase;
+      const budget:OutcomeBudget|undefined=live ? {loads:this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE,used:0} : undefined,phase=progress.phase;
       progress.phase='outcomes';
       try{outcomesDone=await updateOutcomes(tx,block,sec,this.clock,this.cache,this.outcomeSkips,budget);}
       finally{progress.phase=phase;progress.outcomeLoads+=budget?.used ?? 0;}

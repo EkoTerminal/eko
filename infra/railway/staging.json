@@ -122,7 +122,8 @@
         "RPC_PAID_DAILY_BUDGET": "600000",
         "RPC_SESSION_BUDGET": "",
         "ENGINE_STALL_SEC": "3600",
-        "NODE_OPTIONS": "--max-old-space-size=8192"
+        "NODE_OPTIONS": "--max-old-space-size=8192",
+        "ENGINE_OUTCOME_LOADS_PER_WRITE": "1"
       },
       "secretNames": [
         "DATABASE_URL",
