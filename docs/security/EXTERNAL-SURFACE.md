@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **586/586 (100.00%)** documented. Minimum: **90%**.
+Measured: **587/587 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -186,15 +186,16 @@ Measured: **586/586 (100.00%)** documented. Minimum: **90%**.
 | `refreshCoinFlow` | function | [apps/engines/src/watcher/flow-store.ts:41](../../apps/engines/src/watcher/flow-store.ts#L41) | Yes |
 | `refreshFlows` | function | [apps/engines/src/watcher/flow-store.ts:77](../../apps/engines/src/watcher/flow-store.ts#L77) | Yes |
 | `refreshCensus` | function | [apps/engines/src/watcher/flow-store.ts:95](../../apps/engines/src/watcher/flow-store.ts#L95) | Yes |
-| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:86](../../apps/engines/src/worker.ts#L86) | Yes |
-| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:95](../../apps/engines/src/worker.ts#L95) | Yes |
-| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:114](../../apps/engines/src/worker.ts#L114) | Yes |
-| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:127](../../apps/engines/src/worker.ts#L127) | Yes |
-| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:135](../../apps/engines/src/worker.ts#L135) | Yes |
-| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:170](../../apps/engines/src/worker.ts#L170) | Yes |
-| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:207](../../apps/engines/src/worker.ts#L207) | Yes |
-| `EngineWorker.run` | method | [apps/engines/src/worker.ts:435](../../apps/engines/src/worker.ts#L435) | Yes |
-| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:460](../../apps/engines/src/worker.ts#L460) | Yes |
+| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:17](../../apps/engines/src/worker.ts#L17) | Yes |
+| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:90](../../apps/engines/src/worker.ts#L90) | Yes |
+| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:99](../../apps/engines/src/worker.ts#L99) | Yes |
+| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:118](../../apps/engines/src/worker.ts#L118) | Yes |
+| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:131](../../apps/engines/src/worker.ts#L131) | Yes |
+| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:139](../../apps/engines/src/worker.ts#L139) | Yes |
+| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:174](../../apps/engines/src/worker.ts#L174) | Yes |
+| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:211](../../apps/engines/src/worker.ts#L211) | Yes |
+| `EngineWorker.run` | method | [apps/engines/src/worker.ts:454](../../apps/engines/src/worker.ts#L454) | Yes |
+| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:479](../../apps/engines/src/worker.ts#L479) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |
@@ -541,9 +542,9 @@ Measured: **586/586 (100.00%)** documented. Minimum: **90%**.
 | `ScoreboardService.recordCoverage` | method | [apps/server/src/read/scoreboard.ts:42](../../apps/server/src/read/scoreboard.ts#L42) | Yes |
 | `ScoreboardService.recordRefusal` | method | [apps/server/src/read/scoreboard.ts:50](../../apps/server/src/read/scoreboard.ts#L50) | Yes |
 | `ScoreboardService.acceptOutcome` | method | [apps/server/src/read/scoreboard.ts:69](../../apps/server/src/read/scoreboard.ts#L69) | Yes |
-| `ScoreboardService.publishCohort` | method | [apps/server/src/read/scoreboard.ts:166](../../apps/server/src/read/scoreboard.ts#L166) | Yes |
-| `ScoreboardService.attachPostMortem` | method | [apps/server/src/read/scoreboard.ts:236](../../apps/server/src/read/scoreboard.ts#L236) | Yes |
-| `ScoreboardService.list` | method | [apps/server/src/read/scoreboard.ts:253](../../apps/server/src/read/scoreboard.ts#L253) | Yes |
+| `ScoreboardService.publishCohort` | method | [apps/server/src/read/scoreboard.ts:173](../../apps/server/src/read/scoreboard.ts#L173) | Yes |
+| `ScoreboardService.attachPostMortem` | method | [apps/server/src/read/scoreboard.ts:243](../../apps/server/src/read/scoreboard.ts#L243) | Yes |
+| `ScoreboardService.list` | method | [apps/server/src/read/scoreboard.ts:260](../../apps/server/src/read/scoreboard.ts#L260) | Yes |
 | `SensesReadService.constructor` | constructor | [apps/server/src/read/senses.ts:37](../../apps/server/src/read/senses.ts#L37) | Yes |
 | `SensesReadService.verdict` | method | [apps/server/src/read/senses.ts:49](../../apps/server/src/read/senses.ts#L49) | Yes |
 | `SensesReadService.card` | method | [apps/server/src/read/senses.ts:64](../../apps/server/src/read/senses.ts#L64) | Yes |

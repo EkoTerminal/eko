@@ -13,6 +13,8 @@ import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } 
 import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
 import { LiveActivity, baseColumns, leaveActivityFeed, type LiveActivityStats } from './live-activity.js';
 import { materializeHistory, updateOutcomes, OUTCOME_LOADS_PER_WRITE, type OutcomeBudget } from './outcomes.js';
+/** Blocks to wait before reloading a coin whose sources were unavailable: doubles per attempt, from about two minutes to about twelve hours. */
+export const retryAfterBlocks=(attempts:number)=>Math.min(2**Math.max(1,Math.min(attempts,10)),1024)*600;
 import { performance } from 'node:perf_hooks';
 import { ReplayCache, type WriteState } from './replay-cache.js';
 import { persistShadowGuardV2 } from './shadow-v2.js';
@@ -266,10 +268,25 @@ export class EngineWorker {
         revived:watermark=>coin.events.find(event=>event.block>watermark && (event.kind==='swap' || event.kind==='transfer'))?.block,
         inRange:coin.firstBlock>=from || coin.events.some(event=>event.block>=from && event.block<=to),activity:coin}));
     }
+    // A token without a deployer (WETH, USDG and every other non-launchpad token) never gets a card (readSources). It
+    // trades often, so the failure backoff below never held it: it stayed a first scan and went ahead of every real
+    // launch on each poll. It is planned again once the indexer records a deployer.
+    if(live && inputs.length) {
+      const ready=new Set((await this.db.sql.query<{address:Uint8Array}>('SELECT address FROM tokens WHERE address=ANY($1) AND deployer IS NOT NULL',
+        [inputs.map(input=>binary(input.coin))])).rows.map(row=>hex(row.address)));
+      inputs=inputs.filter(input=>ready.has(input.coin));
+    }
     const index=blockIndex(clock);
     const now=this.options.now?.() ?? Date.now()/1000;
     const states=new Map((incremental ? await this.db.sql.query<{coin:Uint8Array;revision:string;through_block:string}>('SELECT * FROM engine_activity_state WHERE coin=ANY($1)',[inputs.map(input=>binary(input.coin))])
       : await this.db.sql.query<{coin:Uint8Array;revision:string;through_block:string}>('SELECT * FROM engine_activity_state')).rows.map(row=>[hex(row.coin),row]));
+    // Live: a coin with no card yet shows "Scanning…". Its sources may be unavailable for a while (launch identity
+    // not enriched yet, no block clock): a failed load is retried after a growing number of blocks, not on every
+    // poll and every restart. At head, thousands of such retries starved the scans that could succeed.
+    const scanned=!live ? undefined : new Set((incremental ? await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest WHERE coin=ANY($1)',[inputs.map(input=>binary(input.coin))])
+      : await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest')).rows.map(row=>hex(row.coin)));
+    const failures=!live ? undefined : new Map((await this.db.sql.query<{coin:Uint8Array;attempts:string;last_block:string}>('SELECT coin,attempts::text,last_block::text FROM engine_card_failures WHERE coin=ANY($1)',
+      [inputs.filter(input=>!scanned!.has(input.coin)).map(input=>binary(input.coin))])).rows.map(row=>[hex(row.coin),{attempts:Number(row.attempts),block:Number(row.last_block)}]));
     const tasks:Checkpoint[]=[];
     const revised=new Set<Address>();
     const pending:PlanInput[]=[];
@@ -288,6 +305,8 @@ export class EngineWorker {
       const state=states.get(input.coin);
       const refreshHead=startup && !this.startupDone.has(input.coin);
       if(live && !refreshHead && state?.revision===input.revision && Number(state.through_block)>=to)continue;
+      const failure=failures?.get(input.coin);
+      if(failure && state?.revision===input.revision && to-failure.block<retryAfterBlocks(failure.attempts))continue;
       if(live && state?.revision!==input.revision)revised.add(input.coin);
       decisions.push({input,refreshHead,changed:state?.revision!==input.revision,planFrom:live && state ? Math.max(from,Number(state.through_block)+1) : from,revived});
     }
@@ -316,8 +335,6 @@ export class EngineWorker {
     // Live: a coin with no card yet shows "Scanning…"; its first scan goes before any refresh of scanned coins,
     // newest launch first. One deployer's launches run oldest first, so each sees its siblings in deployer history.
     // Each coin's own checkpoints stay in block order. Replay keeps strict block order.
-    const scanned=!live ? undefined : new Set((incremental ? await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest WHERE coin=ANY($1)',[[...new Set(tasks.map(task=>task.coin))].map(binary)])
-      : await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM coin_card_latest')).rows.map(row=>hex(row.coin)));
     const launched=new Map(inputs.map(input=>[input.coin,input.firstBlock]));
     const first=(coin:Address)=>!!scanned && !scanned.has(coin);
     const firstCoins=[...new Set(tasks.filter(task=>first(task.coin)).map(task=>task.coin))];

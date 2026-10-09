@@ -99,7 +99,8 @@ export class ScoreboardService {
   private async consume(db: ChainDb) {
     const misses = (await db.sql.query<{ order_id: string; created_at: Date; payload: Record<string, unknown>; coin: string; tx_hash: string; filled_out: string; wallet: string; post_fill_evidence: unknown }>(`SELECT m.order_id,m.created_at,m.payload,o.coin,o.tx_hash,o.filled_out,o.post_fill_evidence,q.wallet
       FROM trade_guard_misses m JOIN trade_orders o ON o.id=m.order_id JOIN trade_quotes q ON q.id=o.quote_id
-      WHERE o.status='confirmed' AND o.side='buy' ORDER BY m.created_at,m.order_id`)).rows;
+      WHERE o.status='confirmed' AND o.side='buy' AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='miss:'||m.order_id::text)
+      ORDER BY m.created_at,m.order_id`)).rows;
     for (const m of misses) {
       const parsed = PostFillEvidenceSchema.safeParse(m.post_fill_evidence);
       if (!parsed.success) continue;
@@ -113,7 +114,10 @@ export class ScoreboardService {
     const measuredRows=(await db.sql.query<{data:ScoreboardRow}>("SELECT data FROM scoreboard_records WHERE category='row' AND data->>'kind' IN ('honeypots_refused','honeypots_missed') AND data->'detail'->>'blockNumber' IS NOT NULL")).rows;
     for(const {data:r} of measuredRows)if(!r.detail.correctionOf && await db.blockHash(BigInt(r.detail.blockNumber!))!==r.detail.blockHash)
       await this.row(db,`counter-reorg:${r.id}`,{...r,detail:{...r.detail,event:'correction',correctionOf:r.id,counterEffect:'retracted',reason:'source_orphaned'}});
-    const calls = (await db.sql.query<{ id: string; data: unknown }>("SELECT id,data FROM receipt_publications WHERE kind='verdict' AND chain_id=4663 ORDER BY publication_sequence")).rows;
+    // Rows are append-only and keyed by source, so only publications without a row are read. Reading every
+    // publication on every request made the public scoreboard time out once the engines had rated thousands of coins.
+    const calls = (await db.sql.query<{ id: string; data: unknown }>(`SELECT p.id,p.data FROM receipt_publications p WHERE p.kind='verdict' AND p.chain_id=4663
+      AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='call:'||p.id) ORDER BY p.publication_sequence`)).rows;
     for (const c of calls) {
       const p = PublicReceiptPayloadSchema.safeParse(c.data);
       if (!p.success || p.data.kind !== 'verdict') continue; // Candidate V2/shadow is not an active V1 call.
@@ -124,7 +128,7 @@ export class ScoreboardService {
     }
     const corrections = (await db.sql.query<{ id: string; kind: string; verdict_id: string; coin: Uint8Array; data: unknown; ts: Date }>(`SELECT e.id,e.kind,e.verdict_id,v.coin,v.data,b.ts
       FROM verdict_events e JOIN verdicts v ON v.id=e.verdict_id JOIN chain_blocks b ON b.number=e.block
-      WHERE e.kind IN ('corrected','orphaned') ORDER BY e.block,e.id`)).rows;
+      WHERE e.kind IN ('corrected','orphaned') AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='correction:'||e.id) ORDER BY e.block,e.id`)).rows;
     for (const c of corrections) {
       const v = VerdictSchema.safeParse(c.data); if (!v.success) continue;
       await this.row(db, `correction:${c.id}`, { kind: 'calls', ts: new Date(c.ts).toISOString(), coin: hex(c.coin), level: v.data.level,
@@ -133,13 +137,16 @@ export class ScoreboardService {
     const outcomes = await this.outcomes(db);
     // TODO(spec): receipt hit/miss semantics are unspecified. Use the 24h horizon,
     // Danger vs confirmed adverse / Clear vs complete survival; Monitor/pending are n/a.
-    const rows = (await db.sql.query<RecordRow<ScoreboardRow>>("SELECT seq,source_key,data FROM scoreboard_records WHERE category='row' AND data->>'kind'='calls' AND data->'detail'->>'event'='call' ORDER BY seq")).rows;
+    const withdrawnIds = new Set((await db.sql.query<{ verdict_id: string }>("SELECT verdict_id FROM verdict_events WHERE kind IN ('corrected','orphaned')")).rows.map(r => r.verdict_id));
+    const outcomeCoins = [...new Set(outcomes.map(a => a.label.records[0]?.coin).filter((c): c is Address => !!c))];
+    const rows = outcomeCoins.length ? (await db.sql.query<RecordRow<ScoreboardRow>>(`SELECT seq,source_key,data FROM scoreboard_records WHERE category='row' AND data->>'kind'='calls'
+      AND data->'detail'->>'event'='call' AND data->>'coin'=ANY($1) ORDER BY seq`, [outcomeCoins])).rows : [];
     for (const { data: call } of rows) {
       const eligible = outcomes.filter(a => a.label.records[0]?.coin === call.coin && a.label.records[0]?.horizonSec === 86400
         && Date.parse(call.ts) <= Number(a.label.records[0]?.entryCursor?.timestampSec ?? '0') * 1000 && Number(call.detail.decisionBlock) <= Number(a.label.records[0]?.entryCursor?.blockNumber ?? '0'));
       const a = eligible.at(-1); if (!a) continue;
       const state = this.classify(a.label);
-      const withdrawn = corrections.some(c => c.verdict_id === call.detail.revisionId);
+      const withdrawn = withdrawnIds.has(String(call.detail.revisionId));
       const grade = withdrawn || !state.assessable || !['clear', 'danger'].includes(call.level ?? '') ? 'n/a'
         : call.level === 'clear' ? state.survived ? 'hit' : 'miss' : state.adverse ? 'hit' : 'miss';
       await this.row(db, `grade:${call.id}:${a.revisionId}:${withdrawn}`, { ...call, grade, ts: ts(a.label.knownAt.cursor.timestampSec),
@@ -261,7 +268,9 @@ export class ScoreboardService {
       const max = (await db.sql.query<{ n: string }>('SELECT coalesce(max(seq),0) AS n FROM scoreboard_records')).rows[0]!.n;
       const snapshot = decoded ? String(decoded[0]) : String(max), before = decoded ? String(decoded[1]) : (BigInt(snapshot) + 1n).toString();
       if (BigInt(snapshot) > BigInt(max) || BigInt(before) > BigInt(snapshot) + 1n) throw new InputError('Invalid scoreboard snapshot');
-      const all = (await db.sql.query<RecordRow<ScoreboardRow>>("SELECT seq,source_key,data FROM scoreboard_records WHERE category='row' AND seq<=$1 ORDER BY seq DESC", [snapshot])).rows;
+      // Only the honeypot counters need every row of their kind; the page itself is read by kind and bounded.
+      const fills = (await db.sql.query<RecordRow<ScoreboardRow>>(`SELECT seq,source_key,data FROM scoreboard_records WHERE category='row' AND seq<=$1
+        AND data->>'kind' IN ('honeypots_refused','honeypots_missed') ORDER BY seq DESC`, [snapshot])).rows;
       const coverage = (await db.sql.query<{ data: Coverage }>("SELECT data FROM scoreboard_records WHERE category='coverage' AND seq<=$1 ORDER BY data->>'from'", [snapshot])).rows.map(r => coverageSchema.parse(r.data));
       const measure = (metric: 'refused' | 'missed') => {
         const periods = coverage.filter(p => p[metric]);
@@ -270,19 +279,21 @@ export class ScoreboardService {
         for (const p of periods.slice(1)) { if (Date.parse(p.from) > through) return { availability: unavailable('coverage_gap'), since, value: null }; through = Math.max(through, Date.parse(p.through)); }
         if (through < asOf) return { availability: unavailable('coverage_gap'), since, value: null };
         const target = metric === 'refused' ? 'honeypots_refused' : 'honeypots_missed';
-        const retracted = new Set(all.filter(r=>r.data.detail.counterEffect==='retracted').map(r=>r.data.detail.correctionOf));
-        const value = all.filter(r => r.data.kind === target && !r.data.detail.correctionOf && !retracted.has(r.data.id) && Date.parse(r.data.ts) >= Date.parse(since) && Date.parse(r.data.ts) <= through).length;
+        const retracted = new Set(fills.filter(r=>r.data.detail.counterEffect==='retracted').map(r=>r.data.detail.correctionOf));
+        const value = fills.filter(r => r.data.kind === target && !r.data.detail.correctionOf && !retracted.has(r.data.id) && Date.parse(r.data.ts) >= Date.parse(since) && Date.parse(r.data.ts) <= through).length;
         return { availability: { status: 'observed' as const, since, through: new Date(through).toISOString() }, since, value };
       };
       const refused = measure('refused'), missed = measure('missed');
       const gated = !['token_live', 'tiers'].includes(this.phase());
-      const rows = gated && kind === 'milestones' ? [] : all.filter(r => r.data.kind === kind && BigInt(r.seq) < BigInt(before));
+      const rows = gated && kind === 'milestones' ? [] : (await db.sql.query<RecordRow<ScoreboardRow>>(`SELECT seq,source_key,data FROM scoreboard_records
+        WHERE category='row' AND seq<=$1 AND seq<$2 AND data->>'kind'=$3 ORDER BY seq DESC LIMIT $4`, [snapshot, before, kind, limit + 1])).rows;
+      const exists = async (where: string) => (await db.sql.query(`SELECT 1 FROM scoreboard_records WHERE category='row' AND seq<=$1 AND ${where} LIMIT 1`, [snapshot])).rows.length > 0;
       const observed = { status: 'observed' as const, through: new Date(this.now()).toISOString() };
       return ScoreboardResponseSchema.parse({ rows: rows.slice(0, limit).map(r => r.data), cursor: rows.length > limit ? encodeCursor(`scoreboard:${kind}`, [snapshot, String(rows[limit - 1]!.seq), String(asOf)]) : null,
         snapshot, counters: { refused: refused.value, missed: missed.value, since: refused.since && missed.since && refused.since === missed.since ? refused.since : null },
         availability: { refused: refused.availability, missed: missed.availability, forecasts: unavailable('forecast_dependency'),
-          grades: all.some(r => r.data.detail.event === 'grade') ? observed : unavailable('outcomes_unaccepted'),
-          cohort: all.some(r => r.data.kind === 'cohort') ? observed : unavailable('outcomes_unaccepted'), milestones: unavailable(gated ? 'd0_gated' : 'milestones_unaccepted') } });
+          grades: await exists("data->'detail'->>'event'='grade'") ? observed : unavailable('outcomes_unaccepted'),
+          cohort: await exists("data->>'kind'='cohort'") ? observed : unavailable('outcomes_unaccepted'), milestones: unavailable(gated ? 'd0_gated' : 'milestones_unaccepted') } });
     });
   }
 }

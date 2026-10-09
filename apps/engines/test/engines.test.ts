@@ -5,7 +5,7 @@ import { ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';
 import { decodeEventLog, type Hex } from 'viem';
-import { EngineWorker } from '../src/worker.js';
+import { EngineWorker, retryAfterBlocks } from '../src/worker.js';
 import { ReplayCache } from '../src/replay-cache.js';
 import { assembleCard, cardHash } from '../src/card.js';
 import { curveProgress,curveProgressAt,type PonsEventRow } from '../src/curve-progress.js';
@@ -119,6 +119,23 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   const worker=new EngineWorker(db);await worker.processBlock(1);
   expect((await db.sql.query('SELECT attempts,last_block,reason FROM engine_card_failures WHERE coin=$1',[binary(coin)])).rows[0]).toMatchObject({attempts:1,last_block:1,reason:'missing_launch_identity'});
   expect(worker.telemetry().cardFailures).toBe(1);expect(await count(db,'coin_cards')).toBe(0);
+ });
+ it('retries a coin without loadable sources after a growing delay, not on every poll or restart',async()=>{
+  const db=await setup(false);await db.sql.query('UPDATE tokens SET name=NULL');await transfer(db,1,actor,100);
+  const worker=new EngineWorker(db,{now:()=>epoch+100});await worker.poll();
+  expect(worker.telemetry().cardFailures).toBe(1);expect(await count(db,'coin_cards')).toBe(0);
+  // A restart within the delay does not reload it; a new block alone does not either.
+  await block(db,2);const restarted=new EngineWorker(db,{now:()=>epoch+100});await restarted.poll();
+  expect(restarted.telemetry().cardFailures).toBe(0);
+  // New activity on the coin retries it at once.
+  await block(db,3);await transfer(db,3,actor,100);await restarted.poll();
+  expect(restarted.telemetry().cardFailures).toBe(1);
+  expect((await db.sql.query<{attempts:string}>('SELECT attempts::text FROM engine_card_failures WHERE coin=$1',[binary(coin)])).rows[0].attempts).toBe('2');
+  // Once the delay has passed, a restart retries it, and it is rated as soon as its identity exists.
+  await db.sql.query("UPDATE tokens SET name='Sample token'");
+  await block(db,3+retryAfterBlocks(2));
+  const later=new EngineWorker(db,{now:()=>epoch+100});await later.poll();
+  expect(later.telemetry().cardFailures).toBe(0);expect(await count(db,'coin_cards')).toBe(1);
  });
  it('normalizes launch observations without promoting getters to effective charges or templates',async()=>{
   const db=await database();
@@ -349,6 +366,15 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   const worker=new EngineWorker(db,{now:()=>epoch+8*86400});expect(await worker.poll()).toBe(1);expect(await count(db,'coin_card_latest')).toBe(1);expect((await latest(db,address(10))).verdict.level).toBe('pending');expect(await worker.poll()).toBe(0);
   await swap(db,3,1,100,100,actor,address(10),8*86400+1);expect(await worker.poll()).toBe(1);expect(await count(db,'engine_runs')).toBe(2);
   expect(await count(db,'chain_blocks')).toBe(0);
+ });
+ it('live polls skip tokens without a deployer until the indexer records one',async()=>{
+  const db=await database();await token(db,coin,1,false);await transfer(db,1,actor,100);
+  await token(db,address(10),1,false);await db.sql.query('UPDATE tokens SET deployer=NULL WHERE address=$1',[binary(address(10))]);await transfer(db,1,actor,100,address(10));
+  const worker=new EngineWorker(db,{now:()=>epoch+2});expect(await worker.poll()).toBe(1);
+  expect(await count(db,'engine_card_failures')).toBe(0);expect(worker.telemetry().cardFailures).toBe(0);
+  expect((await db.sql.query('SELECT 1 FROM engine_activity_state WHERE coin=$1',[binary(address(10))])).rows).toHaveLength(0);
+  await db.sql.query('UPDATE tokens SET deployer=$2 WHERE address=$1',[binary(address(10)),binary(deployer)]);
+  expect(await worker.poll()).toBe(1);expect(await count(db,'coin_card_latest')).toBe(2);
  });
  it('includes launch, liquidity and Pons-only activity and obeys replay TO',async()=>{
   const db=await database();await token(db,coin,1);await transfer(db,1,curve,100000);
