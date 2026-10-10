@@ -8,6 +8,7 @@ import { AddressSchema, AvailabilityCutSchema, Bytes32Schema, PublicReceiptPaylo
 import { PostFillEvidenceSchema } from '../exec/trade-evidence.js';
 import { decodeCursor, encodeCursor } from './pagination.js';
 import { InputError } from '../http/v1/helpers.js';
+import { reportError } from '../obs/errors.js';
 
 const ids = z.array(Bytes32Schema).min(1).max(100);
 const coverageSchema = z.strictObject({ id: Bytes32Schema, origin: z.literal('measured'), evidenceIds: ids,
@@ -36,6 +37,26 @@ export class ScoreboardService {
   private row(db: ChainDb, source: string, row: Omit<ScoreboardRow, 'id'>) {
     return this.append(db, source, 'row', ScoreboardRowSchema.parse({ ...row, id: source }));
   }
+  /** Many fresh rows in one statement. Only for sources known to have no row yet (the caller filtered with NOT EXISTS);
+   * a race with another writer is harmless because the key conflict is ignored and the row is identical by construction. */
+  private async rows(db: ChainDb, rows: { source: string; row: Omit<ScoreboardRow, 'id'> }[]) {
+    for (let i = 0; i < rows.length; i += 500) {
+      const chunk = rows.slice(i, i + 500).map(r => ({ source: r.source, data: JSON.stringify(ScoreboardRowSchema.parse({ ...r.row, id: r.source })) }));
+      await db.sql.query(`INSERT INTO scoreboard_records(source_key,category,data) SELECT k,'row',d::jsonb FROM unnest($1::text[],$2::text[]) AS t(k,d) ON CONFLICT(source_key) DO NOTHING`,
+        [chunk.map(c => c.source), chunk.map(c => c.data)]);
+    }
+  }
+  private timer?: ReturnType<typeof setInterval>;
+  /** Production: consume new evidence every `ms` in the background, so a page request never pays for a large batch
+   * (the first request after the scanner rated thousands of coins took 51 s on 2026-10-10). Tests and tools, which
+   * never call start(), still consume inline in list(). */
+  start(ms = 15_000) { this.timer = setInterval(() => { void this.sync().catch(error => reportError(error, { where: 'scoreboard consume' })); }, ms); this.timer.unref(); }
+  /** Stop the background consumer; an in-flight consume finishes on its own transaction. */
+  async close() { clearInterval(this.timer); this.timer = undefined; }
+  /** True while the background consumer runs, so list() serves what has been consumed instead of consuming inline. */
+  get background() { return this.timer !== undefined; }
+  /** One consume pass under the Scoreboard lock: the timer's body, also callable by tests and tools. */
+  async sync() { await this.db.tx(async db => { await db.sql.query("SELECT pg_advisory_xact_lock(hashtext('scoreboard'))"); await this.consume(db); }); }
   /** A reviewed monitoring interval, never inferred from process boot or the first incident.
    * TODO(spec): CA-15 does not name coverage acquisition. The host supplies accepted
    * measured intervals; gaps and a stale end remain unavailable, even with existing rows. */
@@ -118,14 +139,16 @@ export class ScoreboardService {
     // publication on every request made the public scoreboard time out once the engines had rated thousands of coins.
     const calls = (await db.sql.query<{ id: string; data: unknown }>(`SELECT p.id,p.data FROM receipt_publications p WHERE p.kind='verdict' AND p.chain_id=4663
       AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='call:'||p.id) ORDER BY p.publication_sequence`)).rows;
+    const callRows: { source: string; row: Omit<ScoreboardRow, 'id'> }[] = [];
     for (const c of calls) {
       const p = PublicReceiptPayloadSchema.safeParse(c.data);
       if (!p.success || p.data.kind !== 'verdict') continue; // Candidate V2/shadow is not an active V1 call.
       const verdict = VerdictSchema.omit({receipt:true}).safeParse(p.data.decision);
       if (!verdict.success) continue;
-      await this.row(db, `call:${c.id}`, { kind: 'calls', ts: p.data.recordedAt, coin: p.data.coin, level: verdict.data.level,
-        receiptId: p.data.receiptId, detail: { event: 'call', gradeStatus: 'unavailable', rulesVersion: p.data.rulesVersion, revisionId: p.data.revisionId, decisionBlock: p.data.window.kind === 'snapshot' ? p.data.window.blockNumber : 'unavailable' } });
+      callRows.push({ source: `call:${c.id}`, row: { kind: 'calls', ts: p.data.recordedAt, coin: p.data.coin, level: verdict.data.level,
+        receiptId: p.data.receiptId, detail: { event: 'call', gradeStatus: 'unavailable', rulesVersion: p.data.rulesVersion, revisionId: p.data.revisionId, decisionBlock: p.data.window.kind === 'snapshot' ? p.data.window.blockNumber : 'unavailable' } } });
     }
+    await this.rows(db, callRows);
     const corrections = (await db.sql.query<{ id: string; kind: string; verdict_id: string; coin: Uint8Array; data: unknown; ts: Date }>(`SELECT e.id,e.kind,e.verdict_id,v.coin,v.data,b.ts
       FROM verdict_events e JOIN verdicts v ON v.id=e.verdict_id JOIN chain_blocks b ON b.number=e.block
       WHERE e.kind IN ('corrected','orphaned') AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='correction:'||e.id) ORDER BY e.block,e.id`)).rows;
@@ -264,7 +287,7 @@ export class ScoreboardService {
     if(!Number.isSafeInteger(asOf) || asOf>this.now())throw new InputError('Invalid scoreboard time');
     return this.db.tx(async db => {
       await db.sql.query("SELECT pg_advisory_xact_lock(hashtext('scoreboard'))");
-      await this.consume(db);
+      if (!this.background) await this.consume(db);
       const max = (await db.sql.query<{ n: string }>('SELECT coalesce(max(seq),0) AS n FROM scoreboard_records')).rows[0]!.n;
       const snapshot = decoded ? String(decoded[0]) : String(max), before = decoded ? String(decoded[1]) : (BigInt(snapshot) + 1n).toString();
       if (BigInt(snapshot) > BigInt(max) || BigInt(before) > BigInt(snapshot) + 1n) throw new InputError('Invalid scoreboard snapshot');

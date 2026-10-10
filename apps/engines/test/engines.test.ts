@@ -503,7 +503,9 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    return db;
   }
   const tables=['verdicts','coin_cards','playbook_matches','engine_runs','verdict_events','deployer_stats','outcomes','receipt_publications'];
-  const snapshot=(db:ChainDb)=>Promise.all(tables.map(async table=>(await db.sql.query(`SELECT row_to_json(r) AS data FROM ${table} r ORDER BY row_to_json(r)::text`)).rows));
+  // engine_runs.created_at is the wall-clock write time (0191), the only column two equal runs never share.
+  const durable=(table:string)=>table==='engine_runs' ? "(to_jsonb(r) - 'created_at')" : 'row_to_json(r)';
+  const snapshot=(db:ChainDb)=>Promise.all(tables.map(async table=>(await db.sql.query(`SELECT ${durable(table)} AS data FROM ${table} r ORDER BY ${durable(table)}::text`)).rows));
   const plain=await seed(),cached=await seed(),resumed=await seed();
   const now=()=>epoch+800000; // The same actual recording clock for each synthetic run.
   const uncachedWorker=new EngineWorker(plain,{client:client(),replayCache:false,now});await uncachedWorker.replay(1,13);

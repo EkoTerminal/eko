@@ -77,6 +77,8 @@ revision maps to a public commit:
 | `07266d48a397acc1a51ac100df93f5b13f819e1d` | the commit titled "Sync public tree with source 07266d4" | 2026-10-09 |
 | `fc09f5e5f70dca77975af5ffe802e7f3ef949a6e` | the commit titled "Sync public tree with source fc09f5e" | 2026-10-09 |
 | `879f189b7c95159fd9cde7eecc5fbb27f4f7aca3` | the commit titled "Sync public tree with source 879f189" | 2026-10-09 |
+| `efd3e831dc0b91bc8ae8fe4183666cba20a5a56a` | the commit titled "Sync public tree with source efd3e83" | 2026-10-10 |
+| `0dd96d80fe440646baa87160547925acb3a28de1` | the commit titled "Sync public tree with source 0dd96d8" | 2026-10-10 |
 
 ## Original export (October 2, 2026)
 

@@ -72,10 +72,12 @@ async function database() {
 }
 /** A new process on the same database: refreshClock keeps its watermark per handle. */
 const reopen = (db: ChainDb) => new ChainDb(db.sql, fn => db.tx(tx => fn(tx.sql)));
+/** engine_runs.created_at is the wall-clock write time (0191), the only column two equal runs never share. */
+const durable = (table: string) => table === 'engine_runs' ? "(to_jsonb(r) - 'created_at')" : 'row_to_json(r)';
 const tables = ['verdicts', 'verdict_events', 'coin_cards', 'coin_card_latest', 'playbook_matches', 'engine_runs', 'engine_schedule', 'engine_activity_state',
   'deployer_stats', 'outcomes', 'receipt_publications', 'engine_card_failures'];
 const snapshot = async (db: ChainDb) => Object.fromEntries(await Promise.all([...tables.map(async table => [table,
-  (await db.sql.query<{ data: string }>(`SELECT row_to_json(r)::text AS data FROM ${table} r ORDER BY 1`)).rows.map(row => row.data)] as const),
+  (await db.sql.query<{ data: string }>(`SELECT ${durable(table)}::text AS data FROM ${table} r ORDER BY 1`)).rows.map(row => row.data)] as const),
 ['engine_block_times', (await db.sql.query<{ data: string }>(`SELECT concat_ws(':',number,extract(epoch FROM ts),encode(hash,'hex'),source) AS data FROM engine_block_times ORDER BY number`)).rows.map(row => row.data)] as const]));
 const head = async (db: ChainDb) => Number((await db.sql.query<{ block: string }>("SELECT block FROM engine_cursors WHERE stream='engines'")).rows[0]!.block);
 const lastActivity = (coin: CoinActivity) => coin.events.reduce((latest, event) => Math.max(latest, event.sec), coin.createdSec);

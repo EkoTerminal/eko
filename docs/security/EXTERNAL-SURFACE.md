@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **587/587 (100.00%)** documented. Minimum: **90%**.
+Measured: **591/591 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -280,7 +280,7 @@ Measured: **587/587 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
 | `buildApp` | function | [apps/server/src/app.ts:112](../../apps/server/src/app.ts#L112) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:361](../../apps/server/src/app.ts#L361) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:362](../../apps/server/src/app.ts#L362) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |
@@ -538,13 +538,17 @@ Measured: **587/587 (100.00%)** documented. Minimum: **90%**.
 | `captureInventory` | function | [apps/server/src/ops/restore-checks.ts:47](../../apps/server/src/ops/restore-checks.ts#L47) | Yes |
 | `compareInventories` | function | [apps/server/src/ops/restore-checks.ts:90](../../apps/server/src/ops/restore-checks.ts#L90) | Yes |
 | `reclaimRestoreLeases` | function | [apps/server/src/ops/restore-checks.ts:106](../../apps/server/src/ops/restore-checks.ts#L106) | Yes |
-| `ScoreboardService.constructor` | constructor | [apps/server/src/read/scoreboard.ts:30](../../apps/server/src/read/scoreboard.ts#L30) | Yes |
-| `ScoreboardService.recordCoverage` | method | [apps/server/src/read/scoreboard.ts:42](../../apps/server/src/read/scoreboard.ts#L42) | Yes |
-| `ScoreboardService.recordRefusal` | method | [apps/server/src/read/scoreboard.ts:50](../../apps/server/src/read/scoreboard.ts#L50) | Yes |
-| `ScoreboardService.acceptOutcome` | method | [apps/server/src/read/scoreboard.ts:69](../../apps/server/src/read/scoreboard.ts#L69) | Yes |
-| `ScoreboardService.publishCohort` | method | [apps/server/src/read/scoreboard.ts:173](../../apps/server/src/read/scoreboard.ts#L173) | Yes |
-| `ScoreboardService.attachPostMortem` | method | [apps/server/src/read/scoreboard.ts:243](../../apps/server/src/read/scoreboard.ts#L243) | Yes |
-| `ScoreboardService.list` | method | [apps/server/src/read/scoreboard.ts:260](../../apps/server/src/read/scoreboard.ts#L260) | Yes |
+| `ScoreboardService.constructor` | constructor | [apps/server/src/read/scoreboard.ts:31](../../apps/server/src/read/scoreboard.ts#L31) | Yes |
+| `ScoreboardService.start` | method | [apps/server/src/read/scoreboard.ts:53](../../apps/server/src/read/scoreboard.ts#L53) | Yes |
+| `ScoreboardService.close` | method | [apps/server/src/read/scoreboard.ts:55](../../apps/server/src/read/scoreboard.ts#L55) | Yes |
+| `ScoreboardService.background` | method | [apps/server/src/read/scoreboard.ts:57](../../apps/server/src/read/scoreboard.ts#L57) | Yes |
+| `ScoreboardService.sync` | method | [apps/server/src/read/scoreboard.ts:59](../../apps/server/src/read/scoreboard.ts#L59) | Yes |
+| `ScoreboardService.recordCoverage` | method | [apps/server/src/read/scoreboard.ts:63](../../apps/server/src/read/scoreboard.ts#L63) | Yes |
+| `ScoreboardService.recordRefusal` | method | [apps/server/src/read/scoreboard.ts:71](../../apps/server/src/read/scoreboard.ts#L71) | Yes |
+| `ScoreboardService.acceptOutcome` | method | [apps/server/src/read/scoreboard.ts:90](../../apps/server/src/read/scoreboard.ts#L90) | Yes |
+| `ScoreboardService.publishCohort` | method | [apps/server/src/read/scoreboard.ts:196](../../apps/server/src/read/scoreboard.ts#L196) | Yes |
+| `ScoreboardService.attachPostMortem` | method | [apps/server/src/read/scoreboard.ts:266](../../apps/server/src/read/scoreboard.ts#L266) | Yes |
+| `ScoreboardService.list` | method | [apps/server/src/read/scoreboard.ts:283](../../apps/server/src/read/scoreboard.ts#L283) | Yes |
 | `SensesReadService.constructor` | constructor | [apps/server/src/read/senses.ts:37](../../apps/server/src/read/senses.ts#L37) | Yes |
 | `SensesReadService.verdict` | method | [apps/server/src/read/senses.ts:49](../../apps/server/src/read/senses.ts#L49) | Yes |
 | `SensesReadService.card` | method | [apps/server/src/read/senses.ts:64](../../apps/server/src/read/senses.ts#L64) | Yes |

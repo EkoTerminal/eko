@@ -177,6 +177,21 @@ it('uses kind-bound snapshot pagination without duplicates when later rows arriv
   await expect(service().list('cohort', first.cursor!)).rejects.toThrow('cursor');
 });
 
+it('consumes new publications in batches from the background timer, not inline in a request', async () => {
+  const before = (await service().list('calls', undefined, 100)).rows.length;
+  for (let i = 0; i < 520; i++) await publication(`batch-${i}`, coin, i % 2 ? 'danger' : 'monitor', now - 1000 + i);
+  service().start(3_600_000);
+  try {
+    // With the timer running, a request reads what has been consumed so far and does not pay for the batch itself.
+    const page = await service().list('calls', undefined, 100);
+    expect(page.rows.map(r => r.id)).not.toContain('call:batch-519');
+    await service().sync();
+    const after = await service().list('calls', undefined, 100);
+    expect(after.rows[0]!.id).toBe('call:batch-519');
+    expect(Number((await db().sql.query<{ n: string }>("SELECT count(*) AS n FROM scoreboard_records WHERE source_key LIKE 'call:batch-%'")).rows[0]!.n)).toBe(520);
+    expect((await service().list('calls', undefined, 100)).rows.length).toBe(Math.min(100, before + 520));
+  } finally { await service().close(); }
+});
 it('keeps an empty measured cohort explicit, withdraws orphaned fill counters, and exposes monitoring gaps', async () => {
   await service().publishCohort({ week:'2026-09-28T00:00:00.000Z',cut:cohortCut,origin:'measured',launchCoverageComplete:true,
     evidenceIds:[hash('empty-universe')],outcomeVersion:'2.0.0',identityVersion:'1.0.0' });

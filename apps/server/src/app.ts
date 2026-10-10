@@ -339,6 +339,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
 
   if (opts.startBackground !== false) {
     reads.store.start();
+    reads.scoreboard.start();
     await market.start();
     if (cfg.RUN_WORKER) {
       exec.start();
@@ -365,6 +366,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       clearInterval(flushSamples);
       await live.close();
       await alerts.close();
+      await reads.scoreboard.close();
       await reads.store.close();
       exec.stop();
       await sanctionsWorker.stop();

@@ -38,7 +38,14 @@ class PonsProfiles {
       const read = await readPonsProfile(client, coin, curve, BigInt(block));
       profile = { creatorTaxPct: read.creatorTaxPct, feePct: read.feePct, antiSnipeActive: read.antiSnipeActive,
         codehash: keccak256(read.code), curve, observationVersion: 'pons-getters-2' };
-    } catch (error) { if (rpcStopReason(error)) throw error; /* Missing reads remain unknown at this checkpoint, never a permanent failure or zero. */ }
+    } catch (error) {
+      // A spent daily paid budget leaves this checkpoint's getters unknown and unstored: the card says not fully checked
+      // and a later checkpoint reads them again. Throwing stopped the scanner, and each restart's cold refresh spent
+      // the budget-less hours re-failing (2026-10-10 on the new host: 599 restarts overnight).
+      const stop = rpcStopReason(error);
+      if (stop === 'rpc_budget_exhausted') return undefined;
+      if (stop) throw error; /* Missing reads remain unknown at this checkpoint, never a permanent failure or zero. */
+    }
     await this.db.sql.query('INSERT INTO engine_reads VALUES($1,$2,$3,$4) ON CONFLICT(coin,block) DO UPDATE SET block_hash=excluded.block_hash,profile=excluded.profile',
       [binary(coin), block, hash, profile ? JSON.stringify(profile) : null]);
     return profile;
