@@ -4,11 +4,11 @@ import { writeRegistryLabels } from './registry-labels.js';
 import { expireSimulationTraces } from './reference-simulation.js';
 import { expireV4ReferenceTraces } from './v4-reference.js';
 import { binary, hex, publishReceipt, ScanJobs, scanTarget, recordScanStart, recordScanVerdict, type ChainDb, type EngineBus } from '@eko/db';
-import { assembleVerdict, evaluatePlaybooks, RULES_VERSION } from '@eko/playbooks';
+import { assembleVerdict, evaluatePlaybooks, rules, RULES_VERSION } from '@eko/playbooks';
 import { shouldRecomputeSignal } from '@eko/signal';
 import type { PonsProfileClient } from '@eko/chain';
-import type { Address, CoinCard, Verdict } from '@eko/shared';
-import { assembleCard, cardHash, digest, evaluatedPlaybooks } from './card.js';
+import type { Address, CoinCard, PlaybookId, Verdict } from '@eko/shared';
+import { assembleCard, cardHash, digest, evaluatedPlaybooks, UNSOURCED_PLAYBOOKS } from './card.js';
 import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } from './sources.js';
 import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
 import { LiveActivity, baseColumns, leaveActivityFeed, type LiveActivityStats } from './live-activity.js';
@@ -188,7 +188,7 @@ export class EngineWorker {
     // Recover post-commit timing/job acknowledgements after process failure. Bound each poll.
     const unrecorded=(await this.db.sql.query<{data:CoinCard}>(`SELECT c.data FROM coin_card_latest c JOIN scan_timings t ON t.coin=c.coin
       WHERE c.as_of_block>=t.discovery_block AND (t.first_verdict_at IS NULL OR (t.critical_complete_at IS NULL AND c.data->'verdict'->>'level'<>'pending'
-        AND jsonb_array_length(coalesce(c.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb))=13)) ORDER BY t.discovered_at LIMIT 256`)).rows;
+        AND jsonb_array_length(coalesce(c.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb))+(NOT coalesce(c.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'bundle_dump')::int=13)) ORDER BY t.discovered_at LIMIT 256`)).rows;
     for(const row of unrecorded)await this.recordScan(row.data);
     const scans=await this.processScanJobs(to);
     const count=scans+await this.evaluateActivity(0,to,true,this.startup);
@@ -565,7 +565,10 @@ export class EngineWorker {
     const assembled=assembleVerdict(matches,{ coin:s.coin,asOfBlock:s.asOfBlock,receipt:{ id:'pending',hash:'',status:'pending' } });
     const incomplete=Object.entries(s.attributionCoverage ?? {}).filter(([,gap])=>gap.status==='incomplete');
     if(incomplete.length)assembled.reasons.push(`Not fully checked: ${incomplete.map(([key,gap])=>`${key.replaceAll('_',' ')} (${gap.reason.replaceAll('_',' ')})`).join(', ')}`);
-    if (assembled.level==='clear' && (evaluated.length<13 || incomplete.length>0)) assembled.level='pending';
+    // CA-34: Clear needs every check that has an input source (UNSOURCED_PLAYBOOKS has none yet and is named instead).
+    const notRun=(Object.keys(rules) as PlaybookId[]).filter(id=>!evaluated.includes(id)),blocking=notRun.filter(id=>!UNSOURCED_PLAYBOOKS.includes(id));
+    if (assembled.level==='clear' && (blocking.length>0 || incomplete.length>0)) assembled.level='pending';
+    if (assembled.level==='clear' && notRun.length)assembled.reasons.push(`Not checked yet: ${notRun.map(id=>id.replaceAll('_',' ')).join(', ')} (no data source yet)`);
     // Rated Danger when retention pruned its history: the checks behind that rating cannot be re-run on what is left,
     // so a revived coin is never published as less severe than Danger.
     if(s.dangerBeforePrune) {

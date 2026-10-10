@@ -50,9 +50,11 @@ export class ScanJobs {
   }
 }
 
+/** Checks without an input source yet (apps/engines card.ts UNSOURCED_PLAYBOOKS); completion does not wait for them. */
+const UNSOURCED_PLAYBOOKS=['bundle_dump'];
 /** Completion requires measured buying checks; a persisted pending/danger card alone is insufficient. */
 export function scanChecksComplete(card:CoinCard) {
-  return card.verdict.level!=='pending' && new Set(card.verdict.evaluatedPlaybooks).size===13 &&
+  return card.verdict.level!=='pending' && new Set([...(card.verdict.evaluatedPlaybooks ?? []),...UNSOURCED_PLAYBOOKS]).size===13 &&
     ['tradeability','control','liquidity','supply'].every(section=>{
       const meta=card.meta?.[section as keyof NonNullable<CoinCard['meta']>];
       return !!meta && !meta.unavailable && !meta.missing?.length;

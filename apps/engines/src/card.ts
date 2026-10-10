@@ -7,14 +7,28 @@ import { ZERO } from './aggregates.js';
 import { keccak256, stringToHex } from 'viem';
 import { type LoadedSources } from './sources.js';
 
+/** Checks with no input source yet. Clear does not wait for them; the verdict names them (worker.ts). */
+export const UNSOURCED_PLAYBOOKS: readonly PlaybookId[] = ['bundle_dump'];
+const zeroHook = /^0x0{40}$/i;
+/**
+ * A check counts as evaluated when its input was read, or when the coin's structure means it cannot apply at this
+ * block: no migration dump before graduation, no removable LP while liquidity sits in the Pons curve or the locked
+ * graduation pool, no stuck curve after graduation, no hook abuse on a coin without a hooked pool. Before 2026-10-10
+ * these counted as not run, so no Pons coin could ever be Clear.
+ */
 export function evaluatedPlaybooks(s: LoadedSources): PlaybookId[] {
+  const pons = s.launchpad === 'pons';
+  const graduated = s.token.graduated_block != null && Number(s.token.graduated_block) <= s.asOfBlock;
+  const curveOnly = pons && !graduated && s.poolRefs.length === 0;
   const available: Partial<Record<PlaybookId, boolean>> = {
-    honeypot: [100,1000].every(size=>s.referenceResults?.some(r=>r.sizeUsd===size && r.complete)),
+    honeypot: [100,1000].every(size=>s.referenceResults?.some(r=>r.sizeUsd===size && r.complete)) || s.sellCheckReference != null,
     agent_bait: true, serial_deployer: true, clone_swarm: s.trending != null,
     wash_to_trend: s.wash != null, fee_trap_pool: s.pools != null,
     exempt_insiders: s.pons != null, tax_trap: s.taxes != null && (s.launchpad!=='pons' || s.antiSnipeActive === false),
-    removable_liquidity: s.liquidity != null,
-    migration_dump: s.graduation != null,
+    removable_liquidity: s.liquidity != null || curveOnly || (pons && graduated),
+    migration_dump: s.graduation != null || (pons && !graduated),
+    stuck_at_bonding: s.curve != null || (pons && graduated),
+    malicious_hook: s.hook != null || s.poolRefs.every(p => !p.hooks || zeroHook.test(p.hooks)),
   };
   return (Object.keys(rules) as PlaybookId[]).filter(id => available[id]).sort();
 }

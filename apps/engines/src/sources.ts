@@ -1,5 +1,6 @@
 import { attributionGap } from './attribution-coverage.js';
 import { loadReferenceInputs } from './reference-simulation.js';
+import { loadSellCheckReference } from './sell-check-reference.js';
 import { binary, trendingAt, type ChainDb } from '@eko/db';
 import { loadRegistry, type PonsProfileClient } from '@eko/chain';
 import { toUntrusted } from '@eko/untrusted';
@@ -40,6 +41,8 @@ export interface LoadedSources extends CardSources {
   history: HistoryView; usdComplete: boolean; trendingRank?: number; exemptionWallets: Address[]; previousHolderBlock?: number;
   /** The coin was rated Danger when retention pruned its raw history; the verdict keeps that floor (worker.ts). */
   dangerBeforePrune?: { playbooks: string[] };
+  /** The live sell check run that supplied this card's honeypot input (sell-check-reference.ts). */
+  sellCheckReference?: { runId: string; block: number };
 }
 export const seconds = (date: string | Date) => new Date(date).getTime() / 1000;
 export const evidence = (r: { tx_hash: Uint8Array; log_index: number; block: string }, label: string): EvidenceRef =>
@@ -260,6 +263,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   if(coverage.insider_sells.status==='incomplete')delete s.graduation;
   if(coverage.liquidity_ownership.status==='incomplete')delete s.liquidity;
   await loadReferenceInputs(db,s,retrospective || cache!==undefined);
+  if(!retrospective && cache===undefined)await loadSellCheckReference(db,s);
   return s;
 }
 
