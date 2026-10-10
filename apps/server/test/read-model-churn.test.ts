@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { binary, ChainDb, migrate, migrateEngines, openDb, pruneSwaps, type SqlClient } from '@eko/db';
 import { CoinsService } from '../src/read/coins.js';
-import { FeedService } from '../src/read/feed.js';
+import { FEED_SHARED_TTL_MS, FeedService } from '../src/read/feed.js';
 import { GuardReadStore } from '../src/read/guard-store.js';
 import { PairsService } from '../src/read/pairs.js';
 import { ScanService } from '../src/read/scan.js';
@@ -187,6 +187,28 @@ describe('read-model refresh churn', () => {
     expect(batches.length).toBeGreaterThanOrEqual(3);expect(Math.max(...batches)).toBeLessThanOrEqual(REFRESH_BATCH);
     expect(batches.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(REFRESH_BATCH * 2 + 7);
     expect((await db.sql.query('SELECT 1 FROM read_dirty')).rows).toHaveLength(0);
+  });
+  it('reads the feed availability once per interval with the background refresher, and on every call without it', async () => {
+    const db = await fixture();
+    let clock = now, reads = 0;
+    const wrap = (sql: SqlClient): SqlClient => ({ query: async <T,>(text: string, params?: unknown[]) => {
+      if (text.includes('AS available')) reads++;
+      return sql.query<T>(text, params);
+    } });
+    const traced = new ChainDb(wrap(db.sql), fn => db.tx(tx => fn(wrap(tx.sql))));
+    const inline = new FeedService(new ReadStore(traced, () => clock));
+    // The fixture's minimal cards fail the feed item schema; the shared inputs are read before that.
+    const read = (feed: FeedService, coin?: `0x${string}`) => feed.all(undefined, coin).catch(() => undefined);
+    await read(inline); await read(inline, coinA); expect(reads).toBe(2);
+    reads = 0;
+    const store = new ReadStore(traced, () => clock); await store.refreshModels(); store.start();
+    try {
+      const feed = new FeedService(store);
+      // Live pushes read one coin's feed per refreshed coin and engine event; the whole-database inputs are shared.
+      for (const coin of [undefined, coinA, coinB, coinC]) await read(feed, coin);
+      expect(reads).toBe(1);
+      clock += FEED_SHARED_TTL_MS; await read(feed, coinA); expect(reads).toBe(2);
+    } finally { await store.close(); }
   });
   it('re-ranks volumes from the background timer, not from the first request of the minute', async () => {
     const db = await fixture(), store = new ReadStore(db, () => now);

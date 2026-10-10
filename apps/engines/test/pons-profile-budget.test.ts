@@ -29,3 +29,19 @@ describe('Pons profile reads without paid budget', () => {
     await expect(ponsProfiles(db).read(coin, curve, 11, hash, failing('rpc_session_budget_reached'))).rejects.toMatchObject({ code: 'rpc_session_budget_reached' });
   });
 });
+
+describe('scanner run loop without paid budget', () => {
+  it('waits and polls again on a spent daily budget instead of stopping, and still stops on other errors', async () => {
+    const { EngineWorker } = await import('../src/worker.js');
+    const db = await database();
+    const waits: number[] = [];
+    const worker = new EngineWorker(db, { budgetWaitMs: 5, onBudgetWait: () => waits.push(Date.now()) });
+    let polls = 0;
+    worker.poll = async () => { polls++; if (polls <= 2) throw new RpcGuardError('rpc_budget_exhausted'); worker.stop(); return 0; };
+    await worker.run();
+    expect(waits).toHaveLength(2); expect(polls).toBe(3);
+    const failing = new EngineWorker(db, { budgetWaitMs: 5 });
+    failing.poll = async () => { throw new Error('database unavailable'); };
+    await expect(failing.run()).rejects.toThrow('database unavailable');
+  });
+});

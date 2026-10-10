@@ -6,7 +6,7 @@ import { expireV4ReferenceTraces } from './v4-reference.js';
 import { binary, hex, publishReceipt, ScanJobs, scanTarget, recordScanStart, recordScanVerdict, type ChainDb, type EngineBus } from '@eko/db';
 import { assembleVerdict, evaluatePlaybooks, rules, RULES_VERSION } from '@eko/playbooks';
 import { shouldRecomputeSignal } from '@eko/signal';
-import type { PonsProfileClient } from '@eko/chain';
+import { rpcStopReason, type PonsProfileClient } from '@eko/chain';
 import type { Address, CoinCard, PlaybookId, Verdict } from '@eko/shared';
 import { assembleCard, cardHash, digest, evaluatedPlaybooks, UNSOURCED_PLAYBOOKS } from './card.js';
 import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } from './sources.js';
@@ -29,6 +29,8 @@ export interface WorkerOptions {
   referenceSimulation?: (coin:Address,block:number)=>Promise<void>;
   onScanComplete?: (ms:number)=>void; onScanQueueDelay?: (ms:number)=>void;
   onQueueCompletion?: (ms: number) => void; onHeartbeat?: () => void;
+  /** A poll stopped on a spent daily paid budget; run() waits `budgetWaitMs` (default 60 s) and polls again. */
+  onBudgetWait?: () => void; budgetWaitMs?: number;
   concurrency?: number; pollMs?: number; client?: PonsProfileClient; bus?: EngineBus; readBlock?: BlockReader; now?: () => number; replayCache?:boolean;marketWindow?:boolean; onPlanned?:(plan:{tasks:number;coins:number;from:number;to:number})=>void; onProgress?: (completed:number,block:number) => void;
   /**
    * Live only. Checkpoints older than this many seconds behind the indexed head are not replayed one by one:
@@ -458,7 +460,17 @@ export class EngineWorker {
     catch { /* A disconnected bus does not disable the durable cursor poll. */ }
     try {
       while (!this.stopped) {
-        const completed=await this.poll();
+        let completed:number;
+        try { completed=await this.poll(); }
+        catch(error) {
+          // A spent daily paid budget is not a fault: a restart meets the same budget, and each one costs a cold refresh
+          // (2026-10-10: 24 restarts in seven minutes on the new host). Wait and poll again; public lanes and the next
+          // UTC day let it through. The wait counts as progress for the stall watchdog. Other errors still stop.
+          if(rpcStopReason(error)!=='rpc_budget_exhausted')throw error;
+          this.options.onBudgetWait?.();this.options.onHeartbeat?.();
+          await new Promise<void>(resolve=>{const timer=setTimeout(resolve,this.options.budgetWaitMs ?? 60_000);this.wake=()=>{clearTimeout(timer);this.wake=undefined;resolve();};if(this.stopped)this.wake();});
+          continue;
+        }
         this.options.onHeartbeat?.();
         if (completed) continue;
         await new Promise<void>(resolve => {

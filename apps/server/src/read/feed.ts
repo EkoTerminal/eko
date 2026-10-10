@@ -4,13 +4,36 @@ import { InputError } from '../http/v1/helpers.js';
 import { toUntrusted } from '@eko/untrusted';
 import type { ReadStore } from './store.js';
 import { decodeCursor, encodeCursor } from './pagination.js';
+/** How long the API process reuses the feed's whole-database inputs (flow model, Census gate, agent-trade availability). */
+export const FEED_SHARED_TTL_MS=30_000;
 export class FeedService {
   constructor(readonly store:ReadStore) {}
+  private cachedShared?:{at:number;value:Promise<{model:string;gate:Awaited<ReturnType<typeof censusGate>>;measured:boolean}>};
+  /**
+   * The flow model, the Census gate and agent-trade availability describe the whole database, not one coin or page.
+   * Live pushes read a coin's feed for every refreshed coin and engine event, so on 2026-10-10 the availability query
+   * (a parallel scan of flow_windows) ran continuously and held most of the new host's four cores, slowing the scanner.
+   * With the background refresher they are read at most every 30 s; without it (tests, tools) on every call.
+   */
+  private shared() {
+    const now=this.store.now();
+    if(!this.store.background || !this.cachedShared || now-this.cachedShared.at>=FEED_SHARED_TTL_MS) {
+      const value=this.computeShared();
+      this.cachedShared={at:now,value};
+      value.catch(()=>{if(this.cachedShared?.value===value)this.cachedShared=undefined;});
+    }
+    return this.cachedShared.value;
+  }
+  private async computeShared() {
+    const model=await flowModel(this.store.db),gate=await censusGate(this.store.db,model);
+    const measured=(await this.store.db.sql.query<{available:boolean}>(`SELECT EXISTS(SELECT 1 FROM flow_windows f JOIN chain_blocks b ON b.number=f.block AND b.hash=f.block_hash WHERE f.model_version=$1 AND NOT EXISTS(SELECT 1 FROM flow_dirty d WHERE d.coin=f.coin) AND NOT coalesce((f.data->'meta'->>'unavailable')::boolean,true)) AND NOT EXISTS(SELECT 1 FROM flow_dirty) AND NOT EXISTS(SELECT 1 FROM flow_windows f WHERE f.window_kind='1h' AND (f.model_version<>$1 OR coalesce((f.data->'meta'->>'unavailable')::boolean,true))) AS available`,[model])).rows[0].available;
+    return {model,gate,measured};
+  }
   private async page(kinds?:FeedItem['kind'][],coin?:Address,block?:number,cursor?:string) {
     await this.store.currentModels();
     const scope=`feed:${[...(kinds ?? [])].sort().join(',')}`,key=decodeCursor(cursor,scope);
     if(key && (key.length!==2 || !Number.isSafeInteger(key[0]) || typeof key[1]!=='string'))throw new InputError('Invalid feed cursor');
-    const model=await flowModel(this.store.db),gate=await censusGate(this.store.db,model);
+    const {model,gate,measured}=await this.shared();
     const params:unknown[]=[model],where:string[]=[];
     const source=`(SELECT * FROM read_feed UNION ALL SELECT e.id,e.coin,e.block,
       CASE WHEN e.data->>'label'='crew' THEN 'crew_trade' ELSE 'agent_trade' END AS kind,e.data,NULL::text AS verdict_id,t.first_block,t.symbol
@@ -44,7 +67,6 @@ export class FeedService {
       matchPct:typeof r.data.confidence==='number' ? r.data.confidence*100 : undefined,
       firstVerdictMs:r.kind==='verdict' && r.first_ts && r.first_verdict_ts ? Math.max(0,new Date(r.first_verdict_ts).getTime()-new Date(r.first_ts).getTime()) : undefined}));
     const last=result.rows[99];
-    const measured=(await this.store.db.sql.query<{available:boolean}>(`SELECT EXISTS(SELECT 1 FROM flow_windows f JOIN chain_blocks b ON b.number=f.block AND b.hash=f.block_hash WHERE f.model_version=$1 AND NOT EXISTS(SELECT 1 FROM flow_dirty d WHERE d.coin=f.coin) AND NOT coalesce((f.data->'meta'->>'unavailable')::boolean,true)) AND NOT EXISTS(SELECT 1 FROM flow_dirty) AND NOT EXISTS(SELECT 1 FROM flow_windows f WHERE f.window_kind='1h' AND (f.model_version<>$1 OR coalesce((f.data->'meta'->>'unavailable')::boolean,true))) AS available`,[model])).rows[0].available;
     return {rows,cursor:result.rows.length>100 ? encodeCursor(scope,[Number(last.block),last.id]) : null,delayedSec:0,unavailable:[...(!measured?['agent_trade','crew_trade']:[]),'clone','swarm','burn']};
   }
   async all(kinds?:FeedItem['kind'][],coin?:Address,block?:number) {return (await this.page(kinds,coin,block)).rows;}
