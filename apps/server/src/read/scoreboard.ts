@@ -11,6 +11,8 @@ import { InputError } from '../http/v1/helpers.js';
 import { reportError } from '../obs/errors.js';
 
 const ids = z.array(Bytes32Schema).min(1).max(100);
+/** Publications consumed per pass; keeps one pass well under the api heap even on a freshly restored database. */
+export const CONSUME_BATCH = 2000;
 const coverageSchema = z.strictObject({ id: Bytes32Schema, origin: z.literal('measured'), evidenceIds: ids,
   from: z.iso.datetime(), through: z.iso.datetime(), refused: z.boolean(), missed: z.boolean() })
   .refine(p => Date.parse(p.through) >= Date.parse(p.from) && (p.refused || p.missed));
@@ -137,8 +139,11 @@ export class ScoreboardService {
       await this.row(db,`counter-reorg:${r.id}`,{...r,detail:{...r.detail,event:'correction',correctionOf:r.id,counterEffect:'retracted',reason:'source_orphaned'}});
     // Rows are append-only and keyed by source, so only publications without a row are read. Reading every
     // publication on every request made the public scoreboard time out once the engines had rated thousands of coins.
+    // Bounded per pass: a restored database can carry tens of thousands of unconsumed publications (14,695 on the
+    // 2026-10-10 cutover rehearsal), and loading every payload at once exhausted the api's heap. The timer's next
+    // passes take the rest within minutes.
     const calls = (await db.sql.query<{ id: string; data: unknown }>(`SELECT p.id,p.data FROM receipt_publications p WHERE p.kind='verdict' AND p.chain_id=4663
-      AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='call:'||p.id) ORDER BY p.publication_sequence`)).rows;
+      AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='call:'||p.id) ORDER BY p.publication_sequence LIMIT ${CONSUME_BATCH}`)).rows;
     const callRows: { source: string; row: Omit<ScoreboardRow, 'id'> }[] = [];
     for (const c of calls) {
       const p = PublicReceiptPayloadSchema.safeParse(c.data);
