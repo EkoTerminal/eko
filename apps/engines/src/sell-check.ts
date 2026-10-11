@@ -1,7 +1,7 @@
 import { binary, hex, type ChainDb } from '@eko/db';
 import { balanceSlot, loadRegistry, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
-import { getAddress, zeroAddress, type Hex } from 'viem';
+import { decodeFunctionResult, encodeFunctionData, getAddress, parseAbi, toHex, zeroAddress, type Hex } from 'viem';
 
 /**
  * Live sell checks for Radar, coin pages and the quote guard (BACKEND §6.2, the eth_call probe fallback).
@@ -13,6 +13,8 @@ export interface SellCheckResult {
   coin: Address; block: number; status: SellCheckStatus; route: SellRoute | null; ethUsd: number | null;
   /** On a token-paired Pons curve: the pair token's USD price the sizes used (probe amounts are in its units). */
   pairUsd?: number;
+  /** Where that price came from: USDG at par, the pair's indexed swaps, or its Uniswap v3 USDG pool at the block. */
+  pairUsdSource?: 'par' | 'swaps' | 'pool';
   probes: (SellProbe & { sizeUsd: number })[]; requests: number;
   exit100: number | null; exit1k: number | null;
 }
@@ -59,6 +61,37 @@ export async function pairUsd(db: ChainDb, token: Address, block: number, nowMs:
   if (!prices.length) return null;
   const mid = Math.floor(prices.length / 2);
   return { usd: prices.length % 2 ? prices[mid]! : (prices[mid - 1]! + prices[mid]!) / 2, decimals: Number(rows[0]!.decimals) };
+}
+
+const v3FactoryAbi = parseAbi(['function getPool(address,address,uint24) view returns (address)']);
+const v3PoolAbi = parseAbi(['function liquidity() view returns (uint128)', 'function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16,uint16,uint16,uint8,bool)']);
+/**
+ * The spot USD price of `token` in its most liquid Uniswap v3 pool against USDG at the block, for sizing a pair probe
+ * only (the round trip it measures is a ratio). Robinhood stock tokens trade there but their pools are not indexed,
+ * so they have no indexed price (GME, MSFT and GOOGL pairs stayed unsupported on 2026-10-11). Null without such a pool.
+ */
+export async function poolSpotUsd(rpc: SellRpc, token: Address, decimals: number, block: number, registry: AddressRegistry = loadRegistry()): Promise<{ usd: number | null; requests: number; failed?: true }> {
+  const factory = registry.addressOf('uniswapV3.factory'), usdg = registry.requireAddress('tokens.USDG'), usdgDecimals = registry.data.tokens.USDG.decimals ?? 6;
+  let requests = 0;
+  const call = async (to: Address, data: Hex) => { requests++; return rpc.request({ method: 'eth_call', params: [{ to, data }, toHex(block)] }) as Promise<Hex>; };
+  if (!factory) return { usd: null, requests };
+  let best: { liquidity: bigint; usd: number } | null = null;
+  // A failed read leaves the price unknown (the check is retried), never "no pool"; budget and shutdown stops propagate.
+  try { for (const fee of FEES) {
+    const pool = decodeFunctionResult({ abi: v3FactoryAbi, functionName: 'getPool', data: await call(factory, encodeFunctionData({ abi: v3FactoryAbi, functionName: 'getPool', args: [token, usdg, fee] })) });
+    if (pool === zeroAddress) continue;
+    const liquidity = decodeFunctionResult({ abi: v3PoolAbi, functionName: 'liquidity', data: await call(pool, encodeFunctionData({ abi: v3PoolAbi, functionName: 'liquidity' })) });
+    if (liquidity === 0n || (best && liquidity <= best.liquidity)) continue;
+    const [sqrtPriceX96] = decodeFunctionResult({ abi: v3PoolAbi, functionName: 'slot0', data: await call(pool, encodeFunctionData({ abi: v3PoolAbi, functionName: 'slot0' })) });
+    // token1 per token0 in base units; Uniswap orders the pair by address.
+    const raw = (Number(sqrtPriceX96) / 2 ** 96) ** 2, tokenFirst = token.toLowerCase() < usdg.toLowerCase();
+    const usd = (tokenFirst ? raw : 1 / raw) * 10 ** (decimals - usdgDecimals);
+    if (Number.isFinite(usd) && usd > 0) best = { liquidity, usd };
+  } } catch (error) {
+    if (rpcStopReason(error)) throw error;
+    return { usd: null, requests, failed: true };
+  }
+  return { usd: best?.usd ?? null, requests };
 }
 
 /** About one day of Robinhood Chain blocks (~10 per second), for ranking pools by recent volume. */
@@ -118,6 +151,8 @@ export function combineSellProbes(probes: SellProbe[]): SellCheckStatus {
 export class SellChecker {
   /** Balance layouts of pair tokens, found once per process (one paid eth_call per layout tried). */
   private balances = new Map<string, ReturnType<typeof balanceSlot>>();
+  /** Pool spot prices of pair tokens without an indexed price, kept ten minutes (nine to twelve paid reads each). */
+  private spots = new Map<string, { at: number; value: ReturnType<typeof poolSpotUsd> }>();
   constructor(readonly db: ChainDb, readonly rpc: SellRpc, readonly options: { registry?: AddressRegistry; now?: () => number } = {}) {}
   private get registry() { return this.options.registry ??= loadRegistry(); }
   now() { return this.options.now?.() ?? Date.now(); }
@@ -134,16 +169,30 @@ export class SellChecker {
     return { ...base, route, ethUsd: price, probes, requests: probes.reduce((n, p) => n + p.requests, 0), status: combineSellProbes(probes), exit100: exit(100), exit1k: exit(1000) };
   }
   /**
-   * A token-paired Pons curve: the sizes are $100 and $1,000 of the pair token at its indexed USD price, the probe holds
-   * it through its balance slot, and amounts are in its units. Without a price or a found slot the route is unsupported.
+   * A token-paired Pons curve: the sizes are $100 and $1,000 of the pair token at its USD price (USDG at par, its indexed
+   * swaps, else its Uniswap v3 USDG pool at the block), the probe holds it through its balance slot, and amounts are in
+   * its units. Without a price or a found slot the route is unsupported.
    */
   private async checkPair(base: SellCheckResult, route: Extract<SellRoute, { venue: 'pons_curve' }> & { pair: NonNullable<Extract<SellRoute, { venue: 'pons_curve' }>['pair']> },
     block: number, sizesUsd: readonly number[]): Promise<SellCheckResult> {
-    const quote = await pairUsd(this.db, route.pair.token, block, this.now(), this.registry);
-    const sizes = quote ? sizesUsd.map(sizeUsd => ({ sizeUsd, units: usdToUnits(sizeUsd, quote.usd, quote.decimals) })) : [];
-    if (!quote || !sizes.length || sizes.some(size => size.units == null)) return { ...base, route, status: 'unsupported' };
+    let requests = 0, source: SellCheckResult['pairUsdSource'] = same(route.pair.token, this.registry.requireAddress('tokens.USDG')) ? 'par' : 'swaps';
+    let quote = await pairUsd(this.db, route.pair.token, block, this.now(), this.registry);
+    if (!quote) {
+      const decimals = (await this.db.sql.query<{ decimals: number | null }>('SELECT decimals FROM tokens WHERE address=$1', [binary(route.pair.token)])).rows[0]?.decimals;
+      if (decimals != null) {
+        const key = route.pair.token.toLowerCase(), cached = this.spots.get(key), fresh = cached && this.now() - cached.at < 600_000;
+        const value = fresh ? cached.value : poolSpotUsd(this.rpc, route.pair.token, Number(decimals), block, this.registry);
+        if (!fresh) { this.spots.set(key, { at: this.now(), value }); value.catch(() => this.spots.delete(key)); }
+        const spot = await value;
+        if (!fresh) requests += spot.requests;
+        if (spot.failed) { this.spots.delete(key); return { ...base, route, status: 'unavailable', requests }; }
+        if (spot.usd != null) { quote = { usd: spot.usd, decimals: Number(decimals) }; source = 'pool'; }
+      }
+    }
+    const sizes = quote ? sizesUsd.map(sizeUsd => ({ sizeUsd, units: usdToUnits(sizeUsd, quote!.usd, quote!.decimals) })) : [];
+    if (!quote || !sizes.length || sizes.some(size => size.units == null)) return { ...base, route, status: 'unsupported', requests };
     const key = route.pair.token.toLowerCase();
-    let requests = 0, found = this.balances.get(key);
+    let found = this.balances.get(key);
     if (!found) {
       found = balanceSlot(this.rpc, route.pair.token, BigInt(block));
       this.balances.set(key, found);
@@ -157,7 +206,7 @@ export class SellChecker {
     const priced = { ...route, pair: { token: route.pair.token, balance } };
     const probes = await Promise.all(sizes.map(async ({ sizeUsd, units }) => ({ ...await runSellProbe(this.rpc, priced, units!, BigInt(block), { nowSec: () => this.now() / 1000 }), sizeUsd })));
     const exit = (size: number) => { const p = probes.find(p => p.sizeUsd === size); return p && (p.status === 'sellable' || p.status === 'sell_failed') ? p.exitCostPct : null; };
-    return { ...base, route: priced, pairUsd: quote.usd, probes, requests: requests + probes.reduce((n, p) => n + p.requests, 0), status: combineSellProbes(probes), exit100: exit(100), exit1k: exit(1000) };
+    return { ...base, route: priced, pairUsd: quote.usd, pairUsdSource: source, probes, requests: requests + probes.reduce((n, p) => n + p.requests, 0), status: combineSellProbes(probes), exit100: exit(100), exit1k: exit(1000) };
   }
 }
 
@@ -166,7 +215,7 @@ const MEASURED = new Set<SellCheckStatus>(['sellable', 'refused', 'buy_failed'])
  * the same route; a new route or a lost route replaces it, so a closed curve's reading never outlives graduation. */
 export async function persistSellCheck(db: ChainDb, result: SellCheckResult, at: Date, activityAt: Date | null) {
   const routeId = result.route ? sellRouteId(result.route) : null;
-  const data = { ethUsd: result.ethUsd, ...(result.pairUsd !== undefined ? { pairUsd: result.pairUsd } : {}), route: result.route, probes: result.probes.map(({ requests: _requests, ...p }) => p) };
+  const data = { ethUsd: result.ethUsd, ...(result.pairUsd !== undefined ? { pairUsd: result.pairUsd, pairUsdSource: result.pairUsdSource } : {}), route: result.route, probes: result.probes.map(({ requests: _requests, ...p }) => p) };
   await db.tx(async tx => {
     await tx.sql.query('INSERT INTO sell_check_runs(coin,block,checked_at,status,requests,data) VALUES($1,$2,$3,$4,$5,$6)',
       [binary(result.coin), result.block, at, result.status, result.requests, JSON.stringify(data)]);

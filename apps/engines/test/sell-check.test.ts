@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { binary, openDb, migrate, migrateEngines, type ChainDb } from '@eko/db';
 import { balanceKey, loadRegistry, probeAbi, v4PoolId, v4ProbeAbi, RpcGuardError, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
-import { decodeFunctionData, encodeAbiParameters, getAddress, pad, parseAbi, toHex, zeroAddress, type Hex } from 'viem';
+import { decodeFunctionData, encodeAbiParameters, encodeFunctionData, getAddress, pad, parseAbi, toHex, zeroAddress, type Hex } from 'viem';
 import { SellChecker, SellCheckScheduler, indexedEthUsd, readSellChecks, recordSellRefusal, sellRefusalTotals, sellRoute, usdToUnits, usdToWei } from '../src/sell-check.js';
 
 // Synthetic indexed rows and a synthetic RPC only: no live chain data or network calls.
@@ -167,15 +167,25 @@ describe('live sell checks (indexed routes, synthetic probe outputs)', () => {
     // Synthetic chain: both pair tokens keep balances in a Solidity mapping at slot 1; every round trip returns 98.01%.
     const tripAbi = parseAbi(['struct Trip { address pair; address token; address curve; uint256 amountIn; bytes buyData; bytes sellData; }', 'function roundTrip(Trip trip)']);
     const sizes: { pair: string; amount: bigint }[] = [];
+    // The only Uniswap v3 USDG pool is the pool-priced pair's (fee 3000), at $50 a share (18 decimals against USDG's 6).
+    const v3 = parseAbi(['function getPool(address,address,uint24) view returns (address)', 'function liquidity() view returns (uint128)',
+      'function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16,uint16,uint16,uint8,bool)']);
+    const spotPool = address(25), poolPriced = address(24), sqrt = BigInt(Math.round(Math.sqrt(50 * 1e6 / 1e18) * 2 ** 96));
     const request = vi.fn(async ({ params }: { method: string; params: readonly unknown[] }) => {
-      const [call, , overrides] = params as [{ to: Address; data: Hex }, Hex, Record<string, { stateDiff?: Record<Hex, Hex> }>];
+      const [call, , overrides] = params as [{ to: Address; data: Hex }, Hex, Record<string, { stateDiff?: Record<Hex, Hex> }> | undefined];
+      if (call.data.startsWith(encodeFunctionData({ abi: v3, functionName: 'getPool', args: [zeroAddress, zeroAddress, 0] }).slice(0, 10))) {
+        const [token, , fee] = decodeFunctionData({ abi: v3, data: call.data }).args as [Address, Address, number];
+        return pad(token.toLowerCase() === poolPriced && fee === 3000 ? spotPool : zeroAddress);
+      }
+      if (call.to.toLowerCase() === spotPool) return call.data.startsWith(encodeFunctionData({ abi: v3, functionName: 'liquidity' }))
+        ? pad(toHex(10n ** 18n)) : encodeAbiParameters([{ type: 'uint160' }, { type: 'int24' }, { type: 'uint16' }, { type: 'uint16' }, { type: 'uint16' }, { type: 'uint8' }, { type: 'bool' }], [sqrt, 0, 0, 0, 0, 0, true]);
       if (call.data.startsWith('0x70a08231')) {
         const holder = `0x${call.data.slice(34)}` as Address;
-        return overrides[call.to]?.stateDiff?.[balanceKey({ layout: 'solidity', slot: 1 }, holder)] ?? pad(toHex(0n));
+        return overrides?.[call.to]?.stateDiff?.[balanceKey({ layout: 'solidity', slot: 1 }, holder)] ?? pad(toHex(0n));
       }
       const [trip] = decodeFunctionData({ abi: tripAbi, data: call.data }).args;
       sizes.push({ pair: trip.pair.toLowerCase(), amount: trip.amountIn });
-      expect(overrides[trip.pair]!.stateDiff![balanceKey({ layout: 'solidity', slot: 1 }, call.to)]).toBe(pad(toHex(trip.amountIn * 2n)));
+      expect(overrides![trip.pair]!.stateDiff![balanceKey({ layout: 'solidity', slot: 1 }, call.to)]).toBe(pad(toHex(trip.amountIn * 2n)));
       return out(10n ** 21n, trip.amountIn * 9801n / 10000n, trip.amountIn);
     });
     // A layout lookup the provider fails is unavailable (retried soon), not unsupported, and is not remembered.
@@ -194,10 +204,20 @@ describe('live sell checks (indexed routes, synthetic probe outputs)', () => {
     const stockCheck = await checker.check(stockCurve, 1000, [100], 2000);
     expect(stockCheck).toMatchObject({ status: 'sellable', pairUsd: 250, requests: 3 + 1 });
     expect(sizes.at(-1)).toEqual({ pair: stock, amount: 4n * 10n ** 17n });
-    // A pair token with no USD price cannot be sized: unsupported, nothing sent.
+    // A pair token with neither indexed swaps nor a v3 USDG pool cannot be sized: unsupported after the four pool lookups.
     const calls = request.mock.calls.length;
-    expect(await checker.check(unpricedCoin, 1000, [100, 1000], 2000)).toMatchObject({ status: 'unsupported', requests: 0, probes: [] });
-    expect(request.mock.calls.length).toBe(calls);
+    expect(await checker.check(unpricedCoin, 1000, [100, 1000], 2000)).toMatchObject({ status: 'unsupported', requests: 4, probes: [] });
+    expect(request.mock.calls.length).toBe(calls + 4);
+    // A stock token without indexed swaps is sized at its v3 USDG pool's price ($100 is two shares at $50), kept ten minutes.
+    const poolCoin = address(26), poolCurve = address(27);
+    await token(poolCoin, poolCurve); await launch(poolCoin, poolCurve, poolPriced);
+    await db.insert('tokens', { address: binary(poolPriced), deployer: binary(address(99)), launchpad: 'other', name: 'Stock', symbol: 'DEMO', decimals: 18, first_block: '10', block: '10' });
+    const pooled = await checker.check(poolCoin, 1000, [100], 2000);
+    expect(pooled).toMatchObject({ status: 'sellable', pairUsdSource: 'pool' }); expect(pooled.pairUsd).toBeCloseTo(50, 6);
+    expect(sizes.at(-1)!.amount).toBeGreaterThan(2n * 10n ** 18n - 10n ** 9n); expect(sizes.at(-1)!.amount).toBeLessThan(2n * 10n ** 18n + 10n ** 9n);
+    // Four fee tiers, one liquidity and one slot0 read, three layouts tried, one probe; then only the probe.
+    expect(pooled.requests).toBe(4 + 2 + 3 + 1);
+    expect((await checker.check(poolCoin, 1000, [100], 2000)).requests).toBe(1);
     expect(usdToUnits(100, 250, 18)).toBe(4n * 10n ** 17n); expect(usdToUnits(100, 0, 18)).toBeNull();
   });
   it('checks readings that earlier code left unsupported or failed at the buy once after a restart', async () => {
