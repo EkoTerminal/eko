@@ -320,6 +320,19 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    expect(card.verdict.level).toBe('pending');
    await block(db,3,90);await worker.poll();expect(plans.at(-1)).toMatchObject({rerates:0});
   });
+  it('re-rates stale pending cards from the loop beside the polls, without a poll writing them',async()=>{
+   const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
+   await new EngineWorker(db,{client:client(),now:()=>epoch+120}).poll();
+   await db.sql.query("UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','\"pending\"')");
+   await db.sql.query('UPDATE engine_runs SET created_at=$1::timestamptz - interval \'1 hour\'',[CLEAR_RULES_AT]);
+   await block(db,2,60);
+   const rerates:number[]=[];
+   const worker=new EngineWorker(db,{client:client(),now:()=>epoch+120,rerate:true,rerateIdleMs:10,onRerate:n=>rerates.push(n)});
+   // Polls do nothing here: only the loop can write the card.
+   worker.poll=async()=>{if(rerates.length)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
+   await worker.run();
+   expect(rerates[0]).toBe(1);const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.level).toBe('clear');
+  });
   it('re-rates pending cards written before the Clear rules, and never a current one',async()=>{
    const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
    await new EngineWorker(db,{client:client(),now:()=>epoch+120}).poll();

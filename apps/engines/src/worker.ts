@@ -37,6 +37,8 @@ export interface WorkerOptions {
   onQueueCompletion?: (ms: number) => void; onHeartbeat?: () => void;
   /** A poll stopped on a spent daily paid budget; run() waits `budgetWaitMs` (default 60 s) and polls again. */
   onBudgetWait?: () => void; budgetWaitMs?: number;
+  /** Live: run rerateLoop() beside the polls (the CLI turns it on). `onRerate` reports each batch's cards. */
+  rerate?: boolean; rerateIdleMs?: number; onRerate?: (cards: number) => void; onRerateError?: (error: unknown) => void;
   concurrency?: number; pollMs?: number; client?: PonsProfileClient; bus?: EngineBus; readBlock?: BlockReader; now?: () => number; replayCache?:boolean;marketWindow?:boolean; onPlanned?:(plan:{tasks:number;coins:number;from:number;to:number})=>void; onProgress?: (completed:number,block:number) => void;
   /**
    * Live only. Checkpoints older than this many seconds behind the indexed head are not replayed one by one:
@@ -138,7 +140,8 @@ export class EngineWorker {
    * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
    */
-  stop() { this.stopped=true; this.wake?.(); }
+  stop() { this.stopped=true; this.wake?.(); this.rerateWake?.(); }
+  private rerateWake?:()=>void;
   /**
    * Validate interval and replay retained activity with ordered rule/history writes, clearing replay
    * cache in finally. Engines operator only; invalid interval/source/provider/SQL failures reject.
@@ -488,6 +491,7 @@ export class EngineWorker {
     let unsubscribe: (()=>Promise<void>) | undefined;
     try { unsubscribe=await (this.options.bus ?? this.db.bus).subscribe(message => { if (!['card_updated','verdict_created'].includes(message.topic)) this.wake?.(); }); }
     catch { /* A disconnected bus does not disable the durable cursor poll. */ }
+    const rerating=this.options.rerate ? this.rerateLoop() : undefined;
     try {
       while (!this.stopped) {
         let completed:number;
@@ -509,7 +513,55 @@ export class EngineWorker {
           if (this.stopped) this.wake();
         });
       }
-    } finally { await unsubscribe?.(); }
+    } finally { this.stop(); await rerating; await unsubscribe?.(); }
+  }
+  /**
+   * Live: re-rate stale pending cards (staleRatings) at the newest block, four source loads at a time, beside the polls.
+   * Polls spend minutes refreshing activity and planning before they write anything (about nine of every forty-five
+   * on 2026-10-11, and about fifty after a restart); this loop writes during that time too. Each card is written in the
+   * same locked transaction as a poll's, rewritten like a poll's re-rating even at a block that already has a run, and
+   * without outcome loads (polls catch those up). A spent paid budget waits like the polls; other errors are reported and retried.
+   */
+  private async rerateLoop() {
+    while (!this.stopped) {
+      let cards=0;
+      try {
+        // The indexer's newest block; resolveClock stores its time when polls have not yet.
+        const head=(await this.db.sql.query<{number:string|null}>('SELECT max(number)::text AS number FROM chain_blocks')).rows[0]?.number;
+        // Coins the radar lists (active in the last seven days), by this worker's clock.
+        const active=(await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>to_timestamp($1)',[(this.options.now?.() ?? Date.now()/1000)-7*86400])).rows.map(row=>hex(row.coin) as Address);
+        const stale=head==null ? [] : await staleRatings(this.db,active,4*8,this.rerated);
+        for(let offset=0;offset<stale.length && !this.stopped;offset+=4) {
+          const block=Number(head),batch=stale.slice(offset,offset+4);
+          for(const {coin,card} of batch)this.rerated.set(coin,card);
+          if(!(await resolveClock(this.db,block,this.readBlock,this.clock)))break;
+          const loaded=await Promise.all(batch.map(async ({coin})=>{
+            const prune=await historyPrune(this.db,coin);
+            if(prune && !(await revivedBy(this.db,coin,prune,block)))return null;
+            const sources=await loadSources(this.db,coin,block,this.client,this.clock);
+            if(!sources)this.cardFailures++;
+            return sources;
+          }));
+          for(const sources of loaded) {
+            if(!sources || this.stopped)continue;
+            const card=await this.db.tx(async tx=>{
+              await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
+              // Like a poll's re-rating, a stale card is rewritten even at a block that already has a run.
+              sources.history=await historyAt(tx,sources.deployer,sources.coin,sources.asOfBlock);
+              return this.persistRun(tx,sources);
+            });
+            if(card){await this.recordScan(card);cards++;this.completed++;this.options.onHeartbeat?.();}
+            const latest=(await this.db.sql.query<{card_id:string}>('SELECT card_id FROM coin_card_latest WHERE coin=$1',[binary(sources.coin)])).rows[0];
+            if(latest)this.rerated.set(sources.coin,latest.card_id);
+          }
+        }
+        if(stale.length)this.options.onRerate?.(cards);
+        if(stale.length)continue;
+      } catch(error) {
+        if(rpcStopReason(error)!=='rpc_budget_exhausted')this.options.onRerateError?.(error);
+      }
+      await new Promise<void>(resolve=>{const timer=setTimeout(resolve,this.options.rerateIdleMs ?? 30_000);this.rerateWake=()=>{clearTimeout(timer);resolve();};if(this.stopped)resolve();});
+    }
   }
   /**
    * Schedule a block's eligible coins, acquire sources outside the transaction and serialize
