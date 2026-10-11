@@ -76,13 +76,20 @@ export function createPonsAdapter(ctx: PonsContext, options: {
 export interface PonsProfileClient {
   readContract(input: { address: Address; abi: typeof ponsCurveAbi; functionName: 'currentSnipeTaxBps' | 'creatorTaxBps' | 'feeBps'; args?: readonly [Address]; blockNumber: bigint }): Promise<bigint>;
   getCode(input: { address: Address; blockNumber: bigint }): Promise<`0x${string}` | undefined>;
+  /**
+   * The three getters in one call at the block (Multicall3), failing if any getter fails: one paid request instead of
+   * three, under a per-minute limit the sell check shares. Without it, each getter is read on its own.
+   */
+  readGetters?(input: { curve: Address; token: Address; blockNumber: bigint }): Promise<readonly [creatorTaxBps: bigint, feeBps: bigint, currentSnipeTaxBps: bigint]>;
 }
 /** Archive reads at the requested block; failed reads remain absent at the caller. */
 export async function readPonsProfile(client: PonsProfileClient, token: Address, curve: Address, blockNumber: bigint) {
-  const [creator, fee, snipe, code] = await Promise.all([
-    client.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'creatorTaxBps', blockNumber }),
-    client.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'feeBps', blockNumber }),
-    client.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'currentSnipeTaxBps', args: [token], blockNumber }),
+  const [[creator, fee, snipe], code] = await Promise.all([
+    client.readGetters ? client.readGetters({ curve, token, blockNumber }) : Promise.all([
+      client.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'creatorTaxBps', blockNumber }),
+      client.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'feeBps', blockNumber }),
+      client.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'currentSnipeTaxBps', args: [token], blockNumber }),
+    ]),
     client.getCode({ address: token, blockNumber }),
   ]);
   if ([creator, fee, snipe].some(v => v < 0n || v > 10000n) || !code || code === '0x') throw new Error('Invalid Pons profile');

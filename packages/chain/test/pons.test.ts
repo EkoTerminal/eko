@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getAddress, toEventSelector, type AbiEvent, type Address } from 'viem';
-import { createPonsAdapter, decodePons, decodePonsResult, dedupeExempt } from '../src/launchpads/pons.js';
+import { createPonsAdapter, decodePons, decodePonsResult, dedupeExempt, readPonsProfile } from '../src/launchpads/pons.js';
 import { loadRegistry } from '../src/registry.js';
 import { ponsCurveAbi, ponsFactoryAbi } from '../src/abis.js';
 import { logOf } from './helpers.js';
@@ -59,5 +59,24 @@ describe('Pons adapter', () => {
     expect(await adapter.antiSnipe!(tx.from, launchBlock)).toBeNull();
     const noTiming = createPonsAdapter(ctx, { client: { readContract }, curveForToken: () => getAddress(curve.curve) });
     expect(await noTiming.antiSnipe!(getAddress(curve.token), launchBlock)).toBeNull();
+  });
+  it('reads the profile getters in one call when the client batches them, else one call each, with the same result', async () => {
+    const token = getAddress(curve.token), at = getAddress(curve.curve), blockNumber = 5n;
+    const values: Record<string, bigint> = { creatorTaxBps: 1000n, feeBps: 100n, currentSnipeTaxBps: 0n };
+    const requests: string[] = [];
+    const getCode = async () => { requests.push('getCode'); return '0x6080' as const; };
+    const readContract = async (input: { functionName: string }) => { requests.push(input.functionName); return values[input.functionName]; };
+    const separate = await readPonsProfile({ readContract, getCode }, token, at, blockNumber);
+    expect(requests.sort()).toEqual(['creatorTaxBps', 'currentSnipeTaxBps', 'feeBps', 'getCode']);
+    requests.length = 0;
+    const readGetters = async (input: { curve: Address; token: Address; blockNumber: bigint }) => {
+      requests.push('getters'); expect(input).toEqual({ curve: at, token, blockNumber });
+      return [values.creatorTaxBps, values.feeBps, values.currentSnipeTaxBps] as const;
+    };
+    expect(await readPonsProfile({ readContract, getCode, readGetters }, token, at, blockNumber)).toEqual(separate);
+    expect(requests.sort()).toEqual(['getCode', 'getters']);
+    expect(separate).toMatchObject({ creatorTaxPct: 10, feePct: 1, antiSnipeActive: false });
+    // A failed batched read fails the profile, as a failed getter did.
+    await expect(readPonsProfile({ readContract, getCode, readGetters: async () => { throw new Error('reverted'); } }, token, at, blockNumber)).rejects.toThrow('reverted');
   });
 });

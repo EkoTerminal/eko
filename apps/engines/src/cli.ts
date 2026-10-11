@@ -1,5 +1,6 @@
 import { openDb, migrate, migrateEngines, PostgresBus, launchEmitter } from '@eko/db';
-import { createMeteredClients, loadRegistry, ProgressWatchdog, type PonsProfileClient } from '@eko/chain';
+import { createMeteredClients, loadRegistry, ponsCurveAbi, ProgressWatchdog, type PonsProfileClient } from '@eko/chain';
+import { createPublicClient } from 'viem';
 import { z } from 'zod';
 import type { BlockReader } from './activity.js';
 import { EngineWorker } from './worker.js';
@@ -44,12 +45,22 @@ async function main() {
   const rpc=env.RPC_HTTP_URL ? createMeteredClients(process.env,{ db,onSessionBudget:() => { rpc?.meter.stop('rpc_session_budget_reached');stopWorker(); } }) : undefined;
   if (rpc) {
     if (await rpc.paid.getChainId()!==4663) throw new Error('RPC chain ID must be 4663');
-    readBlock=async block=>{const header=await rpc.header(BigInt(block));return {timestamp:header.timestamp,hash:header.hash};};
+    // Block times public first, paid only when the public read fails (the indexer's parent-header lane): a cold start
+    // read about 170 headers a minute on the paid lane on 2026-10-11, under the per-minute limit card reads share.
+    const headers=createPublicClient({transport:rpc.meter.transport('parent')});
+    readBlock=async block=>{const header=await headers.getBlock({blockNumber:BigInt(block),includeTransactions:false});return {timestamp:header.timestamp,hash:header.hash};};
     readBlock.readMany=blocks=>Promise.all(blocks.map(block=>readBlock!(block)));
     client={ getCode:input=>rpc.archive.getCode(input),readContract:async input=>{
       const value=await rpc.archive.readContract(input);
       if (typeof value!=='bigint') throw new Error('Unexpected Pons read result');
       return value;
+    },readGetters:async ({curve,token,blockNumber})=>{
+      // One Multicall3 call (the chain's registered multicall3) at the same block; any failed getter fails the read.
+      const values=await rpc.archive.multicall({allowFailure:false,blockNumber,contracts:[
+        {address:curve,abi:ponsCurveAbi,functionName:'creatorTaxBps'},{address:curve,abi:ponsCurveAbi,functionName:'feeBps'},
+        {address:curve,abi:ponsCurveAbi,functionName:'currentSnipeTaxBps',args:[token]}]});
+      if (!values.every(value=>typeof value==='bigint')) throw new Error('Unexpected Pons read result');
+      return values as [bigint,bigint,bigint];
     } };
   }
   try {

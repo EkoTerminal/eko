@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { binary, openDb, migrate, migrateEngines, type ChainDb } from '@eko/db';
-import { loadRegistry, probeAbi, v4PoolId, v4ProbeAbi, RpcGuardError, type SellRpc } from '@eko/chain';
+import { balanceKey, loadRegistry, probeAbi, v4PoolId, v4ProbeAbi, RpcGuardError, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
-import { decodeFunctionData, encodeAbiParameters, getAddress, zeroAddress, type Hex } from 'viem';
-import { SellChecker, SellCheckScheduler, indexedEthUsd, readSellChecks, recordSellRefusal, sellRefusalTotals, sellRoute, usdToWei } from '../src/sell-check.js';
+import { decodeFunctionData, encodeAbiParameters, getAddress, pad, parseAbi, toHex, zeroAddress, type Hex } from 'viem';
+import { SellChecker, SellCheckScheduler, indexedEthUsd, readSellChecks, recordSellRefusal, sellRefusalTotals, sellRoute, usdToUnits, usdToWei } from '../src/sell-check.js';
 
 // Synthetic indexed rows and a synthetic RPC only: no live chain data or network calls.
 const address = (n: number): Address => `0x${n.toString(16).padStart(40, '0')}`;
@@ -149,5 +149,61 @@ describe('live sell checks (indexed routes, synthetic probe outputs)', () => {
     expect(totals.byHour[23]).toBe(1);
     expect(totals.byHour[21]).toBe(1);
     expect(totals.byHour.reduce((a, b) => a + b, 0)).toBe(3);
+  });
+  it('probes a curve paired with a token in that token: $100 and $1,000 at its USD price, through its balance slot found once', async () => {
+    const db = await seed();
+    const paired = address(13), pairedCurve = address(14), stock = address(15), unpriced = address(16), stockCurve = address(17), unpricedCurve = address(18), unpricedCoin = address(19);
+    const token = (a: Address, c: Address) => db.insert('tokens', { address: binary(a), deployer: binary(address(99)), curve: binary(c), launchpad: 'pons', name: 'Sample', symbol: 'DEMO', decimals: 18, first_block: '10', block: '10' });
+    await token(paired, pairedCurve); await token(stockCurve, address(20)); await token(unpricedCoin, unpricedCurve);
+    await db.insert('tokens', { address: binary(stock), deployer: binary(address(99)), launchpad: 'other', name: 'Stock', symbol: 'DEMO', decimals: 18, first_block: '10', block: '10' });
+    await db.insert('tokens', { address: binary(unpriced), deployer: binary(address(99)), launchpad: 'other', name: 'Stock', symbol: 'DEMO', decimals: 18, first_block: '10', block: '10' });
+    const launch = (coin: Address, c: Address, pair: Address) => db.insert('pons_events', { block: '10', tx_hash: binary(`0x${(tx++).toString(16).padStart(64, '0')}`), log_index: 0, token: binary(coin),
+      emitter: binary(address(97)), kind: 'launch', data: JSON.stringify({ curve: c, pairToken: pair }) });
+    await launch(paired, pairedCurve, usdg); await launch(stockCurve, address(20), stock); await launch(unpricedCoin, unpricedCurve, unpriced);
+    // The stock token's own swaps price it at $250.
+    await db.insert('swaps', { ts: new Date(epoch + 3500_000), block: '990', tx_hash: binary(`0x${(tx++).toString(16).padStart(64, '0')}`), log_index: 0, venue: 'uniswap_v3', pool_id: binary(address(21)),
+      coin: binary(stock), quote_asset: binary(usdg), trader: binary(address(98)), side: 1, amount_coin: (4n * 10n ** 18n).toString(), amount_quote: '1000000000', price_quote: 250, usd: 1000 });
+    expect(await sellRoute(db, paired, 1000)).toEqual({ venue: 'pons_curve', coin: getAddress(paired), curve: getAddress(pairedCurve), pair: { token: getAddress(usdg) } });
+    // Synthetic chain: both pair tokens keep balances in a Solidity mapping at slot 1; every round trip returns 98.01%.
+    const tripAbi = parseAbi(['struct Trip { address pair; address token; address curve; uint256 amountIn; bytes buyData; bytes sellData; }', 'function roundTrip(Trip trip)']);
+    const sizes: { pair: string; amount: bigint }[] = [];
+    const request = vi.fn(async ({ params }: { method: string; params: readonly unknown[] }) => {
+      const [call, , overrides] = params as [{ to: Address; data: Hex }, Hex, Record<string, { stateDiff?: Record<Hex, Hex> }>];
+      if (call.data.startsWith('0x70a08231')) {
+        const holder = `0x${call.data.slice(34)}` as Address;
+        return overrides[call.to]?.stateDiff?.[balanceKey({ layout: 'solidity', slot: 1 }, holder)] ?? pad(toHex(0n));
+      }
+      const [trip] = decodeFunctionData({ abi: tripAbi, data: call.data }).args;
+      sizes.push({ pair: trip.pair.toLowerCase(), amount: trip.amountIn });
+      expect(overrides[trip.pair]!.stateDiff![balanceKey({ layout: 'solidity', slot: 1 }, call.to)]).toBe(pad(toHex(trip.amountIn * 2n)));
+      return out(10n ** 21n, trip.amountIn * 9801n / 10000n, trip.amountIn);
+    });
+    const checker = new SellChecker(db, { request }, { now: () => epoch + 3600_000 });
+    const first = await checker.check(paired, 1000, [100, 1000], 2000);
+    expect(first).toMatchObject({ status: 'sellable', pairUsd: 1, exit100: 1.99, exit1k: 1.99, route: { pair: { token: getAddress(usdg), balance: { layout: 'solidity', slot: 1 } } } });
+    // Three layouts tried (ERC-7201, then Solidity slots 0 and 1), then one call per size.
+    expect(first.requests).toBe(3 + 2);
+    expect(sizes.splice(0)).toEqual([{ pair: usdg, amount: 100_000_000n }, { pair: usdg, amount: 1_000_000_000n }]);
+    // The USDG layout is not looked up again; the stock token's is, and $100 is 0.4 of a share at $250.
+    expect((await checker.check(paired, 1000, [100], 2000)).requests).toBe(1);
+    const stockCheck = await checker.check(stockCurve, 1000, [100], 2000);
+    expect(stockCheck).toMatchObject({ status: 'sellable', pairUsd: 250, requests: 3 + 1 });
+    expect(sizes.at(-1)).toEqual({ pair: stock, amount: 4n * 10n ** 17n });
+    // A pair token with no USD price cannot be sized: unsupported, nothing sent.
+    const calls = request.mock.calls.length;
+    expect(await checker.check(unpricedCoin, 1000, [100, 1000], 2000)).toMatchObject({ status: 'unsupported', requests: 0, probes: [] });
+    expect(request.mock.calls.length).toBe(calls);
+    expect(usdToUnits(100, 250, 18)).toBe(4n * 10n ** 17n); expect(usdToUnits(100, 0, 18)).toBeNull();
+  });
+  it('checks readings that earlier code left unsupported or failed at the buy once after a restart', async () => {
+    const db = await seed(); await ethSwap(db, 3500);
+    const now = epoch + 3600_000;
+    await db.sql.query("INSERT INTO sell_check_latest(coin,block,checked_at,activity_at,venue,route_id,status,method_version,data,attempted_at,attempt_status) VALUES($1,1000,$2,$2,NULL,NULL,'unsupported','sell-check-1','{}',$2,'unsupported')",
+      [binary(usdgCoin), new Date(now - 60_000)]);
+    const scheduler = new SellCheckScheduler(db, new SellChecker(db, chain({}), { now: () => now }));
+    expect((await scheduler.due(now)).map(d => d.coin)).toContain(usdgCoin);
+    // A reading this process made is not due again before the retry interval.
+    await db.sql.query('UPDATE sell_check_latest SET attempted_at=$1 WHERE coin=$2', [new Date(now), binary(usdgCoin)]);
+    expect((await scheduler.due(now)).map(d => d.coin)).not.toContain(usdgCoin);
   });
 });

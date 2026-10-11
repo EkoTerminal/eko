@@ -82,7 +82,11 @@ export class ReadStore {
           await tx.sql.query('LOCK TABLE read_feed IN SHARE ROW EXCLUSIVE MODE');
           await tx.sql.query('LOCK TABLE read_coins IN SHARE ROW EXCLUSIVE MODE');
           await tx.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[pending.map(r=>r.coin),Math.floor(this.now()/60000)*60]);
-          await tx.sql.query('DELETE FROM read_dirty d USING unnest($1::bytea[],$2::bigint[]) p(coin,revision) WHERE d.coin=p.coin AND d.revision=p.revision',[pending.map(r=>r.coin),pending.map(r=>r.revision)]);
+          // The indexer marks coins dirty from its swap trigger in its own row order; waiting on one of those rows here
+          // deadlocked its block writes (5-9 an hour on 2026-10-11). A row it is changing gets a new revision anyway, so
+          // it is skipped and refreshed next time.
+          await tx.sql.query(`DELETE FROM read_dirty d USING (SELECT x.coin FROM read_dirty x JOIN unnest($1::bytea[],$2::bigint[]) p(coin,revision)
+            ON x.coin=p.coin AND x.revision=p.revision FOR UPDATE OF x SKIP LOCKED) s WHERE d.coin=s.coin`,[pending.map(r=>r.coin),pending.map(r=>r.revision)]);
         });
         for(const listener of this.listeners)listener(pending.map(r=>hex(r.coin)));
       }

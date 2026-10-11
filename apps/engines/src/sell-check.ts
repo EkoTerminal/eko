@@ -1,5 +1,5 @@
 import { binary, hex, type ChainDb } from '@eko/db';
-import { loadRegistry, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
+import { balanceSlot, loadRegistry, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type BalanceSlot, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
 import { getAddress, zeroAddress, type Hex } from 'viem';
 
@@ -11,6 +11,8 @@ export const SELL_CHECK_SIZES_USD = [100, 1000] as const;
 export type SellCheckStatus = 'sellable' | 'refused' | 'buy_failed' | 'unavailable' | 'unsupported';
 export interface SellCheckResult {
   coin: Address; block: number; status: SellCheckStatus; route: SellRoute | null; ethUsd: number | null;
+  /** On a token-paired Pons curve: the pair token's USD price the sizes used (probe amounts are in its units). */
+  pairUsd?: number;
   probes: (SellProbe & { sizeUsd: number })[]; requests: number;
   exit100: number | null; exit1k: number | null;
 }
@@ -38,6 +40,27 @@ export function usdToWei(usd: number, ethUsd: number): bigint {
   return BigInt(Math.round(usd * 1e6)) * 10n ** 18n / BigInt(Math.max(1, Math.round(ethUsd * 1e6)));
 }
 
+/** USD size in a token's base units at one USD price. Sizing only: the probe measures its own debit and credit. */
+export function usdToUnits(usd: number, price: number, decimals: number): bigint | null {
+  const units = usd / price * 10 ** decimals;
+  if (!(usd > 0) || !(price > 0) || !Number.isFinite(units) || units < 1 || units >= 2 ** 127) return null;
+  return BigInt(Math.round(units));
+}
+/**
+ * The USD price of a Pons curve's pair token: USDG at par, else the median of its 25 latest priced swaps as a coin within
+ * a day at or below the block (the indexer's USD). Null without one: the $100 and $1,000 sizes cannot be expressed.
+ */
+export async function pairUsd(db: ChainDb, token: Address, block: number, nowMs: number, registry: AddressRegistry = loadRegistry()): Promise<{ usd: number; decimals: number } | null> {
+  if (same(token, registry.requireAddress('tokens.USDG'))) return { usd: 1, decimals: registry.data.tokens.USDG.decimals ?? 6 };
+  const rows = (await db.sql.query<{ price: number; decimals: number }>(`SELECT x.usd/(x.amount_coin::double precision/10^t.decimals) AS price,t.decimals FROM swaps x
+    JOIN tokens t ON t.address=x.coin WHERE x.coin=$1 AND x.block<=$2 AND x.ts>=to_timestamp($3::double precision) AND x.usd>0 AND x.amount_coin>0 AND t.decimals IS NOT NULL
+    ORDER BY x.block DESC,x.log_index DESC LIMIT 25`, [binary(token), block, nowMs / 1000 - 86400])).rows;
+  const prices = rows.map(r => Number(r.price)).filter(v => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
+  if (!prices.length) return null;
+  const mid = Math.floor(prices.length / 2);
+  return { usd: prices.length % 2 ? prices[mid]! : (prices[mid - 1]! + prices[mid]!) / 2, decimals: Number(rows[0]!.decimals) };
+}
+
 /** About one day of Robinhood Chain blocks (~10 per second), for ranking pools by recent volume. */
 const DAY_BLOCKS = 864_000;
 /**
@@ -51,12 +74,12 @@ export async function sellRoute(db: ChainDb, coin: Address, block: number, regis
   if (!token) return null;
   const checksummed = getAddress(coin);
   if (token.launchpad === 'pons' && token.curve && (token.graduated_block == null || Number(token.graduated_block) > block)) {
-    // The probe buys with ETH. A curve paired with another token (USDG, a stock token, another Pons coin) reverts
-    // UnexpectedNativeValue on every probe, so it has no route here (cards use observed sellers instead).
+    // A curve paired with another token (USDG, a stock token, another Pons coin) is probed in that token (PairProbe):
+    // an ETH buy reverts UnexpectedNativeValue there. Its balance slot is found when the check runs (SellChecker).
     const pair = (await db.sql.query<{ pair: string | null }>("SELECT lower(data->>'pairToken') AS pair FROM pons_events WHERE token=$1 AND kind='launch' ORDER BY block LIMIT 1",
       [binary(coin)])).rows[0]?.pair;
-    if (pair && pair !== zeroAddress) return null;
-    return { venue: 'pons_curve', coin: checksummed, curve: getAddress(hex(token.curve)) };
+    const route: SellRoute = { venue: 'pons_curve', coin: checksummed, curve: getAddress(hex(token.curve)) };
+    return pair && /^0x[0-9a-f]{40}$/.test(pair) && pair !== zeroAddress ? { ...route, pair: { token: getAddress(pair) } } : route;
   }
   const pools = (await db.sql.query<{ id: Uint8Array; venue: string; currency0: Uint8Array; currency1: Uint8Array; fee: number; tick_spacing: number; hooks: Uint8Array | null; created_block: string }>(
     `SELECT id,venue,currency0,currency1,fee,tick_spacing,hooks,created_block FROM pools
@@ -93,6 +116,8 @@ export function combineSellProbes(probes: SellProbe[]): SellCheckStatus {
 }
 /** Runs the probe on the coin's indexed route at the given block. Shared by the engines scheduler and the API quote guard. */
 export class SellChecker {
+  /** Balance layouts of pair tokens, found once per process (one paid eth_call per layout tried). */
+  private balances = new Map<string, Promise<{ balance: BalanceSlot | null; requests: number }>>();
   constructor(readonly db: ChainDb, readonly rpc: SellRpc, readonly options: { registry?: AddressRegistry; now?: () => number } = {}) {}
   private get registry() { return this.options.registry ??= loadRegistry(); }
   now() { return this.options.now?.() ?? Date.now(); }
@@ -101,11 +126,37 @@ export class SellChecker {
     const base: SellCheckResult = { coin, block, status: 'unavailable', route: null, ethUsd: null, probes: [], requests: 0, exit100: null, exit1k: null };
     const route = await sellRoute(this.db, coin, block, this.registry);
     if (!route) return { ...base, status: 'unsupported' };
+    if (route.venue === 'pons_curve' && route.pair) return this.checkPair(base, { ...route, pair: route.pair }, block, sizesUsd);
     const price = ethUsd === undefined ? await this.ethUsd() : ethUsd;
     if (price == null) return { ...base, route };
     const probes = await Promise.all(sizesUsd.map(async sizeUsd => ({ ...await runSellProbe(this.rpc, route, usdToWei(sizeUsd, price), BigInt(block), { nowSec: () => this.now() / 1000 }), sizeUsd })));
     const exit = (size: number) => { const p = probes.find(p => p.sizeUsd === size); return p && (p.status === 'sellable' || p.status === 'sell_failed') ? p.exitCostPct : null; };
     return { ...base, route, ethUsd: price, probes, requests: probes.reduce((n, p) => n + p.requests, 0), status: combineSellProbes(probes), exit100: exit(100), exit1k: exit(1000) };
+  }
+  /**
+   * A token-paired Pons curve: the sizes are $100 and $1,000 of the pair token at its indexed USD price, the probe holds
+   * it through its balance slot, and amounts are in its units. Without a price or a found slot the route is unsupported.
+   */
+  private async checkPair(base: SellCheckResult, route: Extract<SellRoute, { venue: 'pons_curve' }> & { pair: NonNullable<Extract<SellRoute, { venue: 'pons_curve' }>['pair']> },
+    block: number, sizesUsd: readonly number[]): Promise<SellCheckResult> {
+    const quote = await pairUsd(this.db, route.pair.token, block, this.now(), this.registry);
+    const sizes = quote ? sizesUsd.map(sizeUsd => ({ sizeUsd, units: usdToUnits(sizeUsd, quote.usd, quote.decimals) })) : [];
+    if (!quote || !sizes.length || sizes.some(size => size.units == null)) return { ...base, route, status: 'unsupported' };
+    const key = route.pair.token.toLowerCase();
+    let requests = 0, found = this.balances.get(key);
+    if (!found) {
+      found = balanceSlot(this.rpc, route.pair.token, BigInt(block));
+      this.balances.set(key, found);
+      // Only a provider or budget stop is retried; a token with no matching layout stays unsupported.
+      found.catch(() => this.balances.delete(key));
+      requests += (await found).requests;
+    }
+    const { balance } = await found;
+    if (!balance) return { ...base, route, status: 'unsupported', requests };
+    const priced = { ...route, pair: { token: route.pair.token, balance } };
+    const probes = await Promise.all(sizes.map(async ({ sizeUsd, units }) => ({ ...await runSellProbe(this.rpc, priced, units!, BigInt(block), { nowSec: () => this.now() / 1000 }), sizeUsd })));
+    const exit = (size: number) => { const p = probes.find(p => p.sizeUsd === size); return p && (p.status === 'sellable' || p.status === 'sell_failed') ? p.exitCostPct : null; };
+    return { ...base, route: priced, pairUsd: quote.usd, probes, requests: requests + probes.reduce((n, p) => n + p.requests, 0), status: combineSellProbes(probes), exit100: exit(100), exit1k: exit(1000) };
   }
 }
 
@@ -114,7 +165,7 @@ const MEASURED = new Set<SellCheckStatus>(['sellable', 'refused', 'buy_failed'])
  * the same route; a new route or a lost route replaces it, so a closed curve's reading never outlives graduation. */
 export async function persistSellCheck(db: ChainDb, result: SellCheckResult, at: Date, activityAt: Date | null) {
   const routeId = result.route ? sellRouteId(result.route) : null;
-  const data = { ethUsd: result.ethUsd, route: result.route, probes: result.probes.map(({ requests: _requests, ...p }) => p) };
+  const data = { ethUsd: result.ethUsd, ...(result.pairUsd !== undefined ? { pairUsd: result.pairUsd } : {}), route: result.route, probes: result.probes.map(({ requests: _requests, ...p }) => p) };
   await db.tx(async tx => {
     await tx.sql.query('INSERT INTO sell_check_runs(coin,block,checked_at,status,requests,data) VALUES($1,$2,$3,$4,$5,$6)',
       [binary(result.coin), result.block, at, result.status, result.requests, JSON.stringify(data)]);
@@ -181,7 +232,13 @@ export class SellCheckScheduler {
   private readonly cfg: Required<SellCheckSchedule>;
   private stopped = false; private wake?: () => void;
   private day = ''; private spent = 0; private pausedUntil = 0; private prunedAt = 0;
+  /**
+   * Unsupported and failed-buy readings older than this process are due once: earlier code may not have had a route this
+   * code has (token-paired Pons curves before 2026-10-11 bought with ETH and failed, then had no route).
+   */
+  private readonly startedAt: number;
   constructor(readonly db: ChainDb, readonly checker: SellChecker, schedule: SellCheckSchedule = {}, readonly log: (event: string, fields: Record<string, unknown>) => void = () => {}) {
+    this.startedAt = checker.now();
     this.cfg = { ...DEFAULTS, ...Object.fromEntries(Object.entries(schedule).filter(([, v]) => v !== undefined)) };
     for (const [key, value] of Object.entries(this.cfg)) if (!Number.isSafeInteger(value) || value < 0 || (['batch', 'parallel'].includes(key) && value < 1)) throw new Error(`Invalid sell-check ${key}`);
   }
@@ -223,8 +280,9 @@ export class SellCheckScheduler {
         OR (l.attempt_status='unsupported' AND l.attempted_at<=to_timestamp($1::double precision-$6))
         OR (l.attempt_status IN ('sellable','refused','buy_failed') AND r.activity>coalesce(l.activity_at,'-infinity'::timestamptz) AND l.attempted_at<=to_timestamp($1::double precision-$3))
         OR (l.attempt_status IN ('sellable','refused','buy_failed') AND l.attempted_at<=to_timestamp($1::double precision-$4))
-        OR (l.venue='pons_curve' AND t.graduated_block IS NOT NULL AND l.attempt_status<>'unavailable'))
-      ORDER BY (l.coin IS NULL) DESC,r.activity DESC,r.coin LIMIT $7`, [s, c.minAgeSec, c.minIntervalSec, c.maxAgeSec, c.retrySec, c.unsupportedRetrySec, c.batch])).rows
+        OR (l.venue='pons_curve' AND t.graduated_block IS NOT NULL AND l.attempt_status<>'unavailable')
+        OR (l.attempt_status IN ('unsupported','buy_failed') AND l.attempted_at<to_timestamp($8::double precision)))
+      ORDER BY (l.coin IS NULL) DESC,r.activity DESC,r.coin LIMIT $7`, [s, c.minAgeSec, c.minIntervalSec, c.maxAgeSec, c.retrySec, c.unsupportedRetrySec, c.batch, this.startedAt / 1000])).rows
       .map(r => ({ coin: hex(r.coin), activity: new Date(r.activity) }));
   }
   /** One bounded pass. Returns the number of coins attempted. */

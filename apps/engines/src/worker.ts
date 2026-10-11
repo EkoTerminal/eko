@@ -108,6 +108,8 @@ export class EngineWorker {
   private rerated=new Map<Address,string>();
   /** Coins the loop first-scanned, by block: one whose sources were unavailable waits FIRST_SCAN_RETRY_BLOCKS (and the failure backoff). */
   private firstTried=new Map<Address,number>();
+  /** The loop's cards share one hourly volume-leaders read per block, as a poll's do (it ran once per card before). */
+  private rerateMemo:SourceMemo={ranks:new Map()};
   /** Pending cards written before this time are re-rated once (options.rerateBefore, never before CLEAR_RULES_AT). */
   private get rulesAt() { return new Date(Math.max(Date.parse(CLEAR_RULES_AT),Date.parse(this.options.rerateBefore ?? CLEAR_RULES_AT))).toISOString(); }
   /**
@@ -566,7 +568,7 @@ export class EngineWorker {
               const prune=await historyPrune(this.db,coin);
               if(prune && !(await revivedBy(this.db,coin,prune,block)))return null;
               if(!card){await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.options.referenceSimulation?.(coin,block);}
-              const sources=await loadSources(this.db,coin,block,this.client,this.clock);
+              const sources=await loadSources(this.db,coin,block,this.client,this.clock,undefined,false,this.rerateMemo);
               if(!sources)this.cardFailures++;
               return sources;
             }))).filter((sources):sources is LoadedSources=>!!sources);

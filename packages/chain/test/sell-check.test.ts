@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { decodeFunctionData, encodeAbiParameters, getAddress, toHex, zeroAddress, type Address, type Hex } from 'viem';
+import { decodeFunctionData, encodeAbiParameters, getAddress, pad, parseAbi, toHex, zeroAddress, type Address, type Hex } from 'viem';
 import { RpcGuardError } from '../src/rpc/metered.js';
 import { probeAbi } from '../src/simulation/reference.js';
+import { EKO_PAIR_PROBE_RUNTIME } from '../src/simulation/pair-probe-runtime.js';
 import { EKO_PROBE_RUNTIME } from '../src/simulation/probe-runtime.js';
 import { EKO_V4_PROBE_RUNTIME } from '../src/simulation/v4-probe-runtime.js';
-import { ponsCurveSellCheckAbi, runSellProbe, sellRouteId, type SellRoute } from '../src/simulation/sell-check.js';
+import { BALANCE_SLOTS, balanceKey, balanceSlot, ponsCurveSellCheckAbi, runSellProbe, sellRouteId, type SellRoute } from '../src/simulation/sell-check.js';
 import { v4PoolId, v4ProbeAbi } from '../src/simulation/v4.js';
 
 // Synthetic transport only: every output below is an ABI-encoded fixture, never a live chain reading.
@@ -91,5 +92,40 @@ describe('live sell check (eth_call with the probe injected by state override)',
     expect(Object.values(params[2] as Record<string, { code: Hex }>)[0]!.code).toBe(EKO_V4_PROBE_RUNTIME);
     expect(decodeFunctionData({ abi: v4ProbeAbi, data: tx.data }).args).toEqual([v4.manager, v4.quoter, key, '0x', 1000n]);
     await expect(runSellProbe(rpc(), { ...v4, poolId: `0x${'1'.repeat(64)}` }, 1000n, 3n)).rejects.toThrow('Unsupported v4');
+  });
+  it('drives a token-paired Pons curve with the pair probe, funding the probe through the pair token\'s balance slot', async () => {
+    const pairToken = address(40), paired: SellRoute = { ...pons, pair: { token: pairToken, balance: { layout: 'solidity', slot: 1 } } };
+    const t = rpc(output(7000n, 98_010_000n, 100_000_000n));
+    expect(await runSellProbe(t, paired, 100_000_000n, 5n)).toMatchObject({ status: 'sellable', exitCostPct: 1.99, spentWei: '100000000', returnedWei: '98010000', routeId: sellRouteId(pons) });
+    const [tx, , overrides] = t.request.mock.calls[0]![0].params as [{ to: Address; data: Hex }, Hex, Record<string, unknown>];
+    expect(overrides).toEqual({ [tx.to]: { code: EKO_PAIR_PROBE_RUNTIME, balance: toHex(100_000_000n + 10n ** 18n) },
+      [pairToken]: { stateDiff: { [balanceKey({ layout: 'solidity', slot: 1 }, tx.to)]: pad(toHex(200_000_000n)) } } });
+    const abi = parseAbi(['struct Trip { address pair; address token; address curve; uint256 amountIn; bytes buyData; bytes sellData; }', 'function roundTrip(Trip trip)']);
+    const [trip] = decodeFunctionData({ abi, data: tx.data }).args;
+    expect(trip).toMatchObject({ pair: pairToken, token: pons.coin, curve: pons.curve, amountIn: 100_000_000n });
+    expect(decodeFunctionData({ abi: ponsCurveSellCheckAbi, data: trip.buyData })).toMatchObject({ functionName: 'buy', args: [100_000_000n, 0n, getAddress(tx.to)] });
+    expect(decodeFunctionData({ abi: ponsCurveSellCheckAbi, data: trip.sellData }).functionName).toBe('sell');
+    // Without a known balance slot nothing is sent.
+    const none = rpc();
+    expect(await runSellProbe(none, { ...pons, pair: { token: pairToken } }, 1000n, 5n)).toMatchObject({ status: 'unavailable', reason: 'pair_balance_unknown', requests: 0 });
+    expect(none.request).not.toHaveBeenCalled();
+  });
+  it('finds an ERC-20 balance layout by overriding candidate storage keys at the block', async () => {
+    const token = address(41), block = 9n;
+    // The synthetic token keeps balances in a Solidity mapping at slot 3: balanceOf returns an override only at that key.
+    const request = vi.fn(async ({ params }: { method: string; params: readonly unknown[] }) => {
+      const [tx, at, overrides] = params as [{ to: Address; data: Hex }, Hex, Record<string, { stateDiff: Record<Hex, Hex> }>];
+      expect(at).toBe(toHex(block)); expect(tx.to).toBe(token);
+      const holder = decodeFunctionData({ abi: parseAbi(['function balanceOf(address) view returns (uint256)']), data: tx.data }).args[0];
+      const value = overrides[token]!.stateDiff[balanceKey({ layout: 'solidity', slot: 3 }, holder)];
+      return value ?? pad(toHex(0n));
+    });
+    const found = await balanceSlot({ request }, token, block);
+    expect(found).toEqual({ balance: { layout: 'solidity', slot: 3 }, requests: 5 });
+    // A token whose balanceOf never reflects an override has no layout; every candidate is tried once.
+    const computed = vi.fn(async () => pad(toHex(1n)));
+    expect(await balanceSlot({ request: computed }, token, block)).toEqual({ balance: null, requests: 1 + 2 * BALANCE_SLOTS });
+    // A budget stop propagates instead of being read as "no layout".
+    await expect(balanceSlot({ request: async () => { throw new RpcGuardError('rpc_budget_exhausted'); } }, token, block)).rejects.toThrow('rpc_budget_exhausted');
   });
 });
