@@ -17,7 +17,7 @@ export const pricingAssets = (registry = loadRegistry()): PricingAssets => ({
  * never be rated Clear. ETH and WETH quotes use the reference rate the decoder uses: the latest swap on the recorded
  * reference pool at or before the swap's block. Swaps without a reference stay unpriced. Returns the number priced.
  */
-export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from: Date, to: Date, limit = REPRICE_BATCH): Promise<number> {
+export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from: Date, to: Date, limit = REPRICE_BATCH, candleFloor = new Date(Date.now() - 2 * 86_400_000)): Promise<number> {
   return db.tx(async tx => {
     // The latest reference swap below the batch and those inside its block range are read once, and the latest rate is
     // carried forward in block order (a per-swap lookup over every swaps partition priced about 4,000 swaps a minute on
@@ -48,7 +48,10 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
         pricing_pending=false,priced_block=r.rate_block
       FROM r WHERE s.ts=r.ts AND s.tx_hash=r.tx_hash AND s.log_index=r.log_index AND r.rate IS NOT NULL
       RETURNING s.coin,s.ts`, [[NATIVE, assets.weth, assets.usdg].map(binary), binary(assets.weth), binary(assets.usdg), assets.usdgDecimals, from, to, limit])).rows;
-    if (rows.length) await refreshBars(tx, rows.map(row => ({ coin: row.coin, minute: new Date(Math.floor(new Date(row.ts).getTime() / 60000) * 60000) })));
+    // Candles feed the radar's hour and day volume. Rebuilding every touched minute took as long as pricing on
+    // 2026-10-11, so minutes older than two days keep their candles (as before the repair); the raw swaps carry the USD.
+    const recent = rows.filter(row => new Date(row.ts).getTime() >= candleFloor.getTime());
+    if (recent.length) await refreshBars(tx, recent.map(row => ({ coin: row.coin, minute: new Date(Math.floor(new Date(row.ts).getTime() / 60000) * 60000) })));
     return rows.length;
   });
 }
@@ -56,7 +59,7 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
 const HOUR = 3_600_000;
 /**
  * Worker role: every 30 s, price the newest six hours of Pons swaps, then walk an in-memory cursor back one hour at a
- * time through the last eight days within a 25 s budget per pass. A restart walks the history again; hours already
+ * time through the last eight days within a 28 s budget per pass. A restart walks the history again; hours already
  * priced cost one indexed range read each.
  */
 export class PricingRepairWorker {
@@ -64,7 +67,7 @@ export class PricingRepairWorker {
   private running?: Promise<void>;
   private cursor?: number;
   constructor(private readonly db: ChainDb, private readonly log: (event: string, fields: Record<string, unknown>) => void,
-    private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 25_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH) {}
+    private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 28_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH) {}
   start() { if (this.timer) return; void this.tick(); this.timer = setInterval(() => void this.tick(), this.intervalMs); this.timer.unref(); }
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
@@ -73,22 +76,22 @@ export class PricingRepairWorker {
     return this.running;
   }
   /** Price one hour until done (`done`) or out of budget, so an unfinished hour is resumed rather than skipped. */
-  private async hour(end: number, deadline: number) {
+  private async hour(end: number, deadline: number, candleFloor: Date) {
     let priced = 0;
     for (;;) {
-      const n = await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), new Date(end - HOUR), new Date(end), this.batch);
+      const n = await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), new Date(end - HOUR), new Date(end), this.batch, candleFloor);
       priced += n;
       if (n < this.batch) return { priced, done: true };
       if (this.now() >= deadline) return { priced, done: false };
     }
   }
   private async pass() {
-    const started = this.now(), deadline = started + this.budgetMs, top = Math.ceil(started / HOUR) * HOUR;
+    const started = this.now(), deadline = started + this.budgetMs, top = Math.ceil(started / HOUR) * HOUR, candleFloor = new Date(started - 2 * 24 * HOUR);
     let recent = 0, backfilled = 0;
-    for (let end = top; end > top - 6 * HOUR && this.now() < deadline; end -= HOUR) recent += (await this.hour(end, deadline)).priced;
+    for (let end = top; end > top - 6 * HOUR && this.now() < deadline; end -= HOUR) recent += (await this.hour(end, deadline, candleFloor)).priced;
     this.cursor ??= top - 6 * HOUR;
     while (this.cursor > top - 8 * 24 * HOUR && this.now() < deadline) {
-      const hour = await this.hour(this.cursor, deadline);
+      const hour = await this.hour(this.cursor, deadline, candleFloor);
       backfilled += hour.priced;
       if (hour.done) this.cursor -= HOUR;
     }
