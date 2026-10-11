@@ -20,6 +20,13 @@ import { materializeHistory, updateOutcomes, OUTCOME_LOADS_PER_WRITE, type Outco
 export const RERATE_PER_POLL=100;
 /** Cards written before 7426b59 (Clear for Pons coins, deployed 2026-10-10 21:05Z) used rules that could not reach Clear. */
 export const CLEAR_RULES_AT='2026-10-10T21:05:00Z';
+/**
+ * Pending cards written before this time were rated by code that could not complete checks the current code completes
+ * (e13699e, deployed 2026-10-11 21:30Z: taxes and the honeypot check from independent sellers, the launchpad's own hook,
+ * token-paired curves). The live CLI re-rates them once. Move it forward with any change that completes more checks;
+ * a sell check landing after a card is caught by staleRatings without it.
+ */
+export const RATING_CODE_AT='2026-10-11T21:30:29Z';
 /** Stale pending cards the re-rating loop loads at once and writes in one transaction. */
 export const RERATE_WIDTH=16;
 /** Blocks before the loop tries again to first-scan a coin it could not load (about two minutes at 0.2 s blocks). */
@@ -46,11 +53,7 @@ export interface WorkerOptions {
   onBudgetWait?: () => void; budgetWaitMs?: number;
   /** Live: run rerateLoop() beside the polls (the CLI turns it on). `onRerate` reports each batch's cards. */
   rerate?: boolean; rerateIdleMs?: number; onRerate?: (cards: number, firstScans: number) => void; onRerateError?: (error: unknown) => void;
-  /**
-   * Live: re-rate pending cards written before this ISO time. The CLI passes the process start: earlier code may not have
-   * completed checks this code completes (taxes and the honeypot check from independent sellers, the launchpad's own
-   * hook and token-paired curves on 2026-10-11). Wall-clock time, like engine_runs.created_at.
-   */
+  /** Live: re-rate pending cards written before this ISO time (the CLI passes RATING_CODE_AT). Wall-clock, like engine_runs.created_at. */
   rerateBefore?: string;
   concurrency?: number; pollMs?: number; client?: PonsProfileClient; bus?: EngineBus; readBlock?: BlockReader; now?: () => number; replayCache?:boolean;marketWindow?:boolean; onPlanned?:(plan:{tasks:number;coins:number;from:number;to:number})=>void; onProgress?: (completed:number,block:number) => void;
   /**

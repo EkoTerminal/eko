@@ -125,7 +125,9 @@ describe('live sell check (eth_call with the probe injected by state override)',
     // A token whose balanceOf never reflects an override has no layout; every candidate is tried once.
     const computed = vi.fn(async () => pad(toHex(1n)));
     expect(await balanceSlot({ request: computed }, token, block)).toEqual({ balance: null, requests: 1 + 2 * BALANCE_SLOTS });
-    // A budget stop propagates instead of being read as "no layout".
+    // A budget stop propagates, and a failed read is unknown, never "no layout".
     await expect(balanceSlot({ request: async () => { throw new RpcGuardError('rpc_budget_exhausted'); } }, token, block)).rejects.toThrow('rpc_budget_exhausted');
+    expect(await balanceSlot({ request: async () => { throw new Error('header not found'); } }, token, block)).toEqual({ balance: null, requests: 1, failed: true });
+    expect(await balanceSlot({ request: async () => '0x' }, token, block)).toEqual({ balance: null, requests: 1, failed: true });
   });
 });

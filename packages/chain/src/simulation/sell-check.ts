@@ -77,8 +77,10 @@ export const BALANCE_SLOTS = 20;
  * Find where `token` keeps balances: for each candidate layout, override that storage key for a fresh account and read
  * balanceOf at the block. The first layout whose override is what balanceOf returns is the token's. Null when none
  * matches (a token computing balances, for example a rebasing one, is not probed). Each try is one paid eth_call.
+ * A failed read makes the answer unknown (`failed`), never "no layout": on 2026-10-11 USDG's search failed at startup
+ * and its null held every USDG-paired coin unsupported, though its layout is a Solidity mapping at slot 1.
  */
-export async function balanceSlot(rpc: SellRpc, token: Address, block: bigint, options: { random?: (n: number) => Uint8Array } = {}): Promise<{ balance: BalanceSlot | null; requests: number }> {
+export async function balanceSlot(rpc: SellRpc, token: Address, block: bigint, options: { random?: (n: number) => Uint8Array } = {}): Promise<{ balance: BalanceSlot | null; requests: number; failed?: true }> {
   const holder = fresh(options.random ?? randomBytes), marker = 0x5eed_0000_0000_0000_0000_0001n;
   const layouts: BalanceSlot[] = [{ layout: 'erc7201' }];
   for (let slot = 0; slot < BALANCE_SLOTS; slot++) layouts.push({ layout: 'solidity', slot });
@@ -92,9 +94,10 @@ export async function balanceSlot(rpc: SellRpc, token: Address, block: bigint, o
         toHex(block), { [token]: { stateDiff: { [balanceKey(balance, holder)]: pad(toHex(marker)) } } }] });
     } catch (error) {
       if (rpcStopReason(error)) throw error;
-      continue;
+      return { balance: null, requests, failed: true };
     }
-    if (typeof value === 'string' && /^0x[0-9a-f]{64}$/i.test(value) && BigInt(value) === marker) return { balance, requests };
+    if (typeof value !== 'string' || !/^0x[0-9a-f]{64}$/i.test(value)) return { balance: null, requests, failed: true };
+    if (BigInt(value) === marker) return { balance, requests };
   }
   return { balance: null, requests };
 }

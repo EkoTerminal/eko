@@ -1,5 +1,5 @@
 import { binary, hex, type ChainDb } from '@eko/db';
-import { balanceSlot, loadRegistry, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type BalanceSlot, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
+import { balanceSlot, loadRegistry, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
 import { getAddress, zeroAddress, type Hex } from 'viem';
 
@@ -117,7 +117,7 @@ export function combineSellProbes(probes: SellProbe[]): SellCheckStatus {
 /** Runs the probe on the coin's indexed route at the given block. Shared by the engines scheduler and the API quote guard. */
 export class SellChecker {
   /** Balance layouts of pair tokens, found once per process (one paid eth_call per layout tried). */
-  private balances = new Map<string, Promise<{ balance: BalanceSlot | null; requests: number }>>();
+  private balances = new Map<string, ReturnType<typeof balanceSlot>>();
   constructor(readonly db: ChainDb, readonly rpc: SellRpc, readonly options: { registry?: AddressRegistry; now?: () => number } = {}) {}
   private get registry() { return this.options.registry ??= loadRegistry(); }
   now() { return this.options.now?.() ?? Date.now(); }
@@ -147,11 +147,12 @@ export class SellChecker {
     if (!found) {
       found = balanceSlot(this.rpc, route.pair.token, BigInt(block));
       this.balances.set(key, found);
-      // Only a provider or budget stop is retried; a token with no matching layout stays unsupported.
-      found.catch(() => this.balances.delete(key));
+      // A stop or a failed read is looked up again; only a token with no matching layout stays unsupported.
+      found.then(result => { if (result.failed) this.balances.delete(key); }, () => this.balances.delete(key));
       requests += (await found).requests;
     }
-    const { balance } = await found;
+    const { balance, failed } = await found;
+    if (failed) return { ...base, route, status: 'unavailable', requests };
     if (!balance) return { ...base, route, status: 'unsupported', requests };
     const priced = { ...route, pair: { token: route.pair.token, balance } };
     const probes = await Promise.all(sizes.map(async ({ sizeUsd, units }) => ({ ...await runSellProbe(this.rpc, priced, units!, BigInt(block), { nowSec: () => this.now() / 1000 }), sizeUsd })));

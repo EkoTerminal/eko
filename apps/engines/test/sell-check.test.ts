@@ -178,7 +178,12 @@ describe('live sell checks (indexed routes, synthetic probe outputs)', () => {
       expect(overrides[trip.pair]!.stateDiff![balanceKey({ layout: 'solidity', slot: 1 }, call.to)]).toBe(pad(toHex(trip.amountIn * 2n)));
       return out(10n ** 21n, trip.amountIn * 9801n / 10000n, trip.amountIn);
     });
-    const checker = new SellChecker(db, { request }, { now: () => epoch + 3600_000 });
+    // A layout lookup the provider fails is unavailable (retried soon), not unsupported, and is not remembered.
+    let down = true;
+    const checker = new SellChecker(db, { request: async (input: { method: string; params: readonly unknown[] }) => { if (down) throw new Error('synthetic provider failure'); return request(input); } },
+      { now: () => epoch + 3600_000 });
+    expect(await checker.check(paired, 1000, [100, 1000], 2000)).toMatchObject({ status: 'unavailable', requests: 1 });
+    down = false;
     const first = await checker.check(paired, 1000, [100, 1000], 2000);
     expect(first).toMatchObject({ status: 'sellable', pairUsd: 1, exit100: 1.99, exit1k: 1.99, route: { pair: { token: getAddress(usdg), balance: { layout: 'solidity', slot: 1 } } } });
     // Three layouts tried (ERC-7201, then Solidity slots 0 and 1), then one call per size.
