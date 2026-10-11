@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chainTables, hex, migrate, openDb, ChainDb } from '@eko/db';
+import { binary, chainTables, hex, migrate, openDb, ChainDb } from '@eko/db';
 import { BlockDecoder } from '../src/decode.js';
 import { LogHeadFollower } from '../src/log-head.js';
 import { Metrics } from '../src/types.js';
-import { blockOf, catchUpChain, memoryClient, registry, seedCatchUp, type Chain } from './catch-up-fixture.js';
+import { blockOf, catchUpChain, coin, curve, memoryClient, registry, seedCatchUp, type Chain } from './catch-up-fixture.js';
 const quiet = () => {};
 const handles: ChainDb[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(handles.splice(0).map(db => db.close())); });
@@ -104,5 +104,19 @@ describe('live catch-up optimizations', () => {
     expect(ticks.map(t => t.blocks_covered)).toEqual([160, 160, 80]);
     const near = await run(chain, head, { catchUpRange: 160 }, undefined, 365n);
     expect(near.ticks.map(t => t.blocks_covered)).toEqual([20, 16]);
+  }, 60000);
+  it('records a Pons curve trade in its launch pair token and prices a USDG pair at par', async () => {
+    // 2026-10-11: about one Pons launch in ten pairs its curve with USDG, a stock token or another Pons coin, and every
+    // curve trade was recorded as an ETH quote.
+    const usdg = registry.requireAddress('tokens.USDG'), db = await database();
+    await db.insert('pons_events', { block: '0', tx_hash: binary(`0x${'ab'.repeat(32)}`), log_index: 0, token: binary(coin(1)), emitter: binary(curve(1)), kind: 'launch',
+      data: JSON.stringify({ kind: 'launch', token: coin(1), curve: curve(1), pairToken: usdg }) });
+    await run(catchUpChain(100), 100n, {}, db);
+    const trades = (await db.sql.query<{ coin: Uint8Array; quote: Uint8Array; amount_quote: string; usd: number | null }>(
+      "SELECT coin,quote_asset AS quote,amount_quote,usd FROM swaps WHERE venue='pons_curve' AND coin=ANY($1::bytea[]) ORDER BY block", [[coin(1), coin(3)].map(binary)])).rows;
+    const paired = trades.filter(t => hex(t.coin) === coin(1).toLowerCase()), native = trades.filter(t => hex(t.coin) === coin(3).toLowerCase());
+    expect(paired.length).toBeGreaterThan(0); expect(native.length).toBeGreaterThan(0);
+    for (const t of paired) { expect(hex(t.quote)).toBe(usdg.toLowerCase()); expect(t.usd).toBeCloseTo(Number(t.amount_quote) / 1e6, 6); }
+    for (const t of native) expect(hex(t.quote)).toBe('0x0000000000000000000000000000000000000000');
   }, 60000);
 });

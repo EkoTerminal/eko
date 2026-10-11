@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { binary, hex, openDb, migrate, migrateEngines, rebuildBalances, InProcessBus, ChainDb, ReceiptOutbox } from '@eko/db';
-import { ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain';
+import { loadRegistry, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';
 import { decodeEventLog, type Hex } from 'viem';
-import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, staleRatings, type LivePlan } from '../src/worker.js';
+import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, staleRatings, unscannedCoins, type LivePlan } from '../src/worker.js';
 import { ReplayCache } from '../src/replay-cache.js';
-import { assembleCard, cardHash } from '../src/card.js';
+import { assembleCard, cardHash, evaluatedPlaybooks } from '../src/card.js';
 import { curveProgress,curveProgressAt,type PonsEventRow } from '../src/curve-progress.js';
 import { loadSources } from '../src/sources.js';
 import { coinActivity, refreshClock, type BlockReader, type ClockCache } from '../src/activity.js';
@@ -320,6 +320,28 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    expect(card.verdict.level).toBe('pending');
    await block(db,3,90);await worker.poll();expect(plans.at(-1)).toMatchObject({rerates:0});
   });
+  it('counts the hook check as run for the launchpad\'s own graduation hook, never for another hook',async()=>{
+   const pons=loadRegistry().requireAddress('pons.v4Hook');
+   const graduated=(hooks:string)=>({launchpad:'pons',asOfBlock:5,token:{graduated_block:'2'},poolRefs:[{hooks}]}) as unknown as Parameters<typeof evaluatedPlaybooks>[0];
+   expect(evaluatedPlaybooks(graduated(pons))).toContain('malicious_hook');
+   expect(evaluatedPlaybooks(graduated(address(0x4d)))).not.toContain('malicious_hook');
+  });
+  it('completes the honeypot check from independent sellers where the sell check cannot probe, with measured trade charges',async()=>{
+   const run=async(sellers:Address[])=>{
+    const db=await traded();
+    for(const [i,who] of sellers.entries()){await swap(db,1,-1,10,10,who,coin,1,'pons_curve');
+     await db.insert('pons_events',{block:'1',tx_hash:binary(hash(eventId++)),log_index:0,token:binary(coin),emitter:binary(curve),kind:'trade',data:JSON.stringify({side:-1,amountEth:'970',feeEth:'10',taxEth:'20'})});void i;}
+    for(let i=0;i<2;i++)await db.insert('pons_events',{block:'1',tx_hash:binary(hash(eventId++)),log_index:0,token:binary(coin),emitter:binary(curve),kind:'trade',data:JSON.stringify({side:1,amountEth:'1000',feeEth:'10',taxEth:'20'})});
+    return (await loadSources(db,coin,1,client()))!;
+   };
+   const independent=[address(41),address(42),address(43)];
+   const s=await run(independent);
+   expect(s.observedSellers).toMatchObject({sellers:3});expect(s.sellCheckReference).toBeUndefined();
+   expect(s.taxes).toMatchObject({buyPct:3,sellPct:3,mutable:null});
+   expect(evaluatedPlaybooks(s)).toEqual(expect.arrayContaining(['honeypot','tax_trap']));
+   // The deployer's own sells do not count, and two independent sellers are not enough.
+   expect((await run([address(41),address(42),deployer])).observedSellers).toBeUndefined();
+  });
   it('re-rates stale pending cards from the loop beside the polls, without a poll writing them',async()=>{
    const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
    await new EngineWorker(db,{client:client(),now:()=>epoch+120}).poll();
@@ -332,6 +354,40 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    worker.poll=async()=>{if(rerates.length)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
    await worker.run();
    expect(rerates[0]).toBe(1);const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.level).toBe('clear');
+  });
+  it('first-scans radar coins without a card from the loop, a deployer\'s older launch before its sibling',async()=>{
+   const db=await traded();await block(db,2,60);
+   const sibling=address(36);await token(db,sibling,2,true,'Sibling token',deployer);
+   await transfer(db,2,address(136),100000,sibling);await transfer(db,2,actor,1000,sibling,address(136));await swap(db,2,1,100,10,actor,sibling,60);
+   await db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[[binary(coin),binary(sibling)],epoch+120]);
+   expect(await unscannedCoins(db,epoch-86400,2,10)).toEqual([coin]);
+   const scans:number[][]=[];
+   const worker=new EngineWorker(db,{client:client(),now:()=>epoch+120,rerate:true,rerateIdleMs:10,onRerate:(n,first)=>scans.push([n,first])});
+   worker.poll=async()=>{if(scans.length>=2)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
+   await worker.run();
+   expect(scans.slice(0,2)).toEqual([[1,1],[1,1]]);
+   for(const c of [coin,sibling])expect((await latest(db,c)).verdict.asOfBlock).toBe(2);
+   expect(await unscannedCoins(db,epoch-86400,2,10)).toEqual([]);
+  });
+  it('re-rates pending cards that earlier code wrote, from the loop, in one transaction per group',async()=>{
+   const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
+   const other=address(35);await token(db,other,1,true,'Other token',address(45));
+   await transfer(db,1,address(135),100000,other);await transfer(db,1,actor,1000,other,address(135));await swap(db,1,1,100,10,actor,other);
+   await new EngineWorker(db,{client:client(),now:()=>epoch+120}).poll();
+   // Both cards are pending and written after the Clear rules: a worker started earlier never selects them.
+   await db.sql.query("UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','\"pending\"')");
+   expect(await staleRatings(db,[coin,other],10)).toEqual([]);
+   await block(db,2,60);
+   const rerates:number[]=[],txs:string[]=[];
+   const worker=new EngineWorker(db,{client:client(),now:()=>epoch+120,rerate:true,rerateIdleMs:10,rerateBefore:new Date(Date.now()+60_000).toISOString(),onRerate:n=>rerates.push(n)});
+   worker.poll=async()=>{if(rerates.length)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
+   // Count write transactions (those that lock the schedule).
+   const tx=db.tx.bind(db);db.tx=(async (fn:Parameters<typeof db.tx>[0])=>tx(async t=>{const query=t.sql.query.bind(t.sql);
+    t.sql.query=((text:string,...rest:unknown[])=>{if(String(text).startsWith('LOCK TABLE engine_schedule'))txs.push('tx');return (query as (...a:unknown[])=>unknown)(text,...rest);}) as typeof t.sql.query;return fn(t);})) as typeof db.tx;
+   await worker.run();db.tx=tx;
+   expect(rerates[0]).toBe(2);expect(txs.length).toBe(1);
+   for(const c of [coin,other])expect((await latest(db,c)).verdict.asOfBlock).toBe(2);
+   expect(()=>new EngineWorker(db,{rerateBefore:'not a time'})).toThrow('Invalid engine re-rate time');
   });
   it('re-rates pending cards written before the Clear rules, and never a current one',async()=>{
    const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);

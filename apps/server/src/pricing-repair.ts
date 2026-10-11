@@ -22,13 +22,18 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
     // The latest reference swap below the batch and those inside its block range are read once, and the latest rate is
     // carried forward in block order (a per-swap lookup over every swaps partition priced about 4,000 swaps a minute on
     // 2026-10-11, and a six-hour lookback window with a pool check per reference swap was slower still).
+    // A Pons curve paired with a stock token or another Pons coin quotes in that token: its USD price is its own latest
+    // priced swap within a day (only swaps with such a price are selected, so unpriceable ones cannot fill a batch).
     const rows = (await tx.sql.query<{ coin: Uint8Array; ts: Date }>(`WITH c AS MATERIALIZED (
-        SELECT s.ts,s.tx_hash,s.log_index,s.block,s.amount_coin,s.amount_quote,t.decimals,s.quote_asset=$3 AS dollar
-        FROM swaps s JOIN tokens t ON t.address=s.coin
-        WHERE s.ts>=$5 AND s.ts<$6 AND s.usd IS NULL AND t.launchpad='pons' AND t.decimals IS NOT NULL
-          AND s.amount_coin>0 AND s.amount_quote>0 AND s.quote_asset=ANY($1::bytea[])
+        SELECT s.ts,s.tx_hash,s.log_index,s.block,s.amount_coin,s.amount_quote,t.decimals,s.quote_asset,
+          CASE WHEN s.quote_asset=$3 THEN 'dollar' WHEN s.quote_asset=ANY($1::bytea[]) THEN 'eth' ELSE 'token' END AS kind,
+          CASE WHEN s.quote_asset=$3 THEN $4 WHEN s.quote_asset=ANY($1::bytea[]) THEN 18 ELSE q.decimals END AS qdec
+        FROM swaps s JOIN tokens t ON t.address=s.coin LEFT JOIN tokens q ON q.address=s.quote_asset
+        WHERE s.ts>=$5 AND s.ts<$6 AND s.usd IS NULL AND t.launchpad='pons' AND t.decimals IS NOT NULL AND s.amount_coin>0 AND s.amount_quote>0
+          AND (s.quote_asset=ANY($1::bytea[]) OR (q.decimals IS NOT NULL AND EXISTS(SELECT 1 FROM swaps x WHERE x.coin=s.quote_asset AND x.block<=s.block
+            AND x.ts>=s.ts-interval '1 day' AND x.usd>0 AND x.amount_coin>0)))
         ORDER BY s.ts DESC LIMIT $7),
-      span AS (SELECT min(block) AS lo,max(block) AS hi FROM c WHERE NOT dollar),
+      span AS (SELECT min(block) AS lo,max(block) AS hi FROM c WHERE kind='eth'),
       -- The reference pool(s) on record (one in production); the latest reference swap below the batch, then those inside it.
       ref_pools AS (SELECT DISTINCT pool_id FROM eth_usd_reference_sources),
       ref AS (SELECT x.block,x.log_index,x.price_quote FROM span CROSS JOIN LATERAL (SELECT x.block,x.log_index,x.price_quote FROM swaps x
@@ -38,12 +43,15 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
           WHERE x.pool_id IN (SELECT pool_id FROM ref_pools) AND x.coin=$2 AND x.quote_asset=$3 AND x.block BETWEEN span.lo AND span.hi
             AND x.ts>=$5::timestamptz-interval '1 hour' AND x.ts<$6 AND x.price_quote>0 AND x.price_quote<'Infinity'::double precision),
       seq AS (SELECT block,log_index,price_quote AS rate,block AS rate_block,NULL::timestamptz AS ts,NULL::bytea AS tx_hash,NULL::integer AS idx FROM ref
-        UNION ALL SELECT block,2147483647,NULL,NULL,ts,tx_hash,log_index FROM c WHERE NOT dollar),
+        UNION ALL SELECT block,2147483647,NULL,NULL,ts,tx_hash,log_index FROM c WHERE kind='eth'),
       carried AS (SELECT ts,tx_hash,idx,count(rate) OVER w AS grp,rate,rate_block FROM seq WINDOW w AS (ORDER BY block,log_index)),
       filled AS (SELECT ts,tx_hash,idx,first_value(rate) OVER g AS rate,first_value(rate_block) OVER g AS rate_block FROM carried WINDOW g AS (PARTITION BY grp ORDER BY rate NULLS LAST)),
-      r AS (SELECT c.*,CASE WHEN c.dollar THEN 1::double precision ELSE f.rate END AS rate,CASE WHEN c.dollar THEN c.block ELSE f.rate_block END AS rate_block,
-          c.amount_quote::double precision/10^(CASE WHEN c.dollar THEN $4 ELSE 18 END) AS quote
-        FROM c LEFT JOIN filled f ON f.ts=c.ts AND f.tx_hash=c.tx_hash AND f.idx=c.log_index AND f.ts IS NOT NULL)
+      r AS (SELECT c.*,CASE c.kind WHEN 'dollar' THEN 1::double precision WHEN 'eth' THEN f.rate ELSE k.price END AS rate,
+          CASE c.kind WHEN 'dollar' THEN c.block WHEN 'eth' THEN f.rate_block ELSE k.block END AS rate_block,c.amount_quote::double precision/10^c.qdec AS quote
+        FROM c LEFT JOIN filled f ON f.ts=c.ts AND f.tx_hash=c.tx_hash AND f.idx=c.log_index AND f.ts IS NOT NULL
+        LEFT JOIN LATERAL (SELECT x.usd/(x.amount_coin::double precision/10^c.qdec) AS price,x.block FROM swaps x
+          WHERE c.kind='token' AND x.coin=c.quote_asset AND x.block<=c.block AND x.ts>=c.ts-interval '1 day' AND x.usd>0 AND x.amount_coin>0
+          ORDER BY x.block DESC,x.log_index DESC LIMIT 1) k ON true)
       UPDATE swaps s SET usd=r.quote*r.rate,price_quote=coalesce(s.price_quote,r.quote/(r.amount_coin::double precision/10^r.decimals)),
         pricing_pending=false,priced_block=r.rate_block
       FROM r WHERE s.ts=r.ts AND s.tx_hash=r.tx_hash AND s.log_index=r.log_index AND r.rate IS NOT NULL
@@ -56,6 +64,21 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
   });
 }
 
+/**
+ * Re-tag up to `limit` Pons curve swaps of a non-native pair that were recorded as ETH quotes (every curve trade was,
+ * before the decoder read the launch's pair token): quote_asset becomes the pair token and the derived price and USD are
+ * cleared, so repricePonsSwaps prices them in the right asset. Returns the number re-tagged.
+ */
+export async function retagPairQuotes(db: ChainDb, limit = REPRICE_BATCH): Promise<number> {
+  return (await db.sql.query(`WITH pairs AS (SELECT DISTINCT ON (e.token) e.token,decode(substr(lower(e.data->>'curve'),3),'hex') AS curve,
+        decode(substr(lower(e.data->>'pairToken'),3),'hex') AS pair FROM pons_events e
+        WHERE e.kind='launch' AND e.data ? 'pairToken' AND e.data ? 'curve' AND lower(e.data->>'pairToken')<>$1 ORDER BY e.token,e.block),
+      bad AS (SELECT s.ts,s.tx_hash,s.log_index,p.pair FROM swaps s JOIN pairs p ON p.token=s.coin AND p.curve=s.pool_id
+        WHERE s.venue='pons_curve' AND s.quote_asset=$2 LIMIT $3)
+    UPDATE swaps s SET quote_asset=bad.pair,usd=NULL,price_quote=NULL,priced_block=NULL,pricing_pending=false
+    FROM bad WHERE s.ts=bad.ts AND s.tx_hash=bad.tx_hash AND s.log_index=bad.log_index RETURNING 1`, [NATIVE, binary(NATIVE), limit])).rows.length;
+}
+
 const HOUR = 3_600_000;
 /**
  * Worker role: every 30 s, price the newest six hours of Pons swaps, then walk an in-memory cursor back one hour at a
@@ -66,6 +89,8 @@ export class PricingRepairWorker {
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
   private cursor?: number;
+  /** The process re-tagged every mispaired curve swap it found (new ones are decoded with their pair). */
+  private retagged = false;
   constructor(private readonly db: ChainDb, private readonly log: (event: string, fields: Record<string, unknown>) => void,
     private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 28_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH) {}
   start() { if (this.timer) return; void this.tick(); this.timer = setInterval(() => void this.tick(), this.intervalMs); this.timer.unref(); }
@@ -87,7 +112,8 @@ export class PricingRepairWorker {
   }
   private async pass() {
     const started = this.now(), deadline = started + this.budgetMs, top = Math.ceil(started / HOUR) * HOUR, candleFloor = new Date(started - 2 * 24 * HOUR);
-    let recent = 0, backfilled = 0;
+    let recent = 0, backfilled = 0, retagged = 0;
+    while (!this.retagged && this.now() < deadline) { const n = await retagPairQuotes(this.db, this.batch); retagged += n; if (n < this.batch) this.retagged = true; }
     for (let end = top; end > top - 6 * HOUR && this.now() < deadline; end -= HOUR) recent += (await this.hour(end, deadline, candleFloor)).priced;
     this.cursor ??= top - 6 * HOUR;
     while (this.cursor > top - 8 * 24 * HOUR && this.now() < deadline) {
@@ -95,6 +121,6 @@ export class PricingRepairWorker {
       backfilled += hour.priced;
       if (hour.done) this.cursor -= HOUR;
     }
-    if (recent || backfilled) this.log('pricing_repair', { recent, backfilled, cursor: new Date(this.cursor).toISOString(), ms: this.now() - started });
+    if (recent || backfilled || retagged) this.log('pricing_repair', { recent, backfilled, retagged, cursor: new Date(this.cursor).toISOString(), ms: this.now() - started });
   }
 }

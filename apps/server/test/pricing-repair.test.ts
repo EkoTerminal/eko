@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
-import { PricingRepairWorker, repricePonsSwaps, type PricingAssets } from '../src/pricing-repair.js';
+import { PricingRepairWorker, repricePonsSwaps, retagPairQuotes, type PricingAssets } from '../src/pricing-repair.js';
 
 // 2026-10-11: 694,000 of 1.96 million Pons swaps in seven days had no USD (USDG quotes, and curve swaps decoded before
 // the coin's decimals were known), so those coins never got wash and curve checks and could never be rated Clear.
@@ -63,5 +63,22 @@ describe('Pons swap repricing', () => {
     const worker = new PricingRepairWorker(db, () => undefined, () => (clock += 10_000), 30_000, 100_000, assets, 2);
     for (let pass = 0; pass < 40; pass++) await worker.tick();
     expect((await db.sql.query('SELECT 1 FROM swaps WHERE usd IS NULL')).rows).toHaveLength(0);
+  });
+  it('re-tags a non-native curve pair recorded as ETH and prices pair-token quotes from the pair token itself', async () => {
+    const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
+    await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(now));
+    const stock = address(0x5a), curve = address(0xc1), stockCoin = address(0xa2);
+    for (const [c, launchpad] of [[coin, 'pons'], [stockCoin, 'pons'], [stock, null]] as const)
+      await db.insert('tokens', { address: binary(c), name: 'Sample token', symbol: 'DEMO', decimals: 18, launchpad, first_block: '1', block: '1' });
+    // coin's curve pairs with USDG; stockCoin's curve pairs with a stock token that trades at 150 USD.
+    for (const [c, pair] of [[coin, usdg], [stockCoin, stock]] as const) await db.insert('pons_events', { block: '1', tx_hash: binary(hash(9000 + Number(BigInt(c)))), log_index: 0,
+      token: binary(c), emitter: binary(curve), kind: 'launch', data: JSON.stringify({ kind: 'launch', token: c, curve: c === coin ? curve : address(0xc2), pairToken: pair }) });
+    await swap(db, 10, stock, usdg, '150000000', { venue: 'uniswap_v3', amount_coin: '1000000000000000000', price_quote: 150, usd: 150, pricing_pending: false });
+    await swap(db, 20, coin, native, '25000000', { pool_id: binary(curve), price_quote: 1e-11, usd: 0.00000005, pricing_pending: false });   // recorded as ETH
+    await swap(db, 21, stockCoin, stock, '2000000000000000000', { pool_id: binary(address(0xc2)), pricing_pending: false });                 // 2 stock tokens
+    expect(await retagPairQuotes(db)).toBe(1);expect(await retagPairQuotes(db)).toBe(0);
+    expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now))).toBe(2);
+    const rows = (await db.sql.query<{ block: string; quote: Uint8Array; usd: number }>('SELECT block::text,quote_asset AS quote,usd FROM swaps WHERE block IN (20,21) ORDER BY swaps.block')).rows;
+    expect(rows.map(r => [r.block, `0x${Buffer.from(r.quote).toString('hex')}`, r.usd])).toEqual([['20', usdg, 25], ['21', stock, 300]]);
   });
 });

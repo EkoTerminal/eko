@@ -26,6 +26,8 @@ export class BlockDecoder {
   /** Store userops, 7702 delegations and wallet-protocol coverage. Off still computes protocol actors for swap attribution. */
   storeWalletProtocol = true;
   constructor(readonly client: ChainClient, readonly registry: AddressRegistry, readonly metrics = new Metrics(), private logger: Logger = log) {}
+  /** Each Pons curve's quote asset (its launch's pair token); curves never change pair. */
+  private curvePairs = new Map<string, Address>();
   private poolReads = new AsyncCache<string, PoolMetadata | null>(20000);
   private codeReads = new AsyncCache<string, Hex>();
   private headCodeReads = new AsyncCache<string, {code:Hex;block:bigint}>();
@@ -228,6 +230,18 @@ export class BlockDecoder {
       if (this.metadataHints.has(lower(address))) state.storedTokens.add(lower(address));
       if (!state.tokens.has(lower(address))) state.tokens.set(lower(address), { address, decimals: this.registry.data.tokens[name].decimals ?? null, symbol: name, name, curve: null, launchpad: null });
     }
+    // A Pons curve quotes in its launch's pair token: native ETH, or USDG, a Robinhood stock token or another Pons coin
+    // (about one launch in ten). Curve trades were all recorded as ETH quotes, which mispriced 3,475 coins (2026-10-11).
+    for (const e of state.launches.values()) this.curvePairs.set(lower(e.curve), lower(e.pairToken ?? native) as Address);
+    const unpaired = [...new Set(logs.map(l => lower(l.address)).filter(a => state.curves.has(a) && !this.curvePairs.has(a)))];
+    if (unpaired.length) for (const row of (await db.sql.query<{ curve: string | null; pair: string | null }>(
+      `SELECT lower(data->>'curve') AS curve,lower(data->>'pairToken') AS pair FROM pons_events WHERE kind='launch' AND token=ANY($1::bytea[])`,
+      [unpaired.map(curve => binary(state.curves.get(curve)!))])).rows) if (row.curve) this.curvePairs.set(row.curve, (row.pair ?? native) as Address);
+    const pairs = [...new Set(logs.map(l => this.curvePairs.get(lower(l.address))).filter((a): a is Address => !!a && a !== native && !state.tokens.has(a)))];
+    if (pairs.length) for (const row of (await db.sql.query<TokenRow>('SELECT * FROM tokens WHERE address=ANY($1::bytea[])', [pairs.map(binary)])).rows) {
+      const address = hex(row.address) as Address; state.storedTokens.add(lower(address));
+      state.tokens.set(lower(address), { address, decimals: row.decimals, symbol: row.symbol, name: row.name, curve: null, launchpad: row.launchpad });
+    }
     const weth = this.registry.requireAddress('tokens.WETH'); const usdg = this.registry.requireAddress('tokens.USDG');
     state.rate = remote.rate;
     const selected = remote.rate?.source;
@@ -313,7 +327,7 @@ export class BlockDecoder {
           outerFrom: tx.from, outerTo: tx.to, blockHash: block.hash, timestampSec: BigInt(block.timestamp).toString(),
         }) });
         if (e.kind === 'exempt') rows.add('pons_exemptions', { ...base, token: binary(e.token), wallet: binary(e.wallet) });
-        if (e.kind === 'trade') this.swap(rows, state, base, ts, tx, actor, { pool: lower(l.address), venue: 'pons_curve', coin: e.token, quote: native, side: e.side, amountCoin: e.amountToken, amountQuote: e.amountEth, recipient: e.recipient });
+        if (e.kind === 'trade') this.swap(rows, state, base, ts, tx, actor, { pool: lower(l.address), venue: 'pons_curve', coin: e.token, quote: this.curvePairs.get(lower(l.address)) ?? native, side: e.side, amountCoin: e.amountToken, amountQuote: e.amountEth, recipient: e.recipient });
         for (const wallet of [actor, ...(e.kind === 'launch' ? [e.deployer] : e.kind === 'exempt' ? [e.wallet] : [])]) if(wallet) rows.add('wallets', { address: binary(wallet), block: n.toString() });
       }
       for (const e of standard.events) {

@@ -13,10 +13,17 @@ import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } 
 import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
 import { LiveActivity, baseColumns, leaveActivityFeed, type LiveActivityStats } from './live-activity.js';
 import { materializeHistory, updateOutcomes, OUTCOME_LOADS_PER_WRITE, type OutcomeBudget, type OutcomeQueue } from './outcomes.js';
-/** Pending cards re-rated per live poll, after first scans and before backlog (staleRatings). */
-export const RERATE_PER_POLL=800;
+/**
+ * Pending cards re-rated per live poll, after first scans and before backlog (staleRatings). Polls write one card per
+ * transaction and yield to new launches only after this tier; the loop beside them (rerateLoop) does the bulk in groups.
+ */
+export const RERATE_PER_POLL=100;
 /** Cards written before 7426b59 (Clear for Pons coins, deployed 2026-10-10 21:05Z) used rules that could not reach Clear. */
 export const CLEAR_RULES_AT='2026-10-10T21:05:00Z';
+/** Stale pending cards the re-rating loop loads at once and writes in one transaction. */
+export const RERATE_WIDTH=16;
+/** Blocks before the loop tries again to first-scan a coin it could not load (about two minutes at 0.2 s blocks). */
+export const FIRST_SCAN_RETRY_BLOCKS=600;
 /** Outcome horizons the end of a live poll may evaluate, so first scans and re-ratings can skip them per write. */
 export const OUTCOME_LOADS_PER_POLL=40;
 /** Blocks to wait before reloading a coin whose sources were unavailable: doubles per attempt, from about two minutes to about twelve hours. */
@@ -38,7 +45,13 @@ export interface WorkerOptions {
   /** A poll stopped on a spent daily paid budget; run() waits `budgetWaitMs` (default 60 s) and polls again. */
   onBudgetWait?: () => void; budgetWaitMs?: number;
   /** Live: run rerateLoop() beside the polls (the CLI turns it on). `onRerate` reports each batch's cards. */
-  rerate?: boolean; rerateIdleMs?: number; onRerate?: (cards: number) => void; onRerateError?: (error: unknown) => void;
+  rerate?: boolean; rerateIdleMs?: number; onRerate?: (cards: number, firstScans: number) => void; onRerateError?: (error: unknown) => void;
+  /**
+   * Live: re-rate pending cards written before this ISO time. The CLI passes the process start: earlier code may not have
+   * completed checks this code completes (taxes and the honeypot check from independent sellers, the launchpad's own
+   * hook and token-paired curves on 2026-10-11). Wall-clock time, like engine_runs.created_at.
+   */
+  rerateBefore?: string;
   concurrency?: number; pollMs?: number; client?: PonsProfileClient; bus?: EngineBus; readBlock?: BlockReader; now?: () => number; replayCache?:boolean;marketWindow?:boolean; onPlanned?:(plan:{tasks:number;coins:number;from:number;to:number})=>void; onProgress?: (completed:number,block:number) => void;
   /**
    * Live only. Checkpoints older than this many seconds behind the indexed head are not replayed one by one:
@@ -93,6 +106,10 @@ export class EngineWorker {
   private cardFailures=0;
   /** Cards a re-rating left pending (staleRatings skips them until the coin's card changes). */
   private rerated=new Map<Address,string>();
+  /** Coins the loop first-scanned, by block: one whose sources were unavailable waits FIRST_SCAN_RETRY_BLOCKS (and the failure backoff). */
+  private firstTried=new Map<Address,number>();
+  /** Pending cards written before this time are re-rated once (options.rerateBefore, never before CLEAR_RULES_AT). */
+  private get rulesAt() { return new Date(Math.max(Date.parse(CLEAR_RULES_AT),Date.parse(this.options.rerateBefore ?? CLEAR_RULES_AT))).toISOString(); }
   /**
    * Return replay/work counters and card-failure totals without new I/O or authentication. Host
    * diagnostic read; counters describe this worker instance, not whole-system completeness.
@@ -133,6 +150,7 @@ export class EngineWorker {
     this.readBlock=options.readBlock ? this.metrics.headers(options.readBlock) : undefined;
     if (!Number.isInteger(options.concurrency ?? 4) || (options.concurrency ?? 4)<1 || (options.concurrency ?? 4)>32) throw new Error('Invalid engine concurrency');
     if (!Number.isFinite(options.pollMs ?? 2000) || (options.pollMs ?? 2000)<1) throw new Error('Invalid engine poll interval');
+    if (options.rerateBefore!==undefined && !Number.isFinite(Date.parse(options.rerateBefore))) throw new Error('Invalid engine re-rate time');
   }
   /**
    * Set stop state and wake polling sleeps. Host lifecycle only; in-flight source reads/current
@@ -351,7 +369,7 @@ export class EngineWorker {
     const rerateRank=new Map<Address,number>();
     if(live && head && now-head.sec<7*86400) {
       const byCoin=new Map(inputs.map(input=>[input.coin,input]));
-      for(const {coin,card} of await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL,this.rerated)) {
+      for(const {coin,card} of await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL,this.rerated,this.rulesAt)) {
         // A coin still pending after its re-rating is not selected again until its card changes.
         this.rerated.set(coin,card);rerateRank.set(coin,rerateRank.size);revised.add(coin);
         if(!tasks.some(task=>task.coin===coin && task.block===head.number))tasks.push({coin,block:head.number,sec:head.sec});
@@ -516,47 +534,74 @@ export class EngineWorker {
     } finally { this.stop(); await rerating; await unsubscribe?.(); }
   }
   /**
-   * Live: re-rate stale pending cards (staleRatings) at the newest block, four source loads at a time, beside the polls.
-   * Polls spend minutes refreshing activity and planning before they write anything (about nine of every forty-five
-   * on 2026-10-11, and about fifty after a restart); this loop writes during that time too. Each card is written in the
-   * same locked transaction as a poll's, rewritten like a poll's re-rating even at a block that already has a run, and
-   * without outcome loads (polls catch those up). A spent paid budget waits like the polls; other errors are reported and retried.
+   * Live: first-scan radar coins without a card (unscannedCoins), else re-rate stale pending cards (staleRatings), at the
+   * newest block, RERATE_WIDTH source loads at a time, beside the polls. Polls spend minutes refreshing activity and planning before they write anything (about nine of every
+   * forty-five on 2026-10-11, and about fifty after a restart); this loop writes during that time too. Each group's
+   * cards are written in one transaction locked like a poll's, rewritten like a poll's re-rating even at a block that
+   * already has a run, and without outcome loads (polls catch those up). Every card write waits for the API's
+   * read-model refresh batch holding read_feed (up to 2.4 s each on 2026-10-11, about 35 cards a minute one per
+   * transaction), so a group waits once. A spent paid budget waits like the polls; other errors are reported and the
+   * group's coins retried.
    */
   private async rerateLoop() {
     while (!this.stopped) {
-      let cards=0;
+      let cards=0,firstScans=0;
       try {
         // The indexer's newest block; resolveClock stores its time when polls have not yet.
         const head=(await this.db.sql.query<{number:string|null}>('SELECT max(number)::text AS number FROM chain_blocks')).rows[0]?.number;
+        const block=head==null ? NaN : Number(head),since=(this.options.now?.() ?? Date.now()/1000)-7*86400;
+        // Radar coins without a card first: a poll first-scans new launches only when it plans again, about every
+        // fifty minutes on 2026-10-11 (426 coins launched over four hours had none).
+        const tried=[...this.firstTried].filter(([,at])=>block-at<FIRST_SCAN_RETRY_BLOCKS).map(([coin])=>coin);
+        const first=head==null ? [] : await unscannedCoins(this.db,since,block,RERATE_WIDTH*2,tried);
         // Coins the radar lists (active in the last seven days), by this worker's clock.
-        const active=(await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>to_timestamp($1)',[(this.options.now?.() ?? Date.now()/1000)-7*86400])).rows.map(row=>hex(row.coin) as Address);
-        const stale=head==null ? [] : await staleRatings(this.db,active,4*8,this.rerated);
-        for(let offset=0;offset<stale.length && !this.stopped;offset+=4) {
-          const block=Number(head),batch=stale.slice(offset,offset+4);
-          for(const {coin,card} of batch)this.rerated.set(coin,card);
-          if(!(await resolveClock(this.db,block,this.readBlock,this.clock)))break;
-          const loaded=await Promise.all(batch.map(async ({coin})=>{
-            const prune=await historyPrune(this.db,coin);
-            if(prune && !(await revivedBy(this.db,coin,prune,block)))return null;
-            const sources=await loadSources(this.db,coin,block,this.client,this.clock);
-            if(!sources)this.cardFailures++;
-            return sources;
-          }));
-          for(const sources of loaded) {
-            if(!sources || this.stopped)continue;
-            const card=await this.db.tx(async tx=>{
+        const stale=first.length || head==null ? [] : await staleRatings(this.db,(await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>to_timestamp($1)',[since])).rows.map(row=>hex(row.coin) as Address),RERATE_WIDTH*4,this.rerated,this.rulesAt);
+        const work:{coin:Address;card?:string}[]=first.length ? first.map(coin=>({coin})) : stale;
+        for(let offset=0;offset<work.length && !this.stopped;offset+=RERATE_WIDTH) {
+          const batch=work.slice(offset,offset+RERATE_WIDTH);
+          for(const {coin,card} of batch)if(card)this.rerated.set(coin,card);else this.firstTried.set(coin,block);
+          try {
+            if(!(await resolveClock(this.db,block,this.readBlock,this.clock)))break;
+            const loaded=(await Promise.all(batch.map(async ({coin,card})=>{
+              const prune=await historyPrune(this.db,coin);
+              if(prune && !(await revivedBy(this.db,coin,prune,block)))return null;
+              if(!card){await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.options.referenceSimulation?.(coin,block);}
+              const sources=await loadSources(this.db,coin,block,this.client,this.clock);
+              if(!sources)this.cardFailures++;
+              return sources;
+            }))).filter((sources):sources is LoadedSources=>!!sources);
+            if(!loaded.length || this.stopped)continue;
+            // One transaction per group: every card write waits for the API's read-model refresh batch holding read_feed.
+            // read_feed is taken before any card is written. The refresher locks read_feed, then read_coins; a card whose
+            // verdict is unchanged writes only read_coins (its card trigger), so a later card's verdict trigger would
+            // otherwise reach read_feed second and could deadlock with it.
+            const written=await this.db.tx(async tx=>{
               await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
-              // Like a poll's re-rating, a stale card is rewritten even at a block that already has a run.
-              sources.history=await historyAt(tx,sources.deployer,sources.coin,sources.asOfBlock);
-              return this.persistRun(tx,sources);
+              await tx.sql.query('LOCK TABLE read_feed IN ROW EXCLUSIVE MODE');
+              const out:CoinCard[]=[];
+              for(const sources of loaded) {
+                // Like a poll's re-rating, a stale card is rewritten even at a block that already has a run.
+                sources.history=await historyAt(tx,sources.deployer,sources.coin,sources.asOfBlock);
+                const card=await this.persistRun(tx,sources);if(card)out.push(card);
+              }
+              return out;
             });
-            if(card){await this.recordScan(card);cards++;this.completed++;this.options.onHeartbeat?.();}
-            const latest=(await this.db.sql.query<{card_id:string}>('SELECT card_id FROM coin_card_latest WHERE coin=$1',[binary(sources.coin)])).rows[0];
-            if(latest)this.rerated.set(sources.coin,latest.card_id);
+            for(const card of written){await this.recordScan(card);cards++;this.completed++;}
+            if(!batch[0].card)firstScans+=written.length;
+            if(written.length)this.options.onHeartbeat?.();
+            for(const row of (await this.db.sql.query<{coin:Uint8Array;card_id:string}>('SELECT coin,card_id FROM coin_card_latest WHERE coin=ANY($1::bytea[])',[loaded.map(s=>binary(s.coin))])).rows)
+              this.rerated.set(hex(row.coin) as Address,row.card_id);
+          } catch(error) {
+            // Not written: the group's coins are selected again.
+            for(const {coin,card} of batch) {
+              if(card && this.rerated.get(coin)===card)this.rerated.delete(coin);
+              if(!card && this.firstTried.get(coin)===block)this.firstTried.delete(coin);
+            }
+            throw error;
           }
         }
-        if(stale.length)this.options.onRerate?.(cards);
-        if(stale.length)continue;
+        if(work.length)this.options.onRerate?.(cards,firstScans);
+        if(work.length)continue;
       } catch(error) {
         if(rpcStopReason(error)!=='rpc_budget_exhausted')this.options.onRerateError?.(error);
       }
@@ -720,12 +765,27 @@ export class EngineWorker {
 }
 
 /**
+ * Radar coins (active since `since`) that have no card, each deployer's earliest such launch, most recently active
+ * first: a deployer's launches are first-scanned oldest first, so each sees its siblings in deployer history as the
+ * replay does. Coins whose sources failed wait out the poll's backoff (retryAfterBlocks); `skip` holds recent tries.
+ */
+export async function unscannedCoins(db:ChainDb,since:number,block:number,limit:number,skip:Address[]=[]):Promise<Address[]> {
+  if(limit<=0)return [];
+  return (await db.sql.query<{coin:Uint8Array}>(`SELECT coin FROM (SELECT DISTINCT ON (t.deployer) r.coin,r.activity FROM read_coins r JOIN tokens t ON t.address=r.coin
+      LEFT JOIN engine_card_failures f ON f.coin=r.coin
+      WHERE r.activity>to_timestamp($1) AND t.deployer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM coin_card_latest l WHERE l.coin=r.coin)
+        AND NOT r.coin=ANY($4::bytea[]) AND (f.coin IS NULL OR $2-f.last_block>=least(power(2,greatest(1,least(f.attempts,10))),1024)*600)
+      ORDER BY t.deployer,t.first_block,r.coin) x
+    ORDER BY x.activity DESC NULLS LAST,x.coin LIMIT $3`,[since,block,limit,skip.map(binary)])).rows.map(row=>hex(row.coin) as Address);
+}
+
+/**
  * Pending cards that would rate differently now, most recently active first, with their card ids: written before
- * CLEAR_RULES_AT; missing the honeypot check while a sell check ran after them (sell-check-reference.ts reads it at the
+ * `rulesAt` (CLEAR_RULES_AT, or the worker's start for cards earlier code wrote); missing the honeypot check while a sell check ran after them (sell-check-reference.ts reads it at the
  * next checkpoint); or, for a Pons coin that has traded, missing the wash or curve check (both need every swap priced)
  * while no swap is unpriced any more (pricing repair). `skip` holds card ids already re-rated that are still current.
  */
-export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:ReadonlyMap<Address,string>=new Map()):Promise<{coin:Address;card:string}[]> {
+export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:ReadonlyMap<Address,string>=new Map(),rulesAt=CLEAR_RULES_AT):Promise<{coin:Address;card:string}[]> {
   if(!coins.length || limit<=0)return [];
   const found:{coin:Address;card:string}[]=[];
   for(const row of (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT l.coin,l.card_id AS card FROM coin_card_latest l JOIN read_coins r ON r.coin=l.coin
@@ -735,7 +795,7 @@ export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:
         AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused')))
       OR (t.launchpad='pons' AND (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'wash_to_trend' OR NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'stuck_at_bonding')
         AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL)))
-    ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,CLEAR_RULES_AT,RULES_VERSION,[...skip.values()]])).rows)
+    ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,rulesAt,RULES_VERSION,[...skip.values()]])).rows)
     found.push({coin:hex(row.coin) as Address,card:row.card});
   return found;
 }

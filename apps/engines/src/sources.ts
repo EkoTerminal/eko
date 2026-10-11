@@ -43,6 +43,8 @@ export interface LoadedSources extends CardSources {
   dangerBeforePrune?: { playbooks: string[] };
   /** The live sell check run that supplied this card's honeypot input (sell-check-reference.ts). */
   sellCheckReference?: { runId: string; block: number };
+  /** Independent sellers that completed the honeypot check where the sell check cannot probe (sell-check-reference.ts). */
+  observedSellers?: { sellers: number; block: number };
 }
 export const seconds = (date: string | Date) => new Date(date).getTime() / 1000;
 export const evidence = (r: { tx_hash: Uint8Array; log_index: number; block: string }, label: string): EvidenceRef =>

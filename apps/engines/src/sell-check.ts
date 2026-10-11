@@ -50,8 +50,14 @@ export async function sellRoute(db: ChainDb, coin: Address, block: number, regis
     'SELECT launchpad,curve,graduated_block,graduated_pool FROM tokens WHERE address=$1', [binary(coin)])).rows[0];
   if (!token) return null;
   const checksummed = getAddress(coin);
-  if (token.launchpad === 'pons' && token.curve && (token.graduated_block == null || Number(token.graduated_block) > block))
+  if (token.launchpad === 'pons' && token.curve && (token.graduated_block == null || Number(token.graduated_block) > block)) {
+    // The probe buys with ETH. A curve paired with another token (USDG, a stock token, another Pons coin) reverts
+    // UnexpectedNativeValue on every probe, so it has no route here (cards use observed sellers instead).
+    const pair = (await db.sql.query<{ pair: string | null }>("SELECT lower(data->>'pairToken') AS pair FROM pons_events WHERE token=$1 AND kind='launch' ORDER BY block LIMIT 1",
+      [binary(coin)])).rows[0]?.pair;
+    if (pair && pair !== zeroAddress) return null;
     return { venue: 'pons_curve', coin: checksummed, curve: getAddress(hex(token.curve)) };
+  }
   const pools = (await db.sql.query<{ id: Uint8Array; venue: string; currency0: Uint8Array; currency1: Uint8Array; fee: number; tick_spacing: number; hooks: Uint8Array | null; created_block: string }>(
     `SELECT id,venue,currency0,currency1,fee,tick_spacing,hooks,created_block FROM pools
      WHERE (currency0=$1 OR currency1=$1) AND created_block<=$2 AND venue IN ('uniswap_v3','uniswap_v4')`, [binary(coin), block])).rows;

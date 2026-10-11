@@ -320,13 +320,16 @@ export class LiveActivity {
     const fromOf = new Map(requests.map(request => [request.coin, request.from]));
     const starts = new Map<Address, { after: number; state: CadenceStart['state']; ranged: boolean } | null>();
     const resumable = requests.filter(request => request.from > 0);
+    // The newest liquidity event is read per pool of the coin: joined the other way, the planner walked the whole
+    // liquidity_events block index for each coin without one (about 0.8 s per coin, most of a 35-minute cold start, 2026-10-11).
     for (const chunk of chunks(resumable)) for (const row of (await this.db.sql.query<{ coin: Uint8Array; forced: string | null; forced_ts: Date | null; swap_ts: Date | null; price: number | null; newest_swap: string | null }>(`
       SELECT r.c AS coin,l.block::text AS forced,k.ts AS forced_ts,s.ts AS swap_ts,s.price,n.block::text AS newest_swap
       FROM unnest($1::bytea[],$2::bigint[]) AS r(c,p)
       CROSS JOIN LATERAL (SELECT max(b) AS block FROM (
         (SELECT t.block AS b FROM token_transfers t WHERE t.token=r.c AND t.block<=r.p AND EXISTS(SELECT 1 FROM engine_block_times k WHERE k.number=t.block) ORDER BY t.block DESC LIMIT 1)
-        UNION ALL (SELECT e.block FROM liquidity_events e JOIN pools q ON q.id=e.pool_id WHERE (q.currency0=r.c OR q.currency1=r.c) AND e.block<=r.p
-          AND EXISTS(SELECT 1 FROM engine_block_times k WHERE k.number=e.block) ORDER BY e.block DESC LIMIT 1)
+        UNION ALL (SELECT e.block FROM (SELECT q.id FROM pools q WHERE q.currency0=r.c UNION ALL SELECT q.id FROM pools q WHERE q.currency1=r.c) q
+          CROSS JOIN LATERAL (SELECT e.block FROM liquidity_events e WHERE e.pool_id=q.id AND e.block<=r.p
+            AND EXISTS(SELECT 1 FROM engine_block_times k WHERE k.number=e.block) ORDER BY e.block DESC LIMIT 1) e ORDER BY e.block DESC LIMIT 1)
         UNION ALL (SELECT e.block FROM pons_events e WHERE e.token=r.c AND e.block<=r.p AND EXISTS(SELECT 1 FROM engine_block_times k WHERE k.number=e.block) ORDER BY e.block DESC LIMIT 1)
         UNION ALL (SELECT e.block FROM pons_exemptions e WHERE e.token=r.c AND e.block<=r.p AND EXISTS(SELECT 1 FROM engine_block_times k WHERE k.number=e.block) ORDER BY e.block DESC LIMIT 1)
         UNION ALL (SELECT q.created_block FROM pools q WHERE (q.currency0=r.c OR q.currency1=r.c) AND q.created_block<=r.p
