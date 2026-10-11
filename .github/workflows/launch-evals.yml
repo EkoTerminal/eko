@@ -33,7 +33,7 @@ jobs:
       - run: pnpm test:evals
       # No provider credentials or implicit paid generation. Missing measured evidence keeps the check red.
       - run: pnpm evals:nightly --gate ${{ matrix.gate }} --report evals/reports/ci-${{ github.run_id }}-${{ matrix.gate }}.md
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: launch-evals-${{ matrix.gate }}-${{ github.run_id }}
