@@ -119,4 +119,20 @@ describe('live catch-up optimizations', () => {
     for (const t of paired) { expect(hex(t.quote)).toBe(usdg.toLowerCase()); expect(t.usd).toBeCloseTo(Number(t.amount_quote) / 1e6, 6); }
     for (const t of native) expect(hex(t.quote)).toBe('0x0000000000000000000000000000000000000000');
   }, 60000);
+  it('reads a curve pair token\'s missing decimals when its curve trades, once, and records them', async () => {
+    // 2026-10-11: 41 of 65 pair tokens had no decimals, because no indexed pool named them, so their curves' swaps
+    // could not be priced. The fixture client answers metadata with 18 decimals.
+    const pair = '0x00000000000000000000000000000000000000a1' as const, db = await database();
+    await db.insert('tokens', { address: binary(pair), first_block: '0', block: '0' });
+    await db.insert('pons_events', { block: '0', tx_hash: binary(`0x${'ac'.repeat(32)}`), log_index: 0, token: binary(coin(1)), emitter: binary(curve(1)), kind: 'launch',
+      data: JSON.stringify({ kind: 'launch', token: coin(1), curve: curve(1), pairToken: pair }) });
+    const chain = catchUpChain(100), client = memoryClient(chain, () => 100n), read = client.tokenMetadata, asked: string[] = [];
+    client.tokenMetadata = async (address, n) => { asked.push(address.toLowerCase()); return read(address, n); };
+    const follower = new LogHeadFollower(client, db, new BlockDecoder(client, registry, new Metrics(quiet), quiet), { startBlock: 1n, reorgDepth: REORG, pipeline: true, ...legacy, catchUpRange: 160 });
+    for (let i = 0; i < 100 && (await db.cursor('head_logs') ?? 0n) < 100n; i++) await follower.tick();
+    expect((await db.sql.query<{ decimals: number | null }>('SELECT decimals FROM tokens WHERE address=$1', [binary(pair)])).rows[0]!.decimals).toBe(18);
+    expect(asked.filter(a => a === pair).length).toBe(1);
+    const trades = (await db.sql.query<{ quote: Uint8Array }>("SELECT quote_asset AS quote FROM swaps WHERE venue='pons_curve' AND coin=$1", [binary(coin(1))])).rows;
+    expect(trades.length).toBeGreaterThan(0); for (const t of trades) expect(hex(t.quote)).toBe(pair);
+  }, 60000);
 });

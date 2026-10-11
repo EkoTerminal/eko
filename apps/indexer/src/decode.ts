@@ -28,6 +28,8 @@ export class BlockDecoder {
   constructor(readonly client: ChainClient, readonly registry: AddressRegistry, readonly metrics = new Metrics(), private logger: Logger = log) {}
   /** Each Pons curve's quote asset (its launch's pair token); curves never change pair. */
   private curvePairs = new Map<string, Address>();
+  /** Pair tokens whose metadata this process has read (lowercase). */
+  private pairMetadataTried = new Set<string>();
   private poolReads = new AsyncCache<string, PoolMetadata | null>(20000);
   private codeReads = new AsyncCache<string, Hex>();
   private headCodeReads = new AsyncCache<string, {code:Hex;block:bigint}>();
@@ -123,13 +125,18 @@ export class BlockDecoder {
     const relevant=(p:PoolMetadata)=>options.forceSenders || [p.currency0,p.currency1].some(a=>launchTokens.has(a)||scope?.tokens.has(lower(a))) || [p.currency0,p.currency1].every(a=>[lower(this.registry.requireAddress('tokens.WETH')),lower(this.registry.requireAddress('tokens.USDG'))].includes(lower(a)));
     const currencies = [...inputs.pools.values()].filter(relevant).flatMap(p => [p.currency0, p.currency1]);
     if (!options.ponsOnly) for (const l of logs) for (const e of decodePoolEvents(l, { registry: this.registry }).events) if (e.source === 'uniswap_v4' && e.eventName === 'Initialize' && relevant({currency0:e.args.currency0,currency1:e.args.currency1,fee:e.args.fee,tickSpacing:e.args.tickSpacing})) currencies.push(e.args.currency0, e.args.currency1);
-    const addresses = [...new Map([...launchTokens, ...currencies].filter(a => lower(a) !== native).map(a => [lower(a), a])).values()];
+    // A token-paired curve's trades are priced in its pair token, so the pair's decimals are read like a pool currency's.
+    // Pair tokens were never read (no relevant pool names them): 41 of 65 had no decimals on 2026-10-11 and their curves'
+    // swaps stayed unpriced. Each is tried once per process; one without decimals stays unknown.
+    const pairTokens = [...new Set(logs.map(l => this.curvePairs.get(lower(l.address))).filter((a): a is Address => !!a && a !== native && !this.pairMetadataTried.has(a)))];
+    const addresses = [...new Map([...launchTokens, ...currencies, ...pairTokens].filter(a => lower(a) !== native).map(a => [lower(a), a])).values()];
     const hints = new Map(addresses.map(a => {
       const stored = options.knownTokens?.get(lower(a)), cached = this.metadataHints.get(lower(a));
       // Window scope can still contain a placeholder after earlier ordered blocks filled it.
       return [lower(a), stored?.decimals != null ? stored : cached ?? stored] as const;
     }));
     const fresh = addresses.filter(a => (!options.head && launchTokens.has(a)) || hints.get(lower(a))?.decimals == null);
+    for (const a of pairTokens) if (fresh.includes(a)) this.pairMetadataTried.add(a);
     const metadata = !fresh.length ? [] : this.client.tokenMetadataBatch ? await this.client.tokenMetadataBatch(fresh, n) : await Promise.all(fresh.map(a => this.client.tokenMetadata(a, n)));
     if (metadata.length !== fresh.length) throw new Error('Incomplete token metadata batch');
     fresh.forEach((a, i) => inputs.metadata.set(lower(a), metadata[i]));
@@ -241,6 +248,14 @@ export class BlockDecoder {
     if (pairs.length) for (const row of (await db.sql.query<TokenRow>('SELECT * FROM tokens WHERE address=ANY($1::bytea[])', [pairs.map(binary)])).rows) {
       const address = hex(row.address) as Address; state.storedTokens.add(lower(address));
       state.tokens.set(lower(address), { address, decimals: row.decimals, symbol: row.symbol, name: row.name, curve: null, launchpad: row.launchpad });
+    }
+    // Pair-token metadata read for this block fills a missing token or missing decimals (written with this block's rows).
+    for (const address of new Set(logs.map(l => this.curvePairs.get(lower(l.address))).filter((a): a is Address => !!a && a !== native))) {
+      const metadata = remote.metadata.get(lower(address));
+      if (metadata?.decimals == null) continue;
+      const token = state.tokens.get(lower(address));
+      if (!token) state.tokens.set(lower(address), { ...metadata, address, curve: null, launchpad: null });
+      else if (token.decimals == null) { state.tokens.set(lower(address), { ...token, ...metadata }); state.storedTokens.delete(lower(address)); }
     }
     const weth = this.registry.requireAddress('tokens.WETH'); const usdg = this.registry.requireAddress('tokens.USDG');
     state.rate = remote.rate;
