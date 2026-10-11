@@ -89,6 +89,8 @@ export class EngineWorker {
   private metrics=new ReplayMetrics();
   private completed=0;
   private cardFailures=0;
+  /** Cards a re-rating left pending (staleRatings skips them until the coin's card changes). */
+  private rerated=new Map<Address,string>();
   /**
    * Return replay/work counters and card-failure totals without new I/O or authentication. Host
    * diagnostic read; counters describe this worker instance, not whole-system completeness.
@@ -346,8 +348,9 @@ export class EngineWorker {
     const rerateRank=new Map<Address,number>();
     if(live && head && now-head.sec<7*86400) {
       const byCoin=new Map(inputs.map(input=>[input.coin,input]));
-      for(const coin of await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL)) {
-        rerateRank.set(coin,rerateRank.size);revised.add(coin);
+      for(const {coin,card} of await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL,this.rerated)) {
+        // A coin still pending after its re-rating is not selected again until its card changes.
+        this.rerated.set(coin,card);rerateRank.set(coin,rerateRank.size);revised.add(coin);
         if(!tasks.some(task=>task.coin===coin && task.block===head.number))tasks.push({coin,block:head.number,sec:head.sec});
       }
     }
@@ -467,6 +470,11 @@ export class EngineWorker {
         base_sec=excluded.base_sec,last_sec=excluded.last_sec`,[binary(coin.coin),coin.revision,to,...baseColumns(coin.base),coin.lastSec]);
       if(incremental)this.live.written(coin.coin,coin.revision,to);
     } else await this.db.sql.query('UPDATE engine_activity_state SET last_sec=$2 WHERE coin=$1',[binary(coin.coin),coin.lastSec]);
+    if(live && rerateRank.size) {
+      for(const row of (await this.db.sql.query<{coin:Uint8Array;card_id:string}>('SELECT coin,card_id FROM coin_card_latest WHERE coin=ANY($1)',[[...rerateRank.keys()].map(binary)])).rows)
+        this.rerated.set(hex(row.coin) as Address,row.card_id);
+      if(this.rerated.size>50_000)for(const coin of [...this.rerated.keys()].slice(0,25_000))this.rerated.delete(coin);
+    }
     return completed;
   }
   /**
@@ -660,15 +668,22 @@ export class EngineWorker {
 }
 
 /**
- * Pending cards that would rate differently now, most recently active first: written before CLEAR_RULES_AT, or missing
- * the honeypot check while a sell check ran after them (sell-check-reference.ts reads it at the next checkpoint).
+ * Pending cards that would rate differently now, most recently active first, with their card ids: written before
+ * CLEAR_RULES_AT; missing the honeypot check while a sell check ran after them (sell-check-reference.ts reads it at the
+ * next checkpoint); or, for a Pons coin that has traded, missing the wash or curve check (both need every swap priced)
+ * while no swap is unpriced any more (pricing repair). `skip` holds card ids already re-rated that are still current.
  */
-export async function staleRatings(db:ChainDb,coins:Address[],limit:number):Promise<Address[]> {
+export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:ReadonlyMap<Address,string>=new Map()):Promise<{coin:Address;card:string}[]> {
   if(!coins.length || limit<=0)return [];
-  return (await db.sql.query<{coin:Uint8Array}>(`SELECT l.coin FROM coin_card_latest l JOIN read_coins r ON r.coin=l.coin
-    LEFT JOIN engine_runs e ON e.coin=l.coin AND e.block=l.as_of_block AND e.rules_version=$4
-    WHERE l.coin=ANY($1::bytea[]) AND l.data->'verdict'->>'level'='pending' AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
+  const found:{coin:Address;card:string}[]=[];
+  for(const row of (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT l.coin,l.card_id AS card FROM coin_card_latest l JOIN read_coins r ON r.coin=l.coin
+    JOIN tokens t ON t.address=l.coin LEFT JOIN engine_runs e ON e.coin=l.coin AND e.block=l.as_of_block AND e.rules_version=$4
+    WHERE l.coin=ANY($1::bytea[]) AND l.data->'verdict'->>'level'='pending' AND NOT l.card_id=ANY($5::text[]) AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
       OR (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'honeypot'
-        AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused'))))
-    ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,CLEAR_RULES_AT,RULES_VERSION])).rows.map(row=>hex(row.coin) as Address);
+        AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused')))
+      OR (t.launchpad='pons' AND (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'wash_to_trend' OR NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'stuck_at_bonding')
+        AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL)))
+    ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,CLEAR_RULES_AT,RULES_VERSION,[...skip.values()]])).rows)
+    found.push({coin:hex(row.coin) as Address,card:row.card});
+  return found;
 }

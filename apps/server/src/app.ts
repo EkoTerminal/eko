@@ -23,6 +23,7 @@ import { ChainClients, UniswapV3Adapter } from './exec/chain.js';
 import { PortfolioService } from './exec/portfolio.js';
 import { SanctionsService, SanctionsWorker } from './sanctions/service.js';
 import { RetentionWorker } from './retention-worker.js';
+import { PricingRepairWorker } from './pricing-repair.js';
 import { QuoteStore } from './exec/quotes.js';
 import { TradeService, type TradeBackend } from './exec/trades.js';
 import { SellGuard } from './exec/sell-guard.js';
@@ -74,6 +75,7 @@ export interface Ctx {
   sanctions: SanctionsService;
   sanctionsWorker: SanctionsWorker;
   retentionWorker: RetentionWorker;
+  pricingRepair: PricingRepairWorker;
   dbh: DbHandle;
   reads: ReturnType<typeof readServices>;
   hub: Hub;
@@ -133,6 +135,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     idleTokenDays: cfg.RETENTION_IDLE_TOKEN_DAYS, pendingPoolDays: cfg.RETENTION_PENDING_POOL_DAYS, feedDays: cfg.RETENTION_FEED_DAYS,
     dangerQuietDays: cfg.RETENTION_DANGER_QUIET_DAYS, quietCoinDays: cfg.RETENTION_QUIET_COIN_DAYS },
     result => logger['failed' in result ? 'warn' : 'info']({ retention: result }, 'Chain retention pass'));
+  const pricingRepair = new PricingRepairWorker(dbh.chain, (event, fields) => logger.info({ event, ...fields }, event));
 
 
   const monitoring = new LaunchMonitor(dbh.chain.sql);
@@ -224,7 +227,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     },
   );
   const quant = new QuantService(market);
-  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
+  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, pricingRepair, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
 
   // Market data → WebSocket, throttled to ~4 Hz per stream (closed bars always go out immediately).
   const pendingCandles = new Map<string, Extract<ServerMessage, { type: 'candle' }>>();
@@ -343,7 +346,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     await market.start();
     if (cfg.RUN_WORKER) {
       exec.start();
-      if (cfg.APP_ROLE === 'worker' || cfg.APP_ROLE === 'dev') { sanctionsWorker.start(); retentionWorker.start(); }
+      if (cfg.APP_ROLE === 'worker' || cfg.APP_ROLE === 'dev') { sanctionsWorker.start(); retentionWorker.start(); pricingRepair.start(); }
     } else logger.info('RUN_WORKER=false — API-only process (no order reconciler)');
     if (cfg.LEGACY_API && (cfg.RUN_WORKER || cfg.LIVE_TRADING_ENABLED)) void chains.checkHealth().then(pushHealth);
   }
@@ -371,6 +374,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       exec.stop();
       await sanctionsWorker.stop();
       await retentionWorker.stop();
+      await pricingRepair.stop();
       market.stop();
       hub.closeAll();
       await app.close();

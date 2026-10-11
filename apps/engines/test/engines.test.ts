@@ -306,6 +306,20 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    expect(planned.at(-1)).toMatchObject({rerates:1});
    const runs=await count(db,'engine_runs');expect(await next.poll()).toBe(0);expect(await count(db,'engine_runs')).toBe(runs);
   });
+  it('re-rates a pending coin once its last unpriced swap is priced, and not again while its card stays the same',async()=>{
+   const db=await traded();await db.sql.query('UPDATE swaps SET usd=NULL');
+   const plans:LivePlan[]=[];const worker=new EngineWorker(db,{client:client(),now:()=>epoch+120,onLivePlanned:p=>plans.push(p)});await worker.poll();
+   expect((await latest(db)).verdict.evaluatedPlaybooks).not.toContain('wash_to_trend');expect(await staleRatings(db,[coin],10)).toEqual([]);
+   // The pricing repair prices the swap; nothing else about the coin changes.
+   await block(db,2,60);await db.sql.query('UPDATE swaps SET usd=10');
+   expect((await staleRatings(db,[coin],10)).map(r=>r.coin)).toEqual([coin]);
+   expect(await worker.poll()).toBeGreaterThan(0);
+   const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.evaluatedPlaybooks).toContain('wash_to_trend');
+   // Still pending (no sell check yet): the next poll does not select it for re-rating again. (A young coin's own
+   // cadence may still plan a checkpoint at the new block.)
+   expect(card.verdict.level).toBe('pending');
+   await block(db,3,90);await worker.poll();expect(plans.at(-1)).toMatchObject({rerates:0});
+  });
   it('re-rates pending cards written before the Clear rules, and never a current one',async()=>{
    const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
    await new EngineWorker(db,{client:client(),now:()=>epoch+120}).poll();
@@ -313,7 +327,9 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    // A card that the earlier rules left pending.
    await db.sql.query("UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','\"pending\"')");
    await db.sql.query('UPDATE engine_runs SET created_at=$1::timestamptz - interval \'1 hour\'',[CLEAR_RULES_AT]);
-   expect(await staleRatings(db,[coin],10)).toEqual([coin]);expect(await staleRatings(db,[coin],0)).toEqual([]);
+   const card=(await db.sql.query<{card_id:string}>('SELECT card_id FROM coin_card_latest')).rows[0].card_id;
+   expect(await staleRatings(db,[coin],10)).toEqual([{coin,card}]);expect(await staleRatings(db,[coin],0)).toEqual([]);
+   expect(await staleRatings(db,[coin],10,new Map([[coin,card]]))).toEqual([]);
   });
   it('treats a failed sell as a contract restriction (Info), never Danger from a probe alone, and measures no tax',async()=>{
    const db=await traded();await checked(db,1,'refused',[probe(100,'sell_failed','0'),probe(1000,'sell_failed','0')]);

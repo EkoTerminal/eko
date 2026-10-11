@@ -357,9 +357,12 @@ export class BlockDecoder {
     const amountQuote = quoteDecimals==null ? null : scaled(s.amountQuote, quoteDecimals);
     const price = amountQuote==null || coinDecimals==null ? null : amountQuote / scaled(s.amountCoin, coinDecimals);
     const ethQuote = lower(s.quote) === native || lower(s.quote) === lower(this.registry.requireAddress('tokens.WETH'));
-    // TODO(spec): USD conversion for quotes other than WETH/native ETH is not defined for this task.
-    const usd = !pricingPending && ethQuote && state.rate && amountQuote!=null ? amountQuote * state.rate.value : null;
-    rows.add('swaps', { ...base, ts, venue: s.venue, pool_id: binary(s.pool), coin: binary(s.coin), quote_asset: binary(s.quote), trader: pending || actor == null ? null:binary(actor), tx_from: pending?null:binary(tx.from), tx_to:pending?null:binary(tx.to ?? native),senders_pending:pending, recipient: s.recipient ? binary(s.recipient) : null, side: s.side, amount_coin: s.amountCoin.toString(), amount_quote: s.amountQuote.toString(), price_quote: price, pricing_pending:pricingPending, usd, priced_block: usd == null ? null : state.rate!.block.toString() });
+    // USDG is the dollar the ETH/USD reference is quoted in, so a USDG amount is its USD value. Unpriced USDG swaps kept
+    // coins from ever completing their USD checks (2026-10-11: 364,000 Pons swaps in seven days). Other quotes stay
+    // unpriced (TODO(spec): no USD conversion is defined for them).
+    const dollarQuote = lower(s.quote) === lower(this.registry.requireAddress('tokens.USDG'));
+    const usd = pricingPending || amountQuote==null ? null : dollarQuote ? amountQuote : ethQuote && state.rate ? amountQuote * state.rate.value : null;
+    rows.add('swaps', { ...base, ts, venue: s.venue, pool_id: binary(s.pool), coin: binary(s.coin), quote_asset: binary(s.quote), trader: pending || actor == null ? null:binary(actor), tx_from: pending?null:binary(tx.from), tx_to:pending?null:binary(tx.to ?? native),senders_pending:pending, recipient: s.recipient ? binary(s.recipient) : null, side: s.side, amount_coin: s.amountCoin.toString(), amount_quote: s.amountQuote.toString(), price_quote: price, pricing_pending:pricingPending, usd, priced_block: usd == null ? null : dollarQuote ? String(base.block) : state.rate!.block.toString() });
     if(!pending && actor) rows.add('wallets', { address: binary(actor), block: String(base.block) });
   }
 }

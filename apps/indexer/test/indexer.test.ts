@@ -144,6 +144,11 @@ describe('chain ingestion on PGlite', () => {
     expect(pools.find(p => hex(p.id) === '0xcf10fe91aeef392aad841a359e51b4a56fc737ff')).toMatchObject({ venue: 'uniswap_v3', fee: 10000, tick_spacing: 200 });
     expect(pools.find(p => hex(p.id) === '0xcb9852db10d49c90f1a847a260aa5fb81b169c7063c37d031b4046ca8e72dee2')).toMatchObject({ venue: 'uniswap_v4', fee: 100, tick_spacing: 1 });
     expect(Number((await db.sql.query<{ n: string }>("SELECT count(*) n FROM swaps WHERE venue='uniswap_v3'")).rows[0].n)).toBe(17);
+    // USDG quotes are their own USD value, priced at the swap's block.
+    const dollars = (await db.sql.query<{ usd: number | null; amount_quote: string; block: string; priced_block: string | null }>(
+      'SELECT usd,amount_quote,block::text,priced_block::text FROM swaps WHERE quote_asset=$1', [binary(registry.requireAddress('tokens.USDG'))])).rows;
+    expect(dollars.length).toBeGreaterThan(0);
+    for (const d of dollars) { expect(d.usd).toBeCloseTo(Number(d.amount_quote) / 1e6, 6); expect(d.priced_block).toBe(d.block); }
     expect(before.liquidity_events).toBeGreaterThanOrEqual(4); expect(before.token_transfers).toBeGreaterThan(0); expect(before.wallets).toBeGreaterThan(0);
   }, 30000);
 
