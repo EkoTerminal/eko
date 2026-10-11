@@ -81,7 +81,8 @@ export const BALANCE_SLOTS = 20;
  * and its null held every USDG-paired coin unsupported, though its layout is a Solidity mapping at slot 1.
  */
 export async function balanceSlot(rpc: SellRpc, token: Address, block: bigint, options: { random?: (n: number) => Uint8Array } = {}): Promise<{ balance: BalanceSlot | null; requests: number; failed?: true }> {
-  const holder = fresh(options.random ?? randomBytes), marker = 0x5eed_0000_0000_0000_0000_0001n;
+  // A small marker: USDG keeps a balance in the low 64 bits of its storage word, so a wider value reads back masked.
+  const holder = fresh(options.random ?? randomBytes), marker = 1_000_003n;
   const layouts: BalanceSlot[] = [{ layout: 'erc7201' }];
   for (let slot = 0; slot < BALANCE_SLOTS; slot++) layouts.push({ layout: 'solidity', slot });
   for (let slot = 0; slot < BALANCE_SLOTS; slot++) layouts.push({ layout: 'vyper', slot });

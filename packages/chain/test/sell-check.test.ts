@@ -122,6 +122,9 @@ describe('live sell check (eth_call with the probe injected by state override)',
     });
     const found = await balanceSlot({ request }, token, block);
     expect(found).toEqual({ balance: { layout: 'solidity', slot: 3 }, requests: 5 });
+    // A token keeping balances in the low 64 bits of the word (as USDG does) is found too.
+    const packed = vi.fn(async (input: { method: string; params: readonly unknown[] }) => pad(toHex(BigInt(await request(input)) & (2n ** 64n - 1n))));
+    expect(await balanceSlot({ request: packed }, token, block)).toEqual({ balance: { layout: 'solidity', slot: 3 }, requests: 5 });
     // A token whose balanceOf never reflects an override has no layout; every candidate is tried once.
     const computed = vi.fn(async () => pad(toHex(1n)));
     expect(await balanceSlot({ request: computed }, token, block)).toEqual({ balance: null, requests: 1 + 2 * BALANCE_SLOTS });
