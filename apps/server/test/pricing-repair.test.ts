@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
-import { repricePonsSwaps, type PricingAssets } from '../src/pricing-repair.js';
+import { PricingRepairWorker, repricePonsSwaps, type PricingAssets } from '../src/pricing-repair.js';
 
 // 2026-10-11: 694,000 of 1.96 million Pons swaps in seven days had no USD (USDG quotes, and curve swaps decoded before
 // the coin's decimals were known), so those coins never got wash and curve checks and could never be rated Clear.
@@ -48,5 +48,20 @@ describe('Pons swap repricing', () => {
     const bars = (await db.sql.query<{ volume: number }>('SELECT sum(volume_usd) AS volume FROM bars_1m WHERE coin=$1', [binary(coin)])).rows[0];
     expect(Number(bars.volume)).toBe(3525);
     expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now))).toBe(0);
+  });
+  it('resumes an hour the budget cut short instead of skipping it', async () => {
+    const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
+    await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(now - 30 * 3_600_000));
+    await db.insert('tokens', { address: binary(coin), name: 'Sample token', symbol: 'DEMO', decimals: 18, launchpad: 'pons', first_block: '1', block: '1' });
+    // Twelve USDG swaps one hour apart from twenty hours ago: beyond the six recent hours, in the backfill.
+    for (let i = 0; i < 12; i++) await db.insert('swaps', { ts: new Date(now - (20 - i * 0.1) * 3_600_000), block: String(10 + i), tx_hash: binary(hash(500 + i)), log_index: 0,
+      venue: 'uniswap_v3', pool_id: binary(pool), coin: binary(coin), quote_asset: binary(usdg), trader: null, tx_from: null, tx_to: null, senders_pending: false, side: 1,
+      amount_coin: '1000000000000000000', amount_quote: '1000000', price_quote: 1, usd: null, priced_block: null, pricing_pending: false });
+    // Each clock read advances 10 s against a 100 s budget: a pass checks the six recent hours, then prices about three
+    // batches of two, so an hour of ten swaps spans passes.
+    let clock = now;
+    const worker = new PricingRepairWorker(db, () => undefined, () => (clock += 10_000), 30_000, 100_000, assets, 2);
+    for (let pass = 0; pass < 40; pass++) await worker.tick();
+    expect((await db.sql.query('SELECT 1 FROM swaps WHERE usd IS NULL')).rows).toHaveLength(0);
   });
 });

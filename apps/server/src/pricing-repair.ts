@@ -61,7 +61,7 @@ export class PricingRepairWorker {
   private running?: Promise<void>;
   private cursor?: number;
   constructor(private readonly db: ChainDb, private readonly log: (event: string, fields: Record<string, unknown>) => void,
-    private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 25_000, private assets?: PricingAssets) {}
+    private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 25_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH) {}
   start() { if (this.timer) return; void this.tick(); this.timer = setInterval(() => void this.tick(), this.intervalMs); this.timer.unref(); }
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
@@ -69,20 +69,26 @@ export class PricingRepairWorker {
     this.running = this.pass().catch(() => this.log('pricing_repair_failed', {})).finally(() => { this.running = undefined; });
     return this.running;
   }
+  /** Price one hour until done (`done`) or out of budget, so an unfinished hour is resumed rather than skipped. */
   private async hour(end: number, deadline: number) {
     let priced = 0;
     for (;;) {
-      const n = await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), new Date(end - HOUR), new Date(end));
+      const n = await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), new Date(end - HOUR), new Date(end), this.batch);
       priced += n;
-      if (n < REPRICE_BATCH || this.now() >= deadline) return priced;
+      if (n < this.batch) return { priced, done: true };
+      if (this.now() >= deadline) return { priced, done: false };
     }
   }
   private async pass() {
     const started = this.now(), deadline = started + this.budgetMs, top = Math.ceil(started / HOUR) * HOUR;
     let recent = 0, backfilled = 0;
-    for (let end = top; end > top - 6 * HOUR && this.now() < deadline; end -= HOUR) recent += await this.hour(end, deadline);
+    for (let end = top; end > top - 6 * HOUR && this.now() < deadline; end -= HOUR) recent += (await this.hour(end, deadline)).priced;
     this.cursor ??= top - 6 * HOUR;
-    while (this.cursor > top - 8 * 24 * HOUR && this.now() < deadline) { backfilled += await this.hour(this.cursor, deadline); this.cursor -= HOUR; }
+    while (this.cursor > top - 8 * 24 * HOUR && this.now() < deadline) {
+      const hour = await this.hour(this.cursor, deadline);
+      backfilled += hour.priced;
+      if (hour.done) this.cursor -= HOUR;
+    }
     if (recent || backfilled) this.log('pricing_repair', { recent, backfilled, cursor: new Date(this.cursor).toISOString(), ms: this.now() - started });
   }
 }
