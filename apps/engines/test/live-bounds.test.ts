@@ -26,7 +26,7 @@ async function reads(scale: number) {
     const through = new Map((await history.db.sql.query<{ coin: Uint8Array; through_block: string }>('SELECT coin,through_block FROM engine_activity_state')).rows
       .map(row => [`0x${Buffer.from(row.coin).toString('hex')}`, Number(row.through_block)]));
     const plans = await live.plans(loaded.coins.map(coin => ({ coin: coin.coin, from: (through.get(coin.coin) ?? -1) + 1 })), to);
-    return { rows: counted.count.rows, stats: { ...live.stats!, ms: 0 }, coins: loaded.coins.length, tasks: [...plans.values()].flat().length };
+    return { rows: counted.count.rows, stats: { ...live.stats!, ms: 0, sumMs: 0, clockMs: 0 }, coins: loaded.coins.length, tasks: [...plans.values()].flat().length };
   };
   const warm = new LiveActivity(counted.db);
   await poll(warm, await head());

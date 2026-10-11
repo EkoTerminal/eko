@@ -271,6 +271,23 @@ describe('incremental live activity', () => {
     await both(async chain => { await chain.header(at(9.2)); await chain.swap(B, at(9.2), 1, t1, 1.4); });
     expect(await logged()).toBeGreaterThan(before);
   });
+  it('adds a block time stored later below the held clock without reloading the whole clock', async () => {
+    const chain = new Chain(await database());
+    for (const n of [at(2), at(5), at(8.9), at(9)]) await chain.header(n);
+    await chain.token(B, at(2)); await chain.swap(B, at(2), 1, t1); await chain.swap(B, at(9), 1, t2, 1.1);
+    const now = secOf(at(9)) + 30, options = { cache: new Map(), readBlock, concurrency: 4, stopped: () => false };
+    expect(await new EngineWorker(chain.db, { now: () => now, readBlock, liveBacklogSec: 900 }).poll()).toBeGreaterThan(0);
+    const probe = new LiveActivity(chain.db);
+    const held = (await probe.refresh(at(9), now, new Map(), options))!.clock;
+    expect(probe.stats).toMatchObject({ cold: true });
+    // A time for a block inside the eight-day window but below the held range arrives later (a filled gap).
+    const late = at(1) + 100;
+    await chain.db.sql.query("INSERT INTO engine_block_times VALUES($1,to_timestamp($2),NULL,'archive')", [late, secOf(late)]);
+    const clock = (await probe.refresh(at(9), now, new Map(), options))!.clock;
+    expect(probe.stats).toMatchObject({ cold: false });
+    expect(probe.stats!.clockPoints).toBeLessThan(held.length);
+    expect(clock[0]).toEqual({ number: late, sec: secOf(late) });expect(clock.slice(1)).toEqual(held);
+  });
   it('takes recent launches without stored progress on a cold start that follows the log', async () => {
     const chain = new Chain(await database());
     for (const n of [at(8), at(8.5), at(9)]) await chain.header(n);

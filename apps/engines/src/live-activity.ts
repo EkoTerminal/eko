@@ -36,7 +36,7 @@ export interface LiveActivityOptions { readBlock?: BlockReader; cache: ClockCach
  * `windowRows`: activity rows above `after`. `rangeRows`: rows read per coin below the window. `summedCoins`: coins whose
  * base was recomputed in the database. `clockPoints`: block times read.
  */
-export interface LiveActivityStats { cold: boolean; to: number; after: number; coins: number; windowRows: number; rangeRows: number; summedCoins: number; clockPoints: number; ms: number }
+export interface LiveActivityStats { cold: boolean; to: number; after: number; coins: number; windowRows: number; rangeRows: number; summedCoins: number; clockPoints: number; ms: number; sumMs?: number; clockMs?: number }
 interface Stored { revision: string; through: number; base: ActivityBase | null; lastSec: number | null }
 interface Known { coin: Address; firstBlock: number; supplyBlock: string | null; graduatedBlock: string | null; createdSec?: number; stored?: Stored; live?: LiveCoin }
 const revisionOf = (supplyBlock: string | null, graduatedBlock: string | null, sum: bigint) => digest({ activity: coinRevision(supplyBlock, graduatedBlock, sum), rulesVersion: RULES_VERSION });
@@ -238,6 +238,7 @@ export class LiveActivity {
     }
     // Bases recomputed in the database (whole history, one sum per coin); missing times of those rows are filled first.
     const bases = new Map<Address, ActivityBase>();
+    const sumStarted = performance.now();
     for (const chunk of chunks(resum)) {
       const coins = chunk.map(entry => entry.coin);
       if (!await fill(await clockGaps(this.db, to, { coins }))) return;
@@ -245,6 +246,7 @@ export class LiveActivity {
       for (const coin of coins) { const sum = sums.get(coin)!; bases.set(coin, { baseBlock: nextBase, baseSum: sum.sum, baseSec: sum.sec }); }
       summedCoins += coins.length;
     }
+    const sumMs = performance.now() - sumStarted;
     for (const entry of extend) bases.set(entry.coin, baseOf(entry)!);
     // Rows between a base and the window.
     const gaps = [...bases].filter(([, base]) => base.baseBlock < after);
@@ -283,7 +285,9 @@ export class LiveActivity {
       if (coin && row.block != null) coin.revived = Number(row.block);
     }
     this.pending.clear();
+    const clockStarted = performance.now();
     const clockPoints = await this.updateClock(to, now, cold, filled);
+    const clockMs = performance.now() - clockStarted;
     // Coins idle past the planning horizon are dropped; new rows bring them back.
     const held = result.filter(coin => {
       if (now - coin.lastSec < IDLE_SEC + IDLE_MARGIN_SEC) return true;
@@ -295,7 +299,7 @@ export class LiveActivity {
     this.trusted = true;
     await this.follow(to, true);
     await this.collect();
-    this.stats = { cold, to, after, coins: held.length, windowRows, rangeRows, summedCoins, clockPoints, ms: performance.now() - started };
+    this.stats = { cold, to, after, coins: held.length, windowRows, rangeRows, summedCoins, clockPoints, ms: performance.now() - started, sumMs: Math.round(sumMs), clockMs: Math.round(clockMs) };
     return { coins: held, clock: this.clock };
   }
 
@@ -427,12 +431,19 @@ export class LiveActivity {
     // The held range starts at the earliest stored time at or after the cutoff (a block range, so lookups match the full clock).
     const startAt = Number((await this.db.sql.query<{ number: string | null }>('SELECT number::text FROM engine_block_times WHERE ts>=to_timestamp($1) ORDER BY ts,number LIMIT 1',
       [now - CLOCK_SEC])).rows[0]?.number ?? to + 1);
-    if (cold || startAt < this.clockFrom) {
+    if (cold) {
       const commit = await this.feed.skip('clock');
       this.clock = await read('SELECT number,ts FROM engine_block_times WHERE number>=$1 AND number<=$2 ORDER BY number', [startAt, to]);
       this.clockFrom = startAt;
       commit();
       return this.clock.length;
+    }
+    // A time stored later for a block below the held range moves its start down. Only that range is read: reloading
+    // the whole eight-day clock on each such poll (about 610,000 points on 2026-10-11) took minutes of every poll.
+    let prepended = 0;
+    if (startAt < this.clockFrom) {
+      const lower = await read('SELECT number,ts FROM engine_block_times WHERE number>=$1 AND number<$2 ORDER BY number', [startAt, this.clockFrom]);
+      this.clock = [...lower, ...this.clock]; this.clockFrom = startAt; prepended = lower.length;
     }
     const written = await this.feed.clock(), floor = Math.min(this.covered!, to) - CLOCK_LOOKBACK_BLOCKS;
     const older = written.rows.map(row => Number(row.block)).filter(block => block <= floor);
@@ -451,7 +462,7 @@ export class LiveActivity {
     for (const point of tail) this.clock.push(point);
     if (startAt > this.clockFrom) { this.clock = this.clock.slice(above(this.clock, startAt - 1)); this.clockFrom = startAt; }
     written.commit();
-    return count + tail.length;
+    return prepended + count + tail.length;
   }
 
   /** Coins with launch, pool or Pons rows at these blocks: their activity there depends on the blocks' stored times. */
