@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **591/591 (100.00%)** documented. Minimum: **90%**.
+Measured: **592/592 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -186,16 +186,17 @@ Measured: **591/591 (100.00%)** documented. Minimum: **90%**.
 | `refreshCoinFlow` | function | [apps/engines/src/watcher/flow-store.ts:41](../../apps/engines/src/watcher/flow-store.ts#L41) | Yes |
 | `refreshFlows` | function | [apps/engines/src/watcher/flow-store.ts:77](../../apps/engines/src/watcher/flow-store.ts#L77) | Yes |
 | `refreshCensus` | function | [apps/engines/src/watcher/flow-store.ts:95](../../apps/engines/src/watcher/flow-store.ts#L95) | Yes |
-| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:17](../../apps/engines/src/worker.ts#L17) | Yes |
-| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:92](../../apps/engines/src/worker.ts#L92) | Yes |
-| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:101](../../apps/engines/src/worker.ts#L101) | Yes |
-| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:120](../../apps/engines/src/worker.ts#L120) | Yes |
-| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:133](../../apps/engines/src/worker.ts#L133) | Yes |
-| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:141](../../apps/engines/src/worker.ts#L141) | Yes |
-| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:176](../../apps/engines/src/worker.ts#L176) | Yes |
-| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:213](../../apps/engines/src/worker.ts#L213) | Yes |
-| `EngineWorker.run` | method | [apps/engines/src/worker.ts:457](../../apps/engines/src/worker.ts#L457) | Yes |
-| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:492](../../apps/engines/src/worker.ts#L492) | Yes |
+| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:23](../../apps/engines/src/worker.ts#L23) | Yes |
+| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:98](../../apps/engines/src/worker.ts#L98) | Yes |
+| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:107](../../apps/engines/src/worker.ts#L107) | Yes |
+| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:126](../../apps/engines/src/worker.ts#L126) | Yes |
+| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:139](../../apps/engines/src/worker.ts#L139) | Yes |
+| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:147](../../apps/engines/src/worker.ts#L147) | Yes |
+| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:182](../../apps/engines/src/worker.ts#L182) | Yes |
+| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:219](../../apps/engines/src/worker.ts#L219) | Yes |
+| `EngineWorker.run` | method | [apps/engines/src/worker.ts:479](../../apps/engines/src/worker.ts#L479) | Yes |
+| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:514](../../apps/engines/src/worker.ts#L514) | Yes |
+| `staleRatings` | function | [apps/engines/src/worker.ts:666](../../apps/engines/src/worker.ts#L666) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |

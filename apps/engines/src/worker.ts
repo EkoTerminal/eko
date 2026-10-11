@@ -13,6 +13,12 @@ import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } 
 import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
 import { LiveActivity, baseColumns, leaveActivityFeed, type LiveActivityStats } from './live-activity.js';
 import { materializeHistory, updateOutcomes, OUTCOME_LOADS_PER_WRITE, type OutcomeBudget, type OutcomeQueue } from './outcomes.js';
+/** Pending cards re-rated per live poll, after first scans and before backlog (staleRatings). */
+export const RERATE_PER_POLL=800;
+/** Cards written before 7426b59 (Clear for Pons coins, deployed 2026-10-10 21:05Z) used rules that could not reach Clear. */
+export const CLEAR_RULES_AT='2026-10-10T21:05:00Z';
+/** Outcome horizons the end of a live poll may evaluate, so first scans and re-ratings can skip them per write. */
+export const OUTCOME_LOADS_PER_POLL=40;
 /** Blocks to wait before reloading a coin whose sources were unavailable: doubles per attempt, from about two minutes to about twelve hours. */
 export const retryAfterBlocks=(attempts:number)=>Math.min(2**Math.max(1,Math.min(attempts,10)),1024)*600;
 import { performance } from 'node:perf_hooks';
@@ -58,7 +64,7 @@ export interface WorkerOptions {
   onEvaluation?: (progress:EvaluationProgress) => void;
   evaluationReportMs?: number;
   onLivePlanned?: (plan:LivePlan) => void }
-export interface LivePlan { tasks:number; coins:number; firstScans:number; coalescedCheckpoints:number; to:number }
+export interface LivePlan { tasks:number; coins:number; firstScans:number; rerates?:number; coalescedCheckpoints:number; to:number }
 /**
  * One live poll's evaluation phase so far: tasks attempted, skipped (a run already exists), failed (sources
  * unavailable) and completed (cards written), outcome horizons evaluated in write transactions and whether outcomes are
@@ -334,6 +340,17 @@ export class EngineWorker {
       }
       tasks.push(...plan);pending.push(input);
     }
+    // Live: a quiet coin is only re-evaluated when it trades, so pending cards written under rules that could not reach
+    // Clear, or before the sell check that completes them, stayed pending (2026-10-11: 13,007 of 14,341 pending coins).
+    // A bounded number per poll get a head checkpoint and run right after first scans, most recently active first.
+    const rerateRank=new Map<Address,number>();
+    if(live && head && now-head.sec<7*86400) {
+      const byCoin=new Map(inputs.map(input=>[input.coin,input]));
+      for(const coin of await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL)) {
+        rerateRank.set(coin,rerateRank.size);revised.add(coin);
+        if(!tasks.some(task=>task.coin===coin && task.block===head.number))tasks.push({coin,block:head.number,sec:head.sec});
+      }
+    }
     // Live: a coin with no card yet shows "Scanning…"; its first scan goes before any refresh of scanned coins,
     // newest launch first. One deployer's launches run oldest first, so each sees its siblings in deployer history.
     // Each coin's own checkpoints stay in block order. Replay keeps strict block order.
@@ -350,10 +367,13 @@ export class EngineWorker {
       return newestOf.get(gb)!-newestOf.get(ga)! || ga.localeCompare(gb) || launched.get(a.coin)!-launched.get(b.coin)! || a.coin.localeCompare(b.coin) || a.block-b.block;
     };
     const queued=(task:Checkpoint)=>since.get(task.coin) ?? task.block;
-    tasks.sort((a,b)=>Number(first(b.coin))-Number(first(a.coin)) || (first(a.coin) ? firstOrder(a,b) : queued(a)-queued(b) || a.coin.localeCompare(b.coin) || a.block-b.block));
-    const firstScans=tasks.findIndex(task=>!first(task.coin)),priority=firstScans<0 ? tasks.length : firstScans;
+    // Tiers: first scans, then re-ratings (staleRatings), then the backlog. A coin's own checkpoints stay in block order.
+    const tier=(coin:Address)=>first(coin) ? 0 : rerateRank.has(coin) ? 1 : 2;
+    tasks.sort((a,b)=>tier(a.coin)-tier(b.coin) || (tier(a.coin)===0 ? firstOrder(a,b) : tier(a.coin)===1 ? rerateRank.get(a.coin)!-rerateRank.get(b.coin)! || a.block-b.block
+      : queued(a)-queued(b) || a.coin.localeCompare(b.coin) || a.block-b.block));
+    const firstScans=tasks.findIndex(task=>!first(task.coin)),backlogAt=tasks.findIndex(task=>tier(task.coin)===2),priority=backlogAt<0 ? tasks.length : backlogAt;
     if(live)this.options.onLiveTasks?.(tasks);
-    if(live)this.options.onLivePlanned?.({tasks:tasks.length,coins:new Set(tasks.map(t=>t.coin)).size,firstScans:new Set(tasks.slice(0,priority).map(t=>t.coin)).size,coalescedCheckpoints:coalesced,to});
+    if(live)this.options.onLivePlanned?.({tasks:tasks.length,coins:new Set(tasks.map(t=>t.coin)).size,firstScans:new Set(tasks.slice(0,firstScans<0 ? tasks.length : firstScans).map(t=>t.coin)).size,rerates:rerateRank.size,coalescedCheckpoints:coalesced,to});
     const remaining=new Map<Address,number>();for(const task of tasks)remaining.set(task.coin,(remaining.get(task.coin) ?? 0)+1);
     const memo:SourceMemo|undefined=live ? {ranks:new Map()} : undefined;
     const sliceStart=performance.now();let yielded=false;this.yielded=false;
@@ -374,8 +394,8 @@ export class EngineWorker {
     const report=()=>{progress.sec=Math.round((performance.now()-queuedAt)/1000);progress.outcomesPending=!outcomesDone;this.options.onEvaluation?.({...progress});};
     const reporter=live && this.options.onEvaluation ? setInterval(report,this.options.evaluationReportMs ?? 60_000) : undefined;
     const queue:OutcomeQueue={};
-    const outcomes=async (tx:ChainDb,block:number,sec:number)=>{
-      const budget:OutcomeBudget|undefined=live ? {loads:this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE,used:0} : undefined,phase=progress.phase;
+    const outcomes=async (tx:ChainDb,block:number,sec:number,loads=this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE)=>{
+      const budget:OutcomeBudget|undefined=live ? {loads,used:0} : undefined,phase=progress.phase;
       progress.phase='outcomes';
       try{outcomesDone=await updateOutcomes(tx,block,sec,this.clock,this.cache,this.outcomeSkips,budget,live ? queue : undefined);}
       finally{progress.phase=phase;progress.outcomeLoads+=budget?.used ?? 0;}
@@ -386,7 +406,7 @@ export class EngineWorker {
       if(live && offset>=priority && this.options.liveSliceMs!==undefined && performance.now()-sliceStart>=this.options.liveSliceMs
         && (await this.db.sql.query('SELECT 1 FROM tokens WHERE first_block>$1 LIMIT 1',[to])).rows.length) {yielded=true;break;}
       // First scans never share a batch with backlog, so a yield happens right after them.
-      const batch=tasks.slice(offset,Math.min(offset+width,offset<priority ? priority : tasks.length));offset+=batch.length;
+      const batchStart=offset,batch=tasks.slice(offset,Math.min(offset+width,offset<priority ? priority : tasks.length));offset+=batch.length;
       const sourceStart=performance.now();progress.phase='sources';
       // Prepare the shared market lane in task order before asynchronous coin loads.
       if(this.cache)for(const point of batch)await this.cache.ranked(point.block,point.sec);
@@ -412,7 +432,9 @@ export class EngineWorker {
           // Outcomes are keyed by horizon time, so a later block covers every earlier one. Replay runs in block
           // order (unchanged); live first scans run ahead of older backlog, which must not re-run this per write.
           // A live call stops after a few horizons, so the next write continues it instead of the card waiting for all.
-          if(sources.asOfBlock>outcomesBlock || !outcomesDone)await outcomes(tx,sources.asOfBlock,sources.asOfSec);
+          // First scans and re-ratings skip the per-write outcome load (about half of a write); the end of the poll
+          // catches up OUTCOME_LOADS_PER_POLL horizons instead.
+          if(!(live && batchStart<priority) && (sources.asOfBlock>outcomesBlock || !outcomesDone))await outcomes(tx,sources.asOfBlock,sources.asOfSec);
           const {historyAt}=await import('./sources.js');sources.history=await historyAt(tx,sources.deployer,sources.coin,sources.asOfBlock,this.cache);
           return this.persistRun(tx,sources,!live);
         });
@@ -432,7 +454,7 @@ export class EngineWorker {
     const end=clock.at(-1);
     if(!this.stopped && end && (outcomesBlock<end.number || !outcomesDone)){const start=performance.now();await this.db.tx(async tx=>{
       await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
-      await outcomes(tx,end.number,end.sec);
+      await outcomes(tx,end.number,end.sec,Math.max(this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE,OUTCOME_LOADS_PER_POLL));
     });this.metrics.writeMs+=performance.now()-start;}
     } finally {clearInterval(reporter);progress.phase='done';if(live)report();}
     // A yielded poll records only coins whose checkpoints all ran; the rest are planned again next poll.
@@ -635,4 +657,18 @@ export class EngineWorker {
     // TODO(spec): cross-task canonical recovery is conservative: stop for explicit derived-history reconciliation instead of deleting verdict history.
     throw new Error('Engine cursor is on an orphaned block; reconcile derived history before continuing');
   }
+}
+
+/**
+ * Pending cards that would rate differently now, most recently active first: written before CLEAR_RULES_AT, or missing
+ * the honeypot check while a sell check ran after them (sell-check-reference.ts reads it at the next checkpoint).
+ */
+export async function staleRatings(db:ChainDb,coins:Address[],limit:number):Promise<Address[]> {
+  if(!coins.length || limit<=0)return [];
+  return (await db.sql.query<{coin:Uint8Array}>(`SELECT l.coin FROM coin_card_latest l JOIN read_coins r ON r.coin=l.coin
+    LEFT JOIN engine_runs e ON e.coin=l.coin AND e.block=l.as_of_block AND e.rules_version=$4
+    WHERE l.coin=ANY($1::bytea[]) AND l.data->'verdict'->>'level'='pending' AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
+      OR (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'honeypot'
+        AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused'))))
+    ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,CLEAR_RULES_AT,RULES_VERSION])).rows.map(row=>hex(row.coin) as Address);
 }

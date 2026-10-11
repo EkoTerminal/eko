@@ -5,7 +5,7 @@ import { ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';
 import { decodeEventLog, type Hex } from 'viem';
-import { EngineWorker, retryAfterBlocks } from '../src/worker.js';
+import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, staleRatings, type LivePlan } from '../src/worker.js';
 import { ReplayCache } from '../src/replay-cache.js';
 import { assembleCard, cardHash } from '../src/card.js';
 import { curveProgress,curveProgressAt,type PonsEventRow } from '../src/curve-progress.js';
@@ -294,6 +294,26 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    // Without the sell check the same coin stays pending: the honeypot test has not run.
    const unchecked=await traded();await new EngineWorker(unchecked,{client:client()}).processBlock(1);
    expect((await latest(unchecked)).verdict.level).toBe('pending');expect((await latest(unchecked)).meta!.playbooks!.missing).toContain('honeypot');
+  });
+  it('re-rates a quiet pending coin once a sell check completes it, without new trades, and only once',async()=>{
+   const db=await traded();const worker=new EngineWorker(db,{client:client(),now:()=>epoch+120});
+   expect(await worker.poll()).toBeGreaterThan(0);expect((await latest(db)).verdict.level).toBe('pending');
+   // The coin does not trade again; a sell check runs at a later block.
+   await block(db,2,60);await checked(db,2,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')],'pons_curve',60);
+   const planned:LivePlan[]=[];const next=new EngineWorker(db,{client:client(),now:()=>epoch+120,onLivePlanned:plan=>planned.push(plan)});
+   expect(await next.poll()).toBeGreaterThan(0);
+   const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.level).toBe('clear');
+   expect(planned.at(-1)).toMatchObject({rerates:1});
+   const runs=await count(db,'engine_runs');expect(await next.poll()).toBe(0);expect(await count(db,'engine_runs')).toBe(runs);
+  });
+  it('re-rates pending cards written before the Clear rules, and never a current one',async()=>{
+   const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
+   await new EngineWorker(db,{client:client(),now:()=>epoch+120}).poll();
+   expect(await staleRatings(db,[coin],10)).toEqual([]);
+   // A card that the earlier rules left pending.
+   await db.sql.query("UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','\"pending\"')");
+   await db.sql.query('UPDATE engine_runs SET created_at=$1::timestamptz - interval \'1 hour\'',[CLEAR_RULES_AT]);
+   expect(await staleRatings(db,[coin],10)).toEqual([coin]);expect(await staleRatings(db,[coin],0)).toEqual([]);
   });
   it('treats a failed sell as a contract restriction (Info), never Danger from a probe alone, and measures no tax',async()=>{
    const db=await traded();await checked(db,1,'refused',[probe(100,'sell_failed','0'),probe(1000,'sell_failed','0')]);
