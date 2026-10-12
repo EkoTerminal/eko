@@ -1,5 +1,6 @@
 import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
+import { readPoolLiquidity } from './pool-liquidity.js';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
@@ -140,8 +141,9 @@ export class ReadStore {
     LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
     const flows=await readFlows(this.db,result.rows.map(t=>hex(t.address)));
     const sells=await readSellChecks(this.db,result.rows.map(t=>hex(t.address)),this.now());
+    const pools=await readPoolLiquidity(this.db,result.rows.filter(t=>t.graduated_block!=null).map(t=>hex(t.address)));
     return result.rows.map(t => {
-      const sell=sells.get(hex(t.address));
+      const sell=sells.get(hex(t.address)),pool=pools.get(hex(t.address));
       const card = t.data ? withSellCheck(CoinCardSchema.parse(t.data),sell) : null;
       const verdict = t.verdict ? VerdictSchema.parse(t.verdict) : null;
       const flow=flows.get(hex(t.address))??unavailableFlow('1h');
@@ -150,8 +152,9 @@ export class ReadStore {
       // CA-35: exit cost at $1K is a measurement only when the sell check measured that size.
       const unavailable: NonNullable<RadarRow['unavailable']> = sell?.exit1k==null ? ['exitCost'] : [];
       if(flow.meta?.unavailable)unavailable.push('flow');
-      // Depth is structural in current engine cards, even when LP ownership is known.
-      if (!card || card.meta?.liquidity?.unavailable || card.meta?.liquidity?.missing?.includes('depthUsd')) unavailable.push('liquidity');
+      // Depth is structural in current engine cards, even when LP ownership is known. A graduated coin's row shows its
+      // pool's value (both sides of the graduation position) instead, read from indexed events.
+      if (pool == null && (!card || card.meta?.liquidity?.unavailable || card.meta?.liquidity?.missing?.includes('depthUsd'))) unavailable.push('liquidity');
       if (!card?.signal) unavailable.push('signal');
       if(t.buyers_pending)unavailable.push('buyers');
       if(t.pricing_pending)unavailable.push('volume','spark');
@@ -167,7 +170,7 @@ export class ReadStore {
         curvePct: card?.identity.curvePct, priceUsd: t.pricing_pending ? 0 : t.price ?? 0, priceUnavailable: t.pricing_pending || t.price == null,
         change1hPct: !t.pricing_pending && t.price != null && t.previous1h ? 100 * (t.price/t.previous1h-1) : 0,
         change24hPct: !t.pricing_pending && t.price != null && t.previous24h ? 100 * (t.price/t.previous24h-1) : undefined,
-        liquidityUsd: unavailable.includes('liquidity') ? 0 : card!.liquidity.depthUsd.pct2,
+        liquidityUsd: pool ?? (unavailable.includes('liquidity') ? 0 : card!.liquidity.depthUsd.pct2),
         marketCapUsd: !t.pricing_pending && supply != null && t.price != null ? t.price*supply : undefined,
         verdict: verdict?.level ?? 'pending', verdictPending: !verdict,
         evaluatedPlaybooks: verdict?.evaluatedPlaybooks,
