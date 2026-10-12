@@ -51,7 +51,12 @@ export interface FeedBuffer { items: FeedItem[]; waiting: FeedItem[] }
 export function feedRing(rows: readonly FeedItem[]) {
   const unique = new Map<string, FeedItem>();
   rows.forEach((item) => { if (!unique.has(item.id)) unique.set(item.id, item); });
-  return [...unique.values()].sort((a, b) => b.ts - a.ts).slice(0, FEED_RING);
+  // A launch is announced a moment before its name is indexed, so its live row has no ticker. A later row for the same
+  // coin (its first scan) carries one: earlier rows take it instead of showing a bare address until the next reload.
+  const named = new Map<string, FeedItem['symbol']>();
+  for (const item of unique.values()) if (item.symbol.text.trim() && !named.has(item.coin)) named.set(item.coin, item.symbol);
+  return [...unique.values()].map((item) => item.symbol.text.trim() || !named.has(item.coin) ? item : { ...item, symbol: named.get(item.coin)! })
+    .sort((a, b) => b.ts - a.ts).slice(0, FEED_RING);
 }
 export function receiveFeed(buffer: FeedBuffer, rows: readonly FeedItem[], paused: boolean): FeedBuffer {
   return paused ? { items: buffer.items, waiting: feedRing([...rows.filter((r) => !buffer.items.some((i) => i.id === r.id)), ...buffer.waiting]) }

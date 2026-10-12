@@ -41,7 +41,7 @@ export function Verdict({ value }: { value: string }) {
   return (
     <span className={`ed-verdict ed-${value}`}>
       {value === "clear" ? "✓" : value === "danger" ? "⊗" : "△"}{" "}
-      {value[0].toUpperCase() + value.slice(1)}
+      {value === "clear" ? "No flags" : value[0].toUpperCase() + value.slice(1)}
     </span>
   );
 }
@@ -181,8 +181,8 @@ export default function EkoDashboard({
             <div>
               <h3>Radar</h3>
               <p>
-                Every live play on Robinhood Chain, scanned and ranked by the
-                guard.
+                Every live play on Robinhood Chain, scanned by the guard, most
+                traded first.
               </p>
             </div>
             <dl>
@@ -260,7 +260,7 @@ export default function EkoDashboard({
             <small>● Sample snapshot</small>
           </div>
           <div className="ed-filters">
-            {["All", "Clear", "Monitor", "Danger"].map((f) => (
+            {["All", "No flags", "Monitor", "Danger"].map((f) => (
               <span key={f} className={`ed-filter ${f === "All" ? "on" : ""}`}>
                 {f}
               </span>

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { binary, hex, ScanJobs, ScanQueueFull, type ScanJob } from '@eko/db';
-import { BagReportSchema, PublicBagReportSchema, type Address, type BagReport, type CoinCard, type CoinSummary, type PublicBagReport } from '@eko/shared';
+import { BagReportSchema, PublicBagReportSchema, findingsFirst, type Address, type BagReport, type CoinCard, type CoinSummary, type PublicBagReport } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { erc20Abi, formatUnits, type PublicClient } from 'viem';
 import type { Db } from '../db/client.js';
@@ -96,7 +96,7 @@ export class BagsService {
           launchpad: card?.identity.launchpad ?? (candidate.launchpad === 'pons' ? 'pons' : 'other'), stage: candidate.curve && !candidate.graduated_block ? 'curve' : 'graduated',
           priceUsd: candidate.price ?? 0, priceUnavailable: candidate.price === null,
           change1hPct: 0, liquidityUsd: 0, verdict: card?.verdict.level ?? 'pending', verdictPending: !card || card.verdict.level === 'pending',
-          topPlaybook: card?.verdict.playbooks[0]?.id, ageSec: card?.freshness.ageSec ?? 0,
+          topPlaybook: card ? findingsFirst(card.verdict.playbooks)[0]?.id : undefined, ageSec: card?.freshness.ageSec ?? 0,
           evaluatedPlaybooks: card?.verdict.evaluatedPlaybooks, unavailable: ['liquidity', 'change', 'marketCap'],
         };
         let balance: string | null = null, balanceStatus: Holding['balanceStatus'] = 'unavailable';
@@ -111,7 +111,8 @@ export class BagsService {
         const exitCost = meta && meta.asOfBlock <= Number(block) && !meta.unavailable && !meta.missing?.includes('exitCostPct') && !meta.missing?.includes('exitCostPct.usd1k') ? card!.tradeability.exitCostPct.usd1k : null;
         const value = balance !== null && candidate.price !== null ? Number(balance) * candidate.price : undefined;
         const row: Holding = { coin, balance, balanceStatus, status: cardError ? 'error' : card ? 'ready' : 'pending',
-          playbooks: card?.verdict.playbooks.map(p => p.id) ?? [], exitCost1kPct: exitCost,
+          // Findings only, most severe first: an Info observation is not a flag on a holding.
+          playbooks: card ? findingsFirst(card.verdict.playbooks).map(p => p.id) : [], exitCost1kPct: exitCost,
           unavailable: [...(balance === null ? ['balance' as const] : []), ...(value === undefined || !Number.isFinite(value) ? ['value' as const] : []),
             ...(!card ? ['card' as const] : []), ...(exitCost === null ? ['exitCost' as const] : [])],
           ...(value !== undefined && Number.isFinite(value) ? { valueUsd: value } : {}),

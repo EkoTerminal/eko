@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { compactGuardVerdict, guardShareMetadata, GUARD_SHARE_TITLE, publicSharePath, publicShareOrigin, shareMetadata,
-  shareHead, type ShareMeta, type Address, type CoinCard, type ScanResult, type GuardConsumerRequest } from '@eko/shared';
+  shareHead, type ShareMeta, type Address, type CoinCard, type ScanResult, type GuardConsumerRequest, findingsFirst } from '@eko/shared';
 import type { OgRenderer, ShareCard } from '@eko/og-renderer';
 import type { ReceiptApiStore } from '@eko/db';
 import type { Config } from '../config.js';
@@ -33,12 +33,12 @@ function coinContent(result: ScanResult): { card: ShareCard; description: string
   // TODO(spec): §15.6 does not select a Guard 2 route/account quote for the share headline.
   // Keep its exit cost unavailable rather than combine quotes or snapshots.
   const details = legacy ? [
-    `Top playbook: ${playbook(c!.verdict.playbooks[0]?.id)}`,
+    `Top playbook: ${playbook(findingsFirst(c!.verdict.playbooks)[0]?.id)}`,
     `Agent share${c!.flow.beta === false ? '' : ' (beta)'}: ${percent(flowAvailable ? c!.flow.agentPct : undefined)} · confidence ${percent(flowAvailable ? c!.flow.confidence : undefined)}`,
     `Exit cost ($1,000): ${percent(exit && !exit.unavailable && !exit.missing?.includes('exitCostPct') ? c!.tradeability.exitCostPct.usd1k : undefined)}`,
   ] : [
     // TODO(spec): Guard 2 has no playbook field; keep it unavailable rather than relabel reasons.
-    `Top playbook: ${!v2 && c ? playbook(c.verdict.playbooks[0]?.id) : 'unavailable'}`,
+    `Top playbook: ${!v2 && c ? playbook(findingsFirst(c.verdict.playbooks)[0]?.id) : 'unavailable'}`,
     `Agent share (beta): ${percent(v2?.flow.agentPct.status === 'observed' && v2.flow.agentPct.coverage.complete ? Number(v2.flow.agentPct.value) : undefined)} · confidence unavailable`,
     'Exit cost: unavailable in this share projection',
   ];

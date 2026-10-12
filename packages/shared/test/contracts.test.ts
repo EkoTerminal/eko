@@ -196,6 +196,16 @@ describe('CA-32 structured Feed description fields', () => {
   });
 });
 
+describe('which match leads a row', () => {
+  it('puts Danger before Monitor in rule order and never an Info observation', () => {
+    const m = (id: string, level: 'info' | 'monitor' | 'danger') => ({ id, level });
+    const { findingsFirst, isHardDanger, HARD_DANGER_PLAYBOOKS, PlaybookIdSchema } = contracts;
+    expect(findingsFirst([m('tax_trap', 'info'), m('exempt_insiders', 'info')])).toEqual([]);
+    expect(findingsFirst([m('tax_trap', 'info'), m('bundle_dump', 'monitor'), m('holder_concentration', 'monitor'), m('run_up', 'danger')]).map(x => x.id)).toEqual(['run_up', 'bundle_dump', 'holder_concentration']);
+    expect(isHardDanger('honeypot')).toBe(true); expect(isHardDanger('run_up')).toBe(false);
+    for (const id of HARD_DANGER_PLAYBOOKS) expect(PlaybookIdSchema.options).toContain(id);
+  });
+});
 describe('CA-31 (proposed) signal, sparkline and agent split', () => {
   const signal = { composite: 72, readings: { momentum: 86, liquidity: 80, holders: 58, narrative: 70, risk: 44 },
     weights: { momentum: 0.3, liquidity: 0.25, holders: 0.2, narrative: 0.15, risk: 0.1 }, beta: true as const, asOfBlock: 1 };

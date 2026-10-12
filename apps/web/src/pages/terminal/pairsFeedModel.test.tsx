@@ -44,6 +44,18 @@ describe('pairs columns and guard', () => {
     // Paused trading and stale data still disable it.
     expect(pairTradeDisabled(danger, false, false, 'degen')).toBe(true); expect(pairTradeDisabled(danger, true, true, 'degen')).toBe(true);
   });
+  it('gives a launch row its ticker once a later row for the same coin has one', () => {
+    const [sample] = createFeedRows(1000000), blank = { text: '', flags: [], truncated: false }, coin = '0x00000000000000000000000000000000000000bb' as const;
+    const launch = { ...sample, id: 'launch', kind: 'new_pair' as const, coin, symbol: blank, ts: 1000 };
+    const scan = { ...sample, id: 'scan', kind: 'verdict' as const, coin, symbol: { ...blank, text: 'FRESH' }, ts: 2000 };
+    const other = { ...sample, id: 'other', kind: 'new_pair' as const, coin: '0x00000000000000000000000000000000000000cc' as const, symbol: blank, ts: 1500 };
+    const ring = feedRing([launch, other]);
+    expect(ring.find(i => i.id === 'launch')!.symbol.text).toBe('');
+    const named = feedRing([scan, launch, other]);
+    expect(named.find(i => i.id === 'launch')!.symbol.text).toBe('FRESH');
+    // A coin with no named row keeps its address.
+    expect(named.find(i => i.id === 'other')!.symbol.text).toBe('');
+  });
   it('reads the header counts and prints the first-scan time', () => {
     const today = { launches: 1817, medianFirstScanSec: 34.9, refused: 220 };
     expect(PairResponseSchema.parse({ rows: [], cursor: null, delayedSec: 0, today }).today).toEqual(today);

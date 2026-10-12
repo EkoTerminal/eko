@@ -94,9 +94,9 @@ export function App({ walletEnabled = false }: { walletEnabled?: boolean }) {
   const pageTitle = resolved?.route.title ?? C.notFound;
   useShareMeta(path, pageTitle);
   const gatedMission = !!resolved && resolved.route.workspace === 'mission' && resolved.route.auth === 'siwe' && !signedIn && !MOCKS && (path.startsWith('/mission/agents/') || path === '/mission/approvals' || path.startsWith('/approve/'));
-  // Connect stays readable signed out: its steps are the pitch; only creating the agent or key needs a wallet.
-  const connectPreview = !!resolved && path === '/mission/connect' && !signedIn && !MOCKS;
-  const page = Page && resolved ? <>{gatedMission ? <GatedHead title={pageTitle} intro={C.missionGate} /> : <>{connectPreview && <GatedHead title={pageTitle} intro={C.connectGate} />}<Page params={resolved.params} /></>}{resolved.route.auth === 'siwe' && path !== '/bags' && path !== '/watch' && !signedIn && !(MOCKS && resolved.route.workspace === 'mission') ? <div className="connect-card"><p>{C.connect}</p><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-wallet'))}>{C.wallet}</button></div> : null}
+  // Connect stays readable signed out: its steps are the pitch; only creating the agent or key needs a wallet. The
+  // page carries its own heading and intro, so no gate heading is added above it (it showed "Connect an agent" twice).
+  const page = Page && resolved ? <>{gatedMission ? <GatedHead title={pageTitle} intro={C.missionGate} /> : <Page params={resolved.params} />}{resolved.route.auth === 'siwe' && path !== '/bags' && path !== '/watch' && !signedIn && !(MOCKS && resolved.route.workspace === 'mission') ? <div className="connect-card"><p>{C.connect}</p><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-wallet'))}>{C.wallet}</button></div> : null}
     {['/scan/', '/bags/r/', '/receipt/'].some(prefix => path.startsWith(prefix)) && <div className="shell-note"><p>{DYOR}</p><p>{NON_AFFILIATION}</p></div>}
   </> : <NotFound />;
   return <RealtimeContext.Provider value={sharedRealtime}><WatchRuntime owner={MOCKS ? 'demo-account' : signedIn ? account!.walletAddress : null} /><AlertsDrawer /><div className="eko-shell" data-style="desk" data-density={density}><SkipLink /><Header /><div className="shell-frame"><Sidebar /><MobileBar /><main className="shell-main" id="main" tabIndex={-1}>

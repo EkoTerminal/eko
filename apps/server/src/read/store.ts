@@ -1,7 +1,7 @@
 import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
 import { readPoolLiquidity } from './pool-liquidity.js';
-import { CoinCardSchema, VerdictSchema, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
+import { CoinCardSchema, VerdictSchema, findingsFirst, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
 /** Coins per read-model refresh transaction (see refreshModels). */
@@ -197,7 +197,7 @@ export class ReadStore {
         ...(verdict?.playbooks.some(m => m.level === 'danger' && isHardDanger(m.id)) ? { hardDanger: true } : {}),
         evaluatedPlaybooks: verdict?.evaluatedPlaybooks,
         missingChecks: [...new Set(Object.values(card?.meta ?? {}).flatMap(m => m.missing ?? []))],
-        topPlaybook: verdict?.playbooks[0]?.id, ageSec: Math.max(0,now-(t.created_at ? new Date(t.created_at).getTime()/1000 : now)),
+        topPlaybook: verdict ? findingsFirst(verdict.playbooks)[0]?.id : undefined, ageSec: Math.max(0,now-(t.created_at ? new Date(t.created_at).getTime()/1000 : now)),
         flow:flowValues, exitCost1kPct:sell?.exit1k ?? 0,
         ...(sell ? {sellCheck:{status:sell.status,asOfBlock:sell.block,checkedAt:sell.checkedAt.toISOString()}} : {}),
         rank:0, signal:card?.signal, spark8h:t.pricing_pending ? undefined : spark ?? [], beta:verdict?.beta, unavailable,
@@ -211,7 +211,10 @@ export class ReadStore {
     const result = await this.db.sql.query<{ data: unknown }>('SELECT data FROM coin_card_latest WHERE coin=$1',[binary(address)]);
     if (!result.rows.length) return null;
     const card = withSellCheck(CoinCardSchema.parse(result.rows[0].data),(await readSellChecks(this.db,[address.toLowerCase() as Address],this.now())).get(address.toLowerCase() as Address));
-    const times = await this.db.sql.query<{ ts: Date }>(`SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1`,[card.freshness.block]);
+    // The card's age is the age of its rating. `freshness.block` is the oldest block among its sections, and the
+    // identity section dates from the launch, so reading that block made every card as old as its coin: a coin page
+    // said "as of 275647 s ago" and held the trade panel as stale.
+    const times = await this.db.sql.query<{ ts: Date }>(`SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1`,[card.verdict.asOfBlock ?? card.freshness.block]);
     card.freshness.ageSec = times.rows[0] ? Math.max(0,Math.floor((this.now()-new Date(times.rows[0].ts).getTime())/1000)) : card.freshness.ageSec;
     const flow=(await readFlows(this.db,[address])).get(address)??unavailableFlow('1h',card.freshness.block);
     const {meta:flowMeta,...flowValues}=flow;

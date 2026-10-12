@@ -15,6 +15,14 @@ export const PlaybookMatchSchema = z.object({
   }).optional(),
 });
 export type PlaybookMatch = z.infer<typeof PlaybookMatchSchema>;
+/**
+ * The matches a reader should look at first: Danger before Monitor, in the rules' order within a level. Info matches
+ * (a fixed tax under the line, exempt wallets that bought little) are observations, not findings, and never lead: a
+ * verdict's first match in rule order is usually one of them, which put "Tax trap" beside almost every coin.
+ */
+export function findingsFirst<T extends { level: 'info' | 'monitor' | 'danger' | 'clear' | string }>(matches: readonly T[]): T[] {
+  return [...matches.filter(m => m.level === 'danger'), ...matches.filter(m => m.level === 'monitor')];
+}
 export const VerdictSchema = z.object({
   coin: AddressSchema,
   // CA-34 (lead): pending means required checks have not run; it is never Clear.

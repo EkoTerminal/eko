@@ -113,6 +113,7 @@ revision maps to a public commit:
 | `a197ba4d7ef23eb36d8c0c875a5c4f09ac912be9` | the commit titled "Sync public tree with source a197ba4" | 2026-10-12 |
 | `90b8d75a240c2fab2edf89ca9679dfc94477dc25` | the commit titled "Sync public tree with source 90b8d75" | 2026-10-12 |
 | `b516fdd527349e3907d185fd59af179964135e75` | the commit titled "Sync public tree with source b516fdd" | 2026-10-12 |
+| `ca585abfe9889e48f29151680820f9139d3b517c` | the commit titled "Sync public tree with source ca585ab" | 2026-10-12 |
 | `0dd96d80fe440646baa87160547925acb3a28de1` | the commit titled "Sync public tree with source 0dd96d8" | 2026-10-10 |
 
 ## Original export (October 2, 2026)

@@ -260,11 +260,12 @@
 /* Compact unavailable observations and bounded identity columns. */
 .availability-legend{margin:10px 0 12px;color:var(--muted);font-size:12px;line-height:1.5;white-space:normal}
 .availability-legend+.guard-legend{margin-top:-6px}
-.rt-top .rt-pad{flex:none}
+.rt-top .rt-pad{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rt-wrap{overflow-x:auto;min-width:0}
 .rt{table-layout:fixed}
-.rt .c-coin{width:160px}.rt .c-guard{width:156px}.rt .c-watch{width:160px}.rt .c-sig{width:95px}.rt .c-beta{width:60px}.rt .c-1h{width:66px}.rt .c-spark{width:90px}.rt .c-flow{width:105px}.rt .c-liq{width:85px}.rt .c-exit{width:80px}.rt .c-act{width:80px}
-.rt-pick,.rt-top{max-width:100%;min-width:0}.rt-sym{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.rt-top .heat-tag{flex:none}
+.rt .c-coin{width:210px}.rt .c-guard{width:156px}.rt .c-watch{width:160px}.rt .c-sig{width:95px}.rt .c-beta{width:60px}.rt .c-1h{width:66px}.rt .c-spark{width:90px}.rt .c-flow{width:105px}.rt .c-liq{width:85px}.rt .c-exit{width:80px}.rt .c-act{width:80px}
+/* The ticker keeps room for about six characters: with a Hot tag and a "Pons → pool" tag beside it, it shrank to "$…". The launchpad tag gives way first. */
+.rt-pick,.rt-top{max-width:100%;min-width:0}.rt-sym{min-width:min(7ch,100%);flex:0 1 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.rt-top .heat-tag{flex:none}
 :is(.rt-sym,.pr-sym,.fr-sym,.coin-id h1,.insp-id h2) :is(.radar-decode,.untrusted,.untrusted-value){display:inline;white-space:nowrap;overflow-wrap:normal}
 :is(.pr-sym,.fr-sym,.coin-id h1,.insp-id h2){min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Fixed layout: a 100% column takes whatever the fixed columns leave (auto collapsed it to its minimum). */

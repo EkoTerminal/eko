@@ -224,7 +224,7 @@ const readings = [
     name: "Signal context",
     code: "SIGNAL",
     heading: "Read the reasons.",
-    body: "Clear, Monitor or Danger is a starting point. Follow the context behind the reading before deciding what comes next.",
+    body: "No flags, Monitor or Danger is a starting point. Follow the context behind the reading before deciding what comes next.",
     detail: "Verdict · Confidence · Freshness",
   },
 ];

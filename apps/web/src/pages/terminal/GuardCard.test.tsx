@@ -136,7 +136,9 @@ describe('packet 036 Guard card fixtures', () => {
     expect(retainPersisted(views.high, null)).toBe(views.high); expect(retainPersisted(null, null)).toBeNull();
     expect(retainGuardCard(card, { ...card, verdict: null })).toBe(card);
     expect(render(<GuardCard card={{ ...card, verdict: null }} assessment={views.incomplete} />)).not.toContain('Scanning…');
-    expect(render(<GuardCard card={{ ...card, verdict: null }} />)).toContain('Scanning…');
+    // No Guard 2 result is stated plainly, not shown as a scan in progress: nothing is scanning before a release.
+    const none = render(<GuardCard card={{ ...card, verdict: null }} />);
+    expect(none).not.toContain('Scanning…'); expect(none).toContain('has not been released');
     expect(render(<GuardCard card={{ ...card, verdict: views.incomplete }} />)).not.toContain('Scanning…');
   });
   it('renders supplied optional readings and price fields, withholding low-data readings and overlaying High', () => {

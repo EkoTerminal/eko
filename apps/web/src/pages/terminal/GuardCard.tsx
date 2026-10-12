@@ -3,6 +3,7 @@ import { type ReactNode } from 'react';
 import { type CoinCardV2, type GuardAssessmentV2, type GuardCoverage, type Metric, type Untrusted } from '@eko/shared';
 import { AnalysisPolicyNotice } from '../../components/PolicyLinks';
 import { Seg, UntrustedText, VerdictChip, inertText } from '../../components/ui';
+import { GUARD2_UNAVAILABLE_TITLE } from '../../copy/availability';
 import { BUYER_RISK, GUARD_EMPTY, GUARD_NO_RECORDS, GUARD_PENDING, GUARD_COPY as C, GUARD_CHECK_LABELS, GUARD_CHECK_STATUS, GUARD_POLICY_OPTIONS, GUARD_METRIC_NAMES, GUARD_GROUPS, GUARD_QUOTE_HEADINGS, guardBuyText, guardName, guardCoverageText, guardMeasurementText, guardRawAmount, guardSnapshotText, guardLegacyText, guardDecisiveText, formatGuardReason } from '../../copy/guard';
 import { useNow } from '../../components/hooks';
 import { NOT_CHECKED } from '../../copy/availability';
@@ -91,7 +92,7 @@ export function GuardAssessment({ guard, evidenceOpen = false }: { guard: GuardA
 export function GuardCard({ card, assessment, evidenceOpen = false }: { card: CoinCardV2; assessment?: GuardAssessmentV2; evidenceOpen?: boolean }) {
   const guard = assessment ?? card.verdict;
   return <div className="guard-card">
-    {guard ? <GuardAssessment guard={guard} evidenceOpen={evidenceOpen} /> : <section className="panel panel-body"><VerdictChip level="pending" verdictPending /><p>{GUARD_PENDING}</p><p>{BUYER_RISK}</p><AnalysisPolicyNotice /></section>}
+    {guard ? <GuardAssessment guard={guard} evidenceOpen={evidenceOpen} /> : <section className="panel panel-body"><p>{GUARD2_UNAVAILABLE_TITLE}</p><p className="muted">{GUARD_PENDING}</p><p>{BUYER_RISK}</p><AnalysisPolicyNotice /></section>}
     {card.legacy && <p>{guardLegacyText(card.legacy)} · <Link to={`/receipt/${card.legacy.receiptId}`}>{C.originalReceipt}</Link></p>}
     {(card.signal || card.spark8h || card.change24hPct) && <CardDetails title={C.signal}>
       {card.signal && <><h3>{C.signal} <span className="tag">{C.beta}</span></h3><p>{C.descriptive} · {card.verdict?.mode === 'active' ? C.recordedInputs : C.shadowInputs}</p><p>{C.composite} {guard?.level === 'high' ? C.high : card.signal.composite} / 100 · {C.block} {card.signal.asOfBlock}</p><details className="ev"><summary>{C.how}</summary><dl className="kv">{Object.entries(card.signal.readings).map(([key, value]) => <div key={key}><dt>{guardName(key)} · {Math.round(card.signal!.weights[key as keyof typeof card.signal.weights] * 100)}%</dt><dd>{card.signal!.lowData.includes(key as keyof typeof card.signal.readings) ? NOT_CHECKED : `${value} · ${(value * card.signal!.weights[key as keyof typeof card.signal.weights]).toFixed(1)} ${C.points}`}</dd></div>)}</dl></details></>}
