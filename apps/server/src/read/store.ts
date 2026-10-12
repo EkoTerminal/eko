@@ -166,7 +166,9 @@ export class ReadStore {
       const row: RadarRow = {
         address: hex(t.address), name: toUntrusted(t.name ?? '',120), symbol: toUntrusted(t.symbol ?? '',32),
         launchpad: t.launchpad === 'pons' ? 'pons' : 'other',
-        stage: t.graduated_block != null ? 'graduated' : card?.identity.stage ?? (t.curve ? 'curve' : 'graduated'),
+        // A Pons coin is on its curve until its graduation is indexed. Its token row exists a moment before its curve
+        // address does; reading that gap as graduated sent brand-new launches to Migrated and tagged them "Pons → pool".
+        stage: t.graduated_block != null ? 'graduated' : card?.identity.stage ?? (t.curve || t.launchpad === 'pons' ? 'curve' : 'graduated'),
         curvePct: card?.identity.curvePct, priceUsd: t.pricing_pending ? 0 : t.price ?? 0, priceUnavailable: t.pricing_pending || t.price == null,
         change1hPct: !t.pricing_pending && t.price != null && t.previous1h ? 100 * (t.price/t.previous1h-1) : 0,
         change24hPct: !t.pricing_pending && t.price != null && t.previous24h ? 100 * (t.price/t.previous24h-1) : undefined,

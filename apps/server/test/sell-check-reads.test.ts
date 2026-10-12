@@ -27,6 +27,13 @@ const pairRow = async () => z.object({ rows: z.array(PairRowSchema) }).parse((aw
 const coinCard = async () => CoinCardSchema.parse((await built.app.inject(`/v1/coins/${coin()}`)).json());
 
 describe('sell-check readings in the read model', () => {
+  it('reads a Pons coin whose curve address is not indexed yet as on its curve, not graduated', async () => {
+    const db = built.ctx.dbh.chain, fresh = sampleAddress(4242);
+    await db.sql.query(`INSERT INTO tokens(address,first_block,block,name,symbol,launchpad) VALUES($1,$2,$2,'Fresh launch','FRESH','pons')`, [binary(fresh), card.verdict.asOfBlock]);
+    const [entry] = await built.ctx.reads.store.rows(fresh);
+    expect(entry.row.stage).toBe('curve');
+    await db.sql.query('DELETE FROM tokens WHERE address=$1', [binary(fresh)]);
+  });
   it('sends the New pairs header counts with the first New page only', async () => {
     const first = (await built.app.inject('/v1/pairs?stage=new')).json() as { today?: { launches: number; medianFirstScanSec: number | null; refused: number } };
     expect(first.today).toBeDefined();
