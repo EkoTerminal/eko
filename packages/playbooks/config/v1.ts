@@ -8,7 +8,7 @@ export interface PlaybookConfig {
   wash_to_trend: { roundTripSec: number; maxNetShare: number; monitorPct: number; dangerPct: number; usdPerTrader1h: number; maxTraders: number; minVolumeUsd1h: number; minRoundTripsPerActor: number };
   clone_swarm: { trendingTopN: number; originalMinAgeMin: number; trendWindowMin: number; dominantPairShare: number };
   exempt_insiders: { boughtSupplyMonitor: number; boughtSupplyDanger: number };
-  bundle_dump: { minWallets: number; fundingWindowH: number; firstBlocks: number; heldMonitor: number; heldDanger: number };
+  bundle_dump: { minWallets: number; fundingWindowH: number; firstBlocks: number; heldMonitor: number; heldDanger: number; cohortBlocks: number; cohortMonitor: number; cohortDanger: number };
   migration_dump: { windowMin: number; soldMonitor: number; soldDanger: number; impactDanger: number };
   malicious_hook: { quoteSimGapPct: number; asymmetricFeePp: number };
   agent_bait: { maxScanChars: number };
@@ -24,7 +24,10 @@ export const CONFIG_V1: Readonly<{ [K in keyof PlaybookConfig]: Readonly<Playboo
   wash_to_trend: Object.freeze({ roundTripSec: 300, maxNetShare: 0.1, monitorPct: 50, dangerPct: 80, usdPerTrader1h: 5000, maxTraders: 20, minVolumeUsd1h: 10000, minRoundTripsPerActor: 2 }),
   clone_swarm: Object.freeze({ trendingTopN: 50, originalMinAgeMin: 10, trendWindowMin: 60, dominantPairShare: 0.8 }),
   exempt_insiders: Object.freeze({ boughtSupplyMonitor: 0.20, boughtSupplyDanger: 0.50 }),
-  bundle_dump: Object.freeze({ minWallets: 3, fundingWindowH: 24, firstBlocks: 3, heldMonitor: 0.15, heldDanger: 0.30 }),
+  // Calibrated on Robinhood Chain, 2026-10-12 (1,407 Pons launches with 10+ traders in their first day; ~7 blocks a
+  // second): wallets, the deployer included, that bought in the first 35 blocks (5 s) and took 15-30% of supply saw the
+  // price halve within 24 h on 66% of launches (25-28% below 15%), and 30%+ on 90% (44% fell 80%).
+  bundle_dump: Object.freeze({ minWallets: 3, fundingWindowH: 24, firstBlocks: 35, heldMonitor: 0.15, heldDanger: 0.30, cohortBlocks: 35, cohortMonitor: 0.15, cohortDanger: 0.30 }),
   migration_dump: Object.freeze({ windowMin: 5, soldMonitor: 0.30, soldDanger: 0.60, impactDanger: 0.30 }),
   malicious_hook: Object.freeze({ quoteSimGapPct: 2, asymmetricFeePp: 5 }),
   agent_bait: Object.freeze({ maxScanChars: 4000 }),

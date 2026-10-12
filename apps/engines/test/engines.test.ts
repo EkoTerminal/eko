@@ -267,7 +267,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
  it('missing checks remain pending; unpriced swaps do not invent wash or curve data',async()=>{
   const db=await setup();await swap(db,1,1,100,null);await new EngineWorker(db).processBlock(1);const card=await latest(db);
   expect(VerdictSchema.parse(card.verdict).level).toBe('pending');expect(card.verdict.evaluatedPlaybooks).not.toContain('honeypot');expect(match(card,'wash_to_trend')).toBeUndefined();expect(card.meta!.control!.unavailable).toBe(true);
-  expect(card.signal!.lowData).toContain('momentum');expect(card.meta!.playbooks!.missing).toContain('bundle_dump');
+  expect(card.signal!.lowData).toContain('momentum');expect(card.verdict.evaluatedPlaybooks).toContain('bundle_dump');expect(card.meta!.playbooks!.missing).not.toContain('bundle_dump');
  });
  describe('sell check as the Pons honeypot input',()=>{
   // Pons coins have no reference simulation, so before 2026-10-10 no Pons coin could ever be Clear. The live sell check
@@ -278,19 +278,40 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
     [binary(coin),n,new Date((epoch+sec)*1000),status,JSON.stringify({ethUsd:3000,route:{venue},probes})]);
   }
   async function traded(){const db=await setup();await transfer(db,1,curve,100000);await transfer(db,1,actor,1000,coin,curve);await swap(db,1,1,100,10);return db;}
+  it('rates the early cohort: one funder buying for three wallets in the first seconds is a bundle, and their share counts',async()=>{
+   const db=await traded();await checked(db,2,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
+   await block(db,2,2);await block(db,40,40);
+   // A contract paid by one sender buys 10% of supply for each of three fresh wallets in block 2 (supply 100,000).
+   const funder=address(50),bundled=[address(51),address(52),address(53)];
+   for(const wallet of bundled){
+    await db.insert('swaps',{ts:new Date((epoch+2)*1000),block:'2',tx_hash:binary(hash(eventId++)),log_index:0,venue:'pons_curve',pool_id:binary(pool),coin:binary(coin),quote_asset:binary(zero),
+     trader:binary(funder),tx_from:binary(funder),tx_to:binary(curve),recipient:binary(wallet),side:1,amount_coin:'10000',amount_quote:'100',price_quote:1,usd:10,priced_block:'2'});
+    await transfer(db,2,wallet,10000,coin,curve);
+   }
+   // A buy after the first 35 blocks is not early.
+   await swap(db,40,1,20000,10,address(54),coin,40);
+   const s=(await loadSources(db,coin,40,client()))!;
+   const early=new Map(s.earlyBuyers!.map(b=>[b.wallet,b]));
+   expect([...early.keys()].sort()).toEqual([actor,...bundled].map(a=>a.toLowerCase()).sort());
+   for(const wallet of bundled)expect(early.get(wallet.toLowerCase() as Address)).toMatchObject({funder:funder.toLowerCase(),boughtShare:0.1,heldShare:0.1,deployer:false});
+   await new EngineWorker(db,{client:client()}).processBlock(40);const card=await latest(db);
+   const m=match(card,'bundle_dump')!;expect(m.level).toBe('danger');
+   expect(card.verdict.reasons).toContain('4 wallets bought 30.1% of supply in the first 5 seconds and still hold 31%; 3 wallets were bought for by one funder.');
+   expect(card.supply.bundlesHeldPct).toBeCloseTo(31,1);expect(card.verdict.level).toBe('danger');
+  });
   it('counts a passing sell check as the honeypot test and its round trip as a measured tax',async()=>{
    const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
    await new EngineWorker(db,{client:client()}).processBlock(1);const card=await latest(db);
    expect(card.verdict.evaluatedPlaybooks).toEqual(expect.arrayContaining(['honeypot','tax_trap','migration_dump','stuck_at_bonding','malicious_hook','removable_liquidity']));
    expect(match(card,'honeypot')).toBeUndefined();expect(match(card,'tax_trap')?.level).toBe('info');
    expect((await loadSources(db,coin,1,client()))!.taxes).toMatchObject({buyPct:2,sellPct:2,mutable:null});
-   expect(card.meta!.playbooks!.missing).toContain('bundle_dump');expect(card.verdict.evaluatedPlaybooks).not.toContain('bundle_dump');
+   expect(card.verdict.evaluatedPlaybooks).toContain('bundle_dump');expect(match(card,'bundle_dump')).toBeUndefined();
   });
-  it('rates Clear when every sourced check ran and passed, and names the check with no source yet',async()=>{
+  it('rates Clear only when every check ran and passed, bundles included',async()=>{
    const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
    await new EngineWorker(db,{client:client()}).processBlock(1);const card=await latest(db);
-   expect(card.meta!.playbooks!.missing).toEqual(['bundle_dump']);
-   expect(card.verdict.level).toBe('clear');expect(card.verdict.reasons).toContain('Not checked yet: bundle dump (no data source yet)');
+   expect(card.meta!.playbooks!.missing).toEqual([]);
+   expect(card.verdict.level).toBe('clear');expect(card.verdict.reasons.join(' ')).not.toContain('Not checked yet');
    // Without the sell check the same coin stays pending: the honeypot test has not run.
    const unchecked=await traded();await new EngineWorker(unchecked,{client:client()}).processBlock(1);
    expect((await latest(unchecked)).verdict.level).toBe('pending');expect((await latest(unchecked)).meta!.playbooks!.missing).toContain('honeypot');

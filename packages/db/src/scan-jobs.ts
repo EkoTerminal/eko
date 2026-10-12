@@ -51,7 +51,7 @@ export class ScanJobs {
 }
 
 /** Checks without an input source yet (apps/engines card.ts UNSOURCED_PLAYBOOKS); completion does not wait for them. */
-const UNSOURCED_PLAYBOOKS=['bundle_dump'];
+const UNSOURCED_PLAYBOOKS:string[]=[];
 /** Completion requires measured buying checks; a persisted pending/danger card alone is insufficient. */
 export function scanChecksComplete(card:CoinCard) {
   return card.verdict.level!=='pending' && new Set([...(card.verdict.evaluatedPlaybooks ?? []),...UNSOURCED_PLAYBOOKS]).size===13 &&

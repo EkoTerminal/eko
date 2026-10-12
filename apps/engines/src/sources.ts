@@ -22,7 +22,7 @@ export interface TokenRow {
   graduated_block: string | null; graduated_pool: Uint8Array | null;
 }
 export interface SwapRow {
-  block: string; ts: Date; tx_hash: Uint8Array; log_index: number; trader: Uint8Array | null; senders_pending?:boolean;
+  block: string; ts: Date; tx_hash: Uint8Array; log_index: number; trader: Uint8Array | null; senders_pending?:boolean; recipient?: Uint8Array | null;
   traderHex?:Address;quoteHex?:Address;poolHex?:Address;txHex?:Address;sec?:number;
   side: number; amount_coin: string; amount_quote: string; price_quote: number; usd: number | null;
   venue: string; pool_id: Uint8Array; quote_asset: Uint8Array;
@@ -93,7 +93,13 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   const priorBlock = cache ? cache.priorBlock(asOfSec-3600,block) : (await db.sql.query<{ number: string }>('SELECT number FROM engine_block_times WHERE ts<=to_timestamp($1) AND number<=$2 ORDER BY number DESC LIMIT 1', [asOfSec - 3600, block])).rows[0];
   let holdings:Holding[]=[],previousHoldings:Holding[]=[];
   const makeHolders=(rows:Holding[])=>{const state=new HolderAggregate(coin,token.curve ? rowHex(token.curve) : undefined,loadRegistry().addressOf('ours.burnWallet')?.toLowerCase() as Address|undefined);for(const r of rows)state.set(rowHex(r.holder),BigInt(r.amount),Number(r.block));return state;};
-  const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...poolRows.map(p=>rowHex(p.id))];
+  // Early buyers (bundle_dump): buys in the first blocks after launch, credited to the wallet that received the coins.
+  const launchBlock=Number(token.first_block),earlyEnd=Math.min(block,launchBlock+Math.max(CONFIG_V1.bundle_dump.firstBlocks,CONFIG_V1.bundle_dump.cohortBlocks)-1);
+  const earlyRows:SwapRow[]=[];
+  for(let i=0;i<swapEnd && Number(swaps[i].block)<=earlyEnd;i++)if(swaps[i].side===1 && Number(swaps[i].block)>=launchBlock)earlyRows.push(swaps[i]);
+  const buyerOf=(r:SwapRow)=>r.recipient ?? (r.senders_pending ? null : r.trader);
+  const earlyWallets=[...new Set(earlyRows.map(buyerOf).filter((w):w is Uint8Array=>w!=null).map(rowHex))];
+  const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...poolRows.map(p=>rowHex(p.id)),...earlyWallets];
   if(!cache){holdings=await holdingsAt(db,coin,block);previousHoldings=priorBlock ? await holdingsAt(db,coin,Number(priorBlock.number)) : [];}
   const holderView=cache ? await cache.holderViewAt(coin,block,wallets) : (()=>{const a=makeHolders(holdings);return {count:a.count,top10:a.top10(),burned:a.burned,inventory:a.inventory,amounts:new Map(wallets.map(wallet=>[wallet,a.amount(wallet)]))};})();
   const previousCount=priorBlock ? cache ? (await cache.holderViewAt(coin,Number(priorBlock.number),[],'previous')).count : makeHolders(previousHoldings).count : 0;
@@ -130,6 +136,22 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     const burned=holderView.burned,inventory=holderView.inventory;
     s.supply = { total, burned, circulating: total > burned + inventory ? total - burned - inventory : 0n, block: Number(token.supply_block) };
     s.sectionBlocks.supply = Math.min(block, s.supply.block);
+  }
+  // Every early buy must name its buyer, or the cohort is not known and the check stays not run.
+  if (s.supply && s.supply.total > 0n && earlyRows.every(r=>buyerOf(r)!=null)) {
+    const total=Number(s.supply.total),cohort=new Set(earlyWallets),byWallet=new Map<string,SwapRow[]>();
+    for(const r of earlyRows){const w=rowHex(buyerOf(r)!);byWallet.set(w,[...(byWallet.get(w) ?? []),r]);}
+    // Selling into buyers: the wallet sold at least half of what it bought early while everyone else bought on net.
+    let othersNet=0;const sold=new Map<string,number>(),earlySet=new Set(earlyRows);
+    for(let i=0;i<swapEnd;i++){const r=swaps[i],seller=r.trader ? rowHex(r.trader) : null;
+      if(r.side===-1 && seller && cohort.has(seller))sold.set(seller,(sold.get(seller) ?? 0)+Number(r.amount_coin));
+      else if(!earlySet.has(r))othersNet+=r.side*Number(r.amount_coin);}
+    s.earlyBuyers=[...byWallet].map(([wallet,rows])=>{
+      const first=rows[0],bought=rows.reduce((n,r)=>n+Number(r.amount_coin),0),sec=seconds(first.ts);
+      return {wallet:wallet as Address,funder:(first.trader ? rowHex(first.trader) : wallet) as Address,fundedAtSec:sec,buyAtSec:sec,buyBlock:Number(first.block),
+        boughtShare:bought/total,heldShare:Number(holderView.amounts.get(wallet as Address) ?? 0n)/total,deployer:wallet===deployer || rows.some(r=>r.trader!=null && rowHex(r.trader)===deployer),
+        sellingIntoNetInflow:(sold.get(wallet) ?? 0)>=bought*0.5 && othersNet>0,evidence:[evidence(first,'Early-block buy')]};
+    });
   }
   if (s.supply && s.supply.total > 0n) {
     const ex: NonNullable<CardSources['pons']>['exemptions'] = [];

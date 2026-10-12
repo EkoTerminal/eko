@@ -67,7 +67,7 @@ export class ReplayCache {
     const found=this.rows.get(coin);if(found)return found;
     const promise=(async()=>{
       const key=binary(coin),[swaps,pools,events,transfers,last,balances,pons,exemptions,baselines]=await Promise.all([
-        this.db.sql.query<SwapRow>('SELECT block,ts,tx_hash,log_index,trader,side,amount_coin,amount_quote,price_quote,usd,venue,pool_id,quote_asset FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY block,log_index,tx_hash',[key,this.to]),
+        this.db.sql.query<SwapRow>('SELECT block,ts,tx_hash,log_index,trader,recipient,side,amount_coin,amount_quote,price_quote,usd,venue,pool_id,quote_asset FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY block,log_index,tx_hash',[key,this.to]),
         this.db.sql.query<PoolRow>('SELECT * FROM pools WHERE (currency0=$1 OR currency1=$1) AND created_block<=$2 ORDER BY id',[key,this.to]),
         this.db.sql.query<EventRow>('SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block<=$2 ORDER BY e.block,e.log_index,e.tx_hash',[key,this.to]),
         this.db.sql.query<Transfer>('SELECT block,from_address,to_address,amount,kind FROM token_transfers WHERE token=$1 AND block<=$2 ORDER BY block,log_index,tx_hash',[key,this.to]),

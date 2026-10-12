@@ -10,7 +10,7 @@ const templates: Record<PlaybookId, string> = {
   wash_to_trend: 'Estimated wash activity or volume per trader meets a threshold.',
   clone_swarm: 'Normalized identity matches an older trending coin.',
   exempt_insiders: 'Snipe-tax-exempt wallets bought supply or have crew rug history.',
-  bundle_dump: 'Same-funder early buyers hold a bundle or sell into net inflow.',
+  bundle_dump: 'Early buyers (bundled wallets, snipers or the deployer) took a large share of supply.',
   migration_dump: 'Insiders sold holdings in the graduation window.',
   malicious_hook: 'Hook permissions or observed quote/fee behavior meet a threshold.',
   agent_bait: 'Token text contains instructions aimed at agents.',
@@ -25,6 +25,16 @@ export function reasonForMatch(match: PlaybookMatch): string {
     const fee = match.evidence.find((e) => e.kind === 'stat' && e.label === 'Pons fee getter (%)');
     if (typeof creator?.value === 'number' && Number.isFinite(creator.value) && typeof fee?.value === 'number' && Number.isFinite(fee.value))
       return `Observed creator-tax getter ${creator.value}% and Pons-fee getter ${fee.value}%.`;
+  }
+  if (match.id === 'bundle_dump') {
+    const value = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
+    const bought = value('Early buyers bought supply share'), held = value('Early buyers still hold supply share'), wallets = value('Early buyer wallets'), bundled = value('Wallets bought by one funder');
+    const dev = value('Deployer early bought supply share');
+    const pct = (n: number) => `${Math.round(n * 1000) / 10}%`;
+    const who = wallets != null ? `${wallets} wallet${wallets === 1 ? '' : 's'}${dev ? ', the deployer among them,' : ''}` : '';
+    const parts = [bought != null && wallets != null ? `${who} bought ${pct(bought)} of supply in the first 5 seconds${held != null ? ` and still hold${wallets === 1 ? 's' : ''} ${pct(held)}` : ''}` : null,
+      bundled != null ? `${bundled} wallets were bought for by one funder` : null].filter(Boolean);
+    if (parts.length) return `${parts.join('; ')}.`.replace(/^./, (c) => c.toUpperCase());
   }
   if (match.id === 'serial_deployer' && match.level === 'danger') {
     for (const relation of ['deployer', 'crew'] as const) for (const outcome of ['rugged', 'honeypot', 'dumped'] as const) {

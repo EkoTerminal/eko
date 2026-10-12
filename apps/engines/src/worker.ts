@@ -21,12 +21,13 @@ export const RERATE_PER_POLL=100;
 /** Cards written before 7426b59 (Clear for Pons coins, deployed 2026-10-10 21:05Z) used rules that could not reach Clear. */
 export const CLEAR_RULES_AT='2026-10-10T21:05:00Z';
 /**
- * Pending cards written before this time were rated by code that could not complete checks the current code completes
- * (e13699e, deployed 2026-10-11 21:30Z: taxes and the honeypot check from independent sellers, the launchpad's own hook,
- * token-paired curves). The live CLI re-rates them once. Move it forward with any change that completes more checks;
+ * Cards written before this time were rated by code that could not complete checks the current code completes: pending
+ * cards before e13699e (2026-10-11 21:30Z: taxes and the honeypot check from independent sellers, the launchpad's own
+ * hook, token-paired curves), and every card before the bundle check was sourced (deployed 2026-10-12, this time set
+ * just after its deploy). The live CLI re-rates them once. Move it forward with any change that completes more checks;
  * a sell check landing after a card is caught by staleRatings without it.
  */
-export const RATING_CODE_AT='2026-10-11T21:30:29Z';
+export const RATING_CODE_AT='2026-10-12T12:30:00Z';
 /** Stale pending cards the re-rating loop loads at once and writes in one transaction. */
 export const RERATE_WIDTH=16;
 /** Blocks before the loop tries again to first-scan a coin it could not load (about two minutes at 0.2 s blocks). */
@@ -226,7 +227,7 @@ export class EngineWorker {
     // Recover post-commit timing/job acknowledgements after process failure. Bound each poll.
     const unrecorded=(await this.db.sql.query<{data:CoinCard}>(`SELECT c.data FROM coin_card_latest c JOIN scan_timings t ON t.coin=c.coin
       WHERE c.as_of_block>=t.discovery_block AND (t.first_verdict_at IS NULL OR (t.critical_complete_at IS NULL AND c.data->'verdict'->>'level'<>'pending'
-        AND jsonb_array_length(coalesce(c.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb))+(NOT coalesce(c.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'bundle_dump')::int=13)) ORDER BY t.discovered_at LIMIT 256`)).rows;
+        AND jsonb_array_length(coalesce(c.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb))=13)) ORDER BY t.discovered_at LIMIT 256`)).rows;
     for(const row of unrecorded)await this.recordScan(row.data);
     const scans=await this.processScanJobs(to);
     const count=scans+await this.evaluateActivity(0,to,true,this.startup);
@@ -804,7 +805,8 @@ export async function unscannedCoins(db:ChainDb,since:number,block:number,limit:
 }
 
 /**
- * Pending cards that would rate differently now, most recently active first, with their card ids: written before
+ * Cards earlier code rated without the bundle check (any level: Clear never looked at bundles before 2026-10-12), and
+ * pending cards that would rate differently now, most recently active first, with their card ids: written before
  * `rulesAt` (CLEAR_RULES_AT, or the worker's start for cards earlier code wrote); missing the honeypot check while a sell check ran after them (sell-check-reference.ts reads it at the
  * next checkpoint); or, for a Pons coin that has traded, missing the wash or curve check (both need every swap priced)
  * while no swap is unpriced any more (pricing repair). `skip` holds card ids already re-rated that are still current.
@@ -814,11 +816,12 @@ export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:
   const found:{coin:Address;card:string}[]=[];
   for(const row of (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT l.coin,l.card_id AS card FROM coin_card_latest l JOIN read_coins r ON r.coin=l.coin
     JOIN tokens t ON t.address=l.coin LEFT JOIN engine_runs e ON e.coin=l.coin AND e.block=l.as_of_block AND e.rules_version=$4
-    WHERE l.coin=ANY($1::bytea[]) AND l.data->'verdict'->>'level'='pending' AND NOT l.card_id=ANY($5::text[]) AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
+    WHERE l.coin=ANY($1::bytea[]) AND NOT l.card_id=ANY($5::text[]) AND (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'bundle_dump' AND coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
+      OR l.data->'verdict'->>'level'='pending' AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
       OR (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'honeypot'
         AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused')))
       OR (t.launchpad='pons' AND (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'wash_to_trend' OR NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'stuck_at_bonding')
-        AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL)))
+        AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL))))
     ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,rulesAt,RULES_VERSION,[...skip.values()]])).rows)
     found.push({coin:hex(row.coin) as Address,card:row.card});
   return found;

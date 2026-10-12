@@ -1,6 +1,6 @@
 import { canonicalize } from '@eko/policy';
 import { loadRegistry } from '@eko/chain';
-import { cloneFromMatches, rules } from '@eko/playbooks';
+import { CONFIG_V1, cloneFromMatches, rules } from '@eko/playbooks';
 import { computeSignal, compositeFromReadings, type SignalInput } from '@eko/signal';
 import { toUntrusted } from '@eko/untrusted';
 import type { CoinCard, PlaybookId, Verdict } from '@eko/shared';
@@ -9,7 +9,8 @@ import { keccak256, stringToHex } from 'viem';
 import { type LoadedSources } from './sources.js';
 
 /** Checks with no input source yet. Clear does not wait for them; the verdict names them (worker.ts). */
-export const UNSOURCED_PLAYBOOKS: readonly PlaybookId[] = ['bundle_dump'];
+/** Checks with no input source; Clear does not wait for them. None since 2026-10-12, when bundle_dump was sourced. */
+export const UNSOURCED_PLAYBOOKS: readonly PlaybookId[] = [];
 const zeroHook = /^0x0{40}$/i;
 let ponsHook: string | undefined | null;
 /** The launchpad's own graduation hook (registry pons.v4Hook, code verified), which every graduated Pons pool uses. */
@@ -34,8 +35,20 @@ export function evaluatedPlaybooks(s: LoadedSources): PlaybookId[] {
     migration_dump: s.graduation != null || (pons && !graduated),
     stuck_at_bonding: s.curve != null || (pons && graduated),
     malicious_hook: s.hook != null || s.poolRefs.every(p => !p.hooks || zeroHook.test(p.hooks) || isPonsHook(p.hooks)),
+    // Every buy in the early window named its buyer (sources.ts); an empty cohort is a check that ran and found none.
+    bundle_dump: s.earlyBuyers != null,
   };
   return (Object.keys(rules) as PlaybookId[]).filter(id => available[id]).sort();
+}
+/** Percent of supply the early cohort (bundle_dump's window, the deployer included) holds at the card's block; 0 when not measured. */
+export function earlyHeldPct(s: LoadedSources): number {
+  const window = CONFIG_V1.bundle_dump.cohortBlocks, seen = new Set<string>();
+  let held = 0;
+  for (const b of s.earlyBuyers ?? []) {
+    if (b.buyBlock - s.createdAtBlock >= window || seen.has(b.wallet.toLowerCase())) continue;
+    seen.add(b.wallet.toLowerCase()); held += b.heldShare;
+  }
+  return Math.min(100, Math.max(0, held * 100));
 }
 export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
   const denominator = s.supply ? Number(s.supply.total) : 0;
@@ -53,7 +66,7 @@ export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
     tradeability: { confidence: referenceComplete ? 1 : 0, asOfBlock: s.asOfBlock, unavailable: !referenceComplete, flags:references.filter(r=>r.status==='entry_limited').map(r=>`entry_limited_usd${r.sizeUsd}`), missing: referenceComplete ? missingReferences : ['simulations', 'exitCosts', 'antiSnipeTiming', ...missingReferences, ...(!s.taxes ? ['taxes'] : [])] },
     liquidity: { confidence: s.liquidity ? 0.5 : 0, asOfBlock: s.sectionBlocks.liquidity ?? s.asOfBlock, unavailable: !s.liquidity, missing: ['depthUsd', 'routing', 'completeLpOwnership', ...(s.poolRefs.some(p=>p.feeBps>=0x800000/100) ? ['dynamicPoolFees'] : [])] },
     supply: { confidence: s.supply ? 0.5 : 0, asOfBlock: s.sectionBlocks.supply ?? s.asOfBlock, unavailable: !s.supply,
-      missing: ['knownLocksAndVesting', 'bundlesHeldPct', 'freshWalletsPct', ...(!s.supply ? ['circulating', 'totalSupply'] : [])] },
+      missing: ['knownLocksAndVesting', ...(s.earlyBuyers ? [] : ['bundlesHeldPct']), 'freshWalletsPct', ...(!s.supply ? ['circulating', 'totalSupply'] : [])] },
     control: { confidence: 0, asOfBlock: s.asOfBlock, unavailable: true, missing: ['ownerPowerAnalysis'] },
     flow: { confidence: 0, asOfBlock: s.asOfBlock, unavailable: true, missing: ['agentPct', 'crewPct', 'humanPct'] },
     playbooks: { confidence: evaluatedPlaybooks(s).length / 13, asOfBlock: s.asOfBlock, missing: (Object.keys(rules) as PlaybookId[]).filter(id => !evaluatedPlaybooks(s).includes(id)) },
@@ -79,7 +92,7 @@ export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
     tradeability: { exitCostPct: { usd100:references.find(r=>r.sizeUsd===100)?.exitCostPct ?? 0,usd1k:references.find(r=>r.sizeUsd===1000)?.exitCostPct ?? 0,usd10k:references.find(r=>r.sizeUsd===10000)?.exitCostPct ?? 0 }, buyTaxPct:primary?.buyTaxPct ?? s.taxes?.buyPct ?? 0, sellTaxPct:primary?.sellTaxPct ?? s.taxes?.sellPct ?? 0, honeypot:references.some(r=>r.honeypotConfirmed) },
     liquidity: { depthUsd: { pct2:0,pct5:0,pct10:0 }, lpStatus:liquidityStatus, feeTiers:s.pools?.map(p => p.feeBps / 100) ?? [] },
     supply: { top10Pct:pct(s.holderSummary.top10),
-      devPct:pct(s.holderSummary.dev), bundlesHeldPct:0,
+      devPct:pct(s.holderSummary.dev), bundlesHeldPct:earlyHeldPct(s),
       exemptWalletsHeldPct:(s.pons?.heldShare ?? 0)*100, freshWalletsPct:0, burnedPct:pct(Number(s.supply?.burned ?? 0n)),
       circulating: s.supply && s.token.decimals != null ? units(s.supply.circulating,s.token.decimals) : '' },
     control: { canChangeTax:false,canBlacklist:false,canPause:false,canMint:false,upgradeable:false },
@@ -94,7 +107,7 @@ export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
   const input: SignalInput = { priceChange5mPct:change(s.trade.previous5m),priceChange1hPct:change(s.trade.previous1h),
     buyVolumeUsd1h:s.trade.buy1h,buyVolumeUsdPrevious1h:s.trade.buyPrevious1h,
     depth2Usd:0,exitCost1kPct:0,holdersNow:s.holderSummary.count,holdersPrevious1h:s.holderSummary.previousCount,
-    top10Pct:card.supply.top10Pct,freshWalletsPct:0,bundlesHeldPct:0,trendingRank:rank,
+    top10Pct:card.supply.top10Pct,freshWalletsPct:0,bundlesHeldPct:card.supply.bundlesHeldPct,trendingRank:rank,
     playbooks:verdict.playbooks,control:card.control,lpStatus:card.liquidity.lpStatus,asOfBlock:s.asOfBlock };
   const signal = computeSignal(input);
   signal.readings.liquidity = 50;

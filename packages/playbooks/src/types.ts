@@ -72,8 +72,12 @@ export interface CardSources {
     exemptions: { wallet: Address; crewRugRuns: number; log: EvidenceRef }[];
     boughtShare: number; heldShare: number;
   };
+  /**
+   * Wallets that bought soon after launch. `funder` paid for the buy (a contract buying for several wallets groups them);
+   * `boughtShare` is the supply this wallet bought then, `deployer` marks the launch's own deployer.
+   */
   earlyBuyers?: { wallet: Address; funder: Address; fundedAtSec: number; buyAtSec: number; buyBlock: number;
-    heldShare: number; sellingIntoNetInflow: boolean; evidence: EvidenceRef[] }[];
+    heldShare: number; sellingIntoNetInflow: boolean; evidence: EvidenceRef[]; boughtShare?: number; deployer?: boolean }[];
   graduation?: { atSec: number; tx: EvidenceRef; insiderSells: {
     atSec: number; soldShare: number; priceImpactShare: number; evidence: EvidenceRef[];
   }[] };

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PlaybookIdSchema, PlaybookMatchSchema } from '@eko/shared';
 import type { Level, PlaybookId } from '@eko/shared';
 import { CONFIG_V1, cloneFromMatches, evaluatePlaybooks, rules } from '../src/index.js';
+import { reasonForMatch } from '../src/verdict.js';
 import type { PlaybookInput } from '../src/index.js';
 import { addr, bait, base, bundle, clone, cloneFixture, curve, evidence, hook, launch, lp, migration, pool, pons, serial, sim, taxes, wash } from './fixtures.js';
 
@@ -221,11 +222,26 @@ describe('bundle_dump', () => {
   it.each([[86399, 'monitor'], [86400, 'monitor'], [86401, null]] as const)('funding age seconds %s → %s', (age, expected) => {
     const input = bundle(); input.earlyBuyers!.forEach((b) => { b.fundedAtSec = b.buyAtSec - age; }); level('bundle_dump', input, expected);
   });
-  it.each([[2, 'monitor'], [3, null], [4, null]] as const)('launch block offset %s → %s', (offset, expected) => {
+  it.each([[34, 'monitor'], [35, null], [36, null]] as const)('launch block offset %s → %s', (offset, expected) => {
     const input = bundle(); input.earlyBuyers![2].buyBlock = 50 + offset; level('bundle_dump', input, expected);
   });
   it('selling into net inflow is danger even after bundle holdings fall', () => {
     const input = bundle(0); input.earlyBuyers![0].sellingIntoNetInflow = true; level('bundle_dump', input, 'danger');
+  });
+  // Calibrated 2026-10-12: the early cohort's share of supply bought in the first 35 blocks (5 s), the deployer included.
+  const cohort = (shares: number[], offset = 1, deployer = -1): PlaybookInput => ({ ...base(), earlyBuyers: shares.map((boughtShare, i) => ({ wallet: addr(i + 20),
+    funder: addr(i + 20), fundedAtSec: 990_000, buyAtSec: 990_000, buyBlock: 50 + offset, heldShare: boughtShare / 2, boughtShare, deployer: i === deployer,
+    sellingIntoNetInflow: false, evidence: [evidence('Buy', 'tx')] })) });
+  it.each([[[0.05, 0.0999], null], [[0.05, 0.1], 'monitor'], [[0.1, 0.1999], 'monitor'], [[0.1, 0.2], 'danger'], [[0.3], 'danger']] as const)('early cohort bought %j → %s', (shares, expected) =>
+    level('bundle_dump', cohort([...shares]), expected));
+  it('counts the deployer\'s own early buy and ignores buys after the window', () => {
+    level('bundle_dump', cohort([0.1, 0.05], 1, 0), 'monitor');
+    level('bundle_dump', cohort([0.1, 0.05], 35), null);
+  });
+  it('explains the early cohort with its numbers', () => {
+    const m = evaluatePlaybooks(cohort([0.2, 0.12], 1, 0)).find((x) => x.id === 'bundle_dump')!;
+    expect(m.level).toBe('danger');
+    expect(reasonForMatch(m)).toBe('2 wallets, the deployer among them, bought 32% of supply in the first 5 seconds and still hold 16%.');
   });
   it('rejects disparate funders, duplicate wallets and funding after buys', () => {
     const input = bundle(); input.earlyBuyers![2].funder = addr(8); level('bundle_dump', input, null);

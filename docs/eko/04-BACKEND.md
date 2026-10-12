@@ -842,7 +842,7 @@ export interface Rule<K extends keyof PlaybookConfig = keyof PlaybookConfig> {
 | 6 | `wash_to_trend` | Only once the coin has ≥ $10k volume in the hour (below that, wash can't move trending). Wash volume counts only wallets that **cycle**: ≥ 2 round trips in the window, each ≤ 300 s with net position ≤ 10% (a single buy-then-sell is ordinary flipping, not wash). `washEstPct` ≥ 50% monitor, ≥ 80% danger; or high volume per trader with few traders | monitor / danger | round trips, self-trading actors |
 | 7 | `clone_swarm` | Normalised name or symbol (NFKC, casefold, confusables) equals an older top-50 trending coin, created during its trend; one dominant buyer–seller pair → danger. Sets `clone.originalAddress`. At launch an exact match after normalising; **Drop 2** adds fuzzy matching (edit distance ≤ 1 on symbols of 4+ characters), gated on the clone eval set | monitor / danger | original, similarity, dominant pair |
 | 8 | `exempt_insiders` | `SnipeTaxExempted` wallets bought ≥ 20% of supply → monitor; ≥ 50% or an exempt wallet in a crew with rug history → danger (the 53-launch ring: 82–86%) | monitor / danger | exemption logs, bought and held share |
-| 9 | `bundle_dump` | ≥ 3 same-funder wallets buying in the first blocks; bundles hold ≥ 15% → monitor; ≥ 30% or selling into net inflow → danger | monitor / danger | funder, wallets, funding txs, sells |
+| 9 | `bundle_dump` | ≥ 3 same-funder wallets buying in the first 35 blocks (5 s) hold ≥ 15% → monitor; ≥ 30% or selling into net inflow → danger. The whole early cohort (every wallet that bought in the first 35 blocks, the deployer included) bought ≥ 15% of supply → monitor; ≥ 30% → danger. The funder is the account that paid for the buy; native-ETH funding links are not indexed yet. Calibrated 2026-10-12 on 1,407 launches: 15–30% halved within 24 h on 66% (25–28% below 15%), 30%+ on 90% | monitor / danger | wallets, funder, buys, share bought and held, sells |
 | 10 | `migration_dump` | Insiders sell ≥ 30% of holdings within 5 min of graduation → monitor; ≥ 60% with ≥ 30% impact → danger | monitor / danger | graduation tx, insider sells |
 | 11 | `malicious_hook` | v4 hook outside the reviewed allow-list with return-delta permission bits, a quote-vs-sim gap > 2%, or a sell-side fee > buy-side by 5 pp → danger; unverified source with those bits → monitor | monitor / danger | hook, permission bits, quote vs sim |
 | 12 | `agent_bait` | Token text trips the §9.5 detector → monitor; combined with buy, approve, transfer or send instructions → danger | monitor / danger | detector hits as `Untrusted` excerpts |
@@ -851,7 +851,7 @@ export interface Rule<K extends keyof PlaybookConfig = keyof PlaybookConfig> {
 ### 7.3 Thresholds
 
 ```yaml
-# packages/playbooks/config/v1.yaml — rules_version 1.0.2 (1.0.1, Oct 1: wash_to_trend volume floor and cycling rule; 1.0.2, Oct 2: serial_deployer excludes its own matches and needs bad outcomes or another playbook's danger for danger, after live calibration: 4 prolific deployers produced 166 of 170 dangers through the self-count). Any change bumps the version (it's hashed into receipts).
+# packages/playbooks/config/v1.yaml — rules_version 1.0.2 (1.0.1, Oct 1: wash_to_trend volume floor and cycling rule; 1.0.2, Oct 2: serial_deployer excludes its own matches and needs bad outcomes or another playbook's danger for danger, after live calibration: 4 prolific deployers produced 166 of 170 dangers through the self-count; Oct 12: bundle_dump sourced and calibrated, firstBlocks 3 -> 35 blocks (5 s) and the early-cohort share, version kept because history reads key on it). Any change bumps the version (it's hashed into receipts).
 honeypot:            { minLossPct: 95, requireDeepSim: true }
 tax_trap:            { fixedInfoMaxPct: 5, fixedMonitorMaxPct: 25, mutableMonitorMaxPct: 10 }
 removable_liquidity: { deployerLpShare: 0.5, thinDepth2PctUsd: 500, priorRemovalsDanger: 1 }
@@ -860,7 +860,7 @@ stuck_at_bonding:    { minAgeH: 6, volToProgress: 5, topClusters: 3, topClusterS
 wash_to_trend:       { roundTripSec: 300, maxNetShare: 0.1, monitorPct: 50, dangerPct: 80, usdPerTrader1h: 5000, maxTraders: 20, minVolumeUsd1h: 10000, minRoundTripsPerActor: 2 }
 clone_swarm:         { trendingTopN: 50, originalMinAgeMin: 10, trendWindowMin: 60, dominantPairShare: 0.8 }
 exempt_insiders:     { boughtSupplyMonitor: 0.20, boughtSupplyDanger: 0.50 }
-bundle_dump:         { minWallets: 3, fundingWindowH: 24, firstBlocks: 3, heldMonitor: 0.15, heldDanger: 0.30 }
+bundle_dump:         { minWallets: 3, fundingWindowH: 24, firstBlocks: 35, heldMonitor: 0.15, heldDanger: 0.30, cohortBlocks: 35, cohortMonitor: 0.15, cohortDanger: 0.30 }
 migration_dump:      { windowMin: 5, soldMonitor: 0.30, soldDanger: 0.60, impactDanger: 0.30 }
 malicious_hook:      { quoteSimGapPct: 2, asymmetricFeePp: 5 }
 agent_bait:          { maxScanChars: 4000 }

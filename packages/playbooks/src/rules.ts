@@ -189,13 +189,30 @@ export const bundleDump: Rule<'bundle_dump'> = {
       groups.set(key, group);
     }
     const buyers = [...groups.values()].filter((g) => g.length >= cfg.minWallets).flat();
-    if (!buyers.length) return null;
     const share = buyers.reduce((n, b) => n + b.heldShare, 0);
     const selling = buyers.some((b) => b.sellingIntoNetInflow);
-    if (share < cfg.heldMonitor && !selling) return null;
-    return match(s, h, this.id, share >= cfg.heldDanger || selling ? 'danger' : 'monitor', [
-      stat(s, this.id, 'held', 'Same-funder bundle held supply share', share),
+    const bundleLevel = !buyers.length || (share < cfg.heldMonitor && !selling) ? null : share >= cfg.heldDanger || selling ? 'danger' : 'monitor';
+    // The early cohort as a whole, the deployer included: whoever bought in the first cohortBlocks after launch (bundled,
+    // sniping or the deployer's own buy) and the supply share they took then (calibrated thresholds, config v1).
+    const cohort = new Map<string, NonNullable<CardSources['earlyBuyers']>[number][]>();
+    for (const b of s.earlyBuyers ?? []) {
+      if (b.boughtShare == null || b.buyBlock < s.createdAtBlock || b.buyBlock - s.createdAtBlock >= cfg.cohortBlocks) continue;
+      const key = b.wallet.toLowerCase();
+      cohort.set(key, [...(cohort.get(key) ?? []), b]);
+    }
+    const early = [...cohort.values()].map((rows) => rows[0]);
+    const bought = [...cohort.values()].reduce((n, rows) => n + rows.reduce((m, b) => m + (b.boughtShare ?? 0), 0), 0);
+    const held = early.reduce((n, b) => n + b.heldShare, 0);
+    const cohortLevel = bought >= cfg.cohortDanger ? 'danger' : bought >= cfg.cohortMonitor ? 'monitor' : null;
+    const level = bundleLevel === 'danger' || cohortLevel === 'danger' ? 'danger' : bundleLevel ?? cohortLevel;
+    if (!level) return null;
+    return match(s, h, this.id, level, [
+      ...(cohort.size ? [stat(s, this.id, 'cohort_bought', 'Early buyers bought supply share', bought), stat(s, this.id, 'cohort_held', 'Early buyers still hold supply share', held),
+        stat(s, this.id, 'cohort_wallets', 'Early buyer wallets', cohort.size),
+        stat(s, this.id, 'cohort_deployer', 'Deployer early bought supply share', [...cohort.values()].flat().filter((b) => b.deployer).reduce((n, b) => n + (b.boughtShare ?? 0), 0))] : []),
+      ...(buyers.length ? [stat(s, this.id, 'held', 'Same-funder bundle held supply share', share), stat(s, this.id, 'bundled', 'Wallets bought by one funder', buyers.length)] : []),
       ...buyers.flatMap((b) => [address(b.funder, 'Bundle funder'), address(b.wallet, 'Early-block buyer'), ...b.evidence]),
+      ...early.filter((b) => !buyers.includes(b)).flatMap((b) => [address(b.wallet, b.deployer ? 'Deployer early buy' : 'Early buyer'), ...b.evidence]),
     ]);
   },
 };
