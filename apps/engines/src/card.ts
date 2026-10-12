@@ -38,15 +38,17 @@ export function evaluatedPlaybooks(s: LoadedSources): PlaybookId[] {
     // Every buy in the early window named its buyer (sources.ts); an empty cohort is a check that ran and found none.
     bundle_dump: s.earlyBuyers != null,
     holder_concentration: s.holders != null, dev_dump: s.dev != null,
+    // Measured from the trades of a Pons coin still on its curve; nothing to measure once it has graduated or off Pons.
+    run_up: s.runUp != null || !pons || graduated,
   };
   return (Object.keys(rules) as PlaybookId[]).filter(id => available[id]).sort();
 }
 /** Percent of supply the early cohort (bundle_dump's window, the deployer included) holds at the card's block; 0 when not measured. */
 export function earlyHeldPct(s: LoadedSources): number {
-  const window = CONFIG_V1.bundle_dump.cohortBlocks, seen = new Set<string>();
+  const window = CONFIG_V1.bundle_dump.cohortSec, seen = new Set<string>();
   let held = 0;
   for (const b of s.earlyBuyers ?? []) {
-    if (b.buyBlock - s.createdAtBlock >= window || seen.has(b.wallet.toLowerCase())) continue;
+    if (b.buyAtSec - s.createdAtSec >= window || seen.has(b.wallet.toLowerCase())) continue;
     seen.add(b.wallet.toLowerCase()); held += b.heldShare;
   }
   return Math.min(100, Math.max(0, held * 100));

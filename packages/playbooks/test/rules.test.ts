@@ -228,22 +228,32 @@ describe('bundle_dump', () => {
   it('selling into net inflow is danger even after bundle holdings fall', () => {
     const input = bundle(0); input.earlyBuyers![0].sellingIntoNetInflow = true; level('bundle_dump', input, 'danger');
   });
-  // Calibrated 2026-10-12: the early cohort's share of supply bought in the first 35 blocks (5 s), the deployer included.
-  const cohort = (shares: number[], offset = 1, deployer = -1): PlaybookInput => ({ ...base(), earlyBuyers: shares.map((boughtShare, i) => ({ wallet: addr(i + 20),
-    funder: addr(i + 20), fundedAtSec: 990_000, buyAtSec: 990_000, buyBlock: 50 + offset, heldShare: boughtShare / 2, boughtShare, deployer: i === deployer,
+  // Recalibrated 2026-10-12: every wallet that bought in the first 60 seconds, the deployer included; the level follows
+  // what those wallets still hold, and having bought 30%+ that is since sold or moved is the lower one.
+  const cohort = (shares: number[], afterSec = 1, deployer = -1, held = 1): PlaybookInput => ({ ...base(), earlyBuyers: shares.map((boughtShare, i) => ({ wallet: addr(i + 20),
+    funder: addr(i + 20), fundedAtSec: 990_000 + afterSec, buyAtSec: 990_000 + afterSec, buyBlock: 51 + afterSec * 7, heldShare: boughtShare * held, boughtShare, deployer: i === deployer,
     sellingIntoNetInflow: false, evidence: [evidence('Buy', 'tx')] })) });
-  it.each([[[0.05, 0.0999], null], [[0.05, 0.1], 'monitor'], [[0.1, 0.1999], 'monitor'], [[0.1, 0.2], 'danger'], [[0.3], 'danger']] as const)('early cohort bought %j → %s', (shares, expected) =>
+  it.each([[[0.05, 0.0999], null], [[0.05, 0.1], 'monitor'], [[0.1, 0.1999], 'monitor'], [[0.1, 0.2], 'danger'], [[0.3], 'danger']] as const)('early cohort still holds %j → %s', (shares, expected) =>
     level('bundle_dump', cohort([...shares]), expected));
-  it('counts the deployer\'s own early buy and ignores buys after the window', () => {
+  it.each([[[0.2, 0.0999], null], [[0.2, 0.1], 'monitor'], [[0.6], 'monitor']] as const)('early cohort bought %j and holds none of it → %s', (shares, expected) =>
+    level('bundle_dump', cohort([...shares], 1, -1, 0), expected));
+  it('counts the deployer\'s own early buy, buys that wait out the anti-snipe tax, and nothing after the first minute', () => {
     level('bundle_dump', cohort([0.1, 0.05], 1, 0), 'monitor');
-    level('bundle_dump', cohort([0.1, 0.05], 35), null);
+    level('bundle_dump', cohort([0.1, 0.05], 59), 'monitor');
+    level('bundle_dump', cohort([0.1, 0.05], 60), null);
   });
   it('explains the early cohort with its numbers', () => {
     const m = evaluatePlaybooks(cohort([0.2, 0.12], 1, 0)).find((x) => x.id === 'bundle_dump')!;
     expect(m.level).toBe('danger');
-    expect(reasonForMatch(m)).toBe('2 wallets, the deployer among them, bought 32% of supply in the first 5 seconds; those wallets now hold 16%.');
-    const gone = evaluatePlaybooks({ ...cohort([0.2, 0.12]), earlyBuyers: cohort([0.2, 0.12]).earlyBuyers!.map((b) => ({ ...b, heldShare: 0 })) }).find((x) => x.id === 'bundle_dump')!;
-    expect(reasonForMatch(gone)).toBe('2 wallets bought 32% of supply in the first 5 seconds; those wallets now hold 0% (sold or moved to other wallets).');
+    expect(reasonForMatch(m)).toBe('2 wallets, the deployer among them, bought 32% of supply in the first minute; those wallets now hold 32%.');
+    const gone = evaluatePlaybooks(cohort([0.2, 0.12], 1, -1, 0)).find((x) => x.id === 'bundle_dump')!;
+    expect(gone.level).toBe('monitor');
+    expect(reasonForMatch(gone)).toBe('2 wallets bought 32% of supply in the first minute; those wallets now hold 0% (sold or moved to other wallets).');
+  });
+  it('names at most the twenty largest early buyers', () => {
+    const m = evaluatePlaybooks(cohort(Array.from({ length: 40 }, (_, i) => 0.001 * (i + 1)))).find((x) => x.id === 'bundle_dump')!;
+    const named = m.evidence.filter((e) => e.kind === 'address');
+    expect(named).toHaveLength(20); expect(named[0].ref).toBe(addr(59));
   });
   it('rejects disparate funders, duplicate wallets and funding after buys', () => {
     const input = bundle(); input.earlyBuyers![2].funder = addr(8); level('bundle_dump', input, null);
@@ -355,6 +365,9 @@ describe('serial_deployer', () => {
 function holders(o: Partial<NonNullable<PlaybookInput['holders']>> = {}): PlaybookInput {
   return { ...base(), holders: { top10Share: 0.1, largestShare: 0.02, largest: addr(30), transferredShare: 0, transferredWallets: 0, evidence: [evidence('Holder', 'tx')], ...o } };
 }
+function runUp(o: Partial<NonNullable<PlaybookInput['runUp']>> = {}): PlaybookInput {
+  return { ...base(), runUp: { outShare: 0, hourShare: 0, ageSec: 600, evidence: [evidence('Launch curve', 'tx')], ...o } };
+}
 function dev(o: Partial<NonNullable<PlaybookInput['dev']>> = {}): PlaybookInput {
   return { ...base(), dev: { heldShare: 0, cashInUsd: 100, cashOutUsd: 0, soldShare: 0, firstSellSec: null, evidence: [evidence('Deployer trade', 'tx')], ...o } };
 }
@@ -373,11 +386,21 @@ describe('dev_dump (GMGN dump with a size floor)', () => {
   it('is danger when the deployer took out 1.5x within 30 seconds and sold 1% of supply', () => level('dev_dump', dev(dumped), 'danger'));
   it.each([['cashOutUsd', 149.99], ['firstSellSec', 31], ['soldShare', 0.0099], ['cashInUsd', 0]] as const)('is not a dump with %s = %s', (field, value) =>
     level('dev_dump', dev({ ...dumped, [field]: value }), null));
-  it.each([[0.0499, null], [0.05, 'monitor']] as const)('deployer holding %s → %s', (share, expected) => level('dev_dump', dev({ heldShare: share }), expected));
+  it.each([[0.0499, null], [0.05, 'monitor'], [0.1999, 'monitor'], [0.2, 'danger']] as const)('deployer holding %s → %s', (share, expected) => level('dev_dump', dev({ heldShare: share }), expected));
   it('names the numbers', () => {
     expect(reasonForMatch(run('dev_dump', dev({ ...dumped, cashOutUsd: 1234.5, soldShare: 0.034, heldShare: 0.07, firstSellSec: 12 }))!))
       .toBe('The deployer put in $100, took out $1,235 (3.4% of supply) and first sold 12 seconds after launch; it still holds 7% of supply.');
     expect(reasonForMatch(run('dev_dump', dev({ heldShare: 0.07 }))!)).toBe('The deployer still holds 7% of supply.');
+  });
+});
+
+describe('run_up (calibrated 2026-10-12)', () => {
+  it.each([[0.2999, 0.2999, null], [0.3, 0, 'monitor'], [0.7, 0.2999, 'monitor'], [0.3, 0.3, 'danger'], [0.7, 0.45, 'danger']] as const)('supply out of the curve %s, last hour %s → %s', (outShare, hourShare, expected) =>
+    level('run_up', runUp({ outShare, hourShare }), expected));
+  it('is not measured without the curve source', () => level('run_up', base(), null));
+  it('names the numbers', () => {
+    expect(reasonForMatch(run('run_up', runUp({ outShare: 0.412, hourShare: 0.36 }))!)).toBe('41.2% of supply has been bought out of the launch curve, 36% of it in the last hour.');
+    expect(reasonForMatch(run('run_up', runUp({ outShare: 0.412, hourShare: 0.05 }))!)).toBe('41.2% of supply has been bought out of the launch curve.');
   });
 });
 
@@ -386,7 +409,7 @@ describe('pure registry and evidence', () => {
     honeypot: () => ({ ...base(), simulations: [sim()] }), tax_trap: () => taxes(30), removable_liquidity: () => lp(),
     fee_trap_pool: () => pool(), stuck_at_bonding: curve, wash_to_trend: wash, clone_swarm: clone,
     exempt_insiders: pons, bundle_dump: bundle, migration_dump: migration, malicious_hook: () => { const input = hook(); input.hook!.quoteSimGapPct = 3; return input; },
-    agent_bait: bait, serial_deployer: () => serial(3), holder_concentration: () => holders({ top10Share: 0.3 }), dev_dump: () => dev({ heldShare: 0.06 }),
+    agent_bait: bait, serial_deployer: () => serial(3), holder_concentration: () => holders({ top10Share: 0.3 }), dev_dump: () => dev({ heldShare: 0.06 }), run_up: () => runUp({ outShare: 0.4 }),
   };
   it('contains exactly the shared ids', () => expect(Object.keys(rules)).toEqual(PlaybookIdSchema.options));
   it.each(PlaybookIdSchema.options)('%s is deterministic, does not mutate inputs, has valid evidence/confidence', (id) => {

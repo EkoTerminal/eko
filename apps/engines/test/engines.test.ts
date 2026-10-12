@@ -280,7 +280,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   async function traded(){const db=await setup();await transfer(db,1,curve,100000);await transfer(db,1,actor,1000,coin,curve);await swap(db,1,1,100,10);return db;}
   it('rates the early cohort: one funder buying for three wallets in the first seconds is a bundle, and their share counts',async()=>{
    const db=await traded();await checked(db,2,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
-   await block(db,2,2);await block(db,40,40);
+   await block(db,2,2);await block(db,90,90);
    // A contract paid by one sender buys 10% of supply for each of three fresh wallets in block 2 (supply 100,000).
    const funder=address(50),bundled=[address(51),address(52),address(53)];
    for(const wallet of bundled){
@@ -288,15 +288,19 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
      trader:binary(funder),tx_from:binary(funder),tx_to:binary(curve),recipient:binary(wallet),side:1,amount_coin:'10000',amount_quote:'100',price_quote:1,usd:10,priced_block:'2'});
     await transfer(db,2,wallet,10000,coin,curve);
    }
-   // A buy after the first 35 blocks is not early.
-   await swap(db,40,1,20000,10,address(54),coin,40);
-   const s=(await loadSources(db,coin,40,client()))!;
+   // A buy after the first minute is not early.
+   await swap(db,90,1,20000,10,address(54),coin,90);
+   const s=(await loadSources(db,coin,90,client()))!;
    const early=new Map(s.earlyBuyers!.map(b=>[b.wallet,b]));
    expect([...early.keys()].sort()).toEqual([actor,...bundled].map(a=>a.toLowerCase()).sort());
    for(const wallet of bundled)expect(early.get(wallet.toLowerCase() as Address)).toMatchObject({funder:funder.toLowerCase(),boughtShare:0.1,heldShare:0.1,deployer:false});
-   await new EngineWorker(db,{client:client()}).processBlock(40);const card=await latest(db);
+   // Half the supply is out of the curve, all of it bought in the last hour.
+   expect(s.runUp!.outShare).toBeCloseTo(0.501,6);expect(s.runUp!.hourShare).toBeCloseTo(0.501,6);expect(s.runUp!.ageSec).toBe(89);
+   await new EngineWorker(db,{client:client()}).processBlock(90);const card=await latest(db);
    const m=match(card,'bundle_dump')!;expect(m.level).toBe('danger');
-   expect(card.verdict.reasons).toContain('4 wallets bought 30.1% of supply in the first 5 seconds; those wallets now hold 31%; 3 wallets were bought for by one funder.');
+   expect(card.verdict.reasons).toContain('4 wallets bought 30.1% of supply in the first minute; those wallets now hold 31%; 3 wallets were bought for by one funder.');
+   expect(match(card,'run_up')?.level).toBe('danger');expect(card.verdict.reasons).toContain('50.1% of supply has been bought out of the launch curve, 50.1% of it in the last hour.');
+   expect(card.verdict.evaluatedPlaybooks).toContain('run_up');
    expect(card.supply.bundlesHeldPct).toBeCloseTo(31,1);expect(card.verdict.level).toBe('danger');
   });
   it('measures holders and the deployer: tokens held without buying, and a deployer who sold 2x within seconds',async()=>{

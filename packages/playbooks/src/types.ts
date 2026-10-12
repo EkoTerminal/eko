@@ -84,6 +84,11 @@ export interface CardSources {
   holders?: { top10Share: number; largestShare: number; largest: Address | null; transferredShare: number; transferredWallets: number; evidence: EvidenceRef[] };
   /** The deployer's own trading in this coin: USD in and out, supply sold, first sell (seconds after launch), held now. */
   dev?: { heldShare: number; cashInUsd: number; cashOutUsd: number; soldShare: number; firstSellSec: number | null; evidence: EvidenceRef[] };
+  /**
+   * A Pons coin still on its launch curve: the share of supply bought out of the curve (net of sells) at the card's
+   * block, the share bought on net in the last hour, and the coin's age. Absent after graduation and off Pons.
+   */
+  runUp?: { outShare: number; hourShare: number; ageSec: number; evidence: EvidenceRef[] };
   earlyBuyers?: { wallet: Address; funder: Address; fundedAtSec: number; buyAtSec: number; buyBlock: number;
     heldShare: number; sellingIntoNetInflow: boolean; evidence: EvidenceRef[]; boughtShare?: number; deployer?: boolean }[];
   graduation?: { atSec: number; tx: EvidenceRef; insiderSells: {

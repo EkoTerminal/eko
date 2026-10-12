@@ -89,7 +89,7 @@ describe('persisted fixture-backed Fast Scan jobs',()=>{
     await db().sql.query('INSERT INTO scan_timings(coin,discovery_block,discovered_at) VALUES($1,1,$2)',[binary(coin),new Date(now)]);
     expect(await recordScanVerdict(db(),copy,now+10)).toBeUndefined();
     copy.verdict.level='danger';expect(scanChecksComplete(copy)).toBe(false);
-    copy.verdict.evaluatedPlaybooks=['honeypot','tax_trap','removable_liquidity','fee_trap_pool','stuck_at_bonding','wash_to_trend','clone_swarm','exempt_insiders','bundle_dump','migration_dump','malicious_hook','agent_bait','serial_deployer','holder_concentration','dev_dump'];
+    copy.verdict.evaluatedPlaybooks=['honeypot','tax_trap','removable_liquidity','fee_trap_pool','stuck_at_bonding','wash_to_trend','clone_swarm','exempt_insiders','bundle_dump','migration_dump','malicious_hook','agent_bait','serial_deployer','holder_concentration','dev_dump','run_up'];
     for(const section of ['tradeability','control','liquidity','supply'] as const)copy.meta![section]={confidence:1,asOfBlock:1};
     expect(scanChecksComplete(copy)).toBe(true);expect(await recordScanVerdict(db(),copy,now+6000)).toBe(6000);
     expect(await recordScanVerdict(db(),copy,now+7000)).toBeUndefined();

@@ -8,13 +8,14 @@ export interface PlaybookConfig {
   wash_to_trend: { roundTripSec: number; maxNetShare: number; monitorPct: number; dangerPct: number; usdPerTrader1h: number; maxTraders: number; minVolumeUsd1h: number; minRoundTripsPerActor: number };
   clone_swarm: { trendingTopN: number; originalMinAgeMin: number; trendWindowMin: number; dominantPairShare: number };
   exempt_insiders: { boughtSupplyMonitor: number; boughtSupplyDanger: number };
-  bundle_dump: { minWallets: number; fundingWindowH: number; firstBlocks: number; heldMonitor: number; heldDanger: number; cohortBlocks: number; cohortMonitor: number; cohortDanger: number };
+  bundle_dump: { minWallets: number; fundingWindowH: number; firstBlocks: number; heldMonitor: number; heldDanger: number; cohortSec: number; cohortMonitor: number; cohortDanger: number; cohortBought: number };
   migration_dump: { windowMin: number; soldMonitor: number; soldDanger: number; impactDanger: number };
   malicious_hook: { quoteSimGapPct: number; asymmetricFeePp: number };
   agent_bait: { maxScanChars: number };
   serial_deployer: { monitorRuns: number; dangerRuns: number; spamLaunches7d: number; countSelf: false; dangerOutcomes: readonly ('rugged' | 'honeypot' | 'dumped')[] };
   holder_concentration: { top10Monitor: number; top10Danger: number; largestMonitor: number; transferredMonitor: number };
-  dev_dump: { cashOutMultiple: number; firstSellSec: number; minSoldShare: number; heldMonitor: number };
+  dev_dump: { cashOutMultiple: number; firstSellSec: number; minSoldShare: number; heldMonitor: number; heldDanger: number };
+  run_up: { outMonitor: number; hourDanger: number };
 }
 
 export const CONFIG_V1: Readonly<{ [K in keyof PlaybookConfig]: Readonly<PlaybookConfig[K]> }> = Object.freeze({
@@ -26,10 +27,13 @@ export const CONFIG_V1: Readonly<{ [K in keyof PlaybookConfig]: Readonly<Playboo
   wash_to_trend: Object.freeze({ roundTripSec: 300, maxNetShare: 0.1, monitorPct: 50, dangerPct: 80, usdPerTrader1h: 5000, maxTraders: 20, minVolumeUsd1h: 10000, minRoundTripsPerActor: 2 }),
   clone_swarm: Object.freeze({ trendingTopN: 50, originalMinAgeMin: 10, trendWindowMin: 60, dominantPairShare: 0.8 }),
   exempt_insiders: Object.freeze({ boughtSupplyMonitor: 0.20, boughtSupplyDanger: 0.50 }),
-  // Calibrated on Robinhood Chain, 2026-10-12 (1,407 Pons launches with 10+ traders in their first day; ~7 blocks a
-  // second): wallets, the deployer included, that bought in the first 35 blocks (5 s) and took 15-30% of supply saw the
-  // price halve within 24 h on 66% of launches (25-28% below 15%), and 30%+ on 90% (44% fell 80%).
-  bundle_dump: Object.freeze({ minWallets: 3, fundingWindowH: 24, firstBlocks: 35, heldMonitor: 0.15, heldDanger: 0.30, cohortBlocks: 35, cohortMonitor: 0.15, cohortDanger: 0.30 }),
+  // Recalibrated on Robinhood Chain, 2026-10-12, on what a buyer got in the 24 hours after buying (7,137 Pons launches
+  // with 5+ buyers, entries 5 minutes to 24 hours after launch). The early cohort is every wallet, the deployer
+  // included, that bought in the first 60 seconds: the 5-second anti-snipe tax made 682 launches' bundles wait it out
+  // (halved from their peak on 54%, 21% with no early buying). What the cohort still holds predicts a loss about twice
+  // as well as what it bought: holding 30%+ of supply five minutes in, the price halved within 24 h on 58-67% of
+  // launches (2-4% below 15%, 14% at 15-30%); having bought 30%+ whatever is left, on 23-32%.
+  bundle_dump: Object.freeze({ minWallets: 3, fundingWindowH: 24, firstBlocks: 35, heldMonitor: 0.15, heldDanger: 0.30, cohortSec: 60, cohortMonitor: 0.15, cohortDanger: 0.30, cohortBought: 0.30 }),
   migration_dump: Object.freeze({ windowMin: 5, soldMonitor: 0.30, soldDanger: 0.60, impactDanger: 0.30 }),
   malicious_hook: Object.freeze({ quoteSimGapPct: 2, asymmetricFeePp: 5 }),
   agent_bait: Object.freeze({ maxScanChars: 4000 }),
@@ -42,6 +46,13 @@ export const CONFIG_V1: Readonly<{ [K in keyof PlaybookConfig]: Readonly<Playboo
   // GMGN's dump: the deployer took out at least 1.5x what it put in and first sold within 30 seconds of launch; here it
   // must also have sold at least 1% of supply (a tiny bag is not a dump). Every such launch in the sample halved from its
   // peak; selling 1% in the first hour without that pattern did not (43% vs 40%). Deployer holding 5%+: Token Sniffer,
-  // Mobula and De.Fi's line; 25% halved next day in the sample (4% below).
-  dev_dump: Object.freeze({ cashOutMultiple: 1.5, firstSellSec: 30, minSoldShare: 0.01, heldMonitor: 0.05 }),
+  // Mobula and De.Fi's line. Holding 20%+ (65 launches, 2026-10-12): the price halved within 24 h of a buy on 44% and
+  // fell 80% on 29% (3% and 1% under 2%); with 30%+ of supply out of the curve, 70% and 46% (56% and 14% under 2%).
+  dev_dump: Object.freeze({ cashOutMultiple: 1.5, firstSellSec: 30, minSoldShare: 0.01, heldMonitor: 0.05, heldDanger: 0.20 }),
+  // Supply bought out of the Pons launch curve when a buyer arrives (2026-10-12, 29,608 entries on 7,000 launches, price
+  // 24 hours after the entry). Under 15% out the price halved on 0.2-3%, at 15-30% on 3-8%; at 30%+ on 85% five
+  // minutes after launch, 54% at one hour and 16-48% from three hours on. 30%+ of supply bought on net in the hour
+  // before the entry: halved on 74%, fell 80% on 15%. A curve price cannot fall below its start, so the loss is the
+  // run-up unwinding, with or without a bundle behind it.
+  run_up: Object.freeze({ outMonitor: 0.30, hourDanger: 0.30 }),
 });

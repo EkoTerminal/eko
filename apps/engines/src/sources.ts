@@ -95,10 +95,11 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   const priorBlock = cache ? cache.priorBlock(asOfSec-3600,block) : (await db.sql.query<{ number: string }>('SELECT number FROM engine_block_times WHERE ts<=to_timestamp($1) AND number<=$2 ORDER BY number DESC LIMIT 1', [asOfSec - 3600, block])).rows[0];
   let holdings:Holding[]=[],previousHoldings:Holding[]=[];
   const makeHolders=(rows:Holding[])=>{const state=new HolderAggregate(coin,token.curve ? rowHex(token.curve) : undefined,loadRegistry().addressOf('ours.burnWallet')?.toLowerCase() as Address|undefined);for(const r of rows)state.set(rowHex(r.holder),BigInt(r.amount),Number(r.block));return state;};
-  // Early buyers (bundle_dump): buys in the first blocks after launch, credited to the wallet that received the coins.
-  const launchBlock=Number(token.first_block),earlyEnd=Math.min(block,launchBlock+Math.max(CONFIG_V1.bundle_dump.firstBlocks,CONFIG_V1.bundle_dump.cohortBlocks)-1);
+  // Early buyers (bundle_dump): buys in the first blocks after launch (same-funder groups) or the first cohortSec
+  // seconds (the cohort: bundles wait out the 5-second anti-snipe tax), credited to the wallet that received the coins.
+  const launchBlock=Number(token.first_block),early=(r:SwapRow)=>Number(r.block)-launchBlock<CONFIG_V1.bundle_dump.firstBlocks || seconds(r.ts)-createdAtSec<CONFIG_V1.bundle_dump.cohortSec;
   const earlyRows:SwapRow[]=[];
-  for(let i=0;i<swapEnd && Number(swaps[i].block)<=earlyEnd;i++)if(swaps[i].side===1 && Number(swaps[i].block)>=launchBlock)earlyRows.push(swaps[i]);
+  for(let i=0;i<swapEnd && early(swaps[i]);i++)if(swaps[i].side===1 && Number(swaps[i].block)>=launchBlock)earlyRows.push(swaps[i]);
   const buyerOf=(r:SwapRow)=>r.recipient ?? (r.senders_pending ? null : r.trader);
   const earlyWallets=[...new Set(earlyRows.map(buyerOf).filter((w):w is Uint8Array=>w!=null).map(rowHex))];
   const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...poolRows.map(p=>rowHex(p.id)),...earlyWallets];
@@ -143,7 +144,12 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   }
   if (s.supply && s.supply.total > 0n) {
     const total=Number(s.supply.total),bought=new Set<string>();
-    for(let i=0;i<swapEnd;i++){const r=swaps[i];if(r.side!==1)continue;if(r.recipient)bought.add(rowHex(r.recipient));if(r.trader)bought.add(rowHex(r.trader));}
+    let out=0,hour=0;
+    for(let i=0;i<swapEnd;i++){const r=swaps[i],n=r.side*Number(r.amount_coin);out+=n;if(seconds(r.ts)>asOfSec-3600)hour+=n;if(r.side!==1)continue;if(r.recipient)bought.add(rowHex(r.recipient));if(r.trader)bought.add(rowHex(r.trader));}
+    // Run-up (run_up): supply bought out of the launch curve net of sells, in all and in the last hour. Every trade of a
+    // coin still on its curve is a curve trade; after graduation the measure does not apply.
+    if(token.curve && s.launchpad==='pons' && !(token.graduated_block != null && Number(token.graduated_block)<=block))
+      s.runUp={outShare:Math.max(0,out)/total,hourShare:Math.max(0,hour)/total,ageSec:asOfSec-createdAtSec,evidence:[{kind:'address',ref:rowHex(token.curve),label:'Launch curve'}]};
     // Holder concentration: the ten largest holders (pools skipped), the largest that is not the deployer, and what the
     // ten largest hold without ever having bought (transferred in). A buy the indexer could not attribute counts as unknown.
     const top=holderView.top.slice(0,10),unknownBuyer=swaps.slice(0,swapEnd).some(r=>r.side===1 && !r.recipient && (r.trader==null || r.senders_pending));

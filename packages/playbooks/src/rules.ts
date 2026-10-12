@@ -192,18 +192,19 @@ export const bundleDump: Rule<'bundle_dump'> = {
     const share = buyers.reduce((n, b) => n + b.heldShare, 0);
     const selling = buyers.some((b) => b.sellingIntoNetInflow);
     const bundleLevel = !buyers.length || (share < cfg.heldMonitor && !selling) ? null : share >= cfg.heldDanger || selling ? 'danger' : 'monitor';
-    // The early cohort as a whole, the deployer included: whoever bought in the first cohortBlocks after launch (bundled,
-    // sniping or the deployer's own buy) and the supply share they took then (calibrated thresholds, config v1).
+    // The early cohort as a whole, the deployer included: whoever bought in the first cohortSec after launch (bundled,
+    // sniping, waiting out the anti-snipe tax, or the deployer's own buy). What it still holds sets the level; having
+    // bought a large share that it has since sold or moved is the lower one (calibrated thresholds, config v1).
     const cohort = new Map<string, NonNullable<CardSources['earlyBuyers']>[number][]>();
     for (const b of s.earlyBuyers ?? []) {
-      if (b.boughtShare == null || b.buyBlock < s.createdAtBlock || b.buyBlock - s.createdAtBlock >= cfg.cohortBlocks) continue;
+      if (b.boughtShare == null || b.buyBlock < s.createdAtBlock || b.buyAtSec - s.createdAtSec >= cfg.cohortSec) continue;
       const key = b.wallet.toLowerCase();
       cohort.set(key, [...(cohort.get(key) ?? []), b]);
     }
     const early = [...cohort.values()].map((rows) => rows[0]);
     const bought = [...cohort.values()].reduce((n, rows) => n + rows.reduce((m, b) => m + (b.boughtShare ?? 0), 0), 0);
     const held = early.reduce((n, b) => n + b.heldShare, 0);
-    const cohortLevel = bought >= cfg.cohortDanger ? 'danger' : bought >= cfg.cohortMonitor ? 'monitor' : null;
+    const cohortLevel = held >= cfg.cohortDanger ? 'danger' : held >= cfg.cohortMonitor || bought >= cfg.cohortBought ? 'monitor' : null;
     const level = bundleLevel === 'danger' || cohortLevel === 'danger' ? 'danger' : bundleLevel ?? cohortLevel;
     if (!level) return null;
     return match(s, h, this.id, level, [
@@ -212,7 +213,8 @@ export const bundleDump: Rule<'bundle_dump'> = {
         stat(s, this.id, 'cohort_deployer', 'Deployer early bought supply share', [...cohort.values()].flat().filter((b) => b.deployer).reduce((n, b) => n + (b.boughtShare ?? 0), 0))] : []),
       ...(buyers.length ? [stat(s, this.id, 'held', 'Same-funder bundle held supply share', share), stat(s, this.id, 'bundled', 'Wallets bought by one funder', buyers.length)] : []),
       ...buyers.flatMap((b) => [address(b.funder, 'Bundle funder'), address(b.wallet, 'Early-block buyer'), ...b.evidence]),
-      ...early.filter((b) => !buyers.includes(b)).flatMap((b) => [address(b.wallet, b.deployer ? 'Deployer early buy' : 'Early buyer'), ...b.evidence]),
+      // A busy first minute has hundreds of buyers: the card names the twenty that bought most.
+      ...early.filter((b) => !buyers.includes(b)).sort((a, b) => (b.boughtShare ?? 0) - (a.boughtShare ?? 0)).slice(0, 20).flatMap((b) => [address(b.wallet, b.deployer ? 'Deployer early buy' : 'Early buyer'), ...b.evidence]),
     ]);
   },
 };
@@ -326,7 +328,7 @@ export const devDump: Rule<'dev_dump'> = {
     const d = s.dev;
     if (!d) return null;
     const dumped = d.cashInUsd > 0 && d.cashOutUsd >= cfg.cashOutMultiple * d.cashInUsd && d.firstSellSec != null && d.firstSellSec <= cfg.firstSellSec && d.soldShare >= cfg.minSoldShare;
-    const level = dumped ? 'danger' : d.heldShare >= cfg.heldMonitor ? 'monitor' : null;
+    const level = dumped || d.heldShare >= cfg.heldDanger ? 'danger' : d.heldShare >= cfg.heldMonitor ? 'monitor' : null;
     if (!level) return null;
     return match(s, h, this.id, level, [
       stat(s, this.id, 'held', 'Deployer holds supply share', d.heldShare), stat(s, this.id, 'sold', 'Deployer sold supply share', d.soldShare),
@@ -336,10 +338,26 @@ export const devDump: Rule<'dev_dump'> = {
     ]);
   },
 };
+/**
+ * Buyer risk without a culprit: much of the supply has already been bought out of the launch curve, so a buyer now pays
+ * well above the curve's start and loses when the run unwinds (calibrated thresholds, config v1).
+ */
+export const runUp: Rule<'run_up'> = {
+  id: 'run_up', evaluate(s, h, cfg) {
+    const r = s.runUp;
+    if (!r) return null;
+    const level = r.hourShare >= cfg.hourDanger ? 'danger' : r.outShare >= cfg.outMonitor ? 'monitor' : null;
+    if (!level) return null;
+    return match(s, h, this.id, level, [
+      stat(s, this.id, 'out', 'Supply bought out of the launch curve', r.outShare), stat(s, this.id, 'hour', 'Net supply bought in the last hour', r.hourShare),
+      stat(s, this.id, 'age', 'Coin age (seconds)', r.ageSec), ...r.evidence,
+    ]);
+  },
+};
 export const rules: { [K in keyof PlaybookConfig]: Rule<K> } = { honeypot, tax_trap: taxTrap, removable_liquidity: removableLiquidity, fee_trap_pool: feeTrapPool,
   stuck_at_bonding: stuckAtBonding, wash_to_trend: washToTrend, clone_swarm: cloneSwarm, exempt_insiders: exemptInsiders,
   bundle_dump: bundleDump, migration_dump: migrationDump, malicious_hook: maliciousHook, agent_bait: agentBait, serial_deployer: serialDeployer,
-  holder_concentration: holderConcentration, dev_dump: devDump,
+  holder_concentration: holderConcentration, dev_dump: devDump, run_up: runUp,
 };
 
 export function evaluatePlaybooks(input: PlaybookInput, config: PlaybookConfig = CONFIG_V1): PlaybookMatch[] {

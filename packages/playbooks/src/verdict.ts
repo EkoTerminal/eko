@@ -17,6 +17,7 @@ const templates: Record<PlaybookId, string> = {
   serial_deployer: 'Deployer/crew launch history meets a repeat-launch threshold.',
   holder_concentration: 'A few wallets hold a large share of supply.',
   dev_dump: 'The deployer sold on buyers or holds a large share of supply.',
+  run_up: 'Much of the supply has already been bought out of the launch curve.',
 };
 const rank: Record<Level, number> = { danger: 3, monitor: 2, info: 1, clear: 0 };
 
@@ -36,9 +37,15 @@ export function reasonForMatch(match: PlaybookMatch): string {
     const who = wallets != null ? `${wallets} wallet${wallets === 1 ? '' : 's'}${dev ? ', the deployer among them,' : ''}` : '';
     // Held counts only the same wallets: early wallets often send tokens on to others, so a low share is not an exit.
     const now = held == null ? '' : `; ${wallets === 1 ? 'that wallet now holds' : 'those wallets now hold'} ${pct(held)}${bought != null && held < bought / 2 ? ' (sold or moved to other wallets)' : ''}`;
-    const parts = [bought != null && wallets != null ? `${who} bought ${pct(bought)} of supply in the first 5 seconds${now}` : null,
+    const parts = [bought != null && wallets != null ? `${who} bought ${pct(bought)} of supply in the first minute${now}` : null,
       bundled != null ? `${bundled} wallets were bought for by one funder` : null].filter(Boolean);
     if (parts.length) return `${parts.join('; ')}.`.replace(/^./, (c) => c.toUpperCase());
+  }
+  if (match.id === 'run_up') {
+    const value = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
+    const out = value('Supply bought out of the launch curve'), hour = value('Net supply bought in the last hour');
+    const pct = (n: number) => `${Math.round(n * 1000) / 10}%`;
+    if (out != null) return `${pct(out)} of supply has been bought out of the launch curve${match.level === 'danger' && hour != null ? `, ${pct(hour)} of it in the last hour` : ''}.`;
   }
   if (match.id === 'holder_concentration' || match.id === 'dev_dump') {
     const value = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
