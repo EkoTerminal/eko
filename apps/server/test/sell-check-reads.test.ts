@@ -27,6 +27,14 @@ const pairRow = async () => z.object({ rows: z.array(PairRowSchema) }).parse((aw
 const coinCard = async () => CoinCardSchema.parse((await built.app.inject(`/v1/coins/${coin()}`)).json());
 
 describe('sell-check readings in the read model', () => {
+  it('sends the New pairs header counts with the first New page only', async () => {
+    const first = (await built.app.inject('/v1/pairs?stage=new')).json() as { today?: { launches: number; medianFirstScanSec: number | null; refused: number } };
+    expect(first.today).toBeDefined();
+    expect(Number.isInteger(first.today!.launches)).toBe(true); expect(first.today!.launches).toBeGreaterThanOrEqual(0);
+    expect(first.today!.refused).toBeGreaterThanOrEqual(0); expect(first.today!.refused).toBeLessThanOrEqual(first.today!.launches);
+    expect(first.today!.medianFirstScanSec === null || first.today!.medianFirstScanSec >= 0).toBe(true);
+    expect(((await built.app.inject('/v1/pairs?stage=migrated')).json() as { today?: unknown }).today).toBeUndefined();
+  });
   it('keeps exit cost unavailable and the refusal stat absent until something is measured', async () => {
     const { row, totals } = await radarRow();
     expect(row.unavailable).toContain('exitCost');

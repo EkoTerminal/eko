@@ -12,8 +12,37 @@ function exit100(entry:ReadRow):Pick<PairRow,'exitCost100Pct'|'unavailable'> {
   const unavailable=(entry.row.unavailable ?? []).filter(field=>field!=='exitCost');
   return {exitCost100Pct:entry.exit100 ?? 0,unavailable:entry.exit100==null ? [...unavailable,'exitCost'] : unavailable};
 }
+/** New pairs header: Pons launches since UTC midnight, their median seconds from launch block to first scan, and how many were Danger at that first scan. */
+export interface PairsToday { launches:number; medianFirstScanSec:number|null; refused:number }
 export class PairsService {
   constructor(readonly store:ReadStore) {}
+  private cachedToday?: { at:number; value:Promise<PairsToday>; last?:PairsToday };
+  /** Served from a 60-second cache while the store refreshes in the background; a stale entry is served while its replacement is computed. */
+  today():Promise<PairsToday> {
+    if(!this.store.background)return this.computeToday();
+    const now=this.store.now(),cached=this.cachedToday;
+    if(cached && now-cached.at<60_000)return cached.last ? Promise.resolve(cached.last) : cached.value;
+    const value=this.computeToday(),next:{at:number;value:Promise<PairsToday>;last?:PairsToday}={at:now,value,last:cached?.last};
+    this.cachedToday=next;
+    value.then(v=>{next.last=v;},()=>{ if(this.cachedToday===next)this.cachedToday=cached?.last ? {at:0,value:Promise.resolve(cached.last),last:cached.last} : undefined; });
+    return next.last ? Promise.resolve(next.last) : value;
+  }
+  private async computeToday():Promise<PairsToday> {
+    const midnight=new Date(Math.floor(this.store.now()/86400000)*86400000);
+    // The first block of the UTC day is found once (either block-time table can lack a block); a launch's first scan is
+    // its earliest engine run by wall clock, and its first verdict the earliest by block.
+    const row=(await this.store.db.sql.query<{launches:string;median:number|null;refused:string}>(`WITH cut AS (
+        SELECT least((SELECT min(number) FROM engine_block_times WHERE ts>=$1),(SELECT min(number) FROM chain_blocks WHERE ts>=$1)) AS block),
+      launched AS (SELECT r.coin,coalesce(bt.ts,cb.ts) AS at,
+          (SELECT min(coalesce(e.created_at,to_timestamp(e.sec))) FROM engine_runs e WHERE e.coin=r.coin) AS scanned,
+          (SELECT v.data->>'level' FROM verdicts v WHERE v.coin=r.coin ORDER BY v.valid_from_block LIMIT 1) AS first_level
+        FROM read_coins r CROSS JOIN cut LEFT JOIN engine_block_times bt ON bt.number=r.first_block LEFT JOIN chain_blocks cb ON cb.number=r.first_block
+        WHERE r.launchpad='pons' AND r.first_block>=cut.block)
+      SELECT count(*) AS launches,
+        (extract(epoch FROM percentile_cont(0.5) WITHIN GROUP (ORDER BY scanned-at) FILTER (WHERE scanned IS NOT NULL AND at IS NOT NULL)))::float8 AS median,
+        count(*) FILTER (WHERE first_level='danger') AS refused FROM launched`,[midnight])).rows[0];
+    return {launches:Number(row.launches),medianFirstScanSec:row.median==null ? null : Math.max(0,Number(row.median)),refused:Number(row.refused)};
+  }
   async row(address:Hex):Promise<PairRow | null> {
     const entry=(await this.store.rows(address))[0];
     if(!entry?.eligible || entry.row.launchpad!=='pons')return null;
@@ -33,6 +62,8 @@ export class PairsService {
     const indexed=new Map(details.map(e=>[e.row.address,e]));
     const last=page.at(-1);
     return {rows:page.map(r=>{const e=indexed.get(hex(r.coin))!;return {...e.row,column:stage,buyers:Number(r.buyers),...exit100(e),verdictPending:e.row.verdictPending ?? false,antiSnipe:e.card?.meta?.tradeability?.missing?.includes('antiSnipeTiming') ? undefined : e.card?.tradeability.antiSnipe};}),
-      cursor:selected.rows.length>100 && last ? encodeCursor(`pairs:${stage}`,[Number(last.pair_block),hex(last.coin)]) : null,delayedSec:0};
+      cursor:selected.rows.length>100 && last ? encodeCursor(`pairs:${stage}`,[Number(last.pair_block),hex(last.coin)]) : null,delayedSec:0,
+      // The page header's counts ride on the first New page.
+      ...(stage==='new' && !key ? {today:await this.today()} : {})};
   }
 }

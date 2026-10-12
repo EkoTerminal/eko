@@ -5,7 +5,7 @@ import { createPairRows } from '../../mocks/demo/pairs';
 import { createFeedRows } from '../../mocks/demo/feed';
 import { PairView } from './Pairs';
 import { LabelGlyph } from './Feed';
-import { antiSnipeLeft, antiSnipeTax, applyPairEvents, feedDescription, feedRing, flushFeed, launchedAt, pairColumns, pairTradeDisabled, receivedAt, receiveFeed } from './pairsFeedModel';
+import { antiSnipeLeft, antiSnipeTax, applyPairEvents, feedDescription, feedRing, firstScanText, flushFeed, launchedAt, pairColumns, PairResponseSchema, pairTradeDisabled, receivedAt, receiveFeed } from './pairsFeedModel';
 import { scanDelayed } from './radarModel';
 import { terminalRange } from './terminalWindow';
 
@@ -36,6 +36,12 @@ describe('pairs columns and guard', () => {
     const older = { ...first, address: '0x00000000000000000000000000000000000000aa' as const };
     const joined = pairColumns(applyPairEvents(rows, [upsert(older)])).migrated;
     expect(joined[0].address).toBe(first.address); expect(joined.at(-1)!.address).toBe(older.address);
+  });
+  it('reads the header counts and prints the first-scan time', () => {
+    const today = { launches: 1817, medianFirstScanSec: 34.9, refused: 220 };
+    expect(PairResponseSchema.parse({ rows: [], cursor: null, delayedSec: 0, today }).today).toEqual(today);
+    expect(PairResponseSchema.parse({ rows: [], cursor: null, delayedSec: 0 }).today).toBeUndefined();
+    expect([2.94, 34.9, 119.4, 150].map(firstScanText)).toEqual(['2.9 s', '35 s', '119 s', '3 min']);
   });
   it('orders New by launch time across rows received at different times, so later launches reach the top', () => {
     // Reproduces the stuck New column: rows keep the ageSec they carried on arrival, so comparing raw ageSec

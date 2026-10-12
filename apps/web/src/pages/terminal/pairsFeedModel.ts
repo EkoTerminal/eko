@@ -7,7 +7,11 @@ import { PLAYBOOK_DESCRIPTIONS } from '../../copy/playbooks';
 import { WALLET_LABEL_WORD } from '../../components/ui';
 
 export const COLUMNS = ['new', 'near_grad', 'migrated'] as const;
-export const PairResponseSchema = z.object({ rows: z.array(PairRowSchema), cursor: z.string().nullable(), delayedSec: z.number(), unavailable:z.array(z.string()).optional() });
+export const PairResponseSchema = z.object({ rows: z.array(PairRowSchema), cursor: z.string().nullable(), delayedSec: z.number(), unavailable:z.array(z.string()).optional(),
+  today: z.object({ launches: z.number(), medianFirstScanSec: z.number().nullable(), refused: z.number() }).optional() });
+export type PairsToday = NonNullable<z.infer<typeof PairResponseSchema>['today']>;
+/** "35 s" under two minutes, then whole minutes. */
+export const firstScanText = (sec: number) => sec < 10 ? `${sec.toFixed(1)} s` : sec < 120 ? `${Math.round(sec)} s` : `${Math.round(sec / 60)} min`;
 export const FeedResponseSchema = z.object({ rows: z.array(FeedItemSchema), cursor: z.string().nullable(), delayedSec: z.number(), unavailable:z.array(z.string()).optional() });
 export { launchedAt, receivedAt, type ReceivedAt };
 export function pairColumns(rows: readonly PairRow[], received?: ReceivedAt) {
