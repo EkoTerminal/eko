@@ -17,10 +17,17 @@ import { InputError } from '../http/v1/helpers.js';
 /** §7.2: a candidate read path never changes the active 1.0.x manifest. */
 export const GUARD_READ_ACTIVE_VERSION = 'verdict-1' as const;
 // V2 includes indexed partial non-Pons identity. V1 eligibility remains unchanged.
-const liveSource=`WITH activity AS (SELECT coin,max(ts) AS ts FROM swaps GROUP BY coin), live AS (
-  SELECT t.address AS coin,coalesce(r.activity,a.ts,bt.ts,cb.ts) AS activity
-  FROM tokens t LEFT JOIN read_coins r ON r.coin=t.address LEFT JOIN activity a ON a.coin=t.address
-  LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block
+/**
+ * Coins live since the cutoff bound as `$n`: the read model's activity when it has one; otherwise a trade since the
+ * cutoff (one index probe) or a first block at or after the lowest block past the cutoff (found once, in whichever
+ * block-time table has it lower: either can lack a block). Grouping every swap and reading two block-time rows per token
+ * on each request took 20-26 seconds on 58,000 tokens and 11.8 million swaps (2026-10-12) and held the Radar on its
+ * placeholder; this shape took one to two seconds for the same counts.
+ */
+const liveSource=(n:number)=>`WITH cut AS (SELECT least((SELECT min(number) FROM engine_block_times WHERE ts>$${n}),(SELECT min(number) FROM chain_blocks WHERE ts>$${n})) AS block), live AS (
+  SELECT t.address AS coin FROM tokens t LEFT JOIN read_coins r ON r.coin=t.address CROSS JOIN cut
+  WHERE CASE WHEN r.activity IS NOT NULL THEN r.activity>$${n}
+    ELSE EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.ts>$${n}) OR t.first_block>=cut.block END
 )`;
 export class GuardReadStore {
   constructor(readonly legacy: ReadStore) {}
@@ -106,7 +113,7 @@ export class GuardReadStore {
     await this.legacy.currentModels();
     const key=decodeCursor(cursor,'guard-coins');
     if(key && (key.length!==1 || typeof key[0]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[0])))throw new InputError('Invalid Guard cursor');
-    const rows=(await this.db.sql.query<{coin:Uint8Array}>(`${liveSource} SELECT coin FROM live WHERE activity>$1 ${key?'AND coin>$2':''} ORDER BY coin LIMIT 101`,key?[new Date(this.legacy.now()-7*86400000),binary(String(key[0]))]:[new Date(this.legacy.now()-7*86400000)])).rows;
+    const rows=(await this.db.sql.query<{coin:Uint8Array}>(`${liveSource(1)} SELECT coin FROM live ${key?'WHERE coin>$2':''} ORDER BY coin LIMIT 101`,key?[new Date(this.legacy.now()-7*86400000),binary(String(key[0]))]:[new Date(this.legacy.now()-7*86400000)])).rows;
     const page=rows.slice(0,100);
     const summaries:CoinSummaryV2[]=[];for(const row of page)summaries.push(await this.summary(hex(row.coin)));
     return GuardListResponseSchema.parse({version:2,rows:summaries,cursor:rows.length>100?encodeCursor('guard-coins',[hex(page.at(-1)!.coin)]):null,totals:await this.totals()});
@@ -118,18 +125,37 @@ export class GuardReadStore {
     const card=rows.length===1?await this.card(hex(rows[0].address)):null;
     return GuardScanResponseSchema.parse({version:2,status:!rows.length?'not_found':rows.length>1?'ambiguous':card?.verdict?'ready':'pending',cards:card?[card]:[],candidates});
   }
-  async totals():Promise<GuardTotals> {
+  private cachedTotals?: { at: number; value: Promise<GuardTotals>; last?: GuardTotals };
+  /**
+   * Header counts change slowly. While the store refreshes in the background they come from a 30-second cache, and a
+   * stale entry is served while its replacement is computed, so no request waits on the counts after the first.
+   */
+  totals():Promise<GuardTotals> {
+    if(!this.legacy.background)return this.computeTotals();
+    const now=this.legacy.now(),cached=this.cachedTotals;
+    if(cached && now-cached.at<30_000)return cached.last ? Promise.resolve(cached.last) : cached.value;
+    const value=this.computeTotals(),next:{at:number;value:Promise<GuardTotals>;last?:GuardTotals}={at:now,value,last:cached?.last};
+    this.cachedTotals=next;
+    value.then(v=>{next.last=v;},()=>{ if(this.cachedTotals===next)this.cachedTotals=cached?.last ? {at:0,value:Promise.resolve(cached.last),last:cached.last} : undefined; });
+    return next.last ? Promise.resolve(next.last) : value;
+  }
+  private async computeTotals():Promise<GuardTotals> {
     await this.legacy.currentModels();
     const cutoff=new Date(this.legacy.now()-7*86400000),day=Math.floor(this.legacy.now()/86400000)*86400;
     const source=(await this.db.sql.query('SELECT 1 FROM chain_blocks LIMIT 1')).rows.length;
     if(!source)return GuardTotalsSchema.parse({status:'unavailable',activeVersion:GUARD_READ_ACTIVE_VERSION,failureCode:'missing'});
-    const counts=(await this.db.sql.query<{coins:string;lower:string;elevated:string;high:string;incomplete:string;no_verdict:string}>(`${liveSource} SELECT count(*) AS coins,
-      count(*) FILTER(WHERE c.data->'verdict'->>'level'='clear') AS lower,
-      count(*) FILTER(WHERE c.data->'verdict'->>'level'='monitor') AS elevated,
-      count(*) FILTER(WHERE c.data->'verdict'->>'level'='danger') AS high,
-      count(*) FILTER(WHERE c.data->'verdict'->>'level'='pending') AS incomplete,
-      count(*) FILTER(WHERE c.data->'verdict' IS NULL) AS no_verdict FROM live r LEFT JOIN coin_card_latest c ON c.coin=r.coin WHERE r.activity>$1`,[cutoff])).rows[0];
-    const today=(await this.db.sql.query<{n:string}>(`${liveSource} SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN live r ON r.coin=e.coin WHERE e.sec>=$1 AND e.sec<$2 AND r.activity>$3`,[day,day+86400,cutoff])).rows[0];
+    // The level comes from the read model's tier (0 clear, 1 monitor, 2 pending, 3 danger), which the card trigger keeps;
+    // the card's own JSON (8 kB on average on 2026-10-12) is read only for a coin the read model does not have yet.
+    const level=`CASE WHEN c.coin IS NULL THEN NULL WHEN rc.tier IS NOT NULL THEN (ARRAY['clear','monitor','pending','danger'])[rc.tier+1] ELSE c.data->'verdict'->>'level' END`;
+    const counts=(await this.db.sql.query<{coins:string;lower:string;elevated:string;high:string;incomplete:string;no_verdict:string}>(`${liveSource(1)}, graded AS (
+        SELECT ${level} AS level,c.coin IS NULL AS bare FROM live r LEFT JOIN coin_card_latest c ON c.coin=r.coin LEFT JOIN read_coins rc ON rc.coin=r.coin)
+      SELECT count(*) AS coins,
+      count(*) FILTER(WHERE level='clear') AS lower,
+      count(*) FILTER(WHERE level='monitor') AS elevated,
+      count(*) FILTER(WHERE level='danger') AS high,
+      count(*) FILTER(WHERE level='pending') AS incomplete,
+      count(*) FILTER(WHERE bare) AS no_verdict FROM graded`,[cutoff])).rows[0];
+    const today=(await this.db.sql.query<{n:string}>(`${liveSource(3)} SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN live r ON r.coin=e.coin WHERE e.sec>=$1 AND e.sec<$2`,[day,day+86400,cutoff])).rows[0];
     const n=Number(counts.no_verdict),incomplete=Number(counts.incomplete);
     return GuardTotalsSchema.parse({status:'observed',activeVersion:GUARD_READ_ACTIVE_VERSION,coins:Number(counts.coins),lower:Number(counts.lower),elevated:Number(counts.elevated),high:Number(counts.high),incomplete,noVerdict:n,incompleteCoverage:incomplete,evaluatedToday:Number(today.n),clear:Number(counts.lower),monitor:Number(counts.elevated),danger:Number(counts.high),pending:incomplete+n});
   }

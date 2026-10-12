@@ -19,7 +19,16 @@ export function applyPairEvents(rows: readonly PairRow[], events: readonly Chann
   let next = [...rows];
   for (const event of events) {
     if (event.kind === 'pair_remove') next = next.filter((r) => r.address !== event.data.address || r.column !== event.data.column);
-    else { const previous = next.find(r => r.address === event.data.address); next = next.filter((r) => r.address !== event.data.address); next.unshift({ ...event.data, ...(event.data.guardV2 === undefined && previous?.guardV2 !== undefined ? {guardV2:previous.guardV2,guardRefreshFailed:previous.guardRefreshFailed} : {}) }); }
+    else {
+      const previous = next.find(r => r.address === event.data.address);
+      const row = { ...event.data, ...(event.data.guardV2 === undefined && previous?.guardV2 !== undefined ? {guardV2:previous.guardV2,guardRefreshFailed:previous.guardRefreshFailed} : {}) };
+      // Migrated keeps the order it arrived in, so only a coin coming from a curve column is a new migration and goes
+      // first. A coin already listed there keeps its place when it trades or is re-rated, and a graduated coin not listed
+      // (an older one) goes last: every re-rating sent older coins to the top on 2026-10-12.
+      if (row.column === 'migrated' && previous?.column === 'migrated') next = next.map((r) => r.address === row.address ? row : r);
+      else if (row.column === 'migrated' && !previous) next.push(row);
+      else { next = next.filter((r) => r.address !== row.address); next.unshift(row); }
+    }
   }
   const columns = pairColumns(next, received);
   return COLUMNS.flatMap((column) => columns[column]);

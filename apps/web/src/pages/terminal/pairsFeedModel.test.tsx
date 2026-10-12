@@ -25,6 +25,18 @@ describe('pairs columns and guard', () => {
     const many = Array.from({ length: 130 }, (_, i) => ({ ...row, address: `0x${i.toString(16).padStart(40, '0')}` as const, ageSec: i }));
     expect(pairColumns(many).new).toHaveLength(100);
   });
+  it('keeps Migrated in place when a listed coin updates, and puts an older graduated coin last, not first', () => {
+    const migrated = pairColumns(rows).migrated, [first, second] = migrated;
+    expect(migrated.length).toBeGreaterThan(1);
+    // A trade or a re-rating of the second coin does not move it above the first.
+    const updated = pairColumns(applyPairEvents(rows, [upsert({ ...second, exitCost100Pct: 9 })])).migrated;
+    expect(updated.map((r) => r.address)).toEqual(migrated.map((r) => r.address));
+    expect(updated[1].exitCost100Pct).toBe(9);
+    // A graduated coin the page did not list is an older one: it joins at the end.
+    const older = { ...first, address: '0x00000000000000000000000000000000000000aa' as const };
+    const joined = pairColumns(applyPairEvents(rows, [upsert(older)])).migrated;
+    expect(joined[0].address).toBe(first.address); expect(joined.at(-1)!.address).toBe(older.address);
+  });
   it('orders New by launch time across rows received at different times, so later launches reach the top', () => {
     // Reproduces the stuck New column: rows keep the ageSec they carried on arrival, so comparing raw ageSec
     // kept quiet early rows (small frozen ages) above every launch that arrived later with a larger first age.
