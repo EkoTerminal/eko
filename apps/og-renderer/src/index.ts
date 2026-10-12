@@ -33,7 +33,7 @@ export function verdictColour(label: string) {
   if (/not fully checked|unavailable|pending|scan (queued|running|failed)/i.test(label)) return palette.muted;
   if (/^(danger|high risk)\b|^Legacy assessment · DANGER$/i.test(label)) return palette.danger;
   if (/^(monitor|elevated risk)\b|^Legacy assessment · MONITOR$/i.test(label)) return palette.monitor;
-  if (/^(clear|lower observed risk)\b|^Legacy assessment · CLEAR$/i.test(label)) return palette.clear;
+  if (/^(clear|no flags|lower observed risk)\b|^Legacy assessment · CLEAR$/i.test(label)) return palette.clear;
   return palette.muted;
 }
 // A fixed seed and integer PRNG keep the local SVG grain identical on every worker.

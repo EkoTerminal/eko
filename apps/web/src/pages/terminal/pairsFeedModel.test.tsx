@@ -37,6 +37,13 @@ describe('pairs columns and guard', () => {
     const joined = pairColumns(applyPairEvents(rows, [upsert(older)])).migrated;
     expect(joined[0].address).toBe(first.address); expect(joined.at(-1)!.address).toBe(older.address);
   });
+  it('lets Degen mode trade a Danger pair unless a finding is one no mode accepts', () => {
+    const danger = { ...row, verdict: 'danger' as const, verdictPending: false };
+    expect(pairTradeDisabled(danger)).toBe(true); expect(pairTradeDisabled(danger, false, true, 'degen')).toBe(false);
+    expect(pairTradeDisabled({ ...danger, hardDanger: true }, false, true, 'degen')).toBe(true);
+    // Paused trading and stale data still disable it.
+    expect(pairTradeDisabled(danger, false, false, 'degen')).toBe(true); expect(pairTradeDisabled(danger, true, true, 'degen')).toBe(true);
+  });
   it('reads the header counts and prints the first-scan time', () => {
     const today = { launches: 1817, medianFirstScanSec: 34.9, refused: 220 };
     expect(PairResponseSchema.parse({ rows: [], cursor: null, delayedSec: 0, today }).today).toEqual(today);

@@ -1,5 +1,6 @@
-import { TRADING_PAUSED_TITLE } from '../../copy/availability';
+import { DANGER_ACCEPTED_TITLE, REFUSED_TITLE, TRADING_PAUSED_TITLE } from '../../copy/availability';
 import { useShell } from '../../store/shell';
+import { useUi } from '../../store/ui';
 import { WatchButton } from '../../components/WatchButton';
 import { useGuardCoin } from './useGuardCoin';
 import { antiSnipeDeadline } from '../../components/trade/tradePanelModel';
@@ -22,7 +23,7 @@ import { useMedia } from '../../lib/useMedia';
 import { expandTo } from '../../lib/expand';
 import { Link } from '../../lib/Link';
 import { Decode, Roll } from './radarMotion';
-import { age, exitText, pct, PLAYBOOK_NAMES, price, usd } from './radarModel';
+import { age, exitText, pct, PLAYBOOK_NAMES, price, refused, usd } from './radarModel';
 import { formatAge } from '../../lib/format';
 import { launchpadLabel } from '../../copy/chain';
 import { FlowBar } from './FlowBar';
@@ -41,6 +42,7 @@ export const RadarRowView = memo(function RadarRowView({ c, selected, select, tr
   const el = useRef<HTMLTableRowElement>(null);
   useEffect(() => { const row = el.current; if (!pulse || !row) return; row.classList.remove('pulse'); void row.offsetWidth; row.classList.add('pulse'); }, [pulse]);
   const score = c.verdictPending || c.verdict === 'pending' ? undefined : runUpScore(c);
+  const riskMode = useUi((st) => st.riskMode), no = refused(c, riskMode);
   return <tr ref={el} data-address={c.address} className={`h-${heatOf(c)} ${markClass(marking(c))}${selected ? ' sel' : ''}`} onClick={(e) => select(c, e.currentTarget.querySelector<HTMLButtonElement>('[data-pick]')!)}>
     <td className="c-coin"><button data-pick className="rt-pick" aria-pressed={selected} aria-controls={selected ? 'radar-inspector' : undefined} onClick={(e) => { e.stopPropagation(); select(c, e.currentTarget); }}><span className="rt-top"><span className="rt-sym" title={`$${c.symbol.text}`}><Decode text={`$${c.symbol.text}`}><span>$<UntrustedText value={c.symbol} /></span></Decode></span><HeatTag heat={displayHeat(c)} /><span className="tag rt-pad">{launchpadLabel(c.launchpad, c.stage === 'graduated')}</span></span><span className="rt-name"><UntrustedText value={c.name} /> · {age(c.ageSec)}</span></button></td>
     <td className="c-guard"><CompactVerdictChip level={c.verdict} guard={c.guardV2} failed={c.guardRefreshFailed} pending={c.verdictPending} scanDelayed={scanDelayed} evaluatedPlaybooks={c.evaluatedPlaybooks} missing={c.missingChecks} detail={score === undefined ? undefined : String(score)} detailTitle={score === undefined ? undefined : runUpTitle(score)} /></td>
@@ -51,7 +53,7 @@ export const RadarRowView = memo(function RadarRowView({ c, selected, select, tr
     <td className="c-spark">{c.unavailable?.includes('spark') ? <UnavailableValue /> : c.spark8h && <div className="rt-spark"><Spark series={c.spark8h} height={28} /></div>}</td>
     <td className="c-flow">{c.unavailable?.includes('flow') ? <UnavailableValue /> : <div className="rt-flow"><FlowBar flow={c.flow} /><span className="num">{Math.round(c.flow.agentPct)}%</span></div>}</td>
     <td className="c-liq r num">{c.unavailable?.includes('liquidity') ? <UnavailableValue /> : usd(c.liquidityUsd)}</td><td className={`c-exit r num${c.sellCheck?.status === 'refused' || (!c.unavailable?.includes('exitCost') && c.exitCost1kPct > 15) ? ' bad' : ''}`} title={c.sellCheck?.status === 'refused' ? SELL_FAILS_TITLE : undefined}>{c.sellCheck?.status === 'refused' ? SELL_FAILS : c.unavailable?.includes('exitCost') ? <UnavailableValue /> : exitText(c.exitCost1kPct)}</td>
-    <td className="c-act r"><button className={`btn btn-sm${c.verdict === 'danger' || !tradingLive ? '' : ' btn-primary'}`} disabled={c.verdictPending || c.verdict === 'danger' || !tradingLive} title={!tradingLive && c.verdict !== 'danger' ? TRADING_PAUSED_TITLE : undefined} aria-label={c.verdict === 'danger' ? 'Refused by the guard' : !tradingLive ? `Trade $${c.symbol.text}: ${TRADING_PAUSED_TITLE}` : `Trade $${c.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(c, e.currentTarget); }}>{c.verdict === 'danger' ? 'Refused' : 'Trade'}</button></td>
+    <td className="c-act r"><button className={`btn btn-sm${no || !tradingLive || c.verdict === 'danger' ? '' : ' btn-primary'}`} disabled={c.verdictPending || no || !tradingLive} title={no ? REFUSED_TITLE(riskMode, c.hardDanger === true) : c.verdict === 'danger' ? DANGER_ACCEPTED_TITLE : !tradingLive ? TRADING_PAUSED_TITLE : undefined} aria-label={no ? 'Refused by the guard' : !tradingLive ? `Trade $${c.symbol.text}: ${TRADING_PAUSED_TITLE}` : `Trade $${c.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(c, e.currentTarget); }}>{no ? 'Refused' : 'Trade'}</button></td>
   </tr>;
 });
 export function HotStrip({ coins, selected, select }: { coins: RadarRow[]; selected: string | null; select: (c: RadarRow, el: HTMLElement) => void }) {
@@ -80,7 +82,7 @@ export function CoinInspector({ row, close, onCard, formatRowAge = age, stale = 
     <div className="insp-id"><h2><Decode text={`$${row.symbol.text}`}><span>$<UntrustedText value={card?.identity.symbol ?? row.symbol} /></span></Decode></h2><span className="tags"><HeatTag heat={displayHeat({ ...row, verdict: card?.verdict.level ?? row.verdict })} /><VerdictChip guard={guard.assessment ?? row.guardV2 ?? undefined} level={card?.verdict.level ?? row.verdict} verdictPending={row.verdictPending && !card} evaluatedPlaybooks={card?.verdict.evaluatedPlaybooks ?? row.evaluatedPlaybooks} meta={card?.meta} missing={row.missingChecks} /></span></div><p className="insp-sub"><span><UntrustedText value={card?.identity.name ?? row.name} /> · {launchpadLabel(row.launchpad, row.stage === 'graduated')} · {formatRowAge(row.ageSec)} old</span><span className="addr" title={row.address}>{row.address.slice(0, 6)}…{row.address.slice(-4)} <button className="iconbtn" aria-label="Copy address" onClick={() => void navigator.clipboard?.writeText(row.address)}>⧉</button></span></p>
     {/* TODO(spec): CoinCard lacks price/chart fields. Use the selected RadarRow for price/chart and optional market cap. */}
     <div className="insp-price"><b className="num">{row.priceUnavailable ? NOT_CHECKED : price(row.priceUsd)}</b><span className={`num${row.change1hPct > 0 ? ' up' : ''}`}>{row.unavailable?.includes('change') ? NOT_CHECKED : pct(row.change1hPct)} 1h</span>{row.change24hPct !== undefined && <span className={`num${row.change24hPct > 0 ? ' up' : ''}`}>{row.unavailable?.includes('change') ? NOT_CHECKED : pct(row.change24hPct)} 24h</span>}</div>
-    {row.spark8h && <div className="insp-chart"><Spark series={row.spark8h} height={120} label="Price over the last 8 hours" /><MiniBars series={row.spark8h.slice(1).map((v, i) => Math.abs(v - row.spark8h![i]) + 1.5)} height={26} label="Price movement over the same 8 hours" /><div className="insp-axis"><span>8h ago</span><span>4h</span><span>Now</span></div></div>}
+    {row.spark8h && <div className="insp-chart"><Spark series={row.spark8h} height={120} label={`Price over the last ${age(Math.min(28800, Math.max(60, row.ageSec)))}`} /><MiniBars series={row.spark8h.slice(1).map((v, i) => Math.abs(v - row.spark8h![i]) + 1.5)} height={26} label="Price movement over the same time" /><div className="insp-axis"><span>{age(Math.min(28800, Math.max(60, row.ageSec)))} ago</span><span>{age(Math.min(28800, Math.max(60, row.ageSec)) / 2)}</span><span>Now</span></div></div>}
     {guard.assessment && <GuardCompact verdict={{version:2,assessment:guard.assessment}} />}
     {error ? <div role="status">Could not load coin details. <button className="btn" onClick={() => setRetry((n) => n + 1)}>Retry</button></div> : !card ? <div className="skel" aria-label="Loading coin details" style={{ height: 100 }} /> : <>
       <InspectorGuard card={card} href={fullTo} mark={mk?.kind === 'ember' ? markClass(mk) : ''} />

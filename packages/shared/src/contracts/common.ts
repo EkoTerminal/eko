@@ -16,6 +16,14 @@ export const UntrustedSchema = z.object({
 export type Untrusted = z.infer<typeof UntrustedSchema>;
 export const PlaybookIdSchema = z.enum(['honeypot', 'tax_trap', 'removable_liquidity', 'fee_trap_pool', 'stuck_at_bonding', 'wash_to_trend', 'clone_swarm', 'exempt_insiders', 'bundle_dump', 'migration_dump', 'malicious_hook', 'agent_bait', 'serial_deployer', 'holder_concentration', 'dev_dump', 'run_up']);
 export type PlaybookId = z.infer<typeof PlaybookIdSchema>;
+/**
+ * Danger findings no risk mode can accept: the coin cannot be sold or costs most of the position to sell (honeypot, tax
+ * trap, fee-trap pool, a hook that charges sells), its liquidity can be pulled, or its text carries instructions aimed at
+ * agents. Every other Danger finding describes who holds the coin or how far its price has run, which a buyer in Degen
+ * mode may accept with a warning.
+ */
+export const HARD_DANGER_PLAYBOOKS = ['honeypot', 'tax_trap', 'fee_trap_pool', 'malicious_hook', 'removable_liquidity', 'agent_bait'] as const satisfies readonly PlaybookId[];
+export const isHardDanger = (id: string): boolean => (HARD_DANGER_PLAYBOOKS as readonly string[]).includes(id);
 export const EvidenceRefSchema = z.object({
   kind: z.enum(['tx', 'log', 'sim', 'address', 'code', 'stat', 'text']),
   ref: z.string(),

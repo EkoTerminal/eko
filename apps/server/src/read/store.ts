@@ -1,7 +1,7 @@
 import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
 import { readPoolLiquidity } from './pool-liquidity.js';
-import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
+import { CoinCardSchema, VerdictSchema, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
 /** Coins per read-model refresh transaction (see refreshModels). */
@@ -130,10 +130,18 @@ export class ReadStore {
         coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-86400) AND minute<to_timestamp($1::double precision-3600)),0) AS prior_volume,
         min(minute) AS first_minute
       FROM bars_1m b ${bounded ? 'WHERE b.coin=ANY($2::bytea[])' : 'JOIN selected t ON t.address=b.coin'} GROUP BY b.coin
+    ), span AS (
+      -- Each coin's first bar in the last eight hours: the series starts there, not at a fixed clock bucket.
+      SELECT b.coin,min(minute) AS first FROM bars_1m b ${bounded ? '' : 'JOIN selected t ON t.address=b.coin'}
+      WHERE ${bounded ? 'b.coin=ANY($2::bytea[]) AND' : ''} minute>=to_timestamp($1::double precision-28800) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin
     ), buckets AS (
-      SELECT b.coin,floor(extract(epoch FROM minute)/600) AS bucket,(array_agg(close ORDER BY minute DESC))[1] AS close
-      FROM bars_1m b ${bounded ? '' : 'JOIN selected t ON t.address=b.coin'}
-      WHERE ${bounded ? 'b.coin=ANY($2::bytea[]) AND' : ''} minute>=to_timestamp(floor($1::double precision/600)*600-47*600) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket
+      -- Up to about 96 points per coin at the finest whole-minute width that covers its span: one-minute closes for a
+      -- coin under 96 minutes old, five-minute closes over the full eight hours. Ten-minute buckets gave a coin
+      -- under twenty minutes old fewer than two points, which draws nothing.
+      SELECT b.coin,floor(extract(epoch FROM b.minute-s.first)/(60*greatest(1,ceil(extract(epoch FROM to_timestamp($1::double precision)-s.first)/5760.0)))) AS bucket,
+        (array_agg(b.close ORDER BY b.minute DESC))[1] AS close
+      FROM bars_1m b JOIN span s ON s.coin=b.coin
+      WHERE ${bounded ? 'b.coin=ANY($2::bytea[]) AND' : ''} b.minute>=to_timestamp($1::double precision-28800) AND b.minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket
     ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)
     SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,
       b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,coalesce(b.trades,0) AS trades,coalesce(b.prior_volume,0) AS prior_volume,b.first_minute,s.points AS spark
@@ -142,8 +150,19 @@ export class ReadStore {
     const flows=await readFlows(this.db,result.rows.map(t=>hex(t.address)));
     const sells=await readSellChecks(this.db,result.rows.map(t=>hex(t.address)),this.now());
     const pools=await readPoolLiquidity(this.db,result.rows.filter(t=>t.graduated_block!=null).map(t=>hex(t.address)));
+    // A coin with only a few minutes of bars gets its series from its trades instead (the latest 96 priced ones), so a
+    // launch shows a line from its second trade on.
+    const thin=result.rows.filter(t=>!t.pricing_pending && (t.spark?.length ?? 0)<6).map(t=>t.address);
+    const trades=new Map<string,number[]>();
+    if(thin.length)for(const row of (await this.db.sql.query<{coin:Uint8Array;points:number[]}>(`SELECT coin,array_agg(price ORDER BY block,log_index) AS points FROM (
+        SELECT s.coin,s.block,s.log_index,s.usd/(s.amount_coin::double precision/power(10,coalesce(t.decimals,18))) AS price,
+          row_number() OVER (PARTITION BY s.coin ORDER BY s.block DESC,s.log_index DESC) AS n
+        FROM swaps s JOIN tokens t ON t.address=s.coin
+        WHERE s.coin=ANY($1::bytea[]) AND s.ts>to_timestamp($2::double precision-28800) AND s.ts<=to_timestamp($2::double precision) AND s.usd>0 AND s.amount_coin>0) latest
+      WHERE n<=96 GROUP BY coin`,[thin,now])).rows)trades.set(hex(row.coin),row.points.map(Number));
     return result.rows.map(t => {
-      const sell=sells.get(hex(t.address)),pool=pools.get(hex(t.address));
+      const sell=sells.get(hex(t.address)),pool=pools.get(hex(t.address)),traded=trades.get(hex(t.address));
+      const spark=traded && traded.length>(t.spark?.length ?? 0) ? traded : t.spark;
       const card = t.data ? withSellCheck(CoinCardSchema.parse(t.data),sell) : null;
       const verdict = t.verdict ? VerdictSchema.parse(t.verdict) : null;
       const flow=flows.get(hex(t.address))??unavailableFlow('1h');
@@ -175,12 +194,13 @@ export class ReadStore {
         liquidityUsd: pool ?? (unavailable.includes('liquidity') ? 0 : card!.liquidity.depthUsd.pct2),
         marketCapUsd: !t.pricing_pending && supply != null && t.price != null ? t.price*supply : undefined,
         verdict: verdict?.level ?? 'pending', verdictPending: !verdict,
+        ...(verdict?.playbooks.some(m => m.level === 'danger' && isHardDanger(m.id)) ? { hardDanger: true } : {}),
         evaluatedPlaybooks: verdict?.evaluatedPlaybooks,
         missingChecks: [...new Set(Object.values(card?.meta ?? {}).flatMap(m => m.missing ?? []))],
         topPlaybook: verdict?.playbooks[0]?.id, ageSec: Math.max(0,now-(t.created_at ? new Date(t.created_at).getTime()/1000 : now)),
         flow:flowValues, exitCost1kPct:sell?.exit1k ?? 0,
         ...(sell ? {sellCheck:{status:sell.status,asOfBlock:sell.block,checkedAt:sell.checkedAt.toISOString()}} : {}),
-        rank:0, signal:card?.signal, spark8h:t.pricing_pending ? undefined : t.spark ?? [], beta:verdict?.beta, unavailable,
+        rank:0, signal:card?.signal, spark8h:t.pricing_pending ? undefined : spark ?? [], beta:verdict?.beta, unavailable,
         ...(t.pricing_pending ? {} : activity(t, now)),
       };
       return { eligible:t.eligible,row,card,volume:t.pricing_pending ? 0 : t.volume,firstBlock:Number(t.first_block),graduationBlock:Number(t.graduated_block ?? 0),activity:t.activity ? new Date(t.activity).getTime() : this.now(),exit100:sell?.exit100 ?? null };

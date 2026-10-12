@@ -25,7 +25,8 @@ function coinContent(result: ScanResult): { card: ShareCard; description: string
   const view = compactGuardVerdict(request);
   // Never infer a rules version from a card schema version or invent a V2 assessment from V1.
   const legacy = !!c && request.version === 2 && request.assessment === null;
-  const label = legacy ? `Legacy assessment · ${c!.verdict.level.toUpperCase()}` : [view.label, view.mode].filter(Boolean).join(' · ');
+  // The grade from rule set 1.0.x is the live grade: it reads as the grade, with "no match" named as the site names it.
+  const label = legacy ? ({ clear: 'NO FLAGS', monitor: 'MONITOR', danger: 'DANGER', pending: 'NOT FULLY CHECKED' } as const)[c!.verdict.level] : [view.label, view.mode].filter(Boolean).join(' · ');
   const exit = c?.meta?.tradeability;
   const flow = c?.meta?.flow;
   const flowAvailable = flow && !flow.unavailable && !flow.missing?.includes('agentPct') && !flow.coverageGaps?.[c!.flow.window];
@@ -44,7 +45,7 @@ function coinContent(result: ScanResult): { card: ShareCard; description: string
   return { description: legacy ? `${label} · ${view.disclosures.join(' · ')}` : guardShareMetadata(request).description,
     card: { title: 'Buyer risk snapshot', name: v2?.identity.name.text ?? c?.identity.name.text,
       symbol: v2?.identity.symbol.text ?? c?.identity.symbol.text, label: result.status === 'ready' ? label : `Scan ${result.status} · ${view.label}`,
-      gap: legacy ? c!.verdict.level === 'pending' ? 'Not fully checked · required checks pending' : 'Legacy coverage; see the full scan' : view.gap,
+      gap: legacy ? c!.verdict.level === 'pending' ? 'Not fully checked · required checks pending' : 'Rule set 1.0.x · see the full scan' : view.gap,
       details, block: v2?.verdict?.cursor.blockNumber ?? (c ? String(c.verdict.asOfBlock) : 'unavailable'),
       receipt: v2?.verdict?.receipt.id ?? c?.verdict.receipt.id ?? 'pending' } };
 }

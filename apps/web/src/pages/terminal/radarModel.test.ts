@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRadarRows } from '../../mocks/demo/radar';
-import { applyRadarEvents, currentAgeSec, filterRows, hottest, scanDelayed, SORTS, sortRows } from './radarModel';
+import { applyRadarEvents, currentAgeSec, filterRows, hottest, refused, scanDelayed, SORTS, sortRows } from './radarModel';
 import type { ChannelEvent } from '../../lib/realtime';
 const event = (kind: string, data: unknown) => ({t:'ev',ch:'radar',seq:1,ts:1,kind,data}) as ChannelEvent<'radar'>;
 describe('Radar server order and user sorting', () => {
@@ -26,6 +26,24 @@ describe('Radar server order and user sorting', () => {
   it('preserves ranking and Hottest ordering with missing or changed Signal', () => {
     const rows = createRadarRows().slice(0,2); rows[0].signal = undefined; expect(sortRows(rows,'Rank')).toEqual(rows);
     const before=sortRows(rows,'Hottest').map(c=>c.address); rows[1].signal!.composite=0; expect(sortRows(rows,'Hottest').map(c=>c.address)).toEqual(before);
+  });
+  it('hides refused coins on request: Danger grades and failed sell checks, on top of any other filter', () => {
+    const rows = createRadarRows(), danger = rows.filter(c => c.verdict === 'danger').length;
+    expect(danger).toBeGreaterThan(0);
+    expect(filterRows(rows, 'All', 'All', true)).toHaveLength(rows.length - danger);
+    expect(filterRows(rows, 'Danger', 'All', true)).toHaveLength(0);
+    const sold = { ...rows.find(c => c.verdict !== 'danger')!, sellCheck: { status: 'refused' as const, asOfBlock: 1, checkedAt: '2026-10-12T00:00:00.000Z' } };
+    expect(refused(sold)).toBe(true); expect(filterRows([sold], 'All', 'All', true)).toHaveLength(0); expect(filterRows([sold], 'All', 'All')).toHaveLength(1);
+  });
+  it('reads a Danger coin as refused except in Degen mode, and a hard finding or a failed sell as refused in every mode', () => {
+    const base = createRadarRows().find(c => c.verdict === 'danger')!;
+    const soft = { ...base, hardDanger: undefined, sellCheck: undefined }, hard = { ...soft, hardDanger: true };
+    expect([refused(soft, 'safe'), refused(soft, 'balanced'), refused(soft, 'degen')]).toEqual([true, true, false]);
+    expect(refused(hard, 'degen')).toBe(true);
+    expect(refused({ ...soft, verdict: 'monitor' as const, sellCheck: { status: 'refused' as const, asOfBlock: 1, checkedAt: '2026-10-12T00:00:00.000Z' } }, 'degen')).toBe(true);
+    // Hiding refused coins follows the mode: Degen keeps the Danger coins it can buy.
+    expect(filterRows([soft, hard], 'All', 'All', true, 'degen').map(c => c.hardDanger)).toEqual([undefined]);
+    expect(filterRows([soft, hard], 'All', 'All', true, 'balanced')).toHaveLength(0);
   });
   it('filters stage/verdict/heat and combines filters', () => { const rows=createRadarRows(); expect(filterRows(rows,'Danger','Curve').every(c=>c.verdict==='danger'&&c.stage==='curve')).toBe(true); expect(filterRows(rows,'Hot','All').some(c=>c.verdict==='danger')).toBe(false); expect(filterRows(rows,'All','Migrated').every(c=>c.stage==='graduated')).toBe(true); });
   it('upserts in place, removes, and applies authoritative rerank', () => {

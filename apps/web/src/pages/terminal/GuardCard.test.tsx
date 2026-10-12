@@ -158,7 +158,7 @@ describe('packet 036 Guard card fixtures', () => {
   it('labels legacy receipts without reinterpreting No flags as V2 Lower', () => {
     const card = createRadarCard(createRadarRows()[0].address)!;
     const html = render(<CoinVerdict verdict={{ ...card.verdict, level: 'clear', guardV2: undefined }} />);
-    expect(html).toContain('Legacy assessment · rules 1.0.x'); expect(html).toContain('No flags'); expect(html).not.toContain('Lower observed risk'); expect(html).toContain(BUYER_RISK); expect(html).toContain(DYOR);
+    expect(html).toContain('Graded by rule set 1.0.x'); expect(html).not.toContain('Legacy'); expect(html).toContain('No flags'); expect(html).not.toContain('Lower observed risk'); expect(html).toContain(BUYER_RISK); expect(html).toContain(DYOR);
   });
   it('shows the run-up score beside the first rule set\'s grade on a curve coin, never beside a pending one', () => {
     const card = createRadarCard(createRadarRows()[0].address)!;

@@ -33,6 +33,9 @@ export const CoinSummarySchema = z.object({
   // through and the sell reverted or returned under 5% in simulation, so the guard refuses buy quotes. Absent means
   // not checked yet; it is never inferred.
   sellCheck: z.object({ status: z.enum(['sellable', 'refused']), asOfBlock: z.number().int().nonnegative(), checkedAt: z.iso.datetime() }).optional(),
+  // Additive (2026-10-12): a Danger finding on this coin is one no risk mode accepts (HARD_DANGER_PLAYBOOKS), so the
+  // buy is refused even in Degen mode. Absent or false on a Danger coin means Degen mode may accept it with a warning.
+  hardDanger: z.boolean().optional(),
 });
 export type CoinSummary = z.infer<typeof CoinSummarySchema>;
 export const RadarRowSchema = CoinSummarySchema.extend({
@@ -42,7 +45,8 @@ export const RadarRowSchema = CoinSummarySchema.extend({
   beta: VerdictSchema.shape.beta.optional(),
   // CA-31 (proposed): the five-agent signal and the last 8 hours of prices (oldest first, at most 48 points).
   signal: CoinSignalSchema.optional(),
-  spark8h: z.array(z.number()).max(48).optional(),
+  // Up to about 97 closes at the finest whole-minute width covering the coin's last eight hours (48 ten-minute closes before 2026-10-12).
+  spark8h: z.array(z.number()).max(128).optional(),
   change24hPct: z.number().optional(),
   // Last-hour trading against the coin's usual hour (Hot): USD volume and trades in the last 60 minutes, and the
   // average USD volume per hour over up to 23 earlier hours; the baseline is omitted when there is under an hour of it.

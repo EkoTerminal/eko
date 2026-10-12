@@ -6,6 +6,10 @@ export const SCAN_DELAYED_AFTER_SEC = 60;
 export const SCAN_DELAYED = 'Scan delayed';
 export const SCAN_DELAYED_DETAIL = "No verdict yet. This launch is waiting in the scan queue; Trade stays off until the guard's first scan finishes.";
 export const NOT_FULLY_CHECKED = 'Not fully checked';
+/** Why a row's Trade button says Refused, in the reader's risk mode. */
+export const REFUSED_TITLE = (mode: 'safe' | 'balanced' | 'degen', hard: boolean) => hard ? 'The guard refuses this coin in every risk mode: it cannot be sold, costs most of a position to sell, or its liquidity can be pulled.'
+  : mode === 'degen' ? 'The guard refuses this coin: its sell failed in the buy-then-sell check.' : 'The guard refuses Danger coins in Careful and Balanced. Degen mode accepts a Danger grade given for who holds the coin or how far its price has run.';
+export const DANGER_ACCEPTED_TITLE = 'Rated Danger. Degen mode lets you buy it after you accept the warning on the quote.';
 /** No check matched (verdict level `clear`). The label names what was found, not a judgement of the coin. */
 export const NO_FLAGS = 'No flags';
 export const NO_FLAGS_NOTE = 'No flags is not a recommendation.';
@@ -30,7 +34,7 @@ export const CHECK_LEGEND='— not checked yet: exit costs and buyer mix arrive 
 // Plain-language keys for the Guard disclosures; the disclosure labels themselves stay on every row.
 export const LEGACY_TITLE='Graded by EKO’s rule set 1.0.x.';
 export const GUARD2_UNAVAILABLE_TITLE='Guard 2, the next buyer-risk check, has not been released, so it has no result for this coin.';
-export const GUARD_LEGEND='Grades come from EKO’s rule set 1.0.x. Guard 2, the next buyer-risk check, has not been released; until it is, buys are checked against this grade, and Danger or unscanned coins are refused.';
+export const GUARD_LEGEND='Grades come from EKO’s rule set 1.0.x. Guard 2, the next buyer-risk check, has not been released; until it is, buys are checked against this grade. Unscanned coins are refused. Danger coins are refused in Careful and Balanced; Degen mode accepts a Danger grade given for who holds the coin or how far its price has run, and never one for a coin that cannot be sold.';
 
 // Live sell check (BACKEND §6.2 contract probe). A failed sell refuses buy quotes; it is not called a confirmed honeypot.
 export const SELL_FAILS='Sell fails';

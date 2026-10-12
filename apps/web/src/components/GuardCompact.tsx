@@ -14,10 +14,10 @@ export function CompactVerdictChip({ level, guard, pending = false, failed = fal
   // No Guard 2 result: the row shows the grade alone. Guard 2 has no release, so every row carried a "Legacy grade" tag
   // beside the only grade there is; the list's legend (GuardLegend) says once which rule set graded the rows.
   if (guard === null) return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}<VerdictChip level={level} verdictPending={pending} {...context} /></>;
-  return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}{guard !== undefined && <span className="tag" title={LEGACY_TITLE}>Legacy assessment · rules 1.0.x</span>}<VerdictChip level={level} verdictPending={pending} {...context} />
+  return <>{failed && <span>{GUARD_REFRESH_FAILED}</span>}{guard !== undefined && <span className="tag" title={LEGACY_TITLE}>Rule set 1.0.x</span>}<VerdictChip level={level} verdictPending={pending} {...context} />
     {guard ? <VerdictChip level={level} guard={guard} /> : null}{details}</>;
 }
-/** Lists that show the legacy grade beside a missing or shadow Guard 2 result explain both labels once, above the rows. */
+/** Lists that show the rule set 1.0.x grade beside a missing or shadow Guard 2 result explain both labels once, above the rows. */
 export function GuardLegend({ rows }: { rows: { guardV2?: GuardAssessmentV2 | null }[] }) {
   return rows.some((row) => row.guardV2 !== undefined && row.guardV2?.mode !== 'active') ? <p className="availability-legend guard-legend">{GUARD_LEGEND}</p> : null;
 }

@@ -37,7 +37,7 @@ export const GUARD_GROUPS = [['tradeability', 'Tradeability and per-size entry']
 export const GUARD_QUOTE_HEADINGS = ['Size', 'Account', 'Route', 'Entry', 'Sellability', 'Venue cost', 'All-in cost', 'Network fee'];
 export const guardRawAmount = (value: { raw: string; decimals: number; asset: string }) => `${value.raw} raw units · ${value.decimals} decimals · ${value.asset}`;
 export const guardSnapshotText = (guard: GuardAssessmentV2, nowMs: number) => `Snapshot block ${guard.cursor.blockNumber} · ${formatUtcTime(guard.cursor.timestampSec)} · ${formatAge(nowMs / 1000 - Number(guard.cursor.timestampSec))} ago · $100 / $1,000 · EOA / smart account · rules ${guard.rulesVersion}`;
-export const guardLegacyText = (legacy: NonNullable<import('@eko/shared').CoinCardV2['legacy']>) => `Legacy assessment · rules ${legacy.rulesVersion} · ${legacy.level} · block ${legacy.asOfBlock}`;
+export const guardLegacyText = (legacy: NonNullable<import('@eko/shared').CoinCardV2['legacy']>) => `Rule set ${legacy.rulesVersion} · ${legacy.level === 'clear' ? 'no flags' : legacy.level} · block ${legacy.asOfBlock}`;
 export const guardDecisiveText = (id: string) => `Decisive fact: ${guardName(id)}`;
 export function guardCoverageText(value: GuardCoverage) {
   return `Coverage ${value.complete ? 'complete' : 'incomplete'}${value.gaps.length ? ` · ${value.gaps.map(guardName).join(', ')}` : ''} · blocks ${value.from?.blockNumber ?? 'unknown'}–${value.through?.blockNumber ?? 'unknown'} · method ${value.methodVersion}${value.coveredUnits ? ` · covered ${value.coveredUnits.raw} raw units` : ''}${value.excludedUnits ? ` · excluded ${value.excludedUnits.raw} raw units` : ''}`;

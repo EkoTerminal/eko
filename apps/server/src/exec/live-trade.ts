@@ -3,7 +3,7 @@ import { decodeFunctionData, encodeFunctionData, keccak256, padHex, parseAbi, st
 import { binary, type SqlClient } from '@eko/db';
 import { loadRegistry, SerializedMeteredForkLease, type AnvilRpc, type MeteredForkLease } from '@eko/chain';
 import { ActualOrderBindingSchema, canonicalize, type ActualOrderBinding, type ActualOrderObservation, type ActualOrderState,
-  type Agent, type GuardAssessmentV2, type GuardCursor, type Policy, type PreflightRequest, type Verdict } from '@eko/shared';
+  isHardDanger, type Agent, type GuardAssessmentV2, type GuardCursor, type Policy, type PreflightRequest, type Verdict } from '@eko/shared';
 import { executionPolicyHash, PRESETS, type Deps } from '@eko/policy';
 import type { Config } from '../config.js';
 import { UniswapV3Adapter, type ChainClients } from './chain.js';
@@ -361,20 +361,26 @@ export function readModelVerdicts(reads: { store: { verdict(coin: Address): Prom
 }
 
 /**
- * Buy admission on the current verdict while no Guard v2 release is active (owner decision 2026-10-06). Danger, by
- * level or by any Danger playbook match, refuses and is never overridable. No verdict yet, a `pending` verdict, or a
- * queued or running scan of the coin refuses as `scanning`, which is retryable: a requested scan always produces a
- * verdict newer than the stored one, so while it runs the stored verdict is treated as superseded. Every other level
- * (`clear`, `monitor`) is admitted, with no waiting period. Sells never reach this gate; the sell check, policy
- * limits and the exact-account simulation still apply to every buy.
+ * Buy admission on the current verdict while no Guard v2 release is active (owner decisions 2026-10-06 and 2026-10-12).
+ * A hard Danger finding (HARD_DANGER_PLAYBOOKS in @eko/shared) refuses in every risk mode. Any other Danger, by level or by playbook match,
+ * refuses in Careful and Balanced; in Degen the buyer has chosen to accept buyer-risk findings, so it is admitted with a
+ * warning that names them (since 2026-10-12 Danger also covers run-ups and early-buyer holdings, which describe most
+ * actively traded launches). No verdict yet, a `pending` verdict, or a queued or running scan of the coin refuses as
+ * `scanning`, which is retryable: a requested scan always produces a verdict newer than the stored one, so while it
+ * runs the stored verdict is treated as superseded. `clear` and `monitor` are admitted, with no waiting period. Sells
+ * never reach this gate; the sell check, policy limits and the exact-account simulation still apply to every buy.
  */
 export function currentVerdictGate(scanPending: boolean): NonNullable<Deps['buyVerdictGate']> {
-  return verdict => {
-    if (verdict?.level === 'danger' || verdict?.playbooks.some(m => m.level === 'danger'))
-      return { deny: ['guard_danger: EKO rates this coin Danger, so buys are refused'], warn: [] };
+  return (verdict, policy) => {
+    const danger = verdict?.playbooks.filter(m => m.level === 'danger') ?? [], hard = danger.filter(m => isHardDanger(m.id));
+    if (hard.length)
+      return { deny: [`guard_danger: EKO rates this coin Danger (${hard.map(m => m.id).join(', ')}), so buys are refused in every risk mode`], warn: [] };
+    const soft = verdict?.level === 'danger' || danger.length > 0;
+    if (soft && policy?.mode !== 'degen')
+      return { deny: ['guard_danger: EKO rates this coin Danger, so buys are refused; Degen mode accepts buyer-risk findings'], warn: [] };
     if (!verdict || verdict.level === 'pending' || scanPending)
       return { deny: ['scanning: EKO is still scanning this coin; try again shortly'], warn: [] };
-    return { deny: [], warn: [] };
+    return { deny: [], warn: soft ? [`guard_danger_accepted: rated Danger (${danger.map(m => m.id).join(', ') || 'level'}); Degen mode accepts buyer-risk findings`] : [] };
   };
 }
 /** The buy gate for one coin: Guard v2's own gate once a release is active, otherwise the current-verdict gate. */

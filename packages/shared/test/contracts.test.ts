@@ -207,6 +207,7 @@ describe('CA-31 (proposed) signal, sparkline and agent split', () => {
     expect(CoinSignalSchema.safeParse({ ...signal, lowData: ['narrative'] }).success).toBe(true);
     expect(CoinSignalSchema.safeParse({ ...signal, lowData: ['swarm'] }).success).toBe(false);
     expect(RadarRowSchema.shape.signal.isOptional()).toBe(true);
-    expect(RadarRowSchema.shape.spark8h.safeParse(Array.from({ length: 49 }, () => 1)).success).toBe(false);
+    expect(RadarRowSchema.shape.spark8h.safeParse(Array.from({ length: 128 }, () => 1)).success).toBe(true);
+    expect(RadarRowSchema.shape.spark8h.safeParse(Array.from({ length: 129 }, () => 1)).success).toBe(false);
   });
 });

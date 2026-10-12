@@ -2,7 +2,7 @@ import { formatGuardReason, GUARD_REASON_LABELS, GuardReasonV2Schema, GuardReaso
 import { z } from 'zod';
 import { FeedItemSchema, PairRowSchema, type FeedItem, type PairRow, type Untrusted } from '@eko/shared';
 import type { ChannelEvent } from '../../lib/realtime';
-import { launchedAt, PLAYBOOK_NAMES, receivedAt, type ReceivedAt } from './radarModel';
+import { launchedAt, PLAYBOOK_NAMES, receivedAt, refused, type ReceivedAt, type RiskMode } from './radarModel';
 import { PLAYBOOK_DESCRIPTIONS } from '../../copy/playbooks';
 import { WALLET_LABEL_WORD } from '../../components/ui';
 
@@ -45,7 +45,7 @@ export function antiSnipeTax(taxPct: number, endsInSec: number, receivedAt: numb
   if (endsInSec <= 0) return 0;
   return Math.max(0, Math.round(taxPct * Math.max(0, endsInSec - Math.max(0, now - receivedAt) / 1000) / endsInSec));
 }
-export const pairTradeDisabled = (row: PairRow, stale = false, tradingLive = true) => row.verdictPending || row.verdict === 'danger' || stale || !tradingLive;
+export const pairTradeDisabled = (row: PairRow, stale = false, tradingLive = true, mode: RiskMode = 'balanced') => row.verdictPending || refused(row, mode) || stale || !tradingLive;
 export const FEED_RING = 500;
 export interface FeedBuffer { items: FeedItem[]; waiting: FeedItem[] }
 export function feedRing(rows: readonly FeedItem[]) {

@@ -43,7 +43,16 @@ export function sortRows(rows: readonly RadarRow[], sort: Sort, received?: Recei
   const value = (c: RadarRow) => (sortField(sort) && c.unavailable?.includes(sortField(sort)!)) || (sort === 'Hottest' && (c.unavailable?.includes('volume') || c.volume1hUsd === undefined)) ? undefined : sort === 'Hottest' ? heatScore(c) : sort === '1h move' ? c.change1hPct : sort === 'Agent flow' ? c.flow.agentPct : sort === 'Newest' ? -launchedAt(c, received) : c.exitCost1kPct;
   return list.sort((a, b) => { const av = value(a), bv = value(b); return av === undefined ? bv === undefined ? 0 : 1 : bv === undefined ? -1 : ascending(sort) ? av - bv : bv - av; });
 }
-export const filterRows = (rows: readonly RadarRow[], show: string, stage: string) => rows.filter((c) =>
+export type RiskMode = 'safe' | 'balanced' | 'degen';
+/**
+ * A coin the guard refuses to buy in this risk mode: its sell failed in the buy-then-sell check, or it is graded
+ * Danger. Degen mode accepts a Danger grade with a warning unless a finding is one no mode accepts (`hardDanger`).
+ * The server decides again on every quote; this only says what the row's Trade button will meet.
+ */
+export const refused = (c: Pick<RadarRow, 'verdict' | 'sellCheck' | 'hardDanger'>, mode: RiskMode = 'balanced') =>
+  c.sellCheck?.status === 'refused' || (c.verdict === 'danger' && (mode !== 'degen' || c.hardDanger === true));
+export const filterRows = (rows: readonly RadarRow[], show: string, stage: string, hideRefused = false, mode: RiskMode = 'balanced') => rows.filter((c) =>
+  !(hideRefused && refused(c, mode)) &&
   (show === 'All' || (show === 'Hot' ? displayHeat(c) === 'hot' : c.verdict === (show === NO_FLAGS ? 'clear' : show.toLowerCase()))) &&
   (stage === 'All' || c.stage === (stage === 'Curve' ? 'curve' : 'graduated')));
 export function applyRadarEvents(rows: readonly RadarRow[], events: readonly ChannelEvent<'radar'>[]): RadarRow[] {

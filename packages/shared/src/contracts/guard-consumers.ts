@@ -27,7 +27,7 @@ export function guardInertText(text: string): string {
 export function compactGuardVerdict(input: GuardConsumerRequest) {
   const request = GuardConsumerRequestSchema.parse(input);
   const disclosures = [BUYER_RISK, DYOR, BUILT_ON, NON_AFFILIATION];
-  if (request.version === 1) return { version: 1 as const, label: `Legacy assessment · rules ${request.rulesVersion}`, level: request.verdict.level,
+  if (request.version === 1) return { version: 1 as const, label: `Rule set ${request.rulesVersion}`, level: request.verdict.level,
     mode: null, gap: '', snapshot: `Snapshot block ${request.verdict.asOfBlock}`, lines: request.verdict.reasons.slice(0, 3).map(guardInertText),
     allReasons: request.verdict.reasons.map(guardInertText), evidencePath: `/coin/${request.verdict.coin}`, receiptId: request.verdict.receipt.id, disclosures };
   const guard = request.assessment;

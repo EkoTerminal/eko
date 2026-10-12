@@ -2390,7 +2390,7 @@ Fastify at `https://api.{{DOMAIN}}/v1`, one router per area in `apps/server/src/
 
 ### 15.2 Services
 
-Each `/v1` area calls one service: `AuthService` (SignalOS) and `EntitlementsService`; reads of `coin_card_latest`, `verdicts`, `flow_windows` and `swaps` for Radar, pairs, feed and coins (Radar rank = verdict tier, then agent and crew flow, then exit cost; Ape Score ranks only when `swarm_ranking` is on); `ScanService` (address, `$TICKER` or name; ambiguous → candidates; unknown → queue a Fast Scan and return `pending`); `ExecutionService` plus the guard; `AgentService`, `PolicyService` and `ApprovalService` (sharing `packages/policy` with `apps/mcp`); `LoopService` and `ResearchService` on pg-boss; `PerpService` (public venue APIs, link-outs only; we never execute perps).
+Each `/v1` area calls one service: `AuthService` (SignalOS) and `EntitlementsService`; reads of `coin_card_latest`, `verdicts`, `flow_windows` and `swaps` for Radar, pairs, feed and coins (Radar rank = last-hour USD volume, whatever the grade, since 2026-10-12: ranking by verdict tier first put the largest tier's quiet coins ahead of every coin trading; Ape Score ranks only when `swarm_ranking` is on); `ScanService` (address, `$TICKER` or name; ambiguous → candidates; unknown → queue a Fast Scan and return `pending`); `ExecutionService` plus the guard; `AgentService`, `PolicyService` and `ApprovalService` (sharing `packages/policy` with `apps/mcp`); `LoopService` and `ResearchService` on pg-boss; `PerpService` (public venue APIs, link-outs only; we never execute perps).
 
 ### 15.3 WebSocket
 

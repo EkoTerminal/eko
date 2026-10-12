@@ -153,7 +153,8 @@ describe('current-verdict trade admission (no active Guard v2 release)', () => {
   const coin = padHex('0x10', { size: 20 });
   const at = (level: Verdict['level'], playbooks: Verdict['playbooks'] = []): Verdict => ({ ...legacyVerdict, level, playbooks });
   const gate = (scanPending: boolean) => currentVerdictGate(scanPending);
-  const decide = (verdict: Verdict | undefined, scanPending = false) => gate(scanPending)(verdict, {} as never, 'coin', 4663, 0).deny.map(r => r.split(':')[0]);
+  const decide = (verdict: Verdict | undefined, scanPending = false, mode: 'safe' | 'balanced' | 'degen' = 'safe') => gate(scanPending)(verdict, { mode } as never, 'coin', 4663, 0).deny.map(r => r.split(':')[0]);
+  const match = (id: string, level: 'danger' | 'monitor' = 'danger') => ({ id, level, confidence: 1, evidence: [] }) as Verdict['playbooks'][number];
   it('admits clear and monitor with no waiting period, refuses Danger and anything not yet scanned as retryable', () => {
     expect(decide(at('clear'))).toEqual([]);
     expect(decide(at('monitor'))).toEqual([]);
@@ -165,6 +166,24 @@ describe('current-verdict trade admission (no active Guard v2 release)', () => {
     expect(decide(at('pending'))).toEqual(['scanning']);
     // A requested rescan supersedes the stored verdict until it finishes.
     expect(decide(at('clear'), true)).toEqual(['scanning']);
+  });
+  it('admits a buyer-risk Danger in Degen mode with a warning, and never a hard Danger', () => {
+    const soft = at('danger', [match('run_up'), match('bundle_dump')]);
+    // Careful and Balanced refuse it; Degen admits it and names what was accepted.
+    expect(decide(soft, false, 'safe')).toEqual(['guard_danger']); expect(decide(soft, false, 'balanced')).toEqual(['guard_danger']);
+    expect(decide(soft, false, 'degen')).toEqual([]);
+    expect(gate(false)(soft, { mode: 'degen' } as never, 'coin', 4663, 0).warn).toEqual(['guard_danger_accepted: rated Danger (run_up, bundle_dump); Degen mode accepts buyer-risk findings']);
+    expect(gate(false)(at('monitor'), { mode: 'degen' } as never, 'coin', 4663, 0)).toEqual({ deny: [], warn: [] });
+    // A Danger level with no named match is still a buyer-risk Danger.
+    expect(decide(at('danger'), false, 'degen')).toEqual([]);
+    // Cannot sell, costs most of the position to sell, liquidity can be pulled, or text aimed at agents: refused in every mode.
+    for (const id of ['honeypot', 'tax_trap', 'fee_trap_pool', 'malicious_hook', 'removable_liquidity', 'agent_bait']) {
+      expect(decide(at('danger', [match(id), match('run_up')]), false, 'degen')).toEqual(['guard_danger']);
+      // The same finding at Monitor does not refuse.
+      expect(decide(at('monitor', [match(id, 'monitor')]), false, 'degen')).toEqual([]);
+    }
+    // Degen does not skip the scan: an unfinished one still refuses as retryable.
+    expect(decide(soft, true, 'degen')).toEqual(['scanning']); expect(decide(undefined, false, 'degen')).toEqual(['scanning']);
   });
   it('lets an active Guard v2 release take precedence, and binds no verdict into sells', () => {
     const tv = (patch: Partial<TradeVerdict>): TradeVerdict => ({ verdict: at('clear'), guardV2Active: false, scanPending: false, ...patch });

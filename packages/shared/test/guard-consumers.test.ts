@@ -26,7 +26,7 @@ describe('037 compact consumers (synthetic fixtures)', () => {
   it('preserves immutable V1 labels, reasons, legacy matches and receipt bytes', () => {
     const verdict = JSON.parse(JSON.stringify(v1.Verdict)) as typeof v1.Verdict, before = JSON.stringify(verdict);
     const view = compactGuardVerdict(GuardConsumerRequestSchema.parse({version:1,verdict,rulesVersion:'1.0.0'}));
-    expect(view.label).toBe('Legacy assessment · rules 1.0.0'); expect(view.level).toBe(verdict.level);
+    expect(view.label).toBe('Rule set 1.0.0'); expect(view.level).toBe(verdict.level);
     expect(view.receiptId).toBe(verdict.receipt.id); expect(JSON.stringify(verdict)).toBe(before);
     expect(GuardConsumerRequestSchema.safeParse({version:2,assessment:verdict}).success).toBe(false);
   });
