@@ -35,3 +35,35 @@ export async function readPoolLiquidity(db: ChainDb, coins: Address[]): Promise<
   }
   return found;
 }
+
+/**
+ * Where a Pons launch curve stands at its latest priced trade: progress toward graduation (percent of the graduation
+ * reserve raised) and the USD held in the curve, which is what sellers can take out in all. A Pons curve is a
+ * constant product over a virtual quote reserve of 0.4 times the graduation reserve and the whole token supply
+ * (measured 2026-10-12: card progress = 40 x s/(1-s) for s = share of supply bought, median 40.0 on every curve size),
+ * so a trade at price p (quote per coin, base units) puts the quote side at sqrt(0.4 x T x supply x p) and the real
+ * reserve at that less 0.4 x T. The trade's amounts include the fee, which moves the result by under one point of
+ * progress (checked against 14 current cards). Absent without a launch record, a supply or a priced trade.
+ */
+export function curveState(threshold: number, supply: number, coinAmount: number, quoteAmount: number, usd: number): { curvePct: number; usd: number } | null {
+  if (!(threshold > 0) || !(supply > 0) || !(coinAmount > 0) || !(quoteAmount > 0) || !(usd > 0)) return null;
+  const virtual = 0.4 * threshold, reserve = Math.min(threshold, Math.max(0, Math.sqrt(virtual * supply * quoteAmount / coinAmount) - virtual));
+  return { curvePct: 100 * reserve / threshold, usd: reserve * usd / quoteAmount };
+}
+/** `curveState` for Pons coins that have not graduated, by coin, from indexed rows only. */
+export async function readCurveStates(db: ChainDb, coins: Address[]): Promise<Map<Address, { curvePct: number; usd: number }>> {
+  const found = new Map<Address, { curvePct: number; usd: number }>();
+  if (!coins.length) return found;
+  const rows = (await db.sql.query<{ coin: Uint8Array; threshold: number | null; supply: number | null; coin_amount: number | null; quote_amount: number | null; usd: number | null }>(`
+    SELECT t.address AS coin,(e.data->>'graduationThreshold')::numeric::float8 AS threshold,t.total_supply::float8 AS supply,
+      s.amount_coin::float8 AS coin_amount,s.amount_quote::float8 AS quote_amount,s.usd
+    FROM tokens t
+    JOIN LATERAL (SELECT data FROM pons_events e WHERE e.token=t.address AND e.kind='launch' ORDER BY e.block,e.log_index LIMIT 1) e ON true
+    JOIN LATERAL (SELECT amount_coin,amount_quote,usd FROM swaps s WHERE s.coin=t.address AND s.usd>0 AND s.amount_quote>0 AND s.amount_coin>0 ORDER BY s.block DESC LIMIT 1) s ON true
+    WHERE t.address=ANY($1::bytea[]) AND t.launchpad='pons' AND t.graduated_block IS NULL AND t.total_supply>0`, [coins.map(binary)])).rows;
+  for (const row of rows) {
+    const state = curveState(Number(row.threshold), Number(row.supply), Number(row.coin_amount), Number(row.quote_amount), Number(row.usd));
+    if (state) found.set(hex(row.coin) as Address, state);
+  }
+  return found;
+}

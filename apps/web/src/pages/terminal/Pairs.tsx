@@ -1,23 +1,25 @@
-import { DANGER_ACCEPTED_TITLE, REFUSED_TITLE, TRADING_PAUSED_TITLE } from '../../copy/availability';
+import { DANGER_ACCEPTED_TITLE, REFUSED_TITLE, TRADING_PAUSED_TITLE, runUpTitle } from '../../copy/availability';
 import { CompactVerdictChip, GuardLegend } from '../../components/GuardCompact';
 import { AnalysisPolicyNotice } from '../../components/PolicyLinks';
 import { CHECK_LEGEND, NEAR_GRAD, SELL_FAILS, SELL_FAILS_TITLE } from '../../copy/availability';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PairRow } from '@eko/shared';
 import { HeatTag, Info, Seg, UnavailableValue, UntrustedText, VerdictChip } from '../../components/ui';
+import { Spark } from '../../components/ui/charts';
 import { fetchParsed, MOCKS } from '../../lib/api';
 import { useRealtime } from '../../lib/RealtimeContext';
 import { useMedia } from '../../lib/useMedia';
 import { installDither } from '../../lib/dither';
-import { heatOf, marking, markClass } from '../../lib/heat';
+import { displayHeat, heatOf, marking, markClass } from '../../lib/heat';
+import { runUpScore } from '../../lib/runUp';
 import { useShell } from '../../store/shell';
 import { useUi } from '../../store/ui';
 import { refused } from './radarModel';
 import { TradePanel } from '../../components/trade/TradePanel';
 import { CoinInspector, FlowBar, HeatLegend } from './RadarParts';
-import { Decode } from './radarMotion';
+import { Decode, Roll } from './radarMotion';
 import { formatAge } from '../../lib/format';
-import { retainCompactGuard, exitText, PLAYBOOK_NAMES, scanDelayed, usd } from './radarModel';
+import { retainCompactGuard, exitText, pct, PLAYBOOK_NAMES, scanDelayed } from './radarModel';
 import { antiSnipeLeft, antiSnipeTax, applyPairEvents, COLUMNS, firstScanText, pairColumns, PairResponseSchema, pairTradeDisabled, receivedAt, type PairsToday } from './pairsFeedModel';
 import { serverNow } from '../../lib/clock';
 import { useTerminalWindow } from './terminalWindow';
@@ -31,20 +33,46 @@ const META = {
   near_grad: { title: 'Near graduation', sub: NEAR_GRAD, about: 'At 100% the curve fills and the pair migrates to a pool. The guard rescans at migration.' },
   migrated: { title: 'Migrated', sub: 'Graduated to a pool, most recent first', about: 'Pairs that have graduated to a pool. Trading routes and fees appear in the guarded panel.' },
 };
-const PAIR_HEIGHT = 132;
-const GUARD_PAIR_HEIGHT = 224;
-const hasGuardLabels = (row: PairRow) => row.guardV2 !== undefined || !!row.guardRefreshFailed;
+// One fixed height per column (the list is windowed): identity, three lines of numbers and the action row.
+const PAIR_HEIGHT = 176;
+const GUARD_PAIR_HEIGHT = 244;
+// A row without a Guard 2 result shows its grade alone, so only a real assessment needs the taller row.
+const hasGuardLabels = (row: PairRow) => row.guardV2 != null || !!row.guardRefreshFailed;
+/** Dollar amounts on a card keep one decimal under $100K so a coin's liquidity and market cap visibly move. */
+export const cardUsd = (v: number) => v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e5 ? `$${Math.round(v / 1000)}K` : v >= 1000 ? `$${(v / 1000).toFixed(1)}K` : `$${Math.round(v)}`;
+const share = (v: number) => `${v >= 10 ? Math.round(v) : Math.round(v * 10) / 10}%`;
+function Metric({ label, children, tone }: { label: string; children: React.ReactNode; tone?: 'up' | 'down' }) {
+  return <div className="pr-m"><span className="pr-ml">{label}</span><span className={`pr-mv num${tone ? ` ${tone}` : ''}`}>{children}</span></div>;
+}
+/** Holder share with the lines the rules use: the first is where a check starts watching, the second where it flags Danger. */
+function Held({ label, value, watch, danger }: { label: string; value: number | undefined; watch: number; danger: number }) {
+  return value === undefined ? null : <span className={value >= danger ? 'bad' : value >= watch ? 'warn' : undefined}>{label} <b className="num">{share(value)}</b></span>;
+}
 export function PairView({ row, now, at, select, trade, stale }: { row: PairRow; now: number; at: number; select: (r: PairRow, el: HTMLElement) => void; trade: (r: PairRow, el: HTMLElement) => void; stale: boolean }) {
   const tradingLive = useShell((st) => st.config?.trading.liveEnabled !== false), riskMode = useUi((st) => st.riskMode);
-  const pending = row.verdictPending || row.verdict === 'pending', heat = heatOf(row, { pending }), no = !pending && refused(row, riskMode);
+  // A Danger pair keeps its Danger tone and is lit as well when its trading is hot.
+  const pending = row.verdictPending || row.verdict === 'pending', tone = heatOf(row, { pending }), heat = displayHeat(row, { pending }), no = !pending && refused(row, riskMode);
   const ageNow = row.ageSec + Math.max(0, now - at) / 1000, delayed = scanDelayed(row, ageNow);
   const left = row.antiSnipe ? antiSnipeLeft(row.antiSnipe.endsInSec, at, now) : 0;
   const tax = row.antiSnipe ? antiSnipeTax(row.antiSnipe.taxPct, row.antiSnipe.endsInSec, at, now) : 0;
-  return <li className={`prow tone ${heat} ${markClass(marking(row, { pending }))}${hasGuardLabels(row) ? ' guard-labels' : ''}`} data-address={row.address} data-pending={pending} onClick={(e) => select(row, e.currentTarget)}>
-    <div className="pr-top"><div className="pr-id"><button className="pr-sym tone-sym" title={`$${row.symbol.text}`} data-pick aria-label={`Inspect $${row.symbol.text}`} onClick={(e) => { e.stopPropagation(); select(row, e.currentTarget); }}><Decode text={`$${row.symbol.text}`}><span>$<UntrustedText value={row.symbol} /></span></Decode></button><span className="pr-age num">{formatAge(ageNow)}</span></div><span className="pr-verdict"><HeatTag heat={heat} /><CompactVerdictChip level={row.verdict} guard={row.guardV2} failed={row.guardRefreshFailed} pending={row.verdictPending} scanDelayed={delayed} evaluatedPlaybooks={row.evaluatedPlaybooks} missing={row.missingChecks} /></span></div>
-    <div className="pr-sub"><span className="pr-name"><UntrustedText value={row.name} /></span><span>·</span><span>{launchpadLabel(row.launchpad, row.column === 'migrated')}</span>{!pending && row.topPlaybook && <span className={`pr-play${row.verdict === 'danger' ? ' bad' : ''}`}>· {PLAYBOOK_NAMES[row.topPlaybook]}</span>}</div>
-    <div className="pr-tax-line">{left > 0 && <span className="pr-snipe num">{tax}% buy tax → 0 in {left} s</span>}</div>
-    <div className="pr-grid tone-dim"><div className="pr-cell">{row.column === 'migrated' ? <><span className="pr-l">Liquidity</span><span className="pr-v num">{row.unavailable?.includes('liquidity') ? <UnavailableValue /> : usd(row.liquidityUsd)}</span></> : <><span className="pr-l">Curve <b className="num">{row.curvePct === undefined ? <UnavailableValue /> : `${Math.floor(row.curvePct)}%`}</b></span><div className="pr-bar" hidden={row.curvePct === undefined}><div className="bar"><i style={{ width: `${row.curvePct ?? 0}%` }} /></div></div></>}</div><div className="pr-cell"><span className="pr-l">Agents</span>{row.unavailable?.includes('flow') ? <UnavailableValue /> : <><b className="num">{Math.round(row.flow.agentPct)}%</b><FlowBar flow={row.flow} compact /></>}</div><div className="pr-cell pr-exit"><span className="pr-l">Exit at $100</span><span className={`pr-v num${row.sellCheck?.status === 'refused' || (!row.unavailable?.includes('exitCost') && row.exitCost100Pct > 15) ? ' bad' : ''}`} title={row.sellCheck?.status === 'refused' ? SELL_FAILS_TITLE : undefined}>{row.sellCheck?.status === 'refused' ? SELL_FAILS : row.unavailable?.includes('exitCost') ? <UnavailableValue /> : exitText(row.exitCost100Pct)}</span></div><button className={`btn btn-sm${row.verdict === 'danger' || !tradingLive ? '' : ' btn-primary'}`} disabled={pairTradeDisabled(row, stale, tradingLive, riskMode)} title={row.verdictPending ? "Waiting for the guard's first scan." : stale ? 'Waiting for current data.' : no ? REFUSED_TITLE(riskMode, row.hardDanger === true) : row.verdict === 'danger' ? DANGER_ACCEPTED_TITLE : !tradingLive ? TRADING_PAUSED_TITLE : undefined} aria-label={`Trade $${row.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(row, e.currentTarget); }}>{no ? 'Refused' : 'Trade'}</button></div>
+  const un = (field: NonNullable<PairRow['unavailable']>[number]) => row.unavailable?.includes(field);
+  const score = pending ? undefined : runUpScore(row), change = un('change') ? undefined : row.change1hPct;
+  return <li className={`prow tone ${tone}${heat === 'hot' ? ' lit' : ''} ${markClass(marking(row, { pending }))}${hasGuardLabels(row) ? ' guard-labels' : ''}`} data-address={row.address} data-pending={pending} onClick={(e) => select(row, e.currentTarget)}>
+    <div className="pr-top"><div className="pr-id"><button className="pr-sym tone-sym" title={`$${row.symbol.text}`} data-pick aria-label={`Inspect $${row.symbol.text}`} onClick={(e) => { e.stopPropagation(); select(row, e.currentTarget); }}><Decode text={`$${row.symbol.text}`}><span>$<UntrustedText value={row.symbol} /></span></Decode></button><span className="pr-age num">{formatAge(ageNow)}</span></div><span className="pr-verdict"><HeatTag heat={heat} /><CompactVerdictChip level={row.verdict} guard={row.guardV2} failed={row.guardRefreshFailed} pending={row.verdictPending} scanDelayed={delayed} evaluatedPlaybooks={row.evaluatedPlaybooks} missing={row.missingChecks} detail={score === undefined ? undefined : String(score)} detailTitle={score === undefined ? undefined : runUpTitle(score)} /></span></div>
+    <div className="pr-sub"><span className="pr-name"><UntrustedText value={row.name} /></span><span>·</span><span>{launchpadLabel(row.launchpad, row.column === 'migrated')}</span>{!pending && row.topPlaybook && <span className={`pr-play${row.verdict === 'danger' ? ' bad' : ''}`}>· {PLAYBOOK_NAMES[row.topPlaybook]}</span>}{left > 0 && <span className="pr-snipe num pr-end">{tax}% buy tax → 0 in {left} s</span>}</div>
+    <div className="pr-metrics">
+      <Metric label="Mkt cap">{row.marketCapUsd === undefined || un('marketCap') ? <UnavailableValue /> : <Roll value={cardUsd(row.marketCapUsd)} />}</Metric>
+      <Metric label={row.column === 'migrated' ? 'Liquidity' : 'In curve'}>{un('liquidity') ? <UnavailableValue /> : <Roll value={cardUsd(row.liquidityUsd)} />}</Metric>
+      <Metric label="Vol 1h">{row.volume1hUsd === undefined || un('volume') ? <UnavailableValue /> : <Roll value={cardUsd(row.volume1hUsd)} />}</Metric>
+      <Metric label="Trades 1h">{row.trades1h === undefined || un('volume') ? <UnavailableValue /> : <Roll value={row.trades1h.toLocaleString('en-US')} />}</Metric>
+      <Metric label="1h" tone={change === undefined || change === 0 ? undefined : change > 0 ? 'up' : 'down'}>{change === undefined ? <UnavailableValue /> : <Roll value={pct(change)} />}</Metric>
+    </div>
+    <div className="pr-holders">
+      <Held label="Top 10" value={row.top10Pct} watch={20} danger={50} /><Held label="Dev" value={row.devPct} watch={5} danger={20} /><Held label="First-minute buyers" value={row.earlyHeldPct} watch={15} danger={30} />
+      {!un('buyers') && <span>Buyers <b className="num">{row.buyers.toLocaleString('en-US')}</b></span>}
+      {!un('flow') && <span>Agents <b className="num">{Math.round(row.flow.agentPct)}%</b></span>}
+    </div>
+    <div className="pr-grid tone-dim"><div className="pr-cell">{row.column === 'migrated' ? <span className="pr-l">Graduated to a pool</span> : <><span className="pr-l">Curve <b className="num">{row.curvePct === undefined ? <UnavailableValue /> : `${Math.floor(row.curvePct)}%`}</b></span><div className="pr-bar" hidden={row.curvePct === undefined}><div className="bar"><i style={{ width: `${row.curvePct ?? 0}%` }} /></div></div></>}</div><div className="pr-cell pr-spark">{row.spark8h && row.spark8h.length > 1 && !un('spark') ? <Spark series={row.spark8h} height={30} /> : null}</div><div className="pr-cell pr-exit"><span className="pr-l">Exit at $100</span><span className={`pr-v num${row.sellCheck?.status === 'refused' || (!un('exitCost') && row.exitCost100Pct > 15) ? ' bad' : ''}`} title={row.sellCheck?.status === 'refused' ? SELL_FAILS_TITLE : undefined}>{row.sellCheck?.status === 'refused' ? SELL_FAILS : un('exitCost') ? <UnavailableValue /> : exitText(row.exitCost100Pct)}</span></div><button className={`btn btn-sm${row.verdict === 'danger' || !tradingLive ? '' : ' btn-primary'}`} disabled={pairTradeDisabled(row, stale, tradingLive, riskMode)} title={row.verdictPending ? "Waiting for the guard's first scan." : stale ? 'Waiting for current data.' : no ? REFUSED_TITLE(riskMode, row.hardDanger === true) : row.verdict === 'danger' ? DANGER_ACCEPTED_TITLE : !tradingLive ? TRADING_PAUSED_TITLE : undefined} aria-label={`Trade $${row.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(row, e.currentTarget); }}>{no ? 'Refused' : 'Trade'}</button></div>
   </li>;
 }
 function Column({ column, rows, now, times, select, trade, stale }: { column: PairRow['column']; rows: PairRow[]; now: number; times: Map<string, number>; select: (r: PairRow, el: HTMLElement) => void; trade: (r: PairRow, el: HTMLElement) => void; stale: boolean }) {

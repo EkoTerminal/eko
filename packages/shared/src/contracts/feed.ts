@@ -72,6 +72,18 @@ export const PairRowSchema = CoinSummarySchema.extend({
   flow: z.intersection(CoinCardSchema.shape.flow, CoinCardFlowExtraSchema),
   antiSnipe: CoinCardSchema.shape.tradeability.shape.antiSnipe.optional(),
   verdictPending: z.boolean(),
+  // Additive (2026-10-12), all as on a Radar row: the price series, and last-hour trading with the usual hour (a pair
+  // without them could never be marked Hot, since Hot is read from them).
+  spark8h: z.array(z.number()).max(128).optional(),
+  change24hPct: z.number().optional(),
+  volume1hUsd: z.number().nonnegative().optional(),
+  trades1h: z.number().int().nonnegative().optional(),
+  volumeBaselineUsd: z.number().nonnegative().optional(),
+  // Additive (2026-10-12): percent of supply held by the ten largest holders, by the deployer, and still held by the
+  // wallets that bought in the first minute, from the coin's card. Each is absent until the card has measured it.
+  top10Pct: z.number().min(0).max(100).optional(),
+  devPct: z.number().min(0).max(100).optional(),
+  earlyHeldPct: z.number().min(0).max(100).optional(),
 });
 export type PairRow = z.infer<typeof PairRowSchema>;
 export const FeedItemSchema = z.object({

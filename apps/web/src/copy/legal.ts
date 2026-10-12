@@ -122,7 +122,7 @@ export const POLICY_DRAFTS: readonly PolicyDraft[] = [
   { slug: 'risk', title: 'Risk disclosure', sections: [
     { title: 'Loss and changing evidence', paragraphs: [
       'You can lose the entire amount of a trade. Liquidity can disappear, taxes or permissions can change, transactions can fail, and a token that was sellable can become unsellable. Simulation and playbook checks describe observed conditions and can miss harmful behavior. Missing or stale evidence remains unknown.',
-      'Verdicts are live status and can change. Clear is not a recommendation. Refused and missed honeypot counts must be published from measured outcomes; missing counts are not zero. Forecasts and wallet labels are beta estimates, with confidence and limitations shown where available.',
+      'Verdicts are live status and can change. No flags is not a recommendation. Refused and missed honeypot counts must be published from measured outcomes; missing counts are not zero. Forecasts and wallet labels are beta estimates, with confidence and limitations shown where available.',
       DYOR,
     ] },
     { title: 'Agent checks and control', paragraphs: [

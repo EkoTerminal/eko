@@ -33,7 +33,9 @@ describe('v1 indexed read routes',()=>{
     for(const [url,schema] of routes){const res=await built.app.inject(url);expect(res.statusCode,url).toBe(200);expect(schema.safeParse(res.json()).success,url).toBe(true);}
     expect(JSON.stringify(built.ctx.chains.meter.usage())).toBe(before);
     const radar=(await built.app.inject('/v1/radar')).json().rows[0];
-    expect(radar.unavailable).toEqual(expect.arrayContaining(['exitCost','flow','liquidity']));
+    // Exit cost and flow have no reading yet; the money in the coin's curve or pool is read from indexed rows.
+    expect(radar.unavailable).toEqual(expect.arrayContaining(['exitCost','flow']));
+    if(!radar.unavailable.includes('liquidity'))expect(radar.liquidityUsd).toBeGreaterThanOrEqual(0);
     expect(radar.unavailable).not.toContain('change');expect(radar.priceUsd).toBeGreaterThan(0);expect(radar.change1hPct).toBe(0);expect(radar.change24hPct).toBeUndefined();
     const feedResponse=(await built.app.inject('/v1/feed')).json();expect(feedResponse.unavailable).toEqual(['agent_trade','crew_trade','clone','swarm','burn']);const feedRows=feedResponse.rows;expect(feedRows[0].ts).toBeGreaterThan(now-86400000);
     expect(radar.verdict).toBe('pending');expect(radar.verdictPending).toBe(false);

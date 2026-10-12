@@ -14,6 +14,13 @@ function exit100(entry:ReadRow):Pick<PairRow,'exitCost100Pct'|'unavailable'> {
 }
 /** New pairs header: Pons launches since UTC midnight, their median seconds from launch block to first scan, and how many were Danger at that first scan. */
 export interface PairsToday { launches:number; medianFirstScanSec:number|null; refused:number }
+/** Holder shares for a pair card, from the coin's card: each only when the card measured it. */
+function holders(entry:ReadRow):Pick<PairRow,'top10Pct'|'devPct'|'earlyHeldPct'> {
+  const card=entry.card,meta=card?.meta?.supply;
+  if(!card || !meta || meta.unavailable)return {};
+  const pct=(n:number)=>Math.min(100,Math.max(0,n));
+  return {top10Pct:pct(card.supply.top10Pct),devPct:pct(card.supply.devPct),...(meta.missing?.includes('bundlesHeldPct') ? {} : {earlyHeldPct:pct(card.supply.bundlesHeldPct)})};
+}
 export class PairsService {
   constructor(readonly store:ReadStore) {}
   private cachedToday?: { at:number; value:Promise<PairsToday>; last?:PairsToday };
@@ -47,7 +54,7 @@ export class PairsService {
     const entry=(await this.store.rows(address))[0];
     if(!entry?.eligible || entry.row.launchpad!=='pons')return null;
     const count=await this.store.db.sql.query<{count:string}>('SELECT buyers AS count FROM read_coins WHERE coin=$1',[binary(address)]);
-    return {...entry.row,column:pairStage(entry.row),buyers:Number(count.rows[0]?.count ?? 0),...exit100(entry),
+    return {...entry.row,column:pairStage(entry.row),buyers:Number(count.rows[0]?.count ?? 0),...exit100(entry),...holders(entry),
       antiSnipe:entry.card?.meta?.tradeability?.missing?.includes('antiSnipeTiming') ? undefined : entry.card?.tradeability.antiSnipe,
       verdictPending:entry.row.verdictPending ?? false};
   }
@@ -61,7 +68,7 @@ export class PairsService {
     const page=selected.rows.slice(0,100),details=await this.store.rows(undefined,page.map(r=>hex(r.coin)));
     const indexed=new Map(details.map(e=>[e.row.address,e]));
     const last=page.at(-1);
-    return {rows:page.map(r=>{const e=indexed.get(hex(r.coin))!;return {...e.row,column:stage,buyers:Number(r.buyers),...exit100(e),verdictPending:e.row.verdictPending ?? false,antiSnipe:e.card?.meta?.tradeability?.missing?.includes('antiSnipeTiming') ? undefined : e.card?.tradeability.antiSnipe};}),
+    return {rows:page.map(r=>{const e=indexed.get(hex(r.coin))!;return {...e.row,column:stage,buyers:Number(r.buyers),...exit100(e),...holders(e),verdictPending:e.row.verdictPending ?? false,antiSnipe:e.card?.meta?.tradeability?.missing?.includes('antiSnipeTiming') ? undefined : e.card?.tradeability.antiSnipe};}),
       cursor:selected.rows.length>100 && last ? encodeCursor(`pairs:${stage}`,[Number(last.pair_block),hex(last.coin)]) : null,delayedSec:0,
       // The page header's counts ride on the first New page.
       ...(stage==='new' && !key ? {today:await this.today()} : {})};

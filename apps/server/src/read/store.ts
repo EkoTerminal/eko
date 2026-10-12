@@ -1,6 +1,6 @@
 import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
-import { readPoolLiquidity } from './pool-liquidity.js';
+import { readCurveStates, readPoolLiquidity } from './pool-liquidity.js';
 import { CoinCardSchema, VerdictSchema, findingsFirst, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
@@ -150,6 +150,10 @@ export class ReadStore {
     const flows=await readFlows(this.db,result.rows.map(t=>hex(t.address)));
     const sells=await readSellChecks(this.db,result.rows.map(t=>hex(t.address)),this.now());
     const pools=await readPoolLiquidity(this.db,result.rows.filter(t=>t.graduated_block!=null).map(t=>hex(t.address)));
+    // A coin still on its Pons curve shows the money in the curve and its progress as of its latest trade: the card's
+    // own progress is as of its rating, minutes behind a coin that is trading.
+    const curves=await readCurveStates(this.db,result.rows.filter(t=>t.graduated_block==null && t.launchpad==='pons').map(t=>hex(t.address)));
+    for(const [coin,state] of curves)pools.set(coin,state.usd);
     // A coin with only a few minutes of bars gets its series from its trades instead (the latest 96 priced ones), so a
     // launch shows a line from its second trade on.
     const thin=result.rows.filter(t=>!t.pricing_pending && (t.spark?.length ?? 0)<6).map(t=>t.address);
@@ -188,7 +192,7 @@ export class ReadStore {
         // A Pons coin is on its curve until its graduation is indexed. Its token row exists a moment before its curve
         // address does; reading that gap as graduated sent brand-new launches to Migrated and tagged them "Pons → pool".
         stage: t.graduated_block != null ? 'graduated' : card?.identity.stage ?? (t.curve || t.launchpad === 'pons' ? 'curve' : 'graduated'),
-        curvePct: card?.identity.curvePct, priceUsd: t.pricing_pending ? 0 : t.price ?? 0, priceUnavailable: t.pricing_pending || t.price == null,
+        curvePct: curves.has(hex(t.address)) ? Math.round(curves.get(hex(t.address))!.curvePct*100)/100 : card?.identity.curvePct, priceUsd: t.pricing_pending ? 0 : t.price ?? 0, priceUnavailable: t.pricing_pending || t.price == null,
         change1hPct: !t.pricing_pending && t.price != null && t.previous1h ? 100 * (t.price/t.previous1h-1) : 0,
         change24hPct: !t.pricing_pending && t.price != null && t.previous24h ? 100 * (t.price/t.previous24h-1) : undefined,
         liquidityUsd: pool ?? (unavailable.includes('liquidity') ? 0 : card!.liquidity.depthUsd.pct2),
