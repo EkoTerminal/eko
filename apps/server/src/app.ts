@@ -23,7 +23,8 @@ import { ChainClients, UniswapV3Adapter } from './exec/chain.js';
 import { PortfolioService } from './exec/portfolio.js';
 import { SanctionsService, SanctionsWorker } from './sanctions/service.js';
 import { RetentionWorker } from './retention-worker.js';
-import { PricingRepairWorker } from './pricing-repair.js';
+import { PricingRepairWorker, type TokenSpot } from './pricing-repair.js';
+import { bestUsdgPool, isTransientRpcUnavailable, rpcStopReason, usdgPoolPrice, type SpotRpc, type UsdgPool } from '@eko/chain';
 import { QuoteStore } from './exec/quotes.js';
 import { TradeService, type TradeBackend } from './exec/trades.js';
 import { SellGuard } from './exec/sell-guard.js';
@@ -135,7 +136,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     idleTokenDays: cfg.RETENTION_IDLE_TOKEN_DAYS, pendingPoolDays: cfg.RETENTION_PENDING_POOL_DAYS, feedDays: cfg.RETENTION_FEED_DAYS,
     dangerQuietDays: cfg.RETENTION_DANGER_QUIET_DAYS, quietCoinDays: cfg.RETENTION_QUIET_COIN_DAYS },
     result => logger['failed' in result ? 'warn' : 'info']({ retention: result }, 'Chain retention pass'));
-  const pricingRepair = new PricingRepairWorker(dbh.chain, (event, fields) => logger.info({ event, ...fields }, event));
+
 
 
   const monitoring = new LaunchMonitor(dbh.chain.sql);
@@ -174,6 +175,22 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   const budget = new InferenceBudget(db, cfg.AI_DAILY_BUDGET_USD, cfg.AI_MAX_CALLS_PER_BOT_HOUR);
   const chains = new ChainClients({ mainnet: cfg.RH_MAINNET_RPC_URL, testnet: cfg.RH_TESTNET_RPC_URL }, cfg, dbh.rpcUsage);
   chains.meter.start();
+  // Swaps quoted in a token with no indexed price are priced at its Uniswap v3 USDG pool (repricePoolQuotes). A reverted
+  // or undecodable read (no pool at that block) is no price; budget stops and transient provider failures are retried.
+  const usdgPools = new Map<string, Promise<UsdgPool | null>>();
+  const tokenSpot: TokenSpot = async (token, decimals, block) => {
+    const mainnet = chains.get('robinhood-mainnet'), client: SpotRpc = { request: input => mainnet.request(input as never) };
+    try {
+      let pool = usdgPools.get(token);
+      if (!pool) { pool = bestUsdgPool(client, token as `0x${string}`, block).then(found => found.pool); usdgPools.set(token, pool); pool.catch(() => usdgPools.delete(token)); }
+      const found = await pool;
+      return found ? await usdgPoolPrice(client, found, decimals, block) : null;
+    } catch (error) {
+      if (rpcStopReason(error) || isTransientRpcUnavailable(error)) throw error;
+      return null;
+    }
+  };
+  const pricingRepair = new PricingRepairWorker(dbh.chain, (event, fields) => logger.info({ event, ...fields }, event), undefined, undefined, undefined, undefined, undefined, tokenSpot);
   const receipts = new ReceiptApiStore(dbh.chain, cfg.RECEIPTS_REGISTRY_ADDRESS, chains.get('robinhood-mainnet'));
   const portfolio = new PortfolioService(db);
   const quotes = new QuoteStore();

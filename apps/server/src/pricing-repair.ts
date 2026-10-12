@@ -1,4 +1,4 @@
-import { binary, refreshBars, type ChainDb } from '@eko/db';
+import { binary, hex, refreshBars, type ChainDb } from '@eko/db';
 import { loadRegistry } from '@eko/chain';
 
 export interface PricingAssets { weth: string; usdg: string; usdgDecimals: number }
@@ -79,6 +79,40 @@ export async function retagPairQuotes(db: ChainDb, limit = REPRICE_BATCH): Promi
     FROM bad WHERE s.ts=bad.ts AND s.tx_hash=bad.tx_hash AND s.log_index=bad.log_index RETURNING 1`, [NATIVE, binary(NATIVE), limit])).rows.length;
 }
 
+/** A token's USD price at a block, or null when it has none (the worker reads Uniswap v3 USDG pools). */
+export type TokenSpot = (token: string, decimals: number, block: bigint) => Promise<number | null>;
+/**
+ * Price Pons swaps in [from, to) quoted in a token with no indexed USD price within a day: Robinhood stock tokens trade
+ * in Uniswap v3 pools against USDG that are not indexed, so their curves' swaps (and every check needing all of a
+ * coin's swaps priced) stayed unpriced. Each token and hour is priced once, at the spot price at the hour's first such
+ * swap (`prices` keeps the readings across passes); a token without a price stays unpriced. Returns swaps priced and
+ * prices read.
+ */
+export async function repricePoolQuotes(db: ChainDb, assets: PricingAssets, spot: TokenSpot, from: Date, to: Date, prices: Map<string, number | null> = new Map(),
+  candleFloor = new Date(Date.now() - 2 * 86_400_000)): Promise<{ priced: number; reads: number }> {
+  const unpriceable = `s.usd IS NULL AND t.launchpad='pons' AND t.decimals IS NOT NULL AND q.decimals IS NOT NULL AND s.amount_coin>0 AND s.amount_quote>0
+    AND NOT s.quote_asset=ANY($3::bytea[]) AND NOT EXISTS(SELECT 1 FROM swaps x WHERE x.coin=s.quote_asset AND x.block<=s.block
+      AND x.ts>=s.ts-interval '1 day' AND x.usd>0 AND x.amount_coin>0)`;
+  const quotes = [NATIVE, assets.weth, assets.usdg].map(binary);
+  const groups = (await db.sql.query<{ quote: Uint8Array; decimals: number; hour: Date; block: string }>(`SELECT s.quote_asset AS quote,q.decimals,date_trunc('hour',s.ts) AS hour,min(s.block)::text AS block
+    FROM swaps s JOIN tokens t ON t.address=s.coin JOIN tokens q ON q.address=s.quote_asset WHERE s.ts>=$1 AND s.ts<$2 AND ${unpriceable} GROUP BY 1,2,3`, [from, to, quotes])).rows;
+  let priced = 0, reads = 0;
+  for (const g of groups) {
+    const token = hex(g.quote), hour = new Date(g.hour), key = `${token}:${hour.toISOString()}`;
+    if (!prices.has(key)) { reads++; prices.set(key, await spot(token, Number(g.decimals), BigInt(g.block))); }
+    const price = prices.get(key);
+    if (price == null || !(price > 0)) continue;
+    const rows = (await db.tx(tx => tx.sql.query<{ coin: Uint8Array; ts: Date }>(`UPDATE swaps s SET usd=(s.amount_quote::double precision/10^q.decimals)*$6,
+        price_quote=coalesce(s.price_quote,(s.amount_quote::double precision/10^q.decimals)/(s.amount_coin::double precision/10^t.decimals)),pricing_pending=false,priced_block=$7
+      FROM tokens t,tokens q WHERE t.address=s.coin AND q.address=s.quote_asset AND s.quote_asset=$4 AND s.ts>=greatest($1,$5::timestamptz) AND s.ts<least($2,$5::timestamptz+interval '1 hour')
+        AND ${unpriceable} RETURNING s.coin,s.ts`, [from, to, quotes, g.quote, hour, price, g.block]))).rows;
+    priced += rows.length;
+    const recent = rows.filter(row => new Date(row.ts).getTime() >= candleFloor.getTime());
+    if (recent.length) await db.tx(tx => refreshBars(tx, recent.map(row => ({ coin: row.coin, minute: new Date(Math.floor(new Date(row.ts).getTime() / 60000) * 60000) }))));
+  }
+  return { priced, reads };
+}
+
 const HOUR = 3_600_000;
 /**
  * Worker role: every 30 s, price the newest six hours of Pons swaps, then walk an in-memory cursor back one hour at a
@@ -91,8 +125,11 @@ export class PricingRepairWorker {
   private cursor?: number;
   /** The process re-tagged every mispaired curve swap it found (new ones are decoded with their pair). */
   private retagged = false;
+  /** Pool prices read per token and hour (repricePoolQuotes), kept for the process. */
+  private spotPrices = new Map<string, number | null>();
   constructor(private readonly db: ChainDb, private readonly log: (event: string, fields: Record<string, unknown>) => void,
-    private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 28_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH) {}
+    private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 28_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH,
+    private readonly spot?: TokenSpot) {}
   start() { if (this.timer) return; void this.tick(); this.timer = setInterval(() => void this.tick(), this.intervalMs); this.timer.unref(); }
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
@@ -106,9 +143,13 @@ export class PricingRepairWorker {
     for (;;) {
       const n = await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), new Date(end - HOUR), new Date(end), this.batch, candleFloor);
       priced += n;
-      if (n < this.batch) return { priced, done: true };
+      if (n < this.batch) break;
       if (this.now() >= deadline) return { priced, done: false };
     }
+    // Then what has no indexed price: a provider failure leaves the hour for the next pass.
+    if (this.spot) try { priced += (await repricePoolQuotes(this.db, this.assets!, this.spot, new Date(end - HOUR), new Date(end), this.spotPrices, candleFloor)).priced; }
+    catch { return { priced, done: false }; }
+    return { priced, done: true };
   }
   private async pass() {
     const started = this.now(), deadline = started + this.budgetMs, top = Math.ceil(started / HOUR) * HOUR, candleFloor = new Date(started - 2 * 24 * HOUR);

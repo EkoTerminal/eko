@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
-import { PricingRepairWorker, repricePonsSwaps, retagPairQuotes, type PricingAssets } from '../src/pricing-repair.js';
+import { PricingRepairWorker, repricePonsSwaps, repricePoolQuotes, retagPairQuotes, type PricingAssets } from '../src/pricing-repair.js';
 
 // 2026-10-11: 694,000 of 1.96 million Pons swaps in seven days had no USD (USDG quotes, and curve swaps decoded before
 // the coin's decimals were known), so those coins never got wash and curve checks and could never be rated Clear.
@@ -80,5 +80,31 @@ describe('Pons swap repricing', () => {
     expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now))).toBe(2);
     const rows = (await db.sql.query<{ block: string; quote: Uint8Array; usd: number }>('SELECT block::text,quote_asset AS quote,usd FROM swaps WHERE block IN (20,21) ORDER BY swaps.block')).rows;
     expect(rows.map(r => [r.block, `0x${Buffer.from(r.quote).toString('hex')}`, r.usd])).toEqual([['20', usdg, 25], ['21', stock, 300]]);
+  });
+  it('prices swaps quoted in a token with no indexed price at its pool price, once per token and hour', async () => {
+    // Robinhood stock tokens trade in Uniswap v3 USDG pools that are not indexed, so their curves' swaps had no USD.
+    const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
+    await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(now));
+    const stock = address(0x5c), indexed = address(0x5d), unknown = address(0x5e);
+    await db.insert('tokens', { address: binary(coin), name: 'Sample token', symbol: 'DEMO', decimals: 18, launchpad: 'pons', first_block: '1', block: '1' });
+    for (const t of [stock, indexed, unknown]) await db.insert('tokens', { address: binary(t), name: 'Stock', symbol: 'DEMO', decimals: 18, first_block: '1', block: '1' });
+    // `indexed` has its own priced swap; `stock` and `unknown` have none.
+    await swap(db, 50, indexed, usdg, '250000000', { venue: 'uniswap_v3', usd: 250, pricing_pending: false, amount_coin: '1000000000000000000' });
+    await swap(db, 60, coin, stock, '2000000000000000000', { pricing_pending: false });   // 2 shares
+    await swap(db, 61, coin, stock, '1000000000000000000', { pricing_pending: false });   // 1 share, same hour
+    await swap(db, 62, coin, indexed, '1000000000000000000', { pricing_pending: false }); // left to repricePonsSwaps
+    await swap(db, 63, coin, unknown, '1000000000000000000', { pricing_pending: false }); // no pool: stays unpriced
+    const reads: string[] = [];
+    const spot = async (token: string, decimals: number, block: bigint) => { reads.push(`${token}:${decimals}:${block}`); return token === stock ? 26.5 : null; };
+    const prices = new Map<string, number | null>(), from = new Date(now - 200 * 60_000), to = new Date(now);
+    expect(await repricePoolQuotes(db, assets, spot, from, to, prices)).toEqual({ priced: 2, reads: 2 });
+    // One read per token and hour, at the hour's first such swap.
+    expect(reads.sort()).toEqual([`${stock}:18:60`, `${unknown}:18:63`].sort());
+    const rows = new Map((await priced(db)).map(r => [r.block, r]));
+    expect(rows.get('60')).toMatchObject({ usd: 53, pending: false, priced_block: '60' });
+    expect(rows.get('61')).toMatchObject({ usd: 26.5, priced_block: '60' });
+    expect(rows.get('62')!.usd).toBeNull(); expect(rows.get('63')!.usd).toBeNull();
+    // Kept readings are not read again.
+    expect(await repricePoolQuotes(db, assets, spot, from, to, prices)).toEqual({ priced: 0, reads: 0 });
   });
 });

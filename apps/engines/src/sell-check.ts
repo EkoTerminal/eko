@@ -1,7 +1,7 @@
 import { binary, hex, type ChainDb } from '@eko/db';
-import { balanceSlot, loadRegistry, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
+import { balanceSlot, loadRegistry, poolSpotUsd, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
-import { decodeFunctionResult, encodeFunctionData, getAddress, parseAbi, toHex, zeroAddress, type Hex } from 'viem';
+import { getAddress, zeroAddress, type Hex } from 'viem';
 
 /**
  * Live sell checks for Radar, coin pages and the quote guard (BACKEND §6.2, the eth_call probe fallback).
@@ -61,37 +61,6 @@ export async function pairUsd(db: ChainDb, token: Address, block: number, nowMs:
   if (!prices.length) return null;
   const mid = Math.floor(prices.length / 2);
   return { usd: prices.length % 2 ? prices[mid]! : (prices[mid - 1]! + prices[mid]!) / 2, decimals: Number(rows[0]!.decimals) };
-}
-
-const v3FactoryAbi = parseAbi(['function getPool(address,address,uint24) view returns (address)']);
-const v3PoolAbi = parseAbi(['function liquidity() view returns (uint128)', 'function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16,uint16,uint16,uint8,bool)']);
-/**
- * The spot USD price of `token` in its most liquid Uniswap v3 pool against USDG at the block, for sizing a pair probe
- * only (the round trip it measures is a ratio). Robinhood stock tokens trade there but their pools are not indexed,
- * so they have no indexed price (GME, MSFT and GOOGL pairs stayed unsupported on 2026-10-11). Null without such a pool.
- */
-export async function poolSpotUsd(rpc: SellRpc, token: Address, decimals: number, block: number, registry: AddressRegistry = loadRegistry()): Promise<{ usd: number | null; requests: number; failed?: true }> {
-  const factory = registry.addressOf('uniswapV3.factory'), usdg = registry.requireAddress('tokens.USDG'), usdgDecimals = registry.data.tokens.USDG.decimals ?? 6;
-  let requests = 0;
-  const call = async (to: Address, data: Hex) => { requests++; return rpc.request({ method: 'eth_call', params: [{ to, data }, toHex(block)] }) as Promise<Hex>; };
-  if (!factory) return { usd: null, requests };
-  let best: { liquidity: bigint; usd: number } | null = null;
-  // A failed read leaves the price unknown (the check is retried), never "no pool"; budget and shutdown stops propagate.
-  try { for (const fee of FEES) {
-    const pool = decodeFunctionResult({ abi: v3FactoryAbi, functionName: 'getPool', data: await call(factory, encodeFunctionData({ abi: v3FactoryAbi, functionName: 'getPool', args: [token, usdg, fee] })) });
-    if (pool === zeroAddress) continue;
-    const liquidity = decodeFunctionResult({ abi: v3PoolAbi, functionName: 'liquidity', data: await call(pool, encodeFunctionData({ abi: v3PoolAbi, functionName: 'liquidity' })) });
-    if (liquidity === 0n || (best && liquidity <= best.liquidity)) continue;
-    const [sqrtPriceX96] = decodeFunctionResult({ abi: v3PoolAbi, functionName: 'slot0', data: await call(pool, encodeFunctionData({ abi: v3PoolAbi, functionName: 'slot0' })) });
-    // token1 per token0 in base units; Uniswap orders the pair by address.
-    const raw = (Number(sqrtPriceX96) / 2 ** 96) ** 2, tokenFirst = token.toLowerCase() < usdg.toLowerCase();
-    const usd = (tokenFirst ? raw : 1 / raw) * 10 ** (decimals - usdgDecimals);
-    if (Number.isFinite(usd) && usd > 0) best = { liquidity, usd };
-  } } catch (error) {
-    if (rpcStopReason(error)) throw error;
-    return { usd: null, requests, failed: true };
-  }
-  return { usd: best?.usd ?? null, requests };
 }
 
 /** About one day of Robinhood Chain blocks (~10 per second), for ranking pools by recent volume. */
