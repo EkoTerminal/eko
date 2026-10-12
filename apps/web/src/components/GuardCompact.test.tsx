@@ -69,9 +69,9 @@ describe('037 compact rendering (synthetic fixtures)', () => {
   });
   it('says once, above the rows, which rule set graded them, and puts no tag on the row', () => {
     const legend = render(<GuardLegend rows={[{ guardV2: null }, { guardV2: null }]} />);
-    expect(legend.match(/Guard 2, the next buyer-risk check, has not been released/g)).toHaveLength(1);expect(legend).toContain('rule set 1.0.x');
+    expect(legend.match(/rule set 1\.0\.x/g)).toHaveLength(1);
     // The legend states the buy gate as it is: this grade is checked, not a Guard 2 result.
-    expect(legend).toContain('Unscanned coins are refused');expect(legend).toContain('Degen mode accepts a Danger grade');expect(legend).toContain('never one for a coin that cannot be sold');expect(legend).not.toContain('shown for reference');
+    expect(legend).toContain('Unscanned coins and coins that cannot be sold are refused');expect(legend).toContain('unless you trade in Degen mode');expect(legend).not.toContain('shown for reference');
     expect(render(<GuardLegend rows={[{}]} />)).toBe('');
     const active = GuardAssessmentV2Schema.parse({...guard,mode:'active',level:'high',observedLevel:'high',score:60,baseScore:60,familyPoints:{E:60,O:0,Ff:0,C:0,I:0},factors:[]}) as GuardAssessmentV2;
     expect(render(<GuardLegend rows={[{ guardV2: active }]} />)).toBe('');

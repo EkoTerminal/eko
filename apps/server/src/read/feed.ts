@@ -6,6 +6,10 @@ import type { ReadStore } from './store.js';
 import { decodeCursor, encodeCursor } from './pagination.js';
 /** How long the API process reuses the feed's whole-database inputs (flow model, Census gate, agent-trade availability). */
 export const FEED_SHARED_TTL_MS=30_000;
+/** A trade this large on a Radar coin is a Feed row (about 280 an hour on 2026-10-12, against 56,000 swaps in all). */
+export const FEED_TRADE_MIN_USD=500;
+/** Trades are read from the swaps of the last hour only: the Feed keeps the latest 500 rows, which is minutes of them. */
+export const FEED_TRADE_WINDOW_MS=3_600_000;
 export class FeedService {
   constructor(readonly store:ReadStore) {}
   private cachedShared?:{at:number;value:Promise<{model:string;gate:Awaited<ReturnType<typeof censusGate>>;measured:boolean}>};
@@ -34,8 +38,14 @@ export class FeedService {
     const scope=`feed:${[...(kinds ?? [])].sort().join(',')}`,key=decodeCursor(cursor,scope);
     if(key && (key.length!==2 || !Number.isSafeInteger(key[0]) || typeof key[1]!=='string'))throw new InputError('Invalid feed cursor');
     const {model,gate,measured}=await this.shared();
-    const params:unknown[]=[model],where:string[]=[];
-    const source=`(SELECT * FROM read_feed UNION ALL SELECT e.id,e.coin,e.block,
+    // Large trades on Radar coins in the last hour, by any wallet: the buyer is the wallet that received the coins.
+    const params:unknown[]=[model,FEED_TRADE_MIN_USD,new Date(this.store.now()-FEED_TRADE_WINDOW_MS)],where:string[]=[];
+    const source=`(SELECT * FROM read_feed UNION ALL SELECT 'trade:'||encode(s.tx_hash,'hex')||':'||s.log_index AS id,s.coin,s.block,'trade' AS kind,
+      jsonb_build_object('sizeUsd',s.usd,'side',CASE WHEN s.side=1 THEN 'buy' ELSE 'sell' END,'wallet','0x'||encode(coalesce(CASE WHEN s.side=1 THEN s.recipient END,s.trader),'hex')) AS data,
+      NULL::text AS verdict_id,t.first_block,t.symbol
+      FROM swaps s JOIN read_coins r ON r.coin=s.coin JOIN tokens t ON t.address=s.coin
+      WHERE s.usd>=$2 AND s.ts>$3 AND coalesce(CASE WHEN s.side=1 THEN s.recipient END,s.trader) IS NOT NULL
+      UNION ALL SELECT e.id,e.coin,e.block,
       CASE WHEN e.data->>'label'='crew' THEN 'crew_trade' ELSE 'agent_trade' END AS kind,e.data,NULL::text AS verdict_id,t.first_block,t.symbol
       FROM flow_events e JOIN tokens t ON t.address=e.coin JOIN chain_blocks b ON b.number=e.block AND b.hash=e.block_hash
       WHERE e.model_version=$1 AND e.data->>'label' IN ('declared_agent','likely_agent','crew') AND NOT EXISTS(SELECT 1 FROM flow_dirty d WHERE d.coin=e.coin)) AS feed_source`;

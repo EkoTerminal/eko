@@ -65,7 +65,7 @@ export function receiveFeed(buffer: FeedBuffer, rows: readonly FeedItem[], pause
 export const flushFeed = (buffer: FeedBuffer): FeedBuffer => ({ items: feedRing([...buffer.waiting, ...buffer.items]), waiting: [] });
 export const FEED_GROUPS = ['trade', 'scan', 'alert', 'ghost', 'swarm', 'launch', 'burn'] as const;
 export type FeedGroup = typeof FEED_GROUPS[number];
-export const feedGroup = (kind: FeedItem['kind']): FeedGroup => ({ agent_trade: 'trade', crew_trade: 'trade', verdict: 'scan', playbook: 'alert', clone: 'ghost', wash: 'alert', swarm: 'swarm', new_pair: 'launch', graduation: 'launch', burn: 'burn' })[kind] as FeedGroup;
+export const feedGroup = (kind: FeedItem['kind']): FeedGroup => ({ trade: 'trade', agent_trade: 'trade', crew_trade: 'trade', verdict: 'scan', playbook: 'alert', clone: 'ghost', wash: 'alert', swarm: 'swarm', new_pair: 'launch', graduation: 'launch', burn: 'burn' })[kind] as FeedGroup;
 // CA-32: each optional field contributes only its own part of the description.
 export type DescriptionStyle = 'label' | 'name' | 'address' | 'muted' | 'buy' | 'sell' | 'ghost';
 export type DescriptionPart = { text: string; style?: DescriptionStyle } | { value: Untrusted; prefix?: string; style?: DescriptionStyle };
@@ -77,6 +77,10 @@ export function feedDescriptionParts(item: FeedItem): DescriptionPart[] {
   const text = (value: string, style?: DescriptionStyle) => parts.push({ text: value, style });
   const separator = () => text('·', 'muted');
   switch (item.kind) {
+    case 'trade':
+      if (item.wallet) text(`${item.wallet.slice(0, 6)}…${item.wallet.slice(-4)}`, 'address');
+      if (item.side) text(item.side === 'buy' ? 'bought' : 'sold', item.side);
+      break;
     case 'agent_trade': case 'crew_trade':
       if (item.label) text(WALLET_LABEL_WORD[item.label], 'label');
       if (item.agentName) parts.push({ value: item.agentName, style: 'name' });

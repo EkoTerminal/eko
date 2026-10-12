@@ -4,6 +4,7 @@ import { fetchParsed } from '../../lib/api';
 import { Link } from '../../lib/Link';
 import { DYOR } from '../../copy';
 import { availabilityMessage, collapsePendingCalls, counterText, gradeText, NOT_CHECKED, receiptPath, recordTime, RECORD_NOT_STARTED, rowAnchor, safePostMortem, SCOREBOARD_TABS, shortCoin } from './scoreboardModel';
+import { GradeOutcomesPanel } from './GradeOutcomes';
 import './trust.css';
 
 function useScoreboard(kind: ScoreboardKind, revision: number) {
@@ -85,6 +86,7 @@ export default function Scoreboard() {
   const data = kind === 'honeypots_missed' ? misses.data : selected.data;
   const availabilityKey = kind === 'calls' ? 'grades' : kind === 'honeypots_refused' ? 'refused' : kind === 'honeypots_missed' ? 'missed' : kind;
   return <div className="shell-page trust-page"><div className="page-head"><div><h1>Scoreboard</h1><p>The public record. Misses come first; measurements keep their original receipts and corrections.</p></div><button className="btn" onClick={() => setRevision(n => n + 1)}>Refresh record</button></div>
+    <GradeOutcomesPanel revision={revision} />
     <ScoreboardHeadlines data={misses.data} />
     <section className="panel"><div className="panel-head"><h2>Misses first</h2></div><div className="panel-body">
       {misses.error ? <p role="alert">Misses are unavailable. Refresh to retry.</p> : !misses.data ? <p role="status">Loading misses…</p> : <>{!misses.data.rows.length && <p>{misses.data.availability.missed.status === 'observed' ? 'No misses in this record.' : availabilityMessage(misses.data.availability.missed)}</p>}<RecordRows rows={misses.data.rows} />

@@ -27,3 +27,9 @@
   .trust-page .page-head { flex-wrap: wrap; }
   .trust-page .btn { min-height: 44px; }
 }
+
+/* How each grade did: a small table above the record. */
+.grade-outcomes{width:100%;border-collapse:collapse;margin:10px 0 12px}
+.grade-outcomes th,.grade-outcomes td{padding:9px 12px 9px 0;text-align:left;border-bottom:1px solid var(--rule);font-weight:400;vertical-align:top}
+.grade-outcomes thead th{font-size:12px;color:var(--muted)}
+.grade-outcomes tbody th{color:var(--ink);font-weight:500;white-space:nowrap}

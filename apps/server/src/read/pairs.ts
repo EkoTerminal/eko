@@ -19,7 +19,11 @@ function holders(entry:ReadRow):Pick<PairRow,'top10Pct'|'devPct'|'earlyHeldPct'>
   const card=entry.card,meta=card?.meta?.supply;
   if(!card || !meta || meta.unavailable)return {};
   const pct=(n:number)=>Math.min(100,Math.max(0,n));
-  return {top10Pct:pct(card.supply.top10Pct),devPct:pct(card.supply.devPct),...(meta.missing?.includes('bundlesHeldPct') ? {} : {earlyHeldPct:pct(card.supply.bundlesHeldPct)})};
+  // After graduation the card's top-ten share counts the pool that holds the liquidity (96-100% on 2026-10-12), so a
+  // graduated coin shows the share the holder check measured with pools left out, when that check reported one.
+  const measured=card.verdict.playbooks.find(m=>m.id==='holder_concentration')?.evidence.find(e=>e.kind==='stat' && e.label==='Top 10 holders supply share')?.value;
+  const top10=card.identity.stage==='graduated' ? typeof measured==='number' ? pct(measured*100) : undefined : pct(card.supply.top10Pct);
+  return {...(top10===undefined ? {} : {top10Pct:top10}),devPct:pct(card.supply.devPct),...(meta.missing?.includes('bundlesHeldPct') ? {} : {earlyHeldPct:pct(card.supply.bundlesHeldPct)})};
 }
 export class PairsService {
   constructor(readonly store:ReadStore) {}

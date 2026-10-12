@@ -141,5 +141,5 @@ export default function Feed() {
   </div>;
 }
 function FeedItemKinds(groups: readonly FeedGroup[]): FeedItem['kind'][] {
-  return (['new_pair', 'agent_trade', 'crew_trade', 'verdict', 'playbook', 'swarm', 'clone', 'wash', 'graduation', 'burn'] as const).filter((kind) => groups.includes(feedGroup(kind)));
+  return (['new_pair', 'trade', 'agent_trade', 'crew_trade', 'verdict', 'playbook', 'swarm', 'clone', 'wash', 'graduation', 'burn'] as const).filter((kind) => groups.includes(feedGroup(kind)));
 }

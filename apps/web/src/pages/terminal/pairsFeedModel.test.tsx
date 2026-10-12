@@ -5,7 +5,7 @@ import { createPairRows } from '../../mocks/demo/pairs';
 import { createFeedRows } from '../../mocks/demo/feed';
 import { PairView } from './Pairs';
 import { LabelGlyph } from './Feed';
-import { antiSnipeLeft, antiSnipeTax, applyPairEvents, feedDescription, feedRing, firstScanText, flushFeed, launchedAt, pairColumns, PairResponseSchema, pairTradeDisabled, receivedAt, receiveFeed } from './pairsFeedModel';
+import { antiSnipeLeft, antiSnipeTax, applyPairEvents, feedDescription, feedGroup, feedRing, firstScanText, flushFeed, launchedAt, pairColumns, PairResponseSchema, pairTradeDisabled, receivedAt, receiveFeed } from './pairsFeedModel';
 import { scanDelayed } from './radarModel';
 import { terminalRange } from './terminalWindow';
 
@@ -43,6 +43,12 @@ describe('pairs columns and guard', () => {
     expect(pairTradeDisabled({ ...danger, hardDanger: true }, false, true, 'degen')).toBe(true);
     // Paused trading and stale data still disable it.
     expect(pairTradeDisabled(danger, false, false, 'degen')).toBe(true); expect(pairTradeDisabled(danger, true, true, 'degen')).toBe(true);
+  });
+  it('describes a large trade by its wallet and side, in the Trades group', () => {
+    const [sample] = createFeedRows(1000000);
+    const item = { ...sample, kind: 'trade' as const, label: undefined, agentName: undefined, crewName: undefined, wallet: '0x00000000000000000000000000000000000000ab' as const, side: 'buy' as const, sizeUsd: 750 };
+    expect(feedGroup(item.kind)).toBe('trade');
+    expect(feedDescription(item)).toContain('0x0000…00ab'); expect(feedDescription(item)).toContain('bought');
   });
   it('gives a launch row its ticker once a later row for the same coin has one', () => {
     const [sample] = createFeedRows(1000000), blank = { text: '', flags: [], truncated: false }, coin = '0x00000000000000000000000000000000000000bb' as const;

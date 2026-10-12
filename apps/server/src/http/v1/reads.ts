@@ -11,13 +11,14 @@ import { FeedService } from '../../read/feed.js';
 import { CoinsService } from '../../read/coins.js';
 import { GuardReadStore } from '../../read/guard-store.js';
 import { ScoreboardService } from '../../read/scoreboard.js';
+import { GradeOutcomesService } from '../../read/grade-outcomes.js';
 import { ScanService } from '../../read/scan.js';
 import { metrics } from '../../obs/metrics.js';
 import { parse, sendError } from './helpers.js';
 const cursor=z.string().max(1024).optional();
 const range=z.object({from:z.coerce.number().int().nonnegative(),to:z.coerce.number().int().nonnegative()}).refine(r=>r.to>r.from && r.to-r.from<=366*86400,{message:'Invalid time range'});
 export function readServices(store:ReadStore,points?:PointsService,phase:()=>string=()=> 'launch_week') {
-  return {store,points,scoreboard:new ScoreboardService(store.db,()=>store.now(),phase),guard:new GuardReadStore(store),radar:new RadarService(store),pairs:new PairsService(store),feed:new FeedService(store),coins:new CoinsService(store),scan:new ScanService(store)};
+  return {store,points,grades:new GradeOutcomesService(store),scoreboard:new ScoreboardService(store.db,()=>store.now(),phase),guard:new GuardReadStore(store),radar:new RadarService(store),pairs:new PairsService(store),feed:new FeedService(store),coins:new CoinsService(store),scan:new ScanService(store)};
 }
 export type ReadServices=ReturnType<typeof readServices>;
 /**
@@ -31,6 +32,7 @@ export type ReadServices=ReturnType<typeof readServices>;
  */
 export async function readRoutes(app:FastifyInstance,services:ReadServices,auth?:AuthService) {
   const {radar,pairs,feed,coins,scan}=services;
+  app.get('/scoreboard/grades',async()=>services.grades.read());
   app.get('/scoreboard',async req=>{const q=parse(z.strictObject({kind:ScoreboardKindSchema.default('calls'),cursor,limit:z.coerce.number().int().min(1).max(100).default(50)}),req.query);return services.scoreboard.list(q.kind,q.cursor,q.limit);});
   app.get('/census',async()=>readCensus(services.store.db,services.store.now()));
   app.get('/radar',async req=>radar.list(parse(z.object({cursor,mode:z.enum(['safe','degen']).optional(),lens:z.string().max(64).optional()}),req.query).cursor));

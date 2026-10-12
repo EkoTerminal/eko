@@ -3,6 +3,7 @@ import { binary } from '@eko/db';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { seedReadFixture, sampleAddress } from './read-fixture.js';
+import { GRADE_RULES_SINCE } from '../src/read/grade-outcomes.js';
 
 // Synthetic bars and trades only.
 const hash = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
@@ -21,6 +22,46 @@ beforeAll(async () => {
 afterAll(async () => { await built.close(); });
 const reset = async () => { await built.ctx.dbh.chain.sql.query('DELETE FROM bars_1m WHERE coin=$1', [binary(coin)]); await built.ctx.dbh.chain.sql.query('DELETE FROM swaps WHERE coin=$1', [binary(coin)]); };
 
+describe('what happened after a grade', () => {
+  it('counts a coin graded under the current rules that traded before its grade, and whether its price halved by the horizon', async () => {
+    await reset();
+    const db = built.ctx.dbh.chain, since = Date.parse(GRADE_RULES_SINCE), at = since + 600_000, later = since + 3 * 3_600_000;
+    await db.ensurePartitions(new Date(at));
+    await db.sql.query(`UPDATE read_coins SET launchpad='pons' WHERE coin=$1`, [binary(coin)]);
+    const block = async (n: number, ms: number) => { await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source) VALUES($1,$2,$3,'head') ON CONFLICT DO NOTHING`, [n, new Date(ms), binary(hash(30000 + n))]); };
+    await block(20001, since + 1000); await block(20010, at); await block(20020, at + 1_800_000);
+    await db.sql.query('INSERT INTO verdicts(id,coin,valid_from_block,rules_version,signature,data) VALUES($1,$2,$3,$4,$1,$5)', ['grade-test-danger', binary(coin), 20010, '1.0.2', JSON.stringify({ level: 'danger' })]);
+    const swap = (n: number, ms: number, usd: number) => db.insert('swaps', { ts: new Date(ms), block: n, tx_hash: binary(hash(9700 + n)), log_index: 0, venue: 'pons_curve', pool_id: binary(coin), coin: binary(coin), quote_asset: binary(sampleAddress(0)),
+      trader: binary(sampleAddress(74)), tx_from: binary(sampleAddress(74)), tx_to: binary(coin), side: 1, amount_coin: '1000000000000000000', amount_quote: '1', price_quote: 1, usd, priced_block: n });
+    // Traded at 10 ten minutes before the grade; 11 right after it (never 20% up); 4 half an hour later.
+    await swap(20005, at - 600_000, 10); await swap(20011, at + 60_000, 11); await swap(20020, at + 1_800_000, 4);
+    built.ctx.reads.store.now = () => later;
+    try {
+      const hour = (await built.ctx.reads.grades.read()).rows.find(r => r.level === 'danger' && r.horizonSec === 3600)!;
+      expect(hour).toMatchObject({ ratings: 1, down50: 1, down50NeverUp20: 1 });
+      // A day has not passed since the grade, so the 24-hour horizon has no coin yet.
+      expect((await built.ctx.reads.grades.read()).rows.find(r => r.level === 'danger' && r.horizonSec === 86400)!.ratings).toBe(0);
+      expect((await built.app.inject('/v1/scoreboard/grades')).json()).toMatchObject({ since: GRADE_RULES_SINCE });
+    } finally { built.ctx.reads.store.now = () => now; }
+  });
+});
+describe('large trades in the Feed', () => {
+  it('lists a trade of $500 or more on a Radar coin with its size, side and wallet, and leaves smaller ones out', async () => {
+    await reset();
+    const db = built.ctx.dbh.chain, buyer = sampleAddress(71), seller = sampleAddress(72);
+    const swap = (n: number, usd: number, side: 1 | -1, trader: string, recipient?: string) => db.insert('swaps', { ts: new Date(now - 600_000 + n * 1000), block: 9500 + n, tx_hash: binary(hash(9500 + n)), log_index: 0, venue: 'pons_curve', pool_id: binary(coin),
+      coin: binary(coin), quote_asset: binary(sampleAddress(0)), trader: binary(trader), tx_from: binary(trader), tx_to: binary(coin), ...(recipient ? { recipient: binary(recipient) } : {}), side, amount_coin: '1000000000000000000', amount_quote: '1', price_quote: 1, usd, priced_block: 9500 + n });
+    for (const n of [1, 2, 3]) await db.insert('chain_blocks', { number: 9500 + n, block: 9500 + n, hash: binary(hash(19500 + n)), parent_hash: binary(hash(19499 + n)), ts: new Date(now - 600_000 + n * 1000) });
+    // A router pays for a buy the buyer receives; the seller sells for itself; a $499 buy is not a Feed row.
+    await swap(1, 750, 1, sampleAddress(73), buyer); await swap(2, 1200, -1, seller); await swap(3, 499, 1, buyer);
+    const rows = ((await built.app.inject('/v1/feed?kinds=trade')).json() as { rows: { kind: string; coin: string; sizeUsd: number; side: string; wallet: string }[] }).rows;
+    expect(rows.map(r => [r.kind, r.sizeUsd, r.side, r.wallet])).toEqual([['trade', 1200, 'sell', seller], ['trade', 750, 'buy', buyer]]);
+    expect(rows.every(r => r.coin === coin)).toBe(true);
+    // A trade older than the hour the Feed reads is gone.
+    built.ctx.reads.store.now = () => now + 3_600_000; expect(((await built.app.inject('/v1/feed?kinds=trade')).json() as { rows: unknown[] }).rows).toHaveLength(0);
+    built.ctx.reads.store.now = () => now;
+  });
+});
 describe('the price series on a row', () => {
   it('gives a young coin one point per minute', async () => {
     await reset(); await bars(Array.from({ length: 30 }, (_, i) => 30 - i), (ago) => 100 - ago);

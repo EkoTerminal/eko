@@ -507,7 +507,7 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `journalRoutes` | function | [apps/server/src/http/v1/journal.ts:20](../../apps/server/src/http/v1/journal.ts#L20) | Yes |
 | `oauthConsentRoutes` | function | [apps/server/src/http/v1/oauth.ts:19](../../apps/server/src/http/v1/oauth.ts#L19) | Yes |
 | `packRoutes` | function | [apps/server/src/http/v1/packs.ts:13](../../apps/server/src/http/v1/packs.ts#L13) | Yes |
-| `readRoutes` | function | [apps/server/src/http/v1/reads.ts:32](../../apps/server/src/http/v1/reads.ts#L32) | Yes |
+| `readRoutes` | function | [apps/server/src/http/v1/reads.ts:33](../../apps/server/src/http/v1/reads.ts#L33) | Yes |
 | `receiptRoutes` | function | [apps/server/src/http/v1/receipts.ts:14](../../apps/server/src/http/v1/receipts.ts#L14) | Yes |
 | `rpcRoutes` | function | [apps/server/src/http/v1/rpc.ts:59](../../apps/server/src/http/v1/rpc.ts#L59) | Yes |
 | `telegramRoutes` | function | [apps/server/src/http/v1/telegram.ts:13](../../apps/server/src/http/v1/telegram.ts#L13) | Yes |

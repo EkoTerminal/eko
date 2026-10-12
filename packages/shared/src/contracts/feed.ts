@@ -94,7 +94,9 @@ export const FeedItemSchema = z.object({
   id: z.string(),
   ts: z.number(),
   block: z.number(),
-  kind: z.enum(['new_pair', 'agent_trade', 'crew_trade', 'verdict', 'playbook', 'swarm', 'clone', 'wash', 'graduation', 'burn']),
+  // `trade` (2026-10-12): a large buy or sell on a Radar coin by any wallet, with its size, side and wallet. The
+  // labelled kinds (`agent_trade`, `crew_trade`) need a wallet label and are rare on this chain.
+  kind: z.enum(['new_pair', 'trade', 'agent_trade', 'crew_trade', 'verdict', 'playbook', 'swarm', 'clone', 'wash', 'graduation', 'burn']),
   coin: AddressSchema,
   symbol: UntrustedSchema,
   level: LevelSchema.optional(),

@@ -34,7 +34,7 @@ export const CHECK_LEGEND='— not checked yet: exit costs and buyer mix arrive 
 // Plain-language keys for the Guard disclosures; the disclosure labels themselves stay on every row.
 export const LEGACY_TITLE='Graded by EKO’s rule set 1.0.x.';
 export const GUARD2_UNAVAILABLE_TITLE='Guard 2, the next buyer-risk check, has not been released, so it has no result for this coin.';
-export const GUARD_LEGEND='Grades come from EKO’s rule set 1.0.x. Guard 2, the next buyer-risk check, has not been released; until it is, buys are checked against this grade. Unscanned coins are refused. Danger coins are refused in Careful and Balanced; Degen mode accepts a Danger grade given for who holds the coin or how far its price has run, and never one for a coin that cannot be sold.';
+export const GUARD_LEGEND='Grades come from EKO’s rule set 1.0.x. Unscanned coins and coins that cannot be sold are refused; other Danger coins are refused unless you trade in Degen mode.';
 
 // Live sell check (BACKEND §6.2 contract probe). A failed sell refuses buy quotes; it is not called a confirmed honeypot.
 export const SELL_FAILS='Sell fails';
