@@ -63,6 +63,8 @@ export function receiveFeed(buffer: FeedBuffer, rows: readonly FeedItem[], pause
     : { items: feedRing([...rows, ...buffer.waiting, ...buffer.items]), waiting: [] };
 }
 export const flushFeed = (buffer: FeedBuffer): FeedBuffer => ({ items: feedRing([...buffer.waiting, ...buffer.items]), waiting: [] });
+/** A verdict row within this long of the coin's launch is its first scan; later ones are re-grades. */
+export const FIRST_VERDICT_MAX_MS = 600_000;
 export const FEED_GROUPS = ['trade', 'scan', 'alert', 'ghost', 'swarm', 'launch', 'burn'] as const;
 export type FeedGroup = typeof FEED_GROUPS[number];
 export const feedGroup = (kind: FeedItem['kind']): FeedGroup => ({ trade: 'trade', agent_trade: 'trade', crew_trade: 'trade', verdict: 'scan', playbook: 'alert', clone: 'ghost', wash: 'alert', swarm: 'swarm', new_pair: 'launch', graduation: 'launch', burn: 'burn' })[kind] as FeedGroup;
@@ -90,7 +92,9 @@ export function feedDescriptionParts(item: FeedItem): DescriptionPart[] {
       if (item.side) text(item.side === 'buy' ? 'bought' : 'sold', item.side);
       break;
     case 'verdict':
-      text(item.firstVerdictMs === undefined ? 'First verdict' : `First verdict in ${(item.firstVerdictMs / 1000).toFixed(1)} s`);
+      // A first scan lands within minutes of launch. A longer gap is a coin graded again or first graded long after
+      // its launch, which read "First verdict in 276119.0 s".
+      text(item.firstVerdictMs === undefined ? 'First verdict' : item.firstVerdictMs <= FIRST_VERDICT_MAX_MS ? `First verdict in ${(item.firstVerdictMs / 1000).toFixed(1)} s` : 'Grade updated');
       separator(); text(item.playbookId ? PLAYBOOK_NAMES[item.playbookId] : 'no playbook matched', 'muted');
       break;
     case 'playbook':
