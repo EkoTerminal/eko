@@ -241,7 +241,9 @@ describe('bundle_dump', () => {
   it('explains the early cohort with its numbers', () => {
     const m = evaluatePlaybooks(cohort([0.2, 0.12], 1, 0)).find((x) => x.id === 'bundle_dump')!;
     expect(m.level).toBe('danger');
-    expect(reasonForMatch(m)).toBe('2 wallets, the deployer among them, bought 32% of supply in the first 5 seconds and still hold 16%.');
+    expect(reasonForMatch(m)).toBe('2 wallets, the deployer among them, bought 32% of supply in the first 5 seconds; those wallets now hold 16%.');
+    const gone = evaluatePlaybooks({ ...cohort([0.2, 0.12]), earlyBuyers: cohort([0.2, 0.12]).earlyBuyers!.map((b) => ({ ...b, heldShare: 0 })) }).find((x) => x.id === 'bundle_dump')!;
+    expect(reasonForMatch(gone)).toBe('2 wallets bought 32% of supply in the first 5 seconds; those wallets now hold 0% (sold or moved to other wallets).');
   });
   it('rejects disparate funders, duplicate wallets and funding after buys', () => {
     const input = bundle(); input.earlyBuyers![2].funder = addr(8); level('bundle_dump', input, null);

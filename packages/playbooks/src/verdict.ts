@@ -32,7 +32,9 @@ export function reasonForMatch(match: PlaybookMatch): string {
     const dev = value('Deployer early bought supply share');
     const pct = (n: number) => `${Math.round(n * 1000) / 10}%`;
     const who = wallets != null ? `${wallets} wallet${wallets === 1 ? '' : 's'}${dev ? ', the deployer among them,' : ''}` : '';
-    const parts = [bought != null && wallets != null ? `${who} bought ${pct(bought)} of supply in the first 5 seconds${held != null ? ` and still hold${wallets === 1 ? 's' : ''} ${pct(held)}` : ''}` : null,
+    // Held counts only the same wallets: early wallets often send tokens on to others, so a low share is not an exit.
+    const now = held == null ? '' : `; ${wallets === 1 ? 'that wallet now holds' : 'those wallets now hold'} ${pct(held)}${bought != null && held < bought / 2 ? ' (sold or moved to other wallets)' : ''}`;
+    const parts = [bought != null && wallets != null ? `${who} bought ${pct(bought)} of supply in the first 5 seconds${now}` : null,
       bundled != null ? `${bundled} wallets were bought for by one funder` : null].filter(Boolean);
     if (parts.length) return `${parts.join('; ')}.`.replace(/^./, (c) => c.toUpperCase());
   }

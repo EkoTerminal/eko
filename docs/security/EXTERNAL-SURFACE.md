@@ -198,7 +198,7 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:633](../../apps/engines/src/worker.ts#L633) | Yes |
 | `tradedSinceCard` | function | [apps/engines/src/worker.ts:785](../../apps/engines/src/worker.ts#L785) | Yes |
 | `unscannedCoins` | function | [apps/engines/src/worker.ts:797](../../apps/engines/src/worker.ts#L797) | Yes |
-| `staleRatings` | function | [apps/engines/src/worker.ts:814](../../apps/engines/src/worker.ts#L814) | Yes |
+| `staleRatings` | function | [apps/engines/src/worker.ts:815](../../apps/engines/src/worker.ts#L815) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |
@@ -672,7 +672,7 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `ReceiptOutbox.get` | method | [packages/db/src/receipt-outbox.ts:183](../../packages/db/src/receipt-outbox.ts#L183) | Yes |
 | `guardScoreHash` | function | [packages/playbooks/src/guard-scoring.ts:20](../../packages/playbooks/src/guard-scoring.ts#L20) | Yes |
 | `evaluateGuardV2` | function | [packages/playbooks/src/guard-scoring.ts:48](../../packages/playbooks/src/guard-scoring.ts#L48) | Yes |
-| `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:59](../../packages/playbooks/src/verdict.ts#L59) | Yes |
+| `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:61](../../packages/playbooks/src/verdict.ts#L61) | Yes |
 | `actualBindingHash` | function | [packages/policy/src/actual-order.ts:17](../../packages/policy/src/actual-order.ts#L17) | Yes |
 | `executionPolicyHash` | function | [packages/policy/src/actual-order.ts:25](../../packages/policy/src/actual-order.ts#L25) | Yes |
 | `actualStateHash` | function | [packages/policy/src/actual-order.ts:35](../../packages/policy/src/actual-order.ts#L35) | Yes |

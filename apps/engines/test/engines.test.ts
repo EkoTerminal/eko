@@ -296,7 +296,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    for(const wallet of bundled)expect(early.get(wallet.toLowerCase() as Address)).toMatchObject({funder:funder.toLowerCase(),boughtShare:0.1,heldShare:0.1,deployer:false});
    await new EngineWorker(db,{client:client()}).processBlock(40);const card=await latest(db);
    const m=match(card,'bundle_dump')!;expect(m.level).toBe('danger');
-   expect(card.verdict.reasons).toContain('4 wallets bought 30.1% of supply in the first 5 seconds and still hold 31%; 3 wallets were bought for by one funder.');
+   expect(card.verdict.reasons).toContain('4 wallets bought 30.1% of supply in the first 5 seconds; those wallets now hold 31%; 3 wallets were bought for by one funder.');
    expect(card.supply.bundlesHeldPct).toBeCloseTo(31,1);expect(card.verdict.level).toBe('danger');
   });
   it('counts a passing sell check as the honeypot test and its round trip as a measured tax',async()=>{
