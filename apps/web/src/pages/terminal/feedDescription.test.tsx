@@ -19,6 +19,9 @@ describe('CA-32 feed descriptions', () => {
     [item({ kind: 'clone', cloneOf: untrusted('EKO'), clones7d: 6 }), 'Ghost Report · Clone of $EKO · 6 clones from this crew this week'],
     [item({ kind: 'verdict', firstVerdictMs: 4100 }), 'First verdict in 4.1 s · no playbook matched'],
     [item({ kind: 'verdict', firstVerdictMs: 2690, playbookId: 'honeypot' }), 'First verdict in 2.7 s · Honeypot'],
+    // A Danger or Monitor grade is never described as "no playbook matched".
+    [item({ kind: 'verdict', firstVerdictMs: 4100, level: 'danger' }), 'First verdict in 4.1 s'],
+    [item({ kind: 'verdict', firstVerdictMs: 4100, level: 'clear' }), 'First verdict in 4.1 s · no playbook matched'],
     // Long after the launch it is a coin graded again, not a first scan that took days.
     [item({ kind: 'verdict', firstVerdictMs: 276_119_000, playbookId: 'bundle_dump' }), 'Grade updated · Bundle dump'],
     [item({ kind: 'swarm', swarm: { pass: 7, of: 9 } }), '7 of 9 personas pass · graded against all launches'],

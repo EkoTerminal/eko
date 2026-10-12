@@ -95,7 +95,10 @@ export function feedDescriptionParts(item: FeedItem): DescriptionPart[] {
       // A first scan lands within minutes of launch. A longer gap is a coin graded again or first graded long after
       // its launch, which read "First verdict in 276119.0 s".
       text(item.firstVerdictMs === undefined ? 'First verdict' : item.firstVerdictMs <= FIRST_VERDICT_MAX_MS ? `First verdict in ${(item.firstVerdictMs / 1000).toFixed(1)} s` : 'Grade updated');
-      separator(); text(item.playbookId ? PLAYBOOK_NAMES[item.playbookId] : 'no playbook matched', 'muted');
+      // A verdict row names no playbook of its own: "no playbook matched" is said only of a grade without one, never
+      // beside Monitor or Danger (the row's grade chip and the alert rows carry the finding).
+      if (item.playbookId) { separator(); text(PLAYBOOK_NAMES[item.playbookId], 'muted'); }
+      else if (item.level === undefined || item.level === 'clear') { separator(); text('no playbook matched', 'muted'); }
       break;
     case 'playbook':
       if (item.playbookId) text(PLAYBOOK_NAMES[item.playbookId], 'name');
