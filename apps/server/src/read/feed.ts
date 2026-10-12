@@ -40,7 +40,10 @@ export class FeedService {
     const {model,gate,measured}=await this.shared();
     // Large trades on Radar coins in the last hour, by any wallet: the buyer is the wallet that received the coins.
     const params:unknown[]=[model,FEED_TRADE_MIN_USD,new Date(this.store.now()-FEED_TRADE_WINDOW_MS)],where:string[]=[];
-    const source=`(SELECT * FROM read_feed UNION ALL SELECT 'trade:'||encode(s.tx_hash,'hex')||':'||s.log_index AS id,s.coin,s.block,'trade' AS kind,
+    // A new pool for a token with no indexed name that is not on the Radar is left out: about 3,800 a day on
+    // 2026-10-12 (Uniswap pools of tokens EKO does not price or rate yet), each a bare address leading to an empty page.
+    const source=`(SELECT * FROM read_feed f WHERE NOT (f.kind='new_pair' AND coalesce(f.symbol,'')='' AND NOT EXISTS(SELECT 1 FROM read_coins r WHERE r.coin=f.coin))
+      UNION ALL SELECT 'trade:'||encode(s.tx_hash,'hex')||':'||s.log_index AS id,s.coin,s.block,'trade' AS kind,
       jsonb_build_object('sizeUsd',s.usd,'side',CASE WHEN s.side=1 THEN 'buy' ELSE 'sell' END,'wallet','0x'||encode(coalesce(CASE WHEN s.side=1 THEN s.recipient END,s.trader),'hex')) AS data,
       NULL::text AS verdict_id,t.first_block,t.symbol
       FROM swaps s JOIN read_coins r ON r.coin=s.coin JOIN tokens t ON t.address=s.coin

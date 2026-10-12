@@ -24,9 +24,11 @@ export async function readPoolLiquidity(db: ChainDb, coins: Address[]): Promise<
     FROM tokens t
     LEFT JOIN LATERAL (SELECT sum((e.data->>'liquidityDelta')::numeric) AS liquidity FROM liquidity_events e
       WHERE e.pool_id=t.graduated_pool AND e.kind='ModifyLiquidity' AND (e.data->>'tickLower')::int<=-887000 AND (e.data->>'tickUpper')::int>=887000) l ON true
-    LEFT JOIN LATERAL (SELECT amount_coin,amount_quote,usd FROM swaps s
-      WHERE s.coin=t.address AND s.block>=t.graduated_block AND s.pool_id=t.graduated_pool AND s.usd>0 AND s.amount_coin>0 AND s.amount_quote>0
-      ORDER BY s.block DESC LIMIT 1) s ON true
+    -- The coin's latest 50 swaps by its (coin, block) index, then the newest of them on its pool with a price. Filtering
+    -- by pool inside the index scan made the planner sort every swap of a busy coin: 2.5 s for one Radar page.
+    LEFT JOIN LATERAL (SELECT recent.amount_coin,recent.amount_quote,recent.usd FROM (
+        SELECT s.amount_coin,s.amount_quote,s.usd,s.pool_id,s.block FROM swaps s WHERE s.coin=t.address AND s.block>=t.graduated_block ORDER BY s.block DESC LIMIT 50) recent
+      WHERE recent.pool_id=t.graduated_pool AND recent.usd>0 AND recent.amount_coin>0 AND recent.amount_quote>0 ORDER BY recent.block DESC LIMIT 1) s ON true
     WHERE t.address=ANY($1::bytea[]) AND t.graduated_pool IS NOT NULL AND t.graduated_block IS NOT NULL`, [coins.map(binary)])).rows;
   for (const row of rows) {
     if (row.liquidity == null || row.coin_amount == null || row.quote_amount == null || row.usd == null) continue;
