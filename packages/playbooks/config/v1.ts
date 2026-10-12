@@ -13,6 +13,8 @@ export interface PlaybookConfig {
   malicious_hook: { quoteSimGapPct: number; asymmetricFeePp: number };
   agent_bait: { maxScanChars: number };
   serial_deployer: { monitorRuns: number; dangerRuns: number; spamLaunches7d: number; countSelf: false; dangerOutcomes: readonly ('rugged' | 'honeypot' | 'dumped')[] };
+  holder_concentration: { top10Monitor: number; top10Danger: number; largestMonitor: number; transferredMonitor: number };
+  dev_dump: { cashOutMultiple: number; firstSellSec: number; minSoldShare: number; heldMonitor: number };
 }
 
 export const CONFIG_V1: Readonly<{ [K in keyof PlaybookConfig]: Readonly<PlaybookConfig[K]> }> = Object.freeze({
@@ -32,4 +34,14 @@ export const CONFIG_V1: Readonly<{ [K in keyof PlaybookConfig]: Readonly<Playboo
   malicious_hook: Object.freeze({ quoteSimGapPct: 2, asymmetricFeePp: 5 }),
   agent_bait: Object.freeze({ maxScanChars: 4000 }),
   serial_deployer: Object.freeze({ monitorRuns: 1, dangerRuns: 3, spamLaunches7d: 20, countSelf: false, dangerOutcomes: Object.freeze(['rugged', 'honeypot', 'dumped'] as const) }),
+  // Calibrated on Robinhood Chain, 2026-10-12, holdings one hour after launch (400 sampled Pons launches with 10+ traders,
+  // next-day price halving 4.5% overall): top ten 20-35% of supply halved next day on 23% (1.7% below 20%), 35%+ on 33%
+  // (20% fell 80%; 1,367 launches: 35-70% halved on 64%); a non-deployer holder at 10%+ on 27% (4% below); tokens held
+  // without buying at 5%+ on 23-25% (under 1% with none). GMGN's own defaults: top ten 30%, phishing 5%.
+  holder_concentration: Object.freeze({ top10Monitor: 0.20, top10Danger: 0.50, largestMonitor: 0.10, transferredMonitor: 0.05 }),
+  // GMGN's dump: the deployer took out at least 1.5x what it put in and first sold within 30 seconds of launch; here it
+  // must also have sold at least 1% of supply (a tiny bag is not a dump). Every such launch in the sample halved from its
+  // peak; selling 1% in the first hour without that pattern did not (43% vs 40%). Deployer holding 5%+: Token Sniffer,
+  // Mobula and De.Fi's line; 25% halved next day in the sample (4% below).
+  dev_dump: Object.freeze({ cashOutMultiple: 1.5, firstSellSec: 30, minSoldShare: 0.01, heldMonitor: 0.05 }),
 });

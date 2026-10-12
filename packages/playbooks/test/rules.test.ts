@@ -352,14 +352,42 @@ describe('serial_deployer', () => {
   });
 });
 
+function holders(o: Partial<NonNullable<PlaybookInput['holders']>> = {}): PlaybookInput {
+  return { ...base(), holders: { top10Share: 0.1, largestShare: 0.02, largest: addr(30), transferredShare: 0, transferredWallets: 0, evidence: [evidence('Holder', 'tx')], ...o } };
+}
+function dev(o: Partial<NonNullable<PlaybookInput['dev']>> = {}): PlaybookInput {
+  return { ...base(), dev: { heldShare: 0, cashInUsd: 100, cashOutUsd: 0, soldShare: 0, firstSellSec: null, evidence: [evidence('Deployer trade', 'tx')], ...o } };
+}
+describe('holder_concentration (calibrated 2026-10-12)', () => {
+  it.each([[0.1999, null], [0.2, 'monitor'], [0.4999, 'monitor'], [0.5, 'danger']] as const)('top 10 share %s → %s', (share, expected) => level('holder_concentration', holders({ top10Share: share }), expected));
+  it.each([[0.0999, null], [0.1, 'monitor']] as const)('largest non-deployer holder %s → %s', (share, expected) => level('holder_concentration', holders({ largestShare: share }), expected));
+  it.each([[0.0499, null], [0.05, 'monitor']] as const)('held without buying %s → %s', (share, expected) => level('holder_concentration', holders({ transferredShare: share, transferredWallets: 2 }), expected));
+  it('names what it found', () => {
+    const m = run('holder_concentration', holders({ top10Share: 0.42, largestShare: 0.12, transferredShare: 0.08, transferredWallets: 3 }))!;
+    expect(reasonForMatch(m)).toBe('The top 10 holders own 42% of supply; one wallet other than the deployer owns 12%; 3 of the largest holders never bought and hold 8% (transferred in).');
+  });
+});
+describe('dev_dump (GMGN dump with a size floor)', () => {
+  const dumped = { cashInUsd: 100, cashOutUsd: 150, firstSellSec: 30, soldShare: 0.01 };
+  it('is danger when the deployer took out 1.5x within 30 seconds and sold 1% of supply', () => level('dev_dump', dev(dumped), 'danger'));
+  it.each([['cashOutUsd', 149.99], ['firstSellSec', 31], ['soldShare', 0.0099], ['cashInUsd', 0]] as const)('is not a dump with %s = %s', (field, value) =>
+    level('dev_dump', dev({ ...dumped, [field]: value }), null));
+  it.each([[0.0499, null], [0.05, 'monitor']] as const)('deployer holding %s → %s', (share, expected) => level('dev_dump', dev({ heldShare: share }), expected));
+  it('names the numbers', () => {
+    expect(reasonForMatch(run('dev_dump', dev({ ...dumped, cashOutUsd: 1234.5, soldShare: 0.034, heldShare: 0.07, firstSellSec: 12 }))!))
+      .toBe('The deployer put in $100, took out $1,235 (3.4% of supply) and first sold 12 seconds after launch; it still holds 7% of supply.');
+    expect(reasonForMatch(run('dev_dump', dev({ heldShare: 0.07 }))!)).toBe('The deployer still holds 7% of supply.');
+  });
+});
+
 describe('pure registry and evidence', () => {
   const fixtures: Record<PlaybookId, () => PlaybookInput> = {
     honeypot: () => ({ ...base(), simulations: [sim()] }), tax_trap: () => taxes(30), removable_liquidity: () => lp(),
     fee_trap_pool: () => pool(), stuck_at_bonding: curve, wash_to_trend: wash, clone_swarm: clone,
     exempt_insiders: pons, bundle_dump: bundle, migration_dump: migration, malicious_hook: () => { const input = hook(); input.hook!.quoteSimGapPct = 3; return input; },
-    agent_bait: bait, serial_deployer: () => serial(3),
+    agent_bait: bait, serial_deployer: () => serial(3), holder_concentration: () => holders({ top10Share: 0.3 }), dev_dump: () => dev({ heldShare: 0.06 }),
   };
-  it('contains exactly the 13 shared ids', () => expect(Object.keys(rules)).toEqual(PlaybookIdSchema.options));
+  it('contains exactly the shared ids', () => expect(Object.keys(rules)).toEqual(PlaybookIdSchema.options));
   it.each(PlaybookIdSchema.options)('%s is deterministic, does not mutate inputs, has valid evidence/confidence', (id) => {
     const input = fixtures[id](); const before = cloneFixture(input);
     const result = run(id, input)!;

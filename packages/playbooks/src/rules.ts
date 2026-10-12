@@ -301,9 +301,45 @@ export const serialDeployer: Rule<'serial_deployer'> = {
   },
 };
 
+/** Few wallets hold much of the supply, or hold it without having bought it (calibrated thresholds, config v1). */
+export const holderConcentration: Rule<'holder_concentration'> = {
+  id: 'holder_concentration', evaluate(s, h, cfg) {
+    const holders = s.holders;
+    if (!holders) return null;
+    const top = holders.top10Share >= cfg.top10Danger ? 'danger' : holders.top10Share >= cfg.top10Monitor ? 'monitor' : null;
+    const largest = holders.largestShare >= cfg.largestMonitor ? 'monitor' : null;
+    const transferred = holders.transferredShare >= cfg.transferredMonitor ? 'monitor' : null;
+    const level = top === 'danger' ? 'danger' : top ?? largest ?? transferred;
+    if (!level) return null;
+    return match(s, h, this.id, level, [
+      stat(s, this.id, 'top10', 'Top 10 holders supply share', holders.top10Share),
+      stat(s, this.id, 'largest', 'Largest non-deployer holder supply share', holders.largestShare),
+      stat(s, this.id, 'transferred', 'Supply held by top holders that never bought', holders.transferredShare),
+      stat(s, this.id, 'transferredWallets', 'Top holders that never bought', holders.transferredWallets),
+      ...(holders.largest ? [address(holders.largest, 'Largest non-deployer holder')] : []), ...holders.evidence,
+    ]);
+  },
+};
+/** The deployer dumped on buyers (GMGN's definition with a size floor), or still holds a large bag. */
+export const devDump: Rule<'dev_dump'> = {
+  id: 'dev_dump', evaluate(s, h, cfg) {
+    const d = s.dev;
+    if (!d) return null;
+    const dumped = d.cashInUsd > 0 && d.cashOutUsd >= cfg.cashOutMultiple * d.cashInUsd && d.firstSellSec != null && d.firstSellSec <= cfg.firstSellSec && d.soldShare >= cfg.minSoldShare;
+    const level = dumped ? 'danger' : d.heldShare >= cfg.heldMonitor ? 'monitor' : null;
+    if (!level) return null;
+    return match(s, h, this.id, level, [
+      stat(s, this.id, 'held', 'Deployer holds supply share', d.heldShare), stat(s, this.id, 'sold', 'Deployer sold supply share', d.soldShare),
+      stat(s, this.id, 'in', 'Deployer bought (USD)', d.cashInUsd), stat(s, this.id, 'out', 'Deployer sold (USD)', d.cashOutUsd),
+      ...(d.firstSellSec != null ? [stat(s, this.id, 'firstSell', 'Deployer first sell (seconds after launch)', d.firstSellSec)] : []),
+      ...(dumped ? [stat(s, this.id, 'dumped', 'Deployer dumped', 1)] : []), address(s.deployer, 'Deployer'), ...d.evidence,
+    ]);
+  },
+};
 export const rules: { [K in keyof PlaybookConfig]: Rule<K> } = { honeypot, tax_trap: taxTrap, removable_liquidity: removableLiquidity, fee_trap_pool: feeTrapPool,
   stuck_at_bonding: stuckAtBonding, wash_to_trend: washToTrend, clone_swarm: cloneSwarm, exempt_insiders: exemptInsiders,
   bundle_dump: bundleDump, migration_dump: migrationDump, malicious_hook: maliciousHook, agent_bait: agentBait, serial_deployer: serialDeployer,
+  holder_concentration: holderConcentration, dev_dump: devDump,
 };
 
 export function evaluatePlaybooks(input: PlaybookInput, config: PlaybookConfig = CONFIG_V1): PlaybookMatch[] {

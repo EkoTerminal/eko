@@ -27,7 +27,7 @@ export const CLEAR_RULES_AT='2026-10-10T21:05:00Z';
  * just after its deploy). The live CLI re-rates them once. Move it forward with any change that completes more checks;
  * a sell check landing after a card is caught by staleRatings without it.
  */
-export const RATING_CODE_AT='2026-10-12T12:50:00Z';
+export const RATING_CODE_AT='2026-10-12T14:00:00Z';
 /** Stale pending cards the re-rating loop loads at once and writes in one transaction. */
 export const RERATE_WIDTH=16;
 /** Blocks before the loop tries again to first-scan a coin it could not load (about two minutes at 0.2 s blocks). */
@@ -227,7 +227,7 @@ export class EngineWorker {
     // Recover post-commit timing/job acknowledgements after process failure. Bound each poll.
     const unrecorded=(await this.db.sql.query<{data:CoinCard}>(`SELECT c.data FROM coin_card_latest c JOIN scan_timings t ON t.coin=c.coin
       WHERE c.as_of_block>=t.discovery_block AND (t.first_verdict_at IS NULL OR (t.critical_complete_at IS NULL AND c.data->'verdict'->>'level'<>'pending'
-        AND jsonb_array_length(coalesce(c.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb))=13)) ORDER BY t.discovered_at LIMIT 256`)).rows;
+        AND jsonb_array_length(coalesce(c.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb))=$1)) ORDER BY t.discovered_at LIMIT 256`,[Object.keys(rules).length])).rows;
     for(const row of unrecorded)await this.recordScan(row.data);
     const scans=await this.processScanJobs(to);
     const count=scans+await this.evaluateActivity(0,to,true,this.startup);
@@ -805,8 +805,8 @@ export async function unscannedCoins(db:ChainDb,since:number,block:number,limit:
 }
 
 /**
- * Cards earlier code rated without the bundle check (any level: Clear never looked at bundles before 2026-10-12) or with
- * a bundle reason in earlier wording, and pending cards that would rate differently now, most recently active first,
+ * Cards earlier code rated without the bundle, holder-concentration or deployer checks (any level: Clear looked at none
+ * of them before 2026-10-12) or with a bundle reason in earlier wording, and pending cards that would rate differently now, most recently active first,
  * with their card ids: written before
  * `rulesAt` (CLEAR_RULES_AT, or the worker's start for cards earlier code wrote); missing the honeypot check while a sell check ran after them (sell-check-reference.ts reads it at the
  * next checkpoint); or, for a Pons coin that has traded, missing the wash or curve check (both need every swap priced)
@@ -817,7 +817,7 @@ export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:
   const found:{coin:Address;card:string}[]=[];
   for(const row of (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT l.coin,l.card_id AS card FROM coin_card_latest l JOIN read_coins r ON r.coin=l.coin
     JOIN tokens t ON t.address=l.coin LEFT JOIN engine_runs e ON e.coin=l.coin AND e.block=l.as_of_block AND e.rules_version=$4
-    WHERE l.coin=ANY($1::bytea[]) AND NOT l.card_id=ANY($5::text[]) AND ((NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'bundle_dump'
+    WHERE l.coin=ANY($1::bytea[]) AND NOT l.card_id=ANY($5::text[]) AND ((NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ?& ARRAY['bundle_dump','holder_concentration','dev_dump']
         OR coalesce(l.data->'playbooks','[]'::jsonb) @> '[{"id":"bundle_dump"}]') AND coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
       OR l.data->'verdict'->>'level'='pending' AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
       OR (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'honeypot'

@@ -100,9 +100,9 @@ export class ReplayCache {
   }
   materializeHoldings(coin:Address,rows:Rows,block:number){return this.holderState(coin,rows,block,'materialized').rows();}
   async holdingsAt(coin:Address,block:number,lane='now'):Promise<Holding[]> {const rows=await this.coinRows(coin);return this.holderState(coin,rows,block,lane).rows();}
-  async holderViewAt(coin:Address,block:number,wallets:Address[],lane='now') {
+  async holderViewAt(coin:Address,block:number,wallets:Address[],lane='now',skip:ReadonlySet<string>=new Set()) {
     const rows=await this.coinRows(coin),state=this.holderState(coin,rows,block,lane);
-    return {count:state.count,top10:state.top10(),burned:state.burned,inventory:state.inventory,amounts:new Map(wallets.map(wallet=>[wallet,state.amount(wallet)]))};
+    return {count:state.count,top10:state.top10(),burned:state.burned,inventory:state.inventory,amounts:new Map(wallets.map(wallet=>[wallet,state.amount(wallet)])),top:state.top(12,wallet=>skip.has(wallet))};
   }
   async tradeAt(coin:Address,block:number,sec:number,exempt:Set<Address>):Promise<TradeView & {bought:number}> {
     const rows=await this.coinRows(coin);let state=this.trades.get(coin);const end=upperBlock(rows.swaps,block);

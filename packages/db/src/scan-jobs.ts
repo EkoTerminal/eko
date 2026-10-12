@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Address, CoinCard, ScanResult } from '@eko/shared';
+import { PlaybookIdSchema, type Address, type CoinCard, type ScanResult } from '@eko/shared';
 import { binary, hex } from './types.js';
 import type { ChainDb } from './client.js';
 
@@ -54,7 +54,7 @@ export class ScanJobs {
 const UNSOURCED_PLAYBOOKS:string[]=[];
 /** Completion requires measured buying checks; a persisted pending/danger card alone is insufficient. */
 export function scanChecksComplete(card:CoinCard) {
-  return card.verdict.level!=='pending' && new Set([...(card.verdict.evaluatedPlaybooks ?? []),...UNSOURCED_PLAYBOOKS]).size===13 &&
+  return card.verdict.level!=='pending' && new Set([...(card.verdict.evaluatedPlaybooks ?? []),...UNSOURCED_PLAYBOOKS]).size===PlaybookIdSchema.options.length &&
     ['tradeability','control','liquidity','supply'].every(section=>{
       const meta=card.meta?.[section as keyof NonNullable<CoinCard['meta']>];
       return !!meta && !meta.unavailable && !meta.missing?.length;

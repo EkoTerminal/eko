@@ -299,6 +299,20 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    expect(card.verdict.reasons).toContain('4 wallets bought 30.1% of supply in the first 5 seconds; those wallets now hold 31%; 3 wallets were bought for by one funder.');
    expect(card.supply.bundlesHeldPct).toBeCloseTo(31,1);expect(card.verdict.level).toBe('danger');
   });
+  it('measures holders and the deployer: tokens held without buying, and a deployer who sold 2x within seconds',async()=>{
+   const db=await traded();await block(db,2,10);
+   // A wallet that never bought receives 12% of supply from the curve's buyer; the deployer buys $100 worth, then sells for $200.
+   const quiet=address(60);await transfer(db,1,actor,12000,coin,curve);await transfer(db,2,quiet,12000,coin,actor);
+   await swap(db,1,1,5000,100,deployer,coin,1);await transfer(db,1,deployer,5000,coin,curve);
+   await swap(db,2,-1,4000,200,deployer,coin,10);await transfer(db,2,curve,4000,coin,deployer);
+   const s=(await loadSources(db,coin,2,client()))!;
+   expect(s.holders).toMatchObject({largest:quiet.toLowerCase(),transferredWallets:1});expect(s.holders!.transferredShare).toBeCloseTo(0.12,6);expect(s.holders!.largestShare).toBeCloseTo(0.12,6);
+   expect(s.dev).toMatchObject({cashInUsd:100,cashOutUsd:200,firstSellSec:9});expect(s.dev!.soldShare).toBeCloseTo(0.04,6);expect(s.dev!.heldShare).toBeCloseTo(0.01,6);
+   await new EngineWorker(db,{client:client()}).processBlock(2);const card=await latest(db);
+   expect(match(card,'dev_dump')?.level).toBe('danger');expect(match(card,'holder_concentration')?.level).toBe('monitor');
+   expect(card.verdict.reasons).toContain('The deployer put in $100, took out $200 (4% of supply) and first sold 9 seconds after launch.');
+   expect(card.verdict.evaluatedPlaybooks).toEqual(expect.arrayContaining(['holder_concentration','dev_dump']));
+  });
   it('counts a passing sell check as the honeypot test and its round trip as a measured tax',async()=>{
    const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);
    await new EngineWorker(db,{client:client()}).processBlock(1);const card=await latest(db);

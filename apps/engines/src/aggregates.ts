@@ -36,6 +36,8 @@ export class HolderAggregate {
   add(wallet:Address,delta:bigint,block:number){this.set(wallet,(this.amounts.get(wallet)?.amount ?? 0n)+delta,block);}
   amount(wallet:Address){const value=this.amounts.get(wallet)?.amount ?? 0n;return value>0n ? value : 0n;}
   top10(){let sum=0,left=10;const visit=(node:Node|undefined)=>{if(!node || !left)return;visit(node.left);if(left){sum+=node.amount;left--;visit(node.right);}};visit(this.root);return sum;}
+  /** The `n` largest holders, largest first, skipping wallets `skip` names (pools, for holder concentration). */
+  top(n:number,skip:(wallet:Address)=>boolean=()=>false){const out:{wallet:Address;amount:number}[]=[];const visit=(node:Node|undefined)=>{if(!node || out.length>=n)return;visit(node.left);if(out.length<n && !skip(node.wallet))out.push({wallet:node.wallet,amount:node.amount});visit(node.right);};visit(this.root);return out;}
   rows():Holding[]{return [...this.amounts].filter(([,v])=>v.amount>0n).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([holder,v])=>({holder:binary(holder),holderHex:holder,amount:String(v.amount),block:String(v.block)}));}
 }
 export interface ActorVolume {rows:SwapRow[];buy:number;sell:number}

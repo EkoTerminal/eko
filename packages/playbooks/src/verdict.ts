@@ -15,6 +15,8 @@ const templates: Record<PlaybookId, string> = {
   malicious_hook: 'Hook permissions or observed quote/fee behavior meet a threshold.',
   agent_bait: 'Token text contains instructions aimed at agents.',
   serial_deployer: 'Deployer/crew launch history meets a repeat-launch threshold.',
+  holder_concentration: 'A few wallets hold a large share of supply.',
+  dev_dump: 'The deployer sold on buyers or holds a large share of supply.',
 };
 const rank: Record<Level, number> = { danger: 3, monitor: 2, info: 1, clear: 0 };
 
@@ -36,6 +38,23 @@ export function reasonForMatch(match: PlaybookMatch): string {
     const now = held == null ? '' : `; ${wallets === 1 ? 'that wallet now holds' : 'those wallets now hold'} ${pct(held)}${bought != null && held < bought / 2 ? ' (sold or moved to other wallets)' : ''}`;
     const parts = [bought != null && wallets != null ? `${who} bought ${pct(bought)} of supply in the first 5 seconds${now}` : null,
       bundled != null ? `${bundled} wallets were bought for by one funder` : null].filter(Boolean);
+    if (parts.length) return `${parts.join('; ')}.`.replace(/^./, (c) => c.toUpperCase());
+  }
+  if (match.id === 'holder_concentration' || match.id === 'dev_dump') {
+    const value = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
+    const pct = (n: number) => `${Math.round(n * 1000) / 10}%`, usd = (n: number) => `$${n >= 100 ? Math.round(n).toLocaleString('en-US') : n.toFixed(2)}`;
+    const parts: string[] = [];
+    if (match.id === 'holder_concentration') {
+      const top10 = value('Top 10 holders supply share'), largest = value('Largest non-deployer holder supply share'), moved = value('Supply held by top holders that never bought'), wallets = value('Top holders that never bought');
+      if (top10 != null && top10 >= 0.2) parts.push(`The top 10 holders own ${pct(top10)} of supply`);
+      if (largest != null && largest >= 0.1) parts.push(`one wallet other than the deployer owns ${pct(largest)}`);
+      if (moved != null && moved >= 0.05 && wallets) parts.push(`${wallets} of the largest holder${wallets === 1 ? '' : 's'} never bought and hold${wallets === 1 ? 's' : ''} ${pct(moved)} (transferred in)`);
+    } else {
+      const held = value('Deployer holds supply share'), sold = value('Deployer sold supply share'), into = value('Deployer bought (USD)'), out = value('Deployer sold (USD)'), first = value('Deployer first sell (seconds after launch)');
+      if (value('Deployer dumped') && into != null && out != null && sold != null && first != null)
+        parts.push(`The deployer put in ${usd(into)}, took out ${usd(out)} (${pct(sold)} of supply) and first sold ${Math.round(first)} seconds after launch`);
+      if (held != null && held >= 0.05) parts.push(`${parts.length ? 'it' : 'The deployer'} still holds ${pct(held)} of supply`);
+    }
     if (parts.length) return `${parts.join('; ')}.`.replace(/^./, (c) => c.toUpperCase());
   }
   if (match.id === 'serial_deployer' && match.level === 'danger') {

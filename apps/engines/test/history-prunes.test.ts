@@ -39,7 +39,7 @@ async function fixture() {
   await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(epoch * 1000));
   await block(db, 1, 0);
   await db.insert('tokens', { address: binary(coin), deployer: binary(deployer), curve: null, name: 'Sample token', symbol: 'DEMO', launchpad: 'other', decimals: 0,
-    total_supply: '3000', supply_block: '1', first_block: '1', block: '1' });
+    total_supply: '3000000', supply_block: '1', first_block: '1', block: '1' });
   await db.insert('pools', { id: binary(pool), venue: 'uniswap_v3', currency0: binary(coin), currency1: binary(zero), fee: 3000, tick_spacing: 1, creation_verified: true, created_block: '1', block: '1' });
   for (const t of traders) await transfer(db, 1, 0, zero, t, 1000);
   await block(db, 2, 60); await lp(db, 2, 60, deployer, 'Mint'); await lp(db, 2, 60, traders[2]!, 'Mint');

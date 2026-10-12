@@ -76,6 +76,14 @@ export interface CardSources {
    * Wallets that bought soon after launch. `funder` paid for the buy (a contract buying for several wallets groups them);
    * `boughtShare` is the supply this wallet bought then, `deployer` marks the launch's own deployer.
    */
+  /**
+   * Holders at the card's block, the curve, pools and burn addresses excluded: the top ten's share of supply (the
+   * deployer included), the largest holder other than the deployer, and what the largest holders hold without ever
+   * having bought (tokens transferred in: GMGN's "phishing" wallets). Shares are of total supply.
+   */
+  holders?: { top10Share: number; largestShare: number; largest: Address | null; transferredShare: number; transferredWallets: number; evidence: EvidenceRef[] };
+  /** The deployer's own trading in this coin: USD in and out, supply sold, first sell (seconds after launch), held now. */
+  dev?: { heldShare: number; cashInUsd: number; cashOutUsd: number; soldShare: number; firstSellSec: number | null; evidence: EvidenceRef[] };
   earlyBuyers?: { wallet: Address; funder: Address; fundedAtSec: number; buyAtSec: number; buyBlock: number;
     heldShare: number; sellingIntoNetInflow: boolean; evidence: EvidenceRef[]; boughtShare?: number; deployer?: boolean }[];
   graduation?: { atSec: number; tx: EvidenceRef; insiderSells: {

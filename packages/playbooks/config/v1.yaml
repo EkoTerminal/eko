@@ -1,4 +1,4 @@
-# packages/playbooks/config/v1.yaml — rules_version 1.0.2 (1.0.1, Oct 1: wash_to_trend volume floor and cycling rule; 1.0.2, Oct 2: serial_deployer excludes its own matches and needs bad outcomes or another playbook's danger for danger, after live calibration: 4 prolific deployers produced 166 of 170 dangers through the self-count; Oct 12: bundle_dump sourced and calibrated, firstBlocks 3 -> 35 blocks (5 s) and the early-cohort share, version kept because history reads key on it). Any change bumps the version (it's hashed into receipts).
+# packages/playbooks/config/v1.yaml — rules_version 1.0.2 (1.0.1, Oct 1: wash_to_trend volume floor and cycling rule; 1.0.2, Oct 2: serial_deployer excludes its own matches and needs bad outcomes or another playbook's danger for danger, after live calibration: 4 prolific deployers produced 166 of 170 dangers through the self-count; Oct 12: bundle_dump sourced and calibrated, firstBlocks 3 -> 35 blocks (5 s) and the early-cohort share, version kept because history reads key on it; holder_concentration and dev_dump added, calibrated the same day). Any change bumps the version (it's hashed into receipts).
 honeypot:            { minLossPct: 95, requireDeepSim: true }
 tax_trap:            { fixedInfoMaxPct: 5, fixedMonitorMaxPct: 25, mutableMonitorMaxPct: 10 }
 removable_liquidity: { deployerLpShare: 0.5, thinDepth2PctUsd: 500, priorRemovalsDanger: 1 }
@@ -12,3 +12,5 @@ migration_dump:      { windowMin: 5, soldMonitor: 0.30, soldDanger: 0.60, impact
 malicious_hook:      { quoteSimGapPct: 2, asymmetricFeePp: 5 }
 agent_bait:          { maxScanChars: 4000 }
 serial_deployer:     { monitorRuns: 1, dangerRuns: 3, spamLaunches7d: 20, countSelf: false, dangerOutcomes: [rugged, honeypot, dumped] }
+holder_concentration: { top10Monitor: 0.20, top10Danger: 0.50, largestMonitor: 0.10, transferredMonitor: 0.05 }
+dev_dump:            { cashOutMultiple: 1.5, firstSellSec: 30, minSoldShare: 0.01, heldMonitor: 0.05 }

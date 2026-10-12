@@ -101,7 +101,9 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   const earlyWallets=[...new Set(earlyRows.map(buyerOf).filter((w):w is Uint8Array=>w!=null).map(rowHex))];
   const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...poolRows.map(p=>rowHex(p.id)),...earlyWallets];
   if(!cache){holdings=await holdingsAt(db,coin,block);previousHoldings=priorBlock ? await holdingsAt(db,coin,Number(priorBlock.number)) : [];}
-  const holderView=cache ? await cache.holderViewAt(coin,block,wallets) : (()=>{const a=makeHolders(holdings);return {count:a.count,top10:a.top10(),burned:a.burned,inventory:a.inventory,amounts:new Map(wallets.map(wallet=>[wallet,a.amount(wallet)]))};})();
+  // Pools hold liquidity, not a holder's bag: skipped in the top holders (the curve and burn addresses never rank).
+  const poolHolders=new Set<string>([...poolRows.map(p=>rowHex(p.id)),...[loadRegistry().addressOf('uniswapV4.poolManager')].filter((a):a is Address=>!!a).map(a=>a.toLowerCase())]);
+  const holderView=cache ? await cache.holderViewAt(coin,block,wallets,'now',poolHolders) : (()=>{const a=makeHolders(holdings);return {count:a.count,top10:a.top10(),burned:a.burned,inventory:a.inventory,amounts:new Map(wallets.map(wallet=>[wallet,a.amount(wallet)])),top:a.top(12,wallet=>poolHolders.has(wallet))};})();
   const previousCount=priorBlock ? cache ? (await cache.holderViewAt(coin,Number(priorBlock.number),[],'previous')).count : makeHolders(previousHoldings).count : 0;
   const scratch=cache ? undefined : new TradeAggregate(swaps);
   const trade=cache ? await cache.tradeAt(coin,block,asOfSec,exSet) : {...scratch!.advance(swapEnd,asOfSec),bought:scratch!.boughtFor(exSet)};
@@ -136,6 +138,23 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     const burned=holderView.burned,inventory=holderView.inventory;
     s.supply = { total, burned, circulating: total > burned + inventory ? total - burned - inventory : 0n, block: Number(token.supply_block) };
     s.sectionBlocks.supply = Math.min(block, s.supply.block);
+  }
+  if (s.supply && s.supply.total > 0n) {
+    const total=Number(s.supply.total),bought=new Set<string>();
+    for(let i=0;i<swapEnd;i++){const r=swaps[i];if(r.side!==1)continue;if(r.recipient)bought.add(rowHex(r.recipient));if(r.trader)bought.add(rowHex(r.trader));}
+    // Holder concentration: the ten largest holders (pools skipped), the largest that is not the deployer, and what the
+    // ten largest hold without ever having bought (transferred in). A buy the indexer could not attribute counts as unknown.
+    const top=holderView.top.slice(0,10),unknownBuyer=swaps.slice(0,swapEnd).some(r=>r.side===1 && !r.recipient && (r.trader==null || r.senders_pending));
+    const largest=top.find(h=>h.wallet!==deployer),transferred=top.filter(h=>h.wallet!==deployer && !bought.has(h.wallet));
+    if(!unknownBuyer)s.holders={top10Share:top.reduce((n,h)=>n+h.amount,0)/total,largestShare:(largest?.amount ?? 0)/total,largest:largest?.wallet ?? null,
+      transferredShare:transferred.reduce((n,h)=>n+h.amount,0)/total,transferredWallets:transferred.length,evidence:transferred.map(h=>({kind:'address',ref:h.wallet,label:'Holder that never bought'}))};
+    // The deployer's own trades: USD in and out need every one of them priced, or the dump test cannot be made.
+    const devRows=swaps.slice(0,swapEnd).filter(r=>r.trader!=null && !r.senders_pending && rowHex(r.trader)===deployer);
+    if(devRows.every(r=>r.usd!=null)) {
+      const sells=devRows.filter(r=>r.side===-1);
+      s.dev={heldShare:s.holderSummary.dev/total,cashInUsd:devRows.filter(r=>r.side===1).reduce((n,r)=>n+r.usd!,0),cashOutUsd:sells.reduce((n,r)=>n+r.usd!,0),
+        soldShare:sells.reduce((n,r)=>n+Number(r.amount_coin),0)/total,firstSellSec:sells.length ? seconds(sells[0].ts)-createdAtSec : null,evidence:sells.slice(0,5).map(r=>evidence(r,'Deployer sell'))};
+    }
   }
   // Every early buy must name its buyer, or the cohort is not known and the check stays not run.
   if (s.supply && s.supply.total > 0n && earlyRows.every(r=>buyerOf(r)!=null)) {

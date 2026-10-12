@@ -37,6 +37,7 @@ export function evaluatedPlaybooks(s: LoadedSources): PlaybookId[] {
     malicious_hook: s.hook != null || s.poolRefs.every(p => !p.hooks || zeroHook.test(p.hooks) || isPonsHook(p.hooks)),
     // Every buy in the early window named its buyer (sources.ts); an empty cohort is a check that ran and found none.
     bundle_dump: s.earlyBuyers != null,
+    holder_concentration: s.holders != null, dev_dump: s.dev != null,
   };
   return (Object.keys(rules) as PlaybookId[]).filter(id => available[id]).sort();
 }
@@ -69,7 +70,7 @@ export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
       missing: ['knownLocksAndVesting', ...(s.earlyBuyers ? [] : ['bundlesHeldPct']), 'freshWalletsPct', ...(!s.supply ? ['circulating', 'totalSupply'] : [])] },
     control: { confidence: 0, asOfBlock: s.asOfBlock, unavailable: true, missing: ['ownerPowerAnalysis'] },
     flow: { confidence: 0, asOfBlock: s.asOfBlock, unavailable: true, missing: ['agentPct', 'crewPct', 'humanPct'] },
-    playbooks: { confidence: evaluatedPlaybooks(s).length / 13, asOfBlock: s.asOfBlock, missing: (Object.keys(rules) as PlaybookId[]).filter(id => !evaluatedPlaybooks(s).includes(id)) },
+    playbooks: { confidence: evaluatedPlaybooks(s).length / Object.keys(rules).length, asOfBlock: s.asOfBlock, missing: (Object.keys(rules) as PlaybookId[]).filter(id => !evaluatedPlaybooks(s).includes(id)) },
   };
   const coverage=s.attributionCoverage ?? {};
   const attach=(section:keyof typeof meta,keys:string[])=>{

@@ -847,11 +847,13 @@ export interface Rule<K extends keyof PlaybookConfig = keyof PlaybookConfig> {
 | 11 | `malicious_hook` | v4 hook outside the reviewed allow-list with return-delta permission bits, a quote-vs-sim gap > 2%, or a sell-side fee > buy-side by 5 pp → danger; unverified source with those bits → monitor | monitor / danger | hook, permission bits, quote vs sim |
 | 12 | `agent_bait` | Token text trips the §9.5 detector → monitor; combined with buy, approve, transfer or send instructions → danger | monitor / danger | detector hits as `Untrusted` excerpts |
 | 13 | `serial_deployer` | Prior launches by the same deployer or crew, **never counting `serial_deployer`'s own matches** (1.0.2): ≥ 1 prior launch with another playbook at ≥ monitor → monitor; ≥ 3 prior launches that ended `rugged`, `honeypot` or `dumped` (§7.5), or matched another playbook at danger → danger; ≥ 20 launches in 7 days → monitor (volume alone never reaches danger) | monitor / danger | prior coins, matches, outcomes |
+| 14 | `holder_concentration` | Holders at the card's block, the curve, pools and burn addresses excluded: top 10 own ≥ 20% of supply → monitor, ≥ 50% → danger; one non-deployer wallet ≥ 10% → monitor; the largest holders hold ≥ 5% without ever having bought (transferred in, GMGN's "phishing") → monitor. Calibrated 2026-10-12 on holdings one hour after launch: top 10 at 20–35% halved next day on 23% (1.7% below 20%) | monitor / danger | top-10 share, largest holder, transferred-in holders |
+| 15 | `dev_dump` | GMGN's dump: the deployer took out ≥ 1.5× what it put in and first sold ≤ 30 s after launch, having sold ≥ 1% of supply → danger; the deployer holds ≥ 5% of supply → monitor | monitor / danger | deployer buys and sells (USD), first sell time, held share |
 
 ### 7.3 Thresholds
 
 ```yaml
-# packages/playbooks/config/v1.yaml — rules_version 1.0.2 (1.0.1, Oct 1: wash_to_trend volume floor and cycling rule; 1.0.2, Oct 2: serial_deployer excludes its own matches and needs bad outcomes or another playbook's danger for danger, after live calibration: 4 prolific deployers produced 166 of 170 dangers through the self-count; Oct 12: bundle_dump sourced and calibrated, firstBlocks 3 -> 35 blocks (5 s) and the early-cohort share, version kept because history reads key on it). Any change bumps the version (it's hashed into receipts).
+# packages/playbooks/config/v1.yaml — rules_version 1.0.2 (1.0.1, Oct 1: wash_to_trend volume floor and cycling rule; 1.0.2, Oct 2: serial_deployer excludes its own matches and needs bad outcomes or another playbook's danger for danger, after live calibration: 4 prolific deployers produced 166 of 170 dangers through the self-count; Oct 12: bundle_dump sourced and calibrated, firstBlocks 3 -> 35 blocks (5 s) and the early-cohort share, version kept because history reads key on it; holder_concentration and dev_dump added, calibrated the same day). Any change bumps the version (it's hashed into receipts).
 honeypot:            { minLossPct: 95, requireDeepSim: true }
 tax_trap:            { fixedInfoMaxPct: 5, fixedMonitorMaxPct: 25, mutableMonitorMaxPct: 10 }
 removable_liquidity: { deployerLpShare: 0.5, thinDepth2PctUsd: 500, priorRemovalsDanger: 1 }
@@ -865,6 +867,8 @@ migration_dump:      { windowMin: 5, soldMonitor: 0.30, soldDanger: 0.60, impact
 malicious_hook:      { quoteSimGapPct: 2, asymmetricFeePp: 5 }
 agent_bait:          { maxScanChars: 4000 }
 serial_deployer:     { monitorRuns: 1, dangerRuns: 3, spamLaunches7d: 20, countSelf: false, dangerOutcomes: [rugged, honeypot, dumped] }
+holder_concentration: { top10Monitor: 0.20, top10Danger: 0.50, largestMonitor: 0.10, transferredMonitor: 0.05 }
+dev_dump:            { cashOutMultiple: 1.5, firstSellSec: 30, minSoldShare: 0.01, heldMonitor: 0.05 }
 ```
 
 On Pons coins the simulated buy and sell tax includes the Pons 1% standard fee as well as the fixed creator tax (our token: 1% + 1% = 2% total). Both are fixed, so a Pons coin whose creator tax is at most 4% stays Info under `fixedInfoMaxPct`. The card's reason names the creator tax separately from the Pons fee.
