@@ -23,7 +23,7 @@ import { ChainClients, UniswapV3Adapter } from './exec/chain.js';
 import { PortfolioService } from './exec/portfolio.js';
 import { SanctionsService, SanctionsWorker } from './sanctions/service.js';
 import { RetentionWorker } from './retention-worker.js';
-import { PricingRepairWorker, type TokenSpot } from './pricing-repair.js';
+import { PricingRepairWorker, chainTokenMeta, type TokenSpot } from './pricing-repair.js';
 import { bestUsdgPool, isTransientRpcUnavailable, rpcStopReason, usdgPoolPrice, type SpotRpc, type UsdgPool } from '@eko/chain';
 import { QuoteStore } from './exec/quotes.js';
 import { TradeService, type TradeBackend } from './exec/trades.js';
@@ -190,7 +190,8 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       return null;
     }
   };
-  const pricingRepair = new PricingRepairWorker(dbh.chain, (event, fields) => logger.info({ event, ...fields }, event), undefined, undefined, undefined, undefined, undefined, tokenSpot);
+  const tokenMeta = chainTokenMeta(() => chains.get('robinhood-mainnet'));
+  const pricingRepair = new PricingRepairWorker(dbh.chain, (event, fields) => logger.info({ event, ...fields }, event), undefined, undefined, undefined, undefined, undefined, tokenSpot, tokenMeta);
   const receipts = new ReceiptApiStore(dbh.chain, cfg.RECEIPTS_REGISTRY_ADDRESS, chains.get('robinhood-mainnet'));
   const portfolio = new PortfolioService(db);
   const quotes = new QuoteStore();

@@ -1,5 +1,6 @@
+import { parseAbi, type PublicClient } from 'viem';
 import { binary, hex, refreshBars, type ChainDb } from '@eko/db';
-import { loadRegistry } from '@eko/chain';
+import { isTransientRpcUnavailable, loadRegistry, rpcStopReason } from '@eko/chain';
 
 export interface PricingAssets { weth: string; usdg: string; usdgDecimals: number }
 const NATIVE = '0x0000000000000000000000000000000000000000';
@@ -17,7 +18,8 @@ export const pricingAssets = (registry = loadRegistry()): PricingAssets => ({
  * never be rated Clear. ETH and WETH quotes use the reference rate the decoder uses: the latest swap on the recorded
  * reference pool at or before the swap's block. Swaps without a reference stay unpriced. Returns the number priced.
  */
-export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from: Date, to: Date, limit = REPRICE_BATCH, candleFloor = new Date(Date.now() - 2 * 86_400_000)): Promise<number> {
+export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from: Date, to: Date, limit = REPRICE_BATCH, candleFloor = new Date(Date.now() - 2 * 86_400_000),
+  coins?: Uint8Array[]): Promise<number> {
   return db.tx(async tx => {
     // The latest reference swap below the batch and those inside its block range are read once, and the latest rate is
     // carried forward in block order (a per-swap lookup over every swaps partition priced about 4,000 swaps a minute on
@@ -29,7 +31,7 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
           CASE WHEN s.quote_asset=$3 THEN 'dollar' WHEN s.quote_asset=ANY($1::bytea[]) THEN 'eth' ELSE 'token' END AS kind,
           CASE WHEN s.quote_asset=$3 THEN $4 WHEN s.quote_asset=ANY($1::bytea[]) THEN 18 ELSE q.decimals END AS qdec
         FROM swaps s JOIN tokens t ON t.address=s.coin LEFT JOIN tokens q ON q.address=s.quote_asset
-        WHERE s.ts>=$5 AND s.ts<$6 AND s.usd IS NULL AND t.launchpad='pons' AND t.decimals IS NOT NULL AND s.amount_coin>0 AND s.amount_quote>0
+        WHERE s.ts>=$5 AND s.ts<$6 AND s.usd IS NULL AND ${coins ? 's.coin=ANY($8::bytea[])' : "t.launchpad='pons'"} AND t.decimals IS NOT NULL AND s.amount_coin>0 AND s.amount_quote>0
           AND (s.quote_asset=ANY($1::bytea[]) OR (q.decimals IS NOT NULL AND EXISTS(SELECT 1 FROM swaps x WHERE x.coin=s.quote_asset AND x.block<=s.block
             AND x.ts>=s.ts-interval '1 day' AND x.usd>0 AND x.amount_coin>0)))
         ORDER BY s.ts DESC LIMIT $7),
@@ -55,7 +57,7 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
       UPDATE swaps s SET usd=r.quote*r.rate,price_quote=coalesce(s.price_quote,r.quote/(r.amount_coin::double precision/10^r.decimals)),
         pricing_pending=false,priced_block=r.rate_block
       FROM r WHERE s.ts=r.ts AND s.tx_hash=r.tx_hash AND s.log_index=r.log_index AND r.rate IS NOT NULL
-      RETURNING s.coin,s.ts`, [[NATIVE, assets.weth, assets.usdg].map(binary), binary(assets.weth), binary(assets.usdg), assets.usdgDecimals, from, to, limit])).rows;
+      RETURNING s.coin,s.ts`, [[NATIVE, assets.weth, assets.usdg].map(binary), binary(assets.weth), binary(assets.usdg), assets.usdgDecimals, from, to, limit, ...(coins ? [coins] : [])])).rows;
     // Candles feed the radar's hour and day volume. Rebuilding every touched minute took as long as pricing on
     // 2026-10-11, so minutes older than two days keep their candles (as before the repair); the raw swaps carry the USD.
     const recent = rows.filter(row => new Date(row.ts).getTime() >= candleFloor.getTime());
@@ -77,6 +79,41 @@ export async function retagPairQuotes(db: ChainDb, limit = REPRICE_BATCH): Promi
         WHERE s.venue='pons_curve' AND s.quote_asset=$2 LIMIT $3)
     UPDATE swaps s SET quote_asset=bad.pair,usd=NULL,price_quote=NULL,priced_block=NULL,pricing_pending=false
     FROM bad WHERE s.ts=bad.ts AND s.tx_hash=bad.tx_hash AND s.log_index=bad.log_index RETURNING 1`, [NATIVE, binary(NATIVE), limit])).rows.length;
+}
+
+/** The tokens Pons curves are quoted in, other than native ETH (USDG, stock tokens, other coins). */
+export async function pairTokens(db: ChainDb): Promise<Uint8Array[]> {
+  return (await db.sql.query<{ token: Uint8Array }>(`SELECT DISTINCT decode(substr(lower(data->>'pairToken'),3),'hex') AS token FROM pons_events
+    WHERE kind='launch' AND data ? 'pairToken' AND lower(data->>'pairToken') ~ '^0x[0-9a-f]{40}$' AND lower(data->>'pairToken')<>$1`, [NATIVE])).rows.map(row => row.token);
+}
+/** A token's ERC-20 metadata read from the chain, any field null when unreadable. */
+export type TokenMetaReader = (token: string) => Promise<{ decimals: number | null; symbol: string | null; name: string | null }>;
+const erc20Metadata = parseAbi(['function decimals() view returns (uint8)', 'function symbol() view returns (string)', 'function name() view returns (string)']);
+/** Reads token metadata at the latest block through the metered client; an unreadable field is null, stops and transient failures propagate. */
+export function chainTokenMeta(client: () => PublicClient): TokenMetaReader {
+  return async token => {
+    const field = async <T,>(functionName: 'decimals' | 'symbol' | 'name'): Promise<T | null> => {
+      try { return await client().readContract({ address: token as `0x${string}`, abi: erc20Metadata, functionName }) as T; }
+      catch (error) { if (rpcStopReason(error) || isTransientRpcUnavailable(error)) throw error; return null; }
+    };
+    return { decimals: await field<number>('decimals'), symbol: await field<string>('symbol'), name: await field<string>('name') };
+  };
+}
+/**
+ * Fill the metadata of pair tokens that have none (fields stay as stored where present). The indexer reads a pair
+ * token's metadata when its curve trades; a quiet curve's never was (38 of 65 had no decimals on 2026-10-12), so its
+ * swaps could not be priced. Returns the tokens given decimals.
+ */
+export async function repairPairMetadata(db: ChainDb, read: TokenMetaReader, pairs: Uint8Array[]): Promise<number> {
+  const missing = (await db.sql.query<{ address: Uint8Array }>('SELECT address FROM tokens WHERE address=ANY($1::bytea[]) AND decimals IS NULL', [pairs])).rows;
+  let filled = 0;
+  for (const { address } of missing) {
+    const meta = await read(hex(address));
+    if (meta.decimals == null || !Number.isInteger(meta.decimals) || meta.decimals < 0 || meta.decimals > 36) continue;
+    filled += (await db.sql.query('UPDATE tokens SET decimals=coalesce(decimals,$2),symbol=coalesce(symbol,$3),name=coalesce(name,$4) WHERE address=$1 RETURNING 1',
+      [address, meta.decimals, meta.symbol, meta.name])).rows.length;
+  }
+  return filled;
 }
 
 /** A token's USD price at a block, or null when it has none (the worker reads Uniswap v3 USDG pools). */
@@ -127,9 +164,11 @@ export class PricingRepairWorker {
   private retagged = false;
   /** Pool prices read per token and hour (repricePoolQuotes), kept for the process. */
   private spotPrices = new Map<string, number | null>();
+  /** The process priced pair tokens' own swaps over the backfill window (after filling their metadata). */
+  private pairsPriced = false;
   constructor(private readonly db: ChainDb, private readonly log: (event: string, fields: Record<string, unknown>) => void,
     private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 28_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH,
-    private readonly spot?: TokenSpot) {}
+    private readonly spot?: TokenSpot, private readonly meta?: TokenMetaReader) {}
   start() { if (this.timer) return; void this.tick(); this.timer = setInterval(() => void this.tick(), this.intervalMs); this.timer.unref(); }
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
@@ -153,8 +192,20 @@ export class PricingRepairWorker {
   }
   private async pass() {
     const started = this.now(), deadline = started + this.budgetMs, top = Math.ceil(started / HOUR) * HOUR, candleFloor = new Date(started - 2 * 24 * HOUR);
-    let recent = 0, backfilled = 0, retagged = 0;
+    let recent = 0, backfilled = 0, retagged = 0, pairs = 0;
     while (!this.retagged && this.now() < deadline) { const n = await retagPairQuotes(this.db, this.batch); retagged += n; if (n < this.batch) this.retagged = true; }
+    // A token-quoted Pons swap is priced from its pair token's own priced swaps within the day before it, and the
+    // backfill walks hours newest first, so the pair tokens' swaps over the whole window are priced first.
+    if (!this.pairsPriced && this.now() < deadline) {
+      const tokens = await pairTokens(this.db);
+      if (this.meta) await repairPairMetadata(this.db, this.meta, tokens);
+      for (;;) {
+        const n = await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), new Date(top - 8 * 24 * HOUR), new Date(top), this.batch, candleFloor, tokens);
+        pairs += n;
+        if (n < this.batch) { this.pairsPriced = true; break; }
+        if (this.now() >= deadline) break;
+      }
+    }
     for (let end = top; end > top - 6 * HOUR && this.now() < deadline; end -= HOUR) recent += (await this.hour(end, deadline, candleFloor)).priced;
     this.cursor ??= top - 6 * HOUR;
     while (this.cursor > top - 8 * 24 * HOUR && this.now() < deadline) {
@@ -162,6 +213,6 @@ export class PricingRepairWorker {
       backfilled += hour.priced;
       if (hour.done) this.cursor -= HOUR;
     }
-    if (recent || backfilled || retagged) this.log('pricing_repair', { recent, backfilled, retagged, cursor: new Date(this.cursor).toISOString(), ms: this.now() - started });
+    if (recent || backfilled || retagged || pairs) this.log('pricing_repair', { recent, backfilled, retagged, pairs, cursor: new Date(this.cursor).toISOString(), ms: this.now() - started });
   }
 }

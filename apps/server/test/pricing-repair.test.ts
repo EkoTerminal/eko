@@ -107,4 +107,26 @@ describe('Pons swap repricing', () => {
     // Kept readings are not read again.
     expect(await repricePoolQuotes(db, assets, spot, from, to, prices)).toEqual({ priced: 0, reads: 0 });
   });
+  it('fills a quiet pair token\'s missing decimals, prices its own swaps, then the curve swaps quoted in it', async () => {
+    // 38 of 65 pair tokens had no decimals on 2026-10-12 (the indexer reads them only when the curve trades again).
+    const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
+    await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(now));
+    const pair = address(0x6a);
+    await db.insert('tokens', { address: binary(coin), name: 'Sample token', symbol: 'DEMO', decimals: 18, launchpad: 'pons', first_block: '1', block: '1' });
+    await db.insert('tokens', { address: binary(pair), first_block: '1', block: '1' });
+    await db.insert('pons_events', { block: '1', tx_hash: binary(hash(9999)), log_index: 0, token: binary(coin), emitter: binary(address(0x99)), kind: 'launch',
+      data: JSON.stringify({ kind: 'launch', token: coin, curve: address(0x98), pairToken: pair }) });
+    await swap(db, 60, pair, usdg, '3000000', { venue: 'uniswap_v4', amount_coin: '1000000000000000000' }); // the pair at $3
+    await swap(db, 70, coin, pair, '2000000000000000000', { pricing_pending: false });                       // 2 pair tokens
+    const asked: string[] = [];
+    const worker = new PricingRepairWorker(db, () => {}, () => now, 30_000, 28_000, assets, undefined, undefined,
+      async token => { asked.push(token); return { decimals: 18, symbol: 'PAIR', name: 'Pair token' }; });
+    await worker.tick();
+    expect(asked).toEqual([pair]);
+    expect((await db.sql.query<{ decimals: number; symbol: string }>('SELECT decimals,symbol FROM tokens WHERE address=$1', [binary(pair)])).rows[0]).toEqual({ decimals: 18, symbol: 'PAIR' });
+    const rows = (await db.sql.query<{ block: string; usd: number | null }>('SELECT block::text,usd FROM swaps ORDER BY swaps.block')).rows;
+    expect(rows).toEqual([{ block: '60', usd: 3 }, { block: '70', usd: 6 }]);
+    // A token with decimals already is not read again.
+    await worker.tick(); expect(asked).toEqual([pair]);
+  });
 });
