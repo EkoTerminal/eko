@@ -242,7 +242,9 @@ export interface SellCheckSchedule {
   /** Paid requests the scheduler may spend per UTC day; the process-wide RPC budget still applies. */
   dailyRequests?: number;
 }
-const DEFAULTS: Required<SellCheckSchedule> = { batch: 8, parallel: 4, minAgeSec: 30, minIntervalSec: 600, maxAgeSec: 86400, retrySec: 900, unsupportedRetrySec: 6 * 3600, dailyRequests: 60_000 };
+// An unsupported route is checked again hourly: a token-paired curve becomes checkable when its pair token gains
+// metadata or a USD price (the pricing repair fills both), and the check costs no probe while it stays unsupported.
+const DEFAULTS: Required<SellCheckSchedule> = { batch: 8, parallel: 4, minAgeSec: 30, minIntervalSec: 600, maxAgeSec: 86400, retrySec: 900, unsupportedRetrySec: 3600, dailyRequests: 60_000 };
 /**
  * Picks live Radar coins that need a reading (never checked, new activity since the last one, idle past the
  * refresh age, a provider failure to retry, or a graduated curve) and checks them at the indexed head.
