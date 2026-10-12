@@ -6,7 +6,7 @@ import { GUARD_REFRESH_FAILED, GUARD_UNAVAILABLE, GUARD_COPY } from '../copy/gua
 import { GUARD2_UNAVAILABLE_TITLE, GUARD_LEGEND, LEGACY_TITLE } from '../copy/availability';
 
 /** Lists can show a shadow alongside the original grade without replacing it. */
-export function CompactVerdictChip({ level, guard, pending = false, failed = false, linked = true, ...context }: { level: Verdict['level'] | 'info'; guard?: GuardAssessmentV2 | null; pending?: boolean; failed?: boolean; linked?: boolean; evaluatedPlaybooks?: import('@eko/shared').PlaybookId[]; missing?: string[]; scanDelayed?: boolean }) {
+export function CompactVerdictChip({ level, guard, pending = false, failed = false, linked = true, ...context }: { level: Verdict['level'] | 'info'; guard?: GuardAssessmentV2 | null; pending?: boolean; failed?: boolean; linked?: boolean; evaluatedPlaybooks?: import('@eko/shared').PlaybookId[]; missing?: string[]; scanDelayed?: boolean; detail?: string; detailTitle?: string }) {
   const snapshot = guard ? compactGuardVerdict({version:2,assessment:guard}) : null;
   const detailText = guard && `Block ${guard.cursor.blockNumber} · $100 / $1,000 · EOA / smart account`;
   const details = snapshot && (linked ? <Link to={snapshot.evidencePath!} title={snapshot.snapshot}>{detailText} · {GUARD_COPY.allReasons}</Link> : <span title={snapshot.snapshot}>{detailText}</span>);

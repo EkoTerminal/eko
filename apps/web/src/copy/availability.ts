@@ -6,6 +6,13 @@ export const SCAN_DELAYED_AFTER_SEC = 60;
 export const SCAN_DELAYED = 'Scan delayed';
 export const SCAN_DELAYED_DETAIL = "No verdict yet. This launch is waiting in the scan queue; Trade stays off until the guard's first scan finishes.";
 export const NOT_FULLY_CHECKED = 'Not fully checked';
+/** No check matched (verdict level `clear`). The label names what was found, not a judgement of the coin. */
+export const NO_FLAGS = 'No flags';
+export const NO_FLAGS_NOTE = 'No flags is not a recommendation.';
+/** Run-up score (lib/runUp.ts): the number beside a grade on a coin still on its launch curve. */
+export const runUpTitle = (score: number) => `Run-up score ${score} of 100: if the price fell back to the launch curve's starting price, that would be a ${score}% drop.`;
+export const runUpDetail = (score: number, multiple: number) => `Run-up score ${score} of 100. The price is ${multiple >= 10 ? Math.round(multiple) : Math.round(multiple * 10) / 10}× the launch curve's starting price, so a fall back to the start would be a ${score}% drop. On past launches the typical coin was back near its start a day later (measured October 2026). The score is a distance, not a forecast.`;
+export const RUN_UP_LEGEND = 'The number beside a grade is the run-up score, 0 to 100: how far the price would drop if it fell back to the launch curve\'s starting price.';
 export const NOT_CHECKED = 'not checked yet';
 export const PENDING_ORDER = 'Not fully checked. Some required checks have not run; review the missing checks before placing an order.';
 export const NOT_INDEXED = 'Not indexed yet';

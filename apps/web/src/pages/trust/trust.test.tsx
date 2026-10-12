@@ -74,7 +74,7 @@ describe('Scoreboard and receipt UI', () => {
   it('keeps actual measured cohort horizons, denominators and immature/unavailable values', () => {
     const rows: ScoreboardRow[] = [{ id: 'week-clear', kind: 'cohort', ts: '2026-10-02', detail: { week: '2026-09-21', group: 'clear', eligible: 8, evaluated: 2, immature: 3, censored: 1, ungraded: 2, rugRateStatus: 'unavailable', medianStatus: 'unavailable', rugDenominator: 0, medianDenominator: 0, horizonSec: 86400 } }];
     const html = renderToStaticMarkup(<CohortRows rows={rows} />);
-    expect(html).toContain('Clear cohort'); expect(html).toContain('86400 seconds');
+    expect(html).toContain('No flags cohort'); expect(html).toContain('86400 seconds');
     expect(html).toContain('<dt>Immature</dt><dd>3</dd>'); expect(html).toContain(`${NOT_CHECKED} · denominator 0`);
     expect(html).not.toContain('48 h');
   });

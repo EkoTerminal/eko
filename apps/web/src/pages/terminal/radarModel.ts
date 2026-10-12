@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { RadarRowSchema, type RadarRow } from '@eko/shared';
 import type { ChannelEvent } from '../../lib/realtime';
 import { activityRatio, displayHeat, heatOf } from '../../lib/heat';
-import { SCAN_DELAYED_AFTER_SEC } from '../../copy/availability';
+import { NO_FLAGS, SCAN_DELAYED_AFTER_SEC } from '../../copy/availability';
 export { RadarResponseSchema } from '@eko/shared';
 export const SORTS = ['Rank', 'Hottest', '1h move', 'Agent flow', 'Newest', 'Exit cost'] as const;
 export type Sort = typeof SORTS[number];
@@ -44,7 +44,7 @@ export function sortRows(rows: readonly RadarRow[], sort: Sort, received?: Recei
   return list.sort((a, b) => { const av = value(a), bv = value(b); return av === undefined ? bv === undefined ? 0 : 1 : bv === undefined ? -1 : ascending(sort) ? av - bv : bv - av; });
 }
 export const filterRows = (rows: readonly RadarRow[], show: string, stage: string) => rows.filter((c) =>
-  (show === 'All' || (show === 'Hot' ? displayHeat(c) === 'hot' : c.verdict === show.toLowerCase())) &&
+  (show === 'All' || (show === 'Hot' ? displayHeat(c) === 'hot' : c.verdict === (show === NO_FLAGS ? 'clear' : show.toLowerCase()))) &&
   (stage === 'All' || c.stage === (stage === 'Curve' ? 'curve' : 'graduated')));
 export function applyRadarEvents(rows: readonly RadarRow[], events: readonly ChannelEvent<'radar'>[]): RadarRow[] {
   let next = [...rows];

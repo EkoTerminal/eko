@@ -7,7 +7,7 @@ describe('Desk primitives', () => {
   it.each(['clear', 'monitor', 'danger', 'info', 'pending'] as const)('renders %s with both an icon and a word', (level) => {
     const html = renderToStaticMarkup(<VerdictChip level={level} detail="detail" size="lg" />);
     expect(html).toContain('<svg');
-    expect(html).toContain(level === 'pending' ? 'Not fully checked' : level[0].toUpperCase() + level.slice(1));
+    expect(html).toContain(level === 'pending' ? 'Not fully checked' : level === 'clear' ? 'No flags' : level[0].toUpperCase() + level.slice(1));
     expect(html).toContain('detail');
     expect(html).toContain('aria-busy="false"');
   });

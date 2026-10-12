@@ -155,10 +155,18 @@ describe('packet 036 Guard card fixtures', () => {
     const fast = render(<Coin params={{ address: rawCard.identity.address }} />);
     expect(fast).toContain('Buyer risk'); expect(fast).toContain('Not fully checked'); expect(fast).not.toContain('Coin card unavailable');
   });
-  it('labels legacy receipts without reinterpreting Clear as V2 Lower', () => {
+  it('labels legacy receipts without reinterpreting No flags as V2 Lower', () => {
     const card = createRadarCard(createRadarRows()[0].address)!;
     const html = render(<CoinVerdict verdict={{ ...card.verdict, level: 'clear', guardV2: undefined }} />);
-    expect(html).toContain('Legacy assessment · rules 1.0.x'); expect(html).toContain('Clear'); expect(html).not.toContain('Lower observed risk'); expect(html).toContain(BUYER_RISK); expect(html).toContain(DYOR);
+    expect(html).toContain('Legacy assessment · rules 1.0.x'); expect(html).toContain('No flags'); expect(html).not.toContain('Lower observed risk'); expect(html).toContain(BUYER_RISK); expect(html).toContain(DYOR);
+  });
+  it('shows the run-up score beside the first rule set\'s grade on a curve coin, never beside a pending one', () => {
+    const card = createRadarCard(createRadarRows()[0].address)!;
+    const identity = { ...card.identity, stage: 'curve' as const, curvePct: 40 };
+    const html = render(<CoinVerdict identity={identity} verdict={{ ...card.verdict, level: 'danger', guardV2: undefined }} />);
+    expect(html).toContain('· 75'); expect(html).toContain('Run-up score 75 of 100. The price is 4× the launch curve');
+    expect(render(<CoinVerdict identity={identity} verdict={{ ...card.verdict, level: 'pending', guardV2: undefined }} />)).not.toContain('Run-up score');
+    expect(render(<CoinVerdict identity={{ ...identity, stage: 'graduated' as const, curvePct: 100 }} verdict={{ ...card.verdict, level: 'danger', guardV2: undefined }} />)).not.toContain('Run-up score');
   });
   it('formats typed V2 reason amounts in the V1 compatibility view', () => {
     const card = createRadarCard(createRadarRows()[0].address)!;

@@ -7,7 +7,8 @@ import { serverNow } from '../../lib/clock';
 import { TradePanel } from '../../components/trade/TradePanel';
 import { CompactVerdictChip, GuardCompact } from '../../components/GuardCompact';
 import { AnalysisPolicyNotice } from '../../components/PolicyLinks';
-import { SCANNING, SCAN_DELAYED, NOT_CHECKED, NOT_FULLY_CHECKED, SELL_CHECK_TEXT, SELL_FAILS, SELL_FAILS_TITLE } from '../../copy/availability';
+import { SCANNING, SCAN_DELAYED, NOT_CHECKED, NOT_FULLY_CHECKED, RUN_UP_LEGEND, SELL_CHECK_TEXT, SELL_FAILS, SELL_FAILS_TITLE, runUpTitle } from '../../copy/availability';
+import { runUpScore } from '../../lib/runUp';
 import { exitMeasured, sellCheckOf } from '../../lib/sellCheck';
 import { memo, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import type { CoinCard, CoinSignal, RadarRow, Flow } from '@eko/shared';
@@ -33,15 +34,16 @@ export function SignalBars({ signal }: { signal: CoinSignal }) {
   return <span className="rt-sig"><b className="num">{signal.composite}</b><span className="rt-read" aria-hidden="true">{ROLES.map((role) => <i key={role} style={{ height: `${Math.max(14, signal.readings[role])}%` }} />)}</span></span>;
 }
 export function HeatLegend() {
-  return <div className="heat-legend" aria-label="How rows are marked">{['Hot', 'Normal', 'Fading', 'Danger'].map((word, i) => <span key={word}><i className={`sw ${['hot', 'normal', 'fading', 'avoid'][i]}`} />{word}</span>)}<Info label="How rows are marked">A blue-white shimmer grows from warming (3%+ in an hour, agents 25%+, signal 60+) to Hot (signal 70+, rising, agents 30%+) to surging (10%+, agents 40%+). A dark ember marks falling activity (down 8%+, signal under 65), Danger, and red flags (honeypot, 75%+ exit cost, or a Danger match at 97%+ confidence). Danger always wins. Without signal, only price and flow predicates apply. The marks describe activity; they are not a reason to buy.</Info></div>;
+  return <div className="heat-legend" aria-label="How rows are marked">{['Hot', 'Normal', 'Fading', 'Danger'].map((word, i) => <span key={word}><i className={`sw ${['hot', 'normal', 'fading', 'avoid'][i]}`} />{word}</span>)}<Info label="How rows are marked">A blue-white shimmer grows from warming (3%+ in an hour, agents 25%+, signal 60+) to Hot (signal 70+, rising, agents 30%+) to surging (10%+, agents 40%+). A dark ember marks falling activity (down 8%+, signal under 65), Danger, and red flags (honeypot, 75%+ exit cost, or a Danger match at 97%+ confidence). Danger always wins. Without signal, only price and flow predicates apply. The marks describe activity; they are not a reason to buy. {RUN_UP_LEGEND}</Info></div>;
 }
 export const RadarRowView = memo(function RadarRowView({ c, selected, select, trade, pulse, confidence, scanDelayed = false }: { c: RadarRow; selected: boolean; select: (c: RadarRow, el: HTMLElement) => void; trade: (c: RadarRow, el: HTMLElement) => void; pulse: number; confidence?: number; scanDelayed?: boolean }) {
   const tradingLive = useShell((st) => st.config?.trading.liveEnabled !== false);
   const el = useRef<HTMLTableRowElement>(null);
   useEffect(() => { const row = el.current; if (!pulse || !row) return; row.classList.remove('pulse'); void row.offsetWidth; row.classList.add('pulse'); }, [pulse]);
+  const score = c.verdictPending || c.verdict === 'pending' ? undefined : runUpScore(c);
   return <tr ref={el} data-address={c.address} className={`h-${heatOf(c)} ${markClass(marking(c))}${selected ? ' sel' : ''}`} onClick={(e) => select(c, e.currentTarget.querySelector<HTMLButtonElement>('[data-pick]')!)}>
     <td className="c-coin"><button data-pick className="rt-pick" aria-pressed={selected} aria-controls={selected ? 'radar-inspector' : undefined} onClick={(e) => { e.stopPropagation(); select(c, e.currentTarget); }}><span className="rt-top"><span className="rt-sym" title={`$${c.symbol.text}`}><Decode text={`$${c.symbol.text}`}><span>$<UntrustedText value={c.symbol} /></span></Decode></span><HeatTag heat={displayHeat(c)} /><span className="tag rt-pad">{launchpadLabel(c.launchpad, c.stage === 'graduated')}</span></span><span className="rt-name"><UntrustedText value={c.name} /> · {age(c.ageSec)}</span></button></td>
-    <td className="c-guard"><CompactVerdictChip level={c.verdict} guard={c.guardV2} failed={c.guardRefreshFailed} pending={c.verdictPending} scanDelayed={scanDelayed} evaluatedPlaybooks={c.evaluatedPlaybooks} missing={c.missingChecks} /></td>
+    <td className="c-guard"><CompactVerdictChip level={c.verdict} guard={c.guardV2} failed={c.guardRefreshFailed} pending={c.verdictPending} scanDelayed={scanDelayed} evaluatedPlaybooks={c.evaluatedPlaybooks} missing={c.missingChecks} detail={score === undefined ? undefined : String(score)} detailTitle={score === undefined ? undefined : runUpTitle(score)} /></td>
     <td className="c-watch">{c.topPlaybook ? <><span className="rt-play">{PLAYBOOK_NAMES[c.topPlaybook]}</span>{confidence !== undefined && <span className="rt-conf">{Math.round(confidence * 100)}% confidence</span>}</> : <span className="faint">{c.verdictPending ? scanDelayed ? SCAN_DELAYED : SCANNING : c.verdict === 'pending' ? NOT_FULLY_CHECKED : 'Nothing matched'}</span>}</td>
     <td className="c-sig r">{c.unavailable?.includes('signal') ? <UnavailableValue /> : c.signal && <SignalBars signal={c.signal} />}</td>
     <td className="c-beta r">{c.beta && <span className="rt-sig"><span className="tag">Beta</span>{c.beta.apeScore !== undefined && <b className="num">{c.beta.apeScore}</b>}{c.beta.setupGrade && <span>{c.beta.setupGrade}</span>}</span>}</td>

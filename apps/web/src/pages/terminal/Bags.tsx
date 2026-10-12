@@ -20,7 +20,7 @@ function RowVerdict({ row }: { row: BagRow }) {
 }
 export function BagMix({ report }: { report: PublicBagReport }) {
   const counts = bagCounts(report), total = report.holdings.length || 1;
-  return <div className="bag-mix" role="img" aria-label={`Verdicts by coin count: ${counts.clear} Clear, ${counts.monitor} Monitor, ${counts.danger} Danger, ${counts.incomplete} not fully checked`}>
+  return <div className="bag-mix" role="img" aria-label={`Verdicts by coin count: ${counts.clear} No flags, ${counts.monitor} Monitor, ${counts.danger} Danger, ${counts.incomplete} not fully checked`}>
     {(['danger', 'monitor', 'clear', 'incomplete'] as const).map(level => <i key={level} className={level} style={{ width: `${counts[level] / total * 100}%` }} />)}
   </div>;
 }

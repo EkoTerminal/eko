@@ -71,12 +71,12 @@ export function RecordRows({ rows }: { rows: ScoreboardRow[] }) {
 export function CohortRows({ rows }: { rows: ScoreboardRow[] }) {
   return <div className="scoreboard-cohorts">{rows.map(row => {
     const d = row.detail;
-    return <article className="panel" key={row.id}><div className="panel-body"><h3>{d.week} · {d.group === 'clear' ? 'Clear cohort' : 'All launches'}</h3>
+    return <article className="panel" key={row.id}><div className="panel-body"><h3>{d.week} · {d.group === 'clear' ? 'No flags cohort' : 'All launches'}</h3>
       <dl className="receipt-metadata"><dt>Eligible coins</dt><dd>{d.eligible}</dd><dt>Evaluated</dt><dd>{d.evaluated}</dd><dt>Immature</dt><dd>{d.immature}</dd><dt>Censored</dt><dd>{d.censored}</dd><dt>Ungraded</dt><dd>{d.ungraded}</dd>
         <dt>Rug rate</dt><dd>{d.rugRateStatus === 'observed' && typeof d.rugRatePct === 'number' ? `${d.rugRatePct.toFixed(2)}%` : NOT_CHECKED} · denominator {d.rugDenominator}</dd>
         <dt>Median outcome</dt><dd>{d.medianStatus === 'observed' && typeof d.medianOutcomePct === 'number' ? `${d.medianOutcomePct.toFixed(2)}%` : NOT_CHECKED} · denominator {d.medianDenominator}</dd>
         <dt>Horizon</dt><dd>{d.horizonSec} seconds</dd><dt>Membership hash</dt><dd className="num">{d.membershipHash}</dd><dt>Outcome version</dt><dd>{d.outcomeVersion}</dd><dt>Identity version</dt><dd>{d.identityVersion}</dd><dt>Cut block</dt><dd>{d.cutBlock}</dd>
-      </dl><p>Measured cohorts. Immature, censored and ungraded coins are shown separately. Clear is not a recommendation.</p></div></article>;
+      </dl><p>Measured cohorts. Immature, censored and ungraded coins are shown separately. No flags is not a recommendation.</p></div></article>;
   })}</div>;
 }
 export default function Scoreboard() {
@@ -98,6 +98,6 @@ export default function Scoreboard() {
         {data.cursor && <button className="btn" disabled={selected.busy} onClick={() => void selected.more()}>Load more records</button>}</>}
     </div></section>
     <section className="panel"><div className="panel-body"><h2>Verify a receipt</h2><label>Receipt ID <input className="input" value={receiptId} onChange={e => setReceiptId(e.target.value)} spellCheck={false} /></label>{receiptId.trim() && <Link className="btn" to={receiptPath(receiptId.trim())}>Open receipt</Link>}</div></section>
-    <p className="note">{DYOR} Clear is not a recommendation.</p>
+    <p className="note">{DYOR} No flags is not a recommendation.</p>
   </div>;
 }

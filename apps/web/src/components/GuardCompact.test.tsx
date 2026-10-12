@@ -43,7 +43,7 @@ describe('037 compact rendering (synthetic fixtures)', () => {
     expect(render(<CompactVerdictChip level="clear" guard={null}/>)).toContain('Guard 2 assessment unavailable');
     const high = GuardAssessmentV2Schema.parse({...guard,mode:'active',level:'high',observedLevel:'high',score:60,baseScore:60,familyPoints:{E:60,O:0,Ff:0,C:0,I:0},factors:[]}) as GuardAssessmentV2;
     const html = render(<CompactVerdictChip level="clear" guard={high} pending />);
-    expect(html).toContain('High risk');expect(html).toContain('Not fully checked');expect(html).not.toContain('Scanning');expect(html).not.toContain('>Clear<');
+    expect(html).toContain('High risk');expect(html).toContain('Not fully checked');expect(html).not.toContain('Scanning');expect(html).not.toContain('No flags<');
   });
   it('preserves negotiated Guard fields while hiding omitted legacy readings after WS updates', () => {
     const {signal: _signal, spark8h: _spark, ...incoming} = row;

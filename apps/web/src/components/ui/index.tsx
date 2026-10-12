@@ -2,20 +2,20 @@ import { NOT_CHECKED_LABEL, NOT_TRACKED_LABEL } from '../../copy/availability';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react';
 import type { Level, Untrusted, Verdict, WalletLabel } from '@eko/shared';
-import { SCANNING, SCAN_DELAYED, SCAN_DELAYED_DETAIL, NOT_FULLY_CHECKED, missingChecks } from '../../copy/availability';
+import { SCANNING, SCAN_DELAYED, SCAN_DELAYED_DETAIL, NOT_FULLY_CHECKED, NO_FLAGS, missingChecks } from '../../copy/availability';
 import { projectGuardLevelToV1, guardInertText, type CoinCardMeta, type PlaybookId, type GuardAssessmentV2 } from '@eko/shared';
 import { GUARD_LABELS, GUARD_SHADOW, GUARD_CANDIDATE, guardGapText } from '../../copy/guard';
 import { IconAlert, IconCheck, IconChevron, IconFlame, IconInfo, IconOct, IconEye } from '../icons';
 
 const VERDICTS = {
-  clear: { label: 'Clear', Icon: IconCheck },
+  clear: { label: NO_FLAGS, Icon: IconCheck },
   monitor: { label: 'Monitor', Icon: IconAlert },
   danger: { label: 'Danger', Icon: IconOct },
   info: { label: 'Info', Icon: IconInfo },
   pending: { label: NOT_FULLY_CHECKED, Icon: IconEye },
 } as const satisfies Record<Level | 'pending', { label: string; Icon: typeof IconCheck }>;
 export type VerdictLevel = Verdict['level'] | Extract<Level, 'info'> | 'pending';
-export function VerdictChip({ level, size, detail, verdictPending = false, scanDelayed = false, evaluatedPlaybooks, meta, missing, guard }: { level: VerdictLevel; size?: 'lg'; detail?: string; verdictPending?: boolean; scanDelayed?: boolean; evaluatedPlaybooks?: PlaybookId[]; meta?: CoinCardMeta; missing?: string[]; guard?: GuardAssessmentV2 }) {
+export function VerdictChip({ level, size, detail, detailTitle, verdictPending = false, scanDelayed = false, evaluatedPlaybooks, meta, missing, guard }: { level: VerdictLevel; size?: 'lg'; detail?: string; detailTitle?: string; verdictPending?: boolean; scanDelayed?: boolean; evaluatedPlaybooks?: PlaybookId[]; meta?: CoinCardMeta; missing?: string[]; guard?: GuardAssessmentV2 }) {
   if (guard) {
     const projected = projectGuardLevelToV1(guard.level), Icon = VERDICTS[projected].Icon;
     const gap = guardGapText(guard), shadow = guard.mode !== 'active';
@@ -28,7 +28,7 @@ export function VerdictChip({ level, size, detail, verdictPending = false, scanD
   const { label, Icon } = VERDICTS[level];
   const checking = verdictPending, delayed = checking && scanDelayed;
   return <span className={`verdict ${level}${checking ? ' scanning' : ''}${delayed ? ' delayed' : ''}${size === 'lg' ? ' lg' : ''}`} aria-busy={checking} title={delayed ? SCAN_DELAYED_DETAIL : level === 'pending' && !checking ? missingChecks(evaluatedPlaybooks, meta, missing) : undefined} tabIndex={delayed || (level === 'pending' && !checking) ? 0 : undefined}>
-    <Icon />{delayed ? SCAN_DELAYED : checking ? SCANNING : label}{detail && <span className="verdict-detail">· {detail}</span>}
+    <Icon />{delayed ? SCAN_DELAYED : checking ? SCANNING : label}{detail && <span className="verdict-detail" title={detailTitle}>· {detail}</span>}
   </span>;
 }
 

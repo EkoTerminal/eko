@@ -22,7 +22,7 @@ const card = { ...original, verdict, playbooks: [] };
 function checking(html: string) {
   expect(html).toContain('Not fully checked');
   expect(html).toContain('aria-busy="false"');
-  expect(html).not.toContain('>Clear<');
+  expect(html).not.toContain('No flags<');
   expect(html).not.toContain('Nothing matched');
   expect(html).not.toContain('No scam playbooks matched');
 }

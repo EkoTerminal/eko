@@ -672,7 +672,7 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `ReceiptOutbox.get` | method | [packages/db/src/receipt-outbox.ts:183](../../packages/db/src/receipt-outbox.ts#L183) | Yes |
 | `guardScoreHash` | function | [packages/playbooks/src/guard-scoring.ts:20](../../packages/playbooks/src/guard-scoring.ts#L20) | Yes |
 | `evaluateGuardV2` | function | [packages/playbooks/src/guard-scoring.ts:48](../../packages/playbooks/src/guard-scoring.ts#L48) | Yes |
-| `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:87](../../packages/playbooks/src/verdict.ts#L87) | Yes |
+| `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:89](../../packages/playbooks/src/verdict.ts#L89) | Yes |
 | `actualBindingHash` | function | [packages/policy/src/actual-order.ts:17](../../packages/policy/src/actual-order.ts#L17) | Yes |
 | `executionPolicyHash` | function | [packages/policy/src/actual-order.ts:25](../../packages/policy/src/actual-order.ts#L25) | Yes |
 | `actualStateHash` | function | [packages/policy/src/actual-order.ts:35](../../packages/policy/src/actual-order.ts#L35) | Yes |
