@@ -48,7 +48,7 @@ export function reasonForMatch(match: PlaybookMatch): string {
       const top10 = value('Top 10 holders supply share'), largest = value('Largest non-deployer holder supply share'), moved = value('Supply held by top holders that never bought'), wallets = value('Top holders that never bought');
       if (top10 != null && top10 >= 0.2) parts.push(`The top 10 holders own ${pct(top10)} of supply`);
       if (largest != null && largest >= 0.1) parts.push(`one wallet other than the deployer owns ${pct(largest)}`);
-      if (moved != null && moved >= 0.05 && wallets) parts.push(`${wallets} of the largest holder${wallets === 1 ? '' : 's'} never bought and hold${wallets === 1 ? 's' : ''} ${pct(moved)} (transferred in)`);
+      if (moved != null && moved >= 0.05 && wallets) parts.push(`${wallets} of the largest holders never bought and hold${wallets === 1 ? 's' : ''} ${pct(moved)} (transferred in)`);
     } else {
       const held = value('Deployer holds supply share'), sold = value('Deployer sold supply share'), into = value('Deployer bought (USD)'), out = value('Deployer sold (USD)'), first = value('Deployer first sell (seconds after launch)');
       if (value('Deployer dumped') && into != null && out != null && sold != null && first != null)

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
 import { RpcGuardError, type PonsProfileClient } from '@eko/chain';
 import type { Address } from '@eko/shared';
-import { ponsProfiles } from '../src/pons-profile.js';
+import { ownerPowers, ponsProfiles } from '../src/pons-profile.js';
+import { toFunctionSelector } from 'viem';
 
 // A spent daily paid budget must not stop the scanner: the restart's cold refresh met the same spent budget, so the
 // process restarted all night without rating anything. The checkpoint's getters stay unknown instead.
@@ -43,5 +44,15 @@ describe('scanner run loop without paid budget', () => {
     const failing = new EngineWorker(db, { budgetWaitMs: 5 });
     failing.poll = async () => { throw new Error('database unavailable'); };
     await expect(failing.run()).rejects.toThrow('database unavailable');
+  });
+});
+
+describe('owner powers from the dispatch table', () => {
+  const push4 = (sig: string) => `63${toFunctionSelector(sig).slice(2)}`;
+  it('finds mint, blacklist, pause, upgrade and owner selectors, and none in a plain token', () => {
+    const plain = `0x6080${push4('transfer(address,uint256)')}${push4('approve(address,uint256)')}${push4('burn(uint256)')}`;
+    expect(ownerPowers(plain)).toEqual({ mint: false, blacklist: false, pause: false, upgrade: false, owner: false, codeBytes: (plain.length - 2) / 2 });
+    const owned = `${plain}${push4('mint(address,uint256)')}${push4('setBlacklist(address,bool)')}${push4('pause()')}${push4('upgradeTo(address)')}${push4('owner()')}`;
+    expect(ownerPowers(owned)).toMatchObject({ mint: true, blacklist: true, pause: true, upgrade: true, owner: true });
   });
 });

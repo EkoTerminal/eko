@@ -36,7 +36,9 @@ export interface LoadedSources extends CardSources {
   curvePct?:number;trade:TradeView;holderSummary:{count:number;previousCount:number;top10:number;dev:number;burned:bigint;inventory:bigint};
   token: TokenRow; swaps: SwapRow[]; holdings: Holding[]; previousHoldings: Holding[]; events: EventRow[];
   poolRefs: PoolRef[]; supply?: { total: bigint; circulating: bigint; burned: bigint; block: number };
-  profile?: { creatorTaxPct: number; feePct: number; antiSnipeActive: boolean; codehash: string; curve: Address; observationVersion: 'pons-getters-2' };
+  profile?: { creatorTaxPct: number; feePct: number; antiSnipeActive: boolean; codehash: string; curve: Address; observationVersion: 'pons-getters-2';
+    /** Owner powers found in the token's bytecode dispatch table (ownerPowers in pons-profile.ts); absent on reads before 2026-10-12. */
+    powers?: { mint: boolean; blacklist: boolean; pause: boolean; upgrade: boolean; owner: boolean; codeBytes: number } };
   sectionBlocks: { identity: number; supply?: number; liquidity?: number };
   history: HistoryView; usdComplete: boolean; trendingRank?: number; exemptionWallets: Address[]; previousHolderBlock?: number;
   /** The coin was rated Danger when retention pruned its raw history; the verdict keeps that floor (worker.ts). */

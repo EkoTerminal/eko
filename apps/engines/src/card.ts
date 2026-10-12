@@ -68,7 +68,8 @@ export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
     liquidity: { confidence: s.liquidity ? 0.5 : 0, asOfBlock: s.sectionBlocks.liquidity ?? s.asOfBlock, unavailable: !s.liquidity, missing: ['depthUsd', 'routing', 'completeLpOwnership', ...(s.poolRefs.some(p=>p.feeBps>=0x800000/100) ? ['dynamicPoolFees'] : [])] },
     supply: { confidence: s.supply ? 0.5 : 0, asOfBlock: s.sectionBlocks.supply ?? s.asOfBlock, unavailable: !s.supply,
       missing: ['knownLocksAndVesting', ...(s.earlyBuyers ? [] : ['bundlesHeldPct']), 'freshWalletsPct', ...(!s.supply ? ['circulating', 'totalSupply'] : [])] },
-    control: { confidence: 0, asOfBlock: s.asOfBlock, unavailable: true, missing: ['ownerPowerAnalysis'] },
+    // Owner powers read from the token's bytecode (pons-profile.ts ownerPowers); not analysed without that read.
+    control: s.profile?.powers ? { confidence: 0.5, asOfBlock: s.asOfBlock } : { confidence: 0, asOfBlock: s.asOfBlock, unavailable: true, missing: ['ownerPowerAnalysis'] },
     flow: { confidence: 0, asOfBlock: s.asOfBlock, unavailable: true, missing: ['agentPct', 'crewPct', 'humanPct'] },
     playbooks: { confidence: evaluatedPlaybooks(s).length / Object.keys(rules).length, asOfBlock: s.asOfBlock, missing: (Object.keys(rules) as PlaybookId[]).filter(id => !evaluatedPlaybooks(s).includes(id)) },
   };
@@ -96,7 +97,7 @@ export function assembleCard(s: LoadedSources, verdict: Verdict): CoinCard {
       devPct:pct(s.holderSummary.dev), bundlesHeldPct:earlyHeldPct(s),
       exemptWalletsHeldPct:(s.pons?.heldShare ?? 0)*100, freshWalletsPct:0, burnedPct:pct(Number(s.supply?.burned ?? 0n)),
       circulating: s.supply && s.token.decimals != null ? units(s.supply.circulating,s.token.decimals) : '' },
-    control: { canChangeTax:false,canBlacklist:false,canPause:false,canMint:false,upgradeable:false },
+    control: { canChangeTax:false,canBlacklist:s.profile?.powers?.blacklist ?? false,canPause:s.profile?.powers?.pause ?? false,canMint:s.profile?.powers?.mint ?? false,upgradeable:s.profile?.powers?.upgrade ?? false },
     flow: { window:'1h',agentPct:0,crewPct:0,humanPct:0,washEstPct:s.wash?.washEstPct ?? 0,beta:true,confidence:0 },
     playbooks:verdict.playbooks,verdict,meta,
     freshness: { block:Math.min(...Object.values(meta).filter(m => !m.unavailable).map(m => m.asOfBlock)), ageSec:0 },

@@ -365,6 +365,7 @@ describe('holder_concentration (calibrated 2026-10-12)', () => {
   it('names what it found', () => {
     const m = run('holder_concentration', holders({ top10Share: 0.42, largestShare: 0.12, transferredShare: 0.08, transferredWallets: 3 }))!;
     expect(reasonForMatch(m)).toBe('The top 10 holders own 42% of supply; one wallet other than the deployer owns 12%; 3 of the largest holders never bought and hold 8% (transferred in).');
+    expect(reasonForMatch(run('holder_concentration', holders({ transferredShare: 0.06, transferredWallets: 1 }))!)).toBe('1 of the largest holders never bought and holds 6% (transferred in).');
   });
 });
 describe('dev_dump (GMGN dump with a size floor)', () => {
