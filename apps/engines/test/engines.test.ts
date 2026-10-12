@@ -299,9 +299,17 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    await new EngineWorker(db,{client:client()}).processBlock(90);const card=await latest(db);
    const m=match(card,'bundle_dump')!;expect(m.level).toBe('danger');
    expect(card.verdict.reasons).toContain('4 wallets bought 30.1% of supply in the first minute; those wallets now hold 31%; 3 wallets were bought for by one funder.');
-   expect(match(card,'run_up')?.level).toBe('danger');expect(card.verdict.reasons).toContain('50.1% of supply has been bought out of the launch curve, 50.1% of it in the last hour.');
+   expect(match(card,'run_up')?.level).toBe('danger');expect(card.verdict.reasons).toContain('50.1% of supply has been bought out of the launch curve, all in the 1 minute since launch.');
    expect(card.verdict.evaluatedPlaybooks).toContain('run_up');
    expect(card.supply.bundlesHeldPct).toBeCloseTo(31,1);expect(card.verdict.level).toBe('danger');
+  });
+  it('counts an early wallet\'s buys net of what it sold again inside the first minute',async()=>{
+   const db=await traded();await block(db,2,10);
+   // One wallet buys 20% of supply twice and sells 20% in between, all within seconds of launch: it took 20%, not 40%.
+   const flipper=address(56);
+   await swap(db,1,1,20000,10,flipper,coin,1);await swap(db,2,-1,20000,10,flipper,coin,9);await swap(db,2,1,20000,10,flipper,coin,10);await transfer(db,2,flipper,20000,coin,curve);
+   const s=(await loadSources(db,coin,2,client()))!;
+   expect(s.earlyBuyers!.find(b=>b.wallet===flipper.toLowerCase())).toMatchObject({boughtShare:0.2,heldShare:0.2});
   });
   it('measures holders and the deployer: tokens held without buying, and a deployer who sold 2x within seconds',async()=>{
    const db=await traded();await block(db,2,10);

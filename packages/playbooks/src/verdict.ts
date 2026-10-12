@@ -43,9 +43,11 @@ export function reasonForMatch(match: PlaybookMatch): string {
   }
   if (match.id === 'run_up') {
     const value = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
-    const out = value('Supply bought out of the launch curve'), hour = value('Net supply bought in the last hour');
+    const out = value('Supply bought out of the launch curve'), hour = value('Net supply bought in the last hour'), age = value('Coin age (seconds)');
     const pct = (n: number) => `${Math.round(n * 1000) / 10}%`;
-    if (out != null) return `${pct(out)} of supply has been bought out of the launch curve${match.level === 'danger' && hour != null ? `, ${pct(hour)} of it in the last hour` : ''}.`;
+    // A coin under an hour old was bought entirely "in the last hour": say how long it took instead.
+    const fast = match.level !== 'danger' || hour == null ? '' : age != null && age < 3600 ? `, all in the ${Math.max(1, Math.round(age / 60))} minute${Math.round(age / 60) > 1 ? 's' : ''} since launch` : `, ${pct(hour)} of supply in the last hour`;
+    if (out != null) return `${pct(out)} of supply has been bought out of the launch curve${fast}.`;
   }
   if (match.id === 'holder_concentration' || match.id === 'dev_dump') {
     const value = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };

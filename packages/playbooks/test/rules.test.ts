@@ -399,7 +399,9 @@ describe('run_up (calibrated 2026-10-12)', () => {
     level('run_up', runUp({ outShare, hourShare }), expected));
   it('is not measured without the curve source', () => level('run_up', base(), null));
   it('names the numbers', () => {
-    expect(reasonForMatch(run('run_up', runUp({ outShare: 0.412, hourShare: 0.36 }))!)).toBe('41.2% of supply has been bought out of the launch curve, 36% of it in the last hour.');
+    expect(reasonForMatch(run('run_up', runUp({ outShare: 0.412, hourShare: 0.36, ageSec: 7200 }))!)).toBe('41.2% of supply has been bought out of the launch curve, 36% of supply in the last hour.');
+    expect(reasonForMatch(run('run_up', runUp({ outShare: 0.412, hourShare: 0.412, ageSec: 720 }))!)).toBe('41.2% of supply has been bought out of the launch curve, all in the 12 minutes since launch.');
+    expect(reasonForMatch(run('run_up', runUp({ outShare: 0.412, hourShare: 0.412, ageSec: 40 }))!)).toBe('41.2% of supply has been bought out of the launch curve, all in the 1 minute since launch.');
     expect(reasonForMatch(run('run_up', runUp({ outShare: 0.412, hourShare: 0.05 }))!)).toBe('41.2% of supply has been bought out of the launch curve.');
   });
 });

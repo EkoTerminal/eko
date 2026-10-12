@@ -98,8 +98,11 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   // Early buyers (bundle_dump): buys in the first blocks after launch (same-funder groups) or the first cohortSec
   // seconds (the cohort: bundles wait out the 5-second anti-snipe tax), credited to the wallet that received the coins.
   const launchBlock=Number(token.first_block),early=(r:SwapRow)=>Number(r.block)-launchBlock<CONFIG_V1.bundle_dump.firstBlocks || seconds(r.ts)-createdAtSec<CONFIG_V1.bundle_dump.cohortSec;
-  const earlyRows:SwapRow[]=[];
-  for(let i=0;i<swapEnd && early(swaps[i]);i++)if(swaps[i].side===1 && Number(swaps[i].block)>=launchBlock)earlyRows.push(swaps[i]);
+  // What a wallet sold again inside the window comes off what it bought there: a wallet flipping in and out several
+  // times would otherwise count each buy, and a busy first minute would add up to more than the whole supply.
+  const earlyRows:SwapRow[]=[],earlySold=new Map<string,number>();
+  for(let i=0;i<swapEnd && early(swaps[i]);i++){const r=swaps[i];if(Number(r.block)<launchBlock)continue;
+    if(r.side===1)earlyRows.push(r);else if(r.trader){const w=rowHex(r.trader);earlySold.set(w,(earlySold.get(w) ?? 0)+Number(r.amount_coin));}}
   const buyerOf=(r:SwapRow)=>r.recipient ?? (r.senders_pending ? null : r.trader);
   const earlyWallets=[...new Set(earlyRows.map(buyerOf).filter((w):w is Uint8Array=>w!=null).map(rowHex))];
   const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...poolRows.map(p=>rowHex(p.id)),...earlyWallets];
@@ -174,10 +177,10 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
       if(r.side===-1 && seller && cohort.has(seller))sold.set(seller,(sold.get(seller) ?? 0)+Number(r.amount_coin));
       else if(!earlySet.has(r))othersNet+=r.side*Number(r.amount_coin);}
     s.earlyBuyers=[...byWallet].map(([wallet,rows])=>{
-      const first=rows[0],bought=rows.reduce((n,r)=>n+Number(r.amount_coin),0),sec=seconds(first.ts);
+      const first=rows[0],gross=rows.reduce((n,r)=>n+Number(r.amount_coin),0),bought=Math.max(0,gross-(earlySold.get(wallet) ?? 0)),sec=seconds(first.ts);
       return {wallet:wallet as Address,funder:(first.trader ? rowHex(first.trader) : wallet) as Address,fundedAtSec:sec,buyAtSec:sec,buyBlock:Number(first.block),
         boughtShare:bought/total,heldShare:Number(holderView.amounts.get(wallet as Address) ?? 0n)/total,deployer:wallet===deployer || rows.some(r=>r.trader!=null && rowHex(r.trader)===deployer),
-        sellingIntoNetInflow:(sold.get(wallet) ?? 0)>=bought*0.5 && othersNet>0,evidence:[evidence(first,'Early-block buy')]};
+        sellingIntoNetInflow:(sold.get(wallet) ?? 0)>=gross*0.5 && othersNet>0,evidence:[evidence(first,'Early-block buy')]};
     });
   }
   if (s.supply && s.supply.total > 0n) {
