@@ -28,9 +28,9 @@ export function missingChecks(evaluated?:PlaybookId[],meta?:CoinCardMeta,missing
 
 export const CHECK_LEGEND='— not checked yet: exit costs and buyer mix arrive with the trade simulation and wallet labels';
 // Plain-language keys for the Guard disclosures; the disclosure labels themselves stay on every row.
-export const LEGACY_TITLE='Graded by EKO’s first rule set (rules 1.0.x), shown for reference.';
-export const GUARD2_UNAVAILABLE_TITLE='The current buyer-risk check (Guard 2) has no result for this coin yet. Buys stay unavailable until it does.';
-export const GUARD_LEGEND='Legacy assessment · rules 1.0.x: the grade from EKO’s first rule set, shown for reference. Guard 2 assessment unavailable: the current buyer-risk check has no result for this coin yet, and buys stay unavailable until it does.';
+export const LEGACY_TITLE='Graded by EKO’s rule set 1.0.x.';
+export const GUARD2_UNAVAILABLE_TITLE='Guard 2, the next buyer-risk check, has not been released, so it has no result for this coin.';
+export const GUARD_LEGEND='Grades come from EKO’s rule set 1.0.x. Guard 2, the next buyer-risk check, has not been released; until it is, buys are checked against this grade, and Danger or unscanned coins are refused.';
 
 // Live sell check (BACKEND §6.2 contract probe). A failed sell refuses buy quotes; it is not called a confirmed honeypot.
 export const SELL_FAILS='Sell fails';

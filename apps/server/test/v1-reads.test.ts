@@ -57,7 +57,7 @@ describe('v1 indexed read routes',()=>{
     expect((await built.app.inject(`/v1/coins/${sampleAddress(999)}`)).statusCode).toBe(404);
     for(const url of ['/v1/radar?cursor=invalid','/v1/pairs?stage=wrong','/v1/feed?kinds=wrong','/v1/coins/not-an-address','/v1/scan?q=','/v1/coins/'+card.identity.address+'/candles?tf=bad&from=2&to=1'])expect((await built.app.inject(url)).statusCode,url).toBe(422);
   });
-  it('ranks tiers then measured volume and address, paginates, and drops idle coins',async()=>{
+  it('ranks by measured last-hour volume then address whatever the grade, paginates, and drops idle coins',async()=>{
     const db=built.ctx.dbh.chain;
     for(let i=0;i<104;i++) {
       const address=sampleAddress(1000+i),level=(['clear','monitor','pending','danger'] as const)[i%4];
@@ -98,9 +98,12 @@ describe('v1 indexed read routes',()=>{
     expect(legacy.evaluatedToday).toBe(now%86400000>=7200000 ? 1 : 0);expect(legacy.evaluatedByHour.indexOf(1)).toBe(21);
     const first=envelope(RadarRowSchema).parse((await built.app.inject('/v1/radar')).json());expect(first.rows).toHaveLength(100);expect(first.rows[0].address).toBe(sampleAddress(1004));expect(first.rows[1].address).toBe(sampleAddress(1000));expect(first.cursor).not.toBeNull();
     const second=envelope(RadarRowSchema).parse((await built.app.inject(`/v1/radar?cursor=${first.cursor}`)).json());expect(second.cursor).toBeNull();
-    const rows=[...first.rows,...second.rows],tier={clear:0,monitor:1,pending:2,danger:3};
+    const rows=[...first.rows,...second.rows];
     expect(new Set(rows.map(r=>r.address)).size).toBe(rows.length);
-    expect(rows.map(r=>tier[r.verdict])).toEqual(rows.map(r=>tier[r.verdict]).sort((a,b)=>a-b));
+    // Most traded first across pages; the grades are mixed, not grouped.
+    const volumes=rows.map(r=>r.volume1hUsd ?? 0);
+    expect(volumes).toEqual([...volumes].sort((a,b)=>b-a));
+    expect(new Set(first.rows.slice(0,20).map(r=>r.verdict)).size).toBeGreaterThan(1);
     expect((await built.app.inject('/v1/scan?q=$DEMO')).json().status).toBe('ambiguous');
     const feedPage=envelope(FeedItemSchema).parse((await built.app.inject('/v1/feed?kinds=new_pair')).json());expect(feedPage.rows).toHaveLength(100);expect(feedPage.cursor).not.toBeNull();
     const feedNext=envelope(FeedItemSchema).parse((await built.app.inject(`/v1/feed?kinds=new_pair&cursor=${feedPage.cursor}`)).json());expect(feedNext.rows.length).toBeGreaterThan(0);expect(feedNext.rows.every(r=>r.kind==='new_pair')).toBe(true);

@@ -41,6 +41,16 @@ describe('Hot from trading activity, for any coin', () => {
     expect(heatOf(live(HOT.newVolumeUsd - 1, 200, undefined))).toBe('normal');
     expect(heatOf(live(50_000, HOT.newTrades - 1, undefined))).toBe('normal');
   });
+  it('reads heavy trading as Hot whatever the usual hour, unless the price is falling', () => {
+    // A coin a few hours past its launch: $21,600 and 202 trades in the hour against a $271,650 usual hour.
+    expect(heatOf(live(21_600, 202, 271_650, 3.4))).toBe('hot');
+    expect(heatOf(live(HOT.heavyVolumeUsd, HOT.heavyTrades, 1_000_000))).toBe('hot');
+    expect(heatOf(live(HOT.heavyVolumeUsd - 1, 500, 1_000_000))).toBe('normal');
+    expect(heatOf(live(500_000, HOT.heavyTrades - 1, 1_000_000))).toBe('normal');
+    expect(heatOf(live(21_600, 202, 271_650, -5))).not.toBe('hot');
+    // A Danger row keeps its styling and still says Hot.
+    expect(displayHeat(live(21_600, 202, 271_650, 3.4, 'danger'))).toBe('hot');
+  });
   it('never reads Hot from a missing reading, and keeps agent buying as a second path', () => {
     expect(activityHot({ ...live(30_000, 40, 1_000), unavailable: ['flow', 'volume'] })).toBe(false);
     expect(activityHot({ ...live(30_000, 40, 1_000), volume1hUsd: undefined })).toBe(false);

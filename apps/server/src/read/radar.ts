@@ -5,35 +5,31 @@ import type { RadarRow } from '@eko/shared';
 import type { ReadRow, ReadStore } from './store.js';
 import { decodeCursor, encodeCursor } from './pagination.js';
 // TODO(spec): Pending tier is unspecified; place it between Monitor and Danger (task 023).
-const tier = { clear:0, monitor:1, pending:2, danger:3 };
 /** When a run was written: its created_at (0191), or its block time for rows written before that column existed. */
 const at='coalesce(extract(epoch from e.created_at),e.sec)';
 /** Index-friendly window on that time: `from` (and optionally `to`) are epoch-second parameters. */
 const written=(from:string,to?:string)=>`((e.created_at>=to_timestamp(${from})${to ? ` AND e.created_at<to_timestamp(${to})` : ''}) OR (e.created_at IS NULL AND e.sec>=${from}${to ? ` AND e.sec<${to}` : ''}))`;
+/**
+ * Radar rank: the most traded coins of the last hour first, whatever their grade. Ranking by grade first (no match, then
+ * Monitor, pending, Danger) filled the first 124 pages with quiet coins once "no match" became the largest grade: on
+ * 2026-10-12 the first page held 100 of them trading $700-3,000 an hour, while the coins trading $12,000-60,000 an hour
+ * (Monitor and Danger, most of them graduated) sat thousands of rows down. The grade is on every row and in the filter.
+ */
 export function rankRadar(rows: ReadRow[]): RadarRow[] {
-  return rows.sort((a,b) => {
-    const level=tier[a.row.verdict]-tier[b.row.verdict]; if(level)return level;
-    // Skip a ranking key unless both rows have observations for it; signal never ranks.
-    if (!a.row.unavailable?.includes('flow') && !b.row.unavailable?.includes('flow')) {
-      const flow=b.row.flow.agentPct+b.row.flow.crewPct-a.row.flow.agentPct-a.row.flow.crewPct;if(flow)return flow;
-    }
-    if (!a.row.unavailable?.includes('exitCost') && !b.row.unavailable?.includes('exitCost')) {
-      const exit=a.row.exitCost1kPct-b.row.exitCost1kPct;if(exit)return exit;
-    }
-    return b.volume-a.volume || a.row.address.localeCompare(b.row.address);
-  }).map((r,i)=>({...r.row,rank:i+1}));
+  return rows.sort((a,b) => b.volume-a.volume || a.row.address.localeCompare(b.row.address)).map((r,i)=>({...r.row,rank:i+1}));
 }
 export class RadarService {
   constructor(readonly store: ReadStore) {}
-  async order() {await this.store.currentRanks();return (await this.store.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>$1 ORDER BY tier,-volume,coin',[new Date(this.store.now()-7*86400000)])).rows.map(r=>hex(r.coin));}
+  async order() {await this.store.currentRanks();return (await this.store.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>$1 ORDER BY -volume,coin',[new Date(this.store.now()-7*86400000)])).rows.map(r=>hex(r.coin));}
   async list(cursor?:string) {
     await this.store.currentRanks();
     const key=decodeCursor(cursor,'radar');
     if(key && (key.length!==4 || !Number.isInteger(key[0]) || typeof key[1]!=='number' || typeof key[2]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[2]) || !Number.isInteger(key[3])))throw new InputError('Invalid radar cursor');
     const cutoff=new Date(this.store.now()-7*86400000),params:unknown[]=[cutoff];
-    if(key)params.push(key[0],-Number(key[1]),Buffer.from(String(key[2]).slice(2),'hex'));
+    // The cursor keeps its four fields (tier, volume, coin, rank); the tier no longer orders the page.
+    if(key)params.push(-Number(key[1]),Buffer.from(String(key[2]).slice(2),'hex'));
     const selected=await this.store.db.sql.query<{coin:Uint8Array;tier:number;volume:number}>(`SELECT coin,tier,volume FROM read_coins
-      WHERE activity>$1 ${key ? 'AND (tier,-volume,coin)>($2,$3,$4)' : ''} ORDER BY tier,-volume,coin LIMIT 101`,params);
+      WHERE activity>$1 ${key ? 'AND (-volume,coin)>($2,$3)' : ''} ORDER BY -volume,coin LIMIT 101`,params);
     const page=selected.rows.slice(0,100),details=await this.store.rows(undefined,page.map(r=>hex(r.coin)));
     const indexed=new Map(details.map(e=>[e.row.address,e.row]));
     const rows=page.map((r,i)=>({...indexed.get(hex(r.coin))!,rank:i+1+(key ? Number(key[3]) : 0)}));

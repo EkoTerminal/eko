@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest';
 import { GuardAssessmentV2Schema, BUYER_RISK, DYOR, NON_AFFILIATION, GUARD_CHECK_LABELS, type GuardAssessmentV2 } from '@eko/shared';
 import { assessment } from '../../../../packages/shared/test/fixtures/contracts/guard-v2';
 import { GuardCompact, CompactVerdictChip, GuardLegend } from './GuardCompact';
-import { GUARD2_UNAVAILABLE_TITLE, LEGACY_TITLE } from '../copy/availability';
 import { RadarRowView, HotStrip } from '../pages/terminal/RadarParts';
 import { PairView } from '../pages/terminal/Pairs';
 import { FeedRow, FeedDescription } from '../pages/terminal/Feed';
@@ -40,7 +39,8 @@ describe('037 compact rendering (synthetic fixtures)', () => {
     for (const html of views) {expect(html).toContain('Legacy assessment');expect(html).toContain('Shadow assessment');expect(html).toContain('Not fully checked');}
   });
   it('distinguishes unavailable negotiation and active High with gaps from first scan', () => {
-    expect(render(<CompactVerdictChip level="clear" guard={null}/>)).toContain('Guard 2 assessment unavailable');
+    // No Guard 2 result: the grade alone, with no per-row tag (the list's legend explains the rule set once).
+    const alone = render(<CompactVerdictChip level="clear" guard={null}/>);expect(alone).toContain('No flags');expect(alone).not.toContain('Guard 2 assessment unavailable');
     const high = GuardAssessmentV2Schema.parse({...guard,mode:'active',level:'high',observedLevel:'high',score:60,baseScore:60,familyPoints:{E:60,O:0,Ff:0,C:0,I:0},factors:[]}) as GuardAssessmentV2;
     const html = render(<CompactVerdictChip level="clear" guard={high} pending />);
     expect(html).toContain('High risk');expect(html).toContain('Not fully checked');expect(html).not.toContain('Scanning');expect(html).not.toContain('No flags<');
@@ -67,16 +67,15 @@ describe('037 compact rendering (synthetic fixtures)', () => {
     expect(render(<FeedDescription item={item}/>)).toContain('Venue round-trip cost');
     expect(render(<FeedDescription item={{...item,guardReason:guard.reasons[0]}}/>)).toContain('buy-then-sell');
   });
-  it('explains the legacy and Guard 2 labels once, keeping both disclosures on the row', () => {
+  it('says once, above the rows, which rule set graded them, and puts no tag on the row', () => {
     const legend = render(<GuardLegend rows={[{ guardV2: null }, { guardV2: null }]} />);
-    expect(legend.match(/Guard 2 assessment unavailable:/g)).toHaveLength(1);expect(legend).toContain('Legacy assessment · rules 1.0.x:');
+    expect(legend.match(/Guard 2, the next buyer-risk check, has not been released/g)).toHaveLength(1);expect(legend).toContain('rule set 1.0.x');
+    // The legend states the buy gate as it is: this grade is checked, not a Guard 2 result.
+    expect(legend).toContain('Danger or unscanned coins are refused');expect(legend).not.toContain('shown for reference');
     expect(render(<GuardLegend rows={[{}]} />)).toBe('');
     const active = GuardAssessmentV2Schema.parse({...guard,mode:'active',level:'high',observedLevel:'high',score:60,baseScore:60,familyPoints:{E:60,O:0,Ff:0,C:0,I:0},factors:[]}) as GuardAssessmentV2;
     expect(render(<GuardLegend rows={[{ guardV2: active }]} />)).toBe('');
     const chip = render(<CompactVerdictChip level="monitor" guard={null} />);
-    expect(chip).toContain('Legacy assessment · rules 1.0.x');expect(chip).toContain('Guard 2 assessment unavailable');
-    // One compact chip on the row; its tooltip and accessible name carry both full disclosures.
-    expect(chip).toMatch(/>Legacy grade<\/span>/);expect(chip.match(/class="tag guard-disclosure"/g)).toHaveLength(1);
-    expect(chip).toContain(LEGACY_TITLE);expect(chip).toContain(GUARD2_UNAVAILABLE_TITLE);
+    expect(chip).toContain('Monitor');expect(chip).not.toContain('Legacy');expect(chip).not.toContain('guard-disclosure');
   });
 });
