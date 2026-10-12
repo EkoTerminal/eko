@@ -5,7 +5,7 @@ import { loadRegistry, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } fr
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';
 import { decodeEventLog, type Hex } from 'viem';
-import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, staleRatings, unscannedCoins, type LivePlan } from '../src/worker.js';
+import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, staleRatings, tradedSinceCard, unscannedCoins, type LivePlan } from '../src/worker.js';
 import { ReplayCache } from '../src/replay-cache.js';
 import { assembleCard, cardHash, evaluatedPlaybooks } from '../src/card.js';
 import { curveProgress,curveProgressAt,type PonsEventRow } from '../src/curve-progress.js';
@@ -368,6 +368,24 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    expect(scans.slice(0,2)).toEqual([[1,1],[1,1]]);
    for(const c of [coin,sibling])expect((await latest(db,c)).verdict.asOfBlock).toBe(2);
    expect(await unscannedCoins(db,epoch-86400,2,10)).toEqual([]);
+  });
+  it('rates a coin that traded after its card from the loop once the card has settled, newest trade first',async()=>{
+   const db=await traded();await new EngineWorker(db,{client:client(),now:()=>epoch+120}).poll();
+   const refresh=()=>db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[[binary(coin)],epoch+600]);
+   await refresh();
+   // The card (block 1) is newer than every trade: nothing to do.
+   expect(await tradedSinceCard(db,epoch-86400,epoch+600,10)).toEqual([]);
+   await block(db,2,300);await swap(db,2,-1,10,10,address(44),coin,300);await refresh();
+   // Traded after its card, but the card is not yet settled at epoch+100.
+   expect(await tradedSinceCard(db,epoch-86400,epoch,10)).toEqual([]);
+   const card=(await db.sql.query<{card_id:string}>('SELECT card_id FROM coin_card_latest')).rows[0].card_id;
+   expect(await tradedSinceCard(db,epoch-86400,epoch+300,10)).toEqual([{coin,card}]);
+   const reports:number[][]=[];
+   const worker=new EngineWorker(db,{client:client(),now:()=>epoch+600,rerate:true,rerateIdleMs:10,onRerate:(n,first,tradedCards)=>reports.push([n,first,tradedCards])});
+   worker.poll=async()=>{if(reports.length)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
+   await worker.run();
+   expect(reports[0]).toEqual([1,0,1]);expect((await latest(db)).verdict.asOfBlock).toBe(2);
+   expect(await tradedSinceCard(db,epoch-86400,epoch+600,10)).toEqual([]);
   });
   it('re-rates pending cards that earlier code wrote, from the loop, in one transaction per group',async()=>{
    const db=await traded();await checked(db,1,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')]);

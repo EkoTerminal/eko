@@ -31,6 +31,8 @@ export const RATING_CODE_AT='2026-10-11T21:30:29Z';
 export const RERATE_WIDTH=16;
 /** Blocks before the loop tries again to first-scan a coin it could not load (about two minutes at 0.2 s blocks). */
 export const FIRST_SCAN_RETRY_BLOCKS=600;
+/** A coin that traded after its card is rated again once that card is at least this old (seconds). */
+export const TRADED_RERATE_SEC=300;
 /** Outcome horizons the end of a live poll may evaluate, so first scans and re-ratings can skip them per write. */
 export const OUTCOME_LOADS_PER_POLL=40;
 /** Blocks to wait before reloading a coin whose sources were unavailable: doubles per attempt, from about two minutes to about twelve hours. */
@@ -52,7 +54,7 @@ export interface WorkerOptions {
   /** A poll stopped on a spent daily paid budget; run() waits `budgetWaitMs` (default 60 s) and polls again. */
   onBudgetWait?: () => void; budgetWaitMs?: number;
   /** Live: run rerateLoop() beside the polls (the CLI turns it on). `onRerate` reports each batch's cards. */
-  rerate?: boolean; rerateIdleMs?: number; onRerate?: (cards: number, firstScans: number) => void; onRerateError?: (error: unknown) => void;
+  rerate?: boolean; rerateIdleMs?: number; onRerate?: (cards: number, firstScans: number, traded: number) => void; onRerateError?: (error: unknown) => void;
   /** Live: re-rate pending cards written before this ISO time (the CLI passes RATING_CODE_AT). Wall-clock, like engine_runs.created_at. */
   rerateBefore?: string;
   concurrency?: number; pollMs?: number; client?: PonsProfileClient; bus?: EngineBus; readBlock?: BlockReader; now?: () => number; replayCache?:boolean;marketWindow?:boolean; onPlanned?:(plan:{tasks:number;coins:number;from:number;to:number})=>void; onProgress?: (completed:number,block:number) => void;
@@ -559,9 +561,15 @@ export class EngineWorker {
         // fifty minutes on 2026-10-11 (426 coins launched over four hours had none).
         const tried=[...this.firstTried].filter(([,at])=>block-at<FIRST_SCAN_RETRY_BLOCKS).map(([coin])=>coin);
         const first=head==null ? [] : await unscannedCoins(this.db,since,block,RERATE_WIDTH*2,tried);
+        // Then coins that traded after their card was written: polls reach a trade only after refreshing activity and
+        // planning, and yield to every new launch (on 2026-10-12 the median coin traded in the last hour was rated as of
+        // nine hours before). Beside them, pending cards that would rate differently now.
+        const traded=first.length || head==null ? [] : await tradedSinceCard(this.db,since,(this.options.now?.() ?? Date.now()/1000)-TRADED_RERATE_SEC,RERATE_WIDTH*2);
         // Coins the radar lists (active in the last seven days), by this worker's clock.
-        const stale=first.length || head==null ? [] : await staleRatings(this.db,(await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>to_timestamp($1)',[since])).rows.map(row=>hex(row.coin) as Address),RERATE_WIDTH*4,this.rerated,this.rulesAt);
-        const work:{coin:Address;card?:string}[]=first.length ? first.map(coin=>({coin})) : stale;
+        const stale=first.length || head==null ? [] : (await staleRatings(this.db,(await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>to_timestamp($1)',[since])).rows.map(row=>hex(row.coin) as Address),RERATE_WIDTH*2,this.rerated,this.rulesAt))
+          .filter(entry=>!traded.some(t=>t.coin===entry.coin));
+        const work:{coin:Address;card?:string}[]=first.length ? first.map(coin=>({coin})) : [...traded,...stale];
+        const tradedCoins=new Set(traded.map(t=>t.coin));let tradedCards=0;
         for(let offset=0;offset<work.length && !this.stopped;offset+=RERATE_WIDTH) {
           const batch=work.slice(offset,offset+RERATE_WIDTH);
           for(const {coin,card} of batch)if(card)this.rerated.set(coin,card);else this.firstTried.set(coin,block);
@@ -591,7 +599,7 @@ export class EngineWorker {
               }
               return out;
             });
-            for(const card of written){await this.recordScan(card);cards++;this.completed++;}
+            for(const card of written){await this.recordScan(card);cards++;this.completed++;if(tradedCoins.has(card.identity.address.toLowerCase() as Address) || tradedCoins.has(card.identity.address as Address))tradedCards++;}
             if(!batch[0].card)firstScans+=written.length;
             if(written.length)this.options.onHeartbeat?.();
             for(const row of (await this.db.sql.query<{coin:Uint8Array;card_id:string}>('SELECT coin,card_id FROM coin_card_latest WHERE coin=ANY($1::bytea[])',[loaded.map(s=>binary(s.coin))])).rows)
@@ -605,7 +613,7 @@ export class EngineWorker {
             throw error;
           }
         }
-        if(work.length)this.options.onRerate?.(cards,firstScans);
+        if(work.length)this.options.onRerate?.(cards,firstScans,tradedCards);
         if(work.length)continue;
       } catch(error) {
         if(rpcStopReason(error)!=='rpc_budget_exhausted')this.options.onRerateError?.(error);
@@ -767,6 +775,17 @@ export class EngineWorker {
     // TODO(spec): cross-task canonical recovery is conservative: stop for explicit derived-history reconciliation instead of deleting verdict history.
     throw new Error('Engine cursor is on an orphaned block; reconcile derived history before continuing');
   }
+}
+
+/**
+ * Radar coins (active since `since`) whose last trade is later than their card's block and whose card was written
+ * before `settledBefore` (seconds), most recently traded first, with their card ids.
+ */
+export async function tradedSinceCard(db:ChainDb,since:number,settledBefore:number,limit:number):Promise<{coin:Address;card:string}[]> {
+  if(limit<=0)return [];
+  return (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT r.coin,l.card_id AS card FROM read_coins r JOIN coin_card_latest l ON l.coin=r.coin
+    JOIN engine_block_times b ON b.number=l.as_of_block WHERE r.activity>to_timestamp($1) AND r.activity>b.ts AND b.ts<to_timestamp($2)
+    ORDER BY r.activity DESC,r.coin LIMIT $3`,[since,settledBefore,limit])).rows.map(row=>({coin:hex(row.coin) as Address,card:row.card}));
 }
 
 /**

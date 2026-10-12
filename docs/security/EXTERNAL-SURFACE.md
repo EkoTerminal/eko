@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **593/593 (100.00%)** documented. Minimum: **90%**.
+Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -186,18 +186,19 @@ Measured: **593/593 (100.00%)** documented. Minimum: **90%**.
 | `refreshCoinFlow` | function | [apps/engines/src/watcher/flow-store.ts:41](../../apps/engines/src/watcher/flow-store.ts#L41) | Yes |
 | `refreshFlows` | function | [apps/engines/src/watcher/flow-store.ts:77](../../apps/engines/src/watcher/flow-store.ts#L77) | Yes |
 | `refreshCensus` | function | [apps/engines/src/watcher/flow-store.ts:95](../../apps/engines/src/watcher/flow-store.ts#L95) | Yes |
-| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:37](../../apps/engines/src/worker.ts#L37) | Yes |
-| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:124](../../apps/engines/src/worker.ts#L124) | Yes |
-| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:133](../../apps/engines/src/worker.ts#L133) | Yes |
-| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:152](../../apps/engines/src/worker.ts#L152) | Yes |
-| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:166](../../apps/engines/src/worker.ts#L166) | Yes |
-| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:175](../../apps/engines/src/worker.ts#L175) | Yes |
-| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:210](../../apps/engines/src/worker.ts#L210) | Yes |
-| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:247](../../apps/engines/src/worker.ts#L247) | Yes |
-| `EngineWorker.run` | method | [apps/engines/src/worker.ts:513](../../apps/engines/src/worker.ts#L513) | Yes |
-| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:624](../../apps/engines/src/worker.ts#L624) | Yes |
-| `unscannedCoins` | function | [apps/engines/src/worker.ts:777](../../apps/engines/src/worker.ts#L777) | Yes |
-| `staleRatings` | function | [apps/engines/src/worker.ts:793](../../apps/engines/src/worker.ts#L793) | Yes |
+| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:39](../../apps/engines/src/worker.ts#L39) | Yes |
+| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:126](../../apps/engines/src/worker.ts#L126) | Yes |
+| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:135](../../apps/engines/src/worker.ts#L135) | Yes |
+| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:154](../../apps/engines/src/worker.ts#L154) | Yes |
+| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:168](../../apps/engines/src/worker.ts#L168) | Yes |
+| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:177](../../apps/engines/src/worker.ts#L177) | Yes |
+| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:212](../../apps/engines/src/worker.ts#L212) | Yes |
+| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:249](../../apps/engines/src/worker.ts#L249) | Yes |
+| `EngineWorker.run` | method | [apps/engines/src/worker.ts:515](../../apps/engines/src/worker.ts#L515) | Yes |
+| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:632](../../apps/engines/src/worker.ts#L632) | Yes |
+| `tradedSinceCard` | function | [apps/engines/src/worker.ts:784](../../apps/engines/src/worker.ts#L784) | Yes |
+| `unscannedCoins` | function | [apps/engines/src/worker.ts:796](../../apps/engines/src/worker.ts#L796) | Yes |
+| `staleRatings` | function | [apps/engines/src/worker.ts:812](../../apps/engines/src/worker.ts#L812) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |

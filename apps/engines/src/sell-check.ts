@@ -295,7 +295,8 @@ export class SellCheckScheduler {
   stop() { this.stopped = true; this.wake?.(); }
   async run(pollMs: number) {
     while (!this.stopped) {
-      try { await this.tick(); }
+      let attempted = 0;
+      try { attempted = await this.tick(); }
       catch (error) {
         const reason = rpcStopReason(error);
         if (reason === 'rpc_budget_exhausted') { this.pausedUntil = (Math.floor(this.checker.now() / 86400000) + 1) * 86400000; this.log('sell_check_paused', { reason }); }
@@ -303,6 +304,9 @@ export class SellCheckScheduler {
         else this.log('sell_check_failed', {});
       }
       if (this.stopped) return;
+      // A full batch means more coins are due: the next pass starts at once (one batch then a pause held checks to about
+      // 32 a minute on 2026-10-11, with 2,300 radar coins due a re-check after a restart).
+      if (attempted >= this.cfg.batch) continue;
       await new Promise<void>(resolve => { const timer = setTimeout(resolve, pollMs); timer.unref?.(); this.wake = () => { clearTimeout(timer); resolve(); }; });
     }
   }
@@ -332,7 +336,7 @@ export class SellCheckScheduler {
         OR (l.attempt_status IN ('sellable','refused','buy_failed') AND l.attempted_at<=to_timestamp($1::double precision-$4))
         OR (l.venue='pons_curve' AND t.graduated_block IS NOT NULL AND l.attempt_status<>'unavailable')
         OR (l.attempt_status IN ('unsupported','buy_failed') AND l.attempted_at<to_timestamp($8::double precision)))
-      ORDER BY (l.coin IS NULL) DESC,r.activity DESC,r.coin LIMIT $7`, [s, c.minAgeSec, c.minIntervalSec, c.maxAgeSec, c.retrySec, c.unsupportedRetrySec, c.batch, this.startedAt / 1000])).rows
+      ORDER BY (l.coin IS NULL) DESC,(l.attempt_status IN ('unsupported','buy_failed') AND l.attempted_at<to_timestamp($8::double precision)) DESC,r.activity DESC,r.coin LIMIT $7`, [s, c.minAgeSec, c.minIntervalSec, c.maxAgeSec, c.retrySec, c.unsupportedRetrySec, c.batch, this.startedAt / 1000])).rows
       .map(r => ({ coin: hex(r.coin), activity: new Date(r.activity) }));
   }
   /** One bounded pass. Returns the number of coins attempted. */
