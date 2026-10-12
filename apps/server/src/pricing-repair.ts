@@ -166,6 +166,9 @@ export class PricingRepairWorker {
   private spotPrices = new Map<string, number | null>();
   /** The process priced pair tokens' own swaps over the backfill window (after filling their metadata). */
   private pairsPriced = false;
+  /** Pair tokens (read once per process) and the hour their oldest-first pricing walk has reached. */
+  private pairs?: Uint8Array[];
+  private pairCursor?: number;
   constructor(private readonly db: ChainDb, private readonly log: (event: string, fields: Record<string, unknown>) => void,
     private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 28_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH,
     private readonly spot?: TokenSpot, private readonly meta?: TokenMetaReader) {}
@@ -195,16 +198,17 @@ export class PricingRepairWorker {
     let recent = 0, backfilled = 0, retagged = 0, pairs = 0;
     while (!this.retagged && this.now() < deadline) { const n = await retagPairQuotes(this.db, this.batch); retagged += n; if (n < this.batch) this.retagged = true; }
     // A token-quoted Pons swap is priced from its pair token's own priced swaps within the day before it, and the
-    // backfill walks hours newest first, so the pair tokens' swaps over the whole window are priced first.
+    // backfill walks hours newest first, so the pair tokens' swaps over the window are priced first, an hour at a time
+    // oldest first (one query over the whole window took ten minutes for 5,000 swaps on 2026-10-12).
     if (!this.pairsPriced && this.now() < deadline) {
-      const tokens = await pairTokens(this.db);
-      if (this.meta) await repairPairMetadata(this.db, this.meta, tokens);
-      for (;;) {
-        const n = await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), new Date(top - 8 * 24 * HOUR), new Date(top), this.batch, candleFloor, tokens);
+      if (!this.pairs) { this.pairs = await pairTokens(this.db); if (this.meta) await repairPairMetadata(this.db, this.meta, this.pairs); }
+      this.pairCursor ??= top - 8 * 24 * HOUR;
+      while (this.pairCursor < top && this.now() < deadline) {
+        const n = await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), new Date(this.pairCursor), new Date(this.pairCursor + HOUR), this.batch, candleFloor, this.pairs);
         pairs += n;
-        if (n < this.batch) { this.pairsPriced = true; break; }
-        if (this.now() >= deadline) break;
+        if (n < this.batch) this.pairCursor += HOUR;
       }
+      if (this.pairCursor >= top) this.pairsPriced = true;
     }
     for (let end = top; end > top - 6 * HOUR && this.now() < deadline; end -= HOUR) recent += (await this.hour(end, deadline, candleFloor)).priced;
     this.cursor ??= top - 6 * HOUR;
