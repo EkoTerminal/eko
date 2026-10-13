@@ -126,6 +126,21 @@ export async function repairPairMetadata(db: ChainDb, read: TokenMetaReader, pai
   return filled;
 }
 
+/**
+ * Rebuild candles in a transaction of their own. The coins' read-model rows are marked first, in coin order: the candle
+ * write marks them anyway (its trigger), and taking them only once the candle table's lock was held deadlocked with
+ * writers that hold such a row from a swap write and then ask for that lock, the indexer above all (18 deadlocks on
+ * 2026-10-13 by 10:45Z, 14 of them in the two hours coins with long histories were being onboarded).
+ */
+export async function rebuildCandles(db: ChainDb, keys: { coin: Uint8Array; minute: Date }[]) {
+  if (!keys.length) return;
+  const coins = [...new Map(keys.map(key => [hex(key.coin), key.coin])).entries()].sort(([a], [b]) => a < b ? -1 : 1).map(([, coin]) => coin);
+  await db.tx(async tx => {
+    await tx.sql.query('INSERT INTO read_dirty(coin) SELECT c FROM unnest($1::bytea[]) AS c ORDER BY c ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision', [coins]);
+    await refreshBars(tx, keys);
+  });
+}
+
 /** A token's USD price at a block, or null when it has none (the worker reads Uniswap v3 USDG pools). */
 export type TokenSpot = (token: string, decimals: number, block: bigint) => Promise<number | null>;
 /**
@@ -155,7 +170,7 @@ export async function repricePoolQuotes(db: ChainDb, assets: PricingAssets, spot
         AND ${unpriceable} RETURNING s.coin,s.ts`, [from, to, quotes, g.quote, hour, price, g.block]))).rows;
     priced += rows.length;
     const recent = rows.filter(row => new Date(row.ts).getTime() >= candleFloor.getTime());
-    if (recent.length) await db.tx(tx => refreshBars(tx, recent.map(row => ({ coin: row.coin, minute: new Date(Math.floor(new Date(row.ts).getTime() / 60000) * 60000) }))));
+    await rebuildCandles(db, recent.map(row => ({ coin: row.coin, minute: new Date(Math.floor(new Date(row.ts).getTime() / 60000) * 60000) })));
   }
   return { priced, reads };
 }

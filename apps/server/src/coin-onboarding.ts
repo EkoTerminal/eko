@@ -1,7 +1,7 @@
 import { decodeAbiParameters, hexToString, parseAbi, type Hex, type PublicClient } from 'viem';
-import { binary, hex, refreshBars, type ChainDb } from '@eko/db';
+import { binary, hex, type ChainDb } from '@eko/db';
 import { isTransientRpcUnavailable, loadRegistry, rpcStopReason } from '@eko/chain';
-import { repricePonsSwaps, pricingAssets, type PricingAssets } from './pricing-repair.js';
+import { rebuildCandles, repricePonsSwaps, pricingAssets, type PricingAssets } from './pricing-repair.js';
 
 const ZERO = '0x0000000000000000000000000000000000000000', DEAD = '0x000000000000000000000000000000000000dead';
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', ZERO_TOPIC = `0x${'0'.repeat(64)}`;
@@ -15,9 +15,11 @@ export const ATTRIBUTE_BATCH = 1000, ONBOARD_PRICE_BATCH = 1000;
  * Minutes of candles rebuilt per transaction once a coin's swaps are priced. Rebuilding candles takes the candle
  * table's exclusive lock, which the indexer needs to write every block: a thousand minutes in the pricing transaction
  * held it for ten seconds at a time (2026-10-13). The candles of the last two days are rebuilt after pricing instead,
- * a few minutes of them at a time.
+ * four hours of them at a time. That was thirty minutes while a candle's delete read the coin's whole history; since
+ * that was fixed a rebuild of 240 minutes holds the lock about as long as one of 30 did (93 ms against 70 ms on a copy
+ * of 2026-10-13), and a coin's two days take 12 turns at the lock instead of 96.
  */
-export const CANDLE_MINUTES = 30;
+export const CANDLE_MINUTES = 240;
 const NO_CANDLES = new Date(8.64e15);
 /**
  * Blocks per mint search request (the paid endpoint refuses a log range over 100,000 blocks, about three hours), and
@@ -268,8 +270,16 @@ export class CoinOnboardingWorker {
   private failed = new Map<string, number>();
   private traded: Candidate[] = [];
   private tradedAt = -Infinity;
-  /** Per coin being settled: the oldest minute whose candle this process has rebuilt (older ones remain). */
-  private candles = new Map<string, Date>();
+  /**
+   * Per coin being settled: the hours still to price and the minutes whose candles are still to rebuild, read once and
+   * worked down across passes. Read again on every pass, the two lists were a scan of the coin's whole history each
+   * (0.5 s each for a 71,000-swap coin on a copy of 2026-10-13, most of a busy coin's share of a pass in production).
+   */
+  private hours = new Map<string, Date[]>();
+  private minutes = new Map<string, Date[]>();
+  /** Listed coins with swaps or liquidity events still to name, read every two minutes. */
+  private behind: Uint8Array[] = [];
+  private behindAt = -Infinity;
   private pausedAt = -Infinity;
   private readonly now: () => number;
   private readonly addresses: AttributionAddresses;
@@ -363,7 +373,7 @@ export class CoinOnboardingWorker {
   }
   private done(coin: Uint8Array) {
     const key = hex(coin), other = (row: Candidate) => hex(row.coin) !== key;
-    this.candles.delete(key); this.traded = this.traded.filter(other); this.busiest = this.busiest.filter(other); this.busy = this.busy.filter(other); this.queue = this.queue.filter(other);
+    this.hours.delete(key); this.minutes.delete(key); this.traded = this.traded.filter(other); this.busiest = this.busiest.filter(other); this.busy = this.busy.filter(other); this.queue = this.queue.filter(other);
   }
   private async mark(coin: Uint8Array, status: string, data: Record<string, unknown> = {}) {
     // Waits are measured on the worker's clock, so the row's time is too.
@@ -390,23 +400,29 @@ export class CoinOnboardingWorker {
    */
   private async settle(coin: Uint8Array, deadline: number): Promise<boolean> {
     const batch = this.options.batch ?? ATTRIBUTE_BATCH, epoch = new Date(0), end = new Date(this.now() + HOUR), floor = new Date(this.now() - 2 * 24 * HOUR), key = hex(coin);
-    const hours = (await this.db.sql.query<{ hour: Date }>(`SELECT DISTINCT date_trunc('hour',ts) AS hour FROM swaps WHERE coin=$1 AND usd IS NULL AND amount_coin>0 AND amount_quote>0 ORDER BY 1 DESC`, [coin])).rows;
-    for (const { hour } of hours) for (;;) {
-      if (this.now() >= deadline) return false;
-      const from = new Date(hour);
-      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), ONBOARD_PRICE_BATCH, NO_CANDLES, [coin]) < ONBOARD_PRICE_BATCH) break;
-      this.candles.delete(key);
+    let hours = this.hours.get(key);
+    if (!hours) {
+      hours = (await this.db.sql.query<{ hour: Date }>(`SELECT DISTINCT date_trunc('hour',ts) AS hour FROM swaps WHERE coin=$1 AND usd IS NULL AND amount_coin>0 AND amount_quote>0 ORDER BY 1 DESC`, [coin])).rows.map(row => new Date(row.hour));
+      this.hours.set(key, hours);
     }
-    // Candles of the last two days, newest first, a few minutes per transaction. `candles` holds how far a pass got.
-    const minutes = (await this.db.sql.query<{ minute: Date }>(`SELECT DISTINCT date_trunc('minute',ts) AS minute FROM swaps WHERE coin=$1 AND ts>=$2 AND ts<$3::timestamptz AND usd>0 ORDER BY 1 DESC`,
-      [coin, floor, this.candles.get(key) ?? end])).rows.map(row => new Date(row.minute));
-    for (let offset = 0; offset < minutes.length; offset += CANDLE_MINUTES) {
+    while (hours.length) {
       if (this.now() >= deadline) return false;
-      const chunk = minutes.slice(offset, offset + CANDLE_MINUTES);
-      await this.db.tx(tx => refreshBars(tx, chunk.map(minute => ({ coin, minute }))));
-      this.candles.set(key, chunk.at(-1)!);
+      const from = hours[0];
+      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), ONBOARD_PRICE_BATCH, NO_CANDLES, [coin]) < ONBOARD_PRICE_BATCH) hours.shift();
+      this.minutes.delete(key);
     }
-    this.candles.delete(key);
+    // Candles of the last two days, newest first, CANDLE_MINUTES per transaction.
+    let minutes = this.minutes.get(key);
+    if (!minutes) {
+      minutes = (await this.db.sql.query<{ minute: Date }>(`SELECT DISTINCT date_trunc('minute',ts) AS minute FROM swaps WHERE coin=$1 AND ts>=$2 AND ts<$3::timestamptz AND usd>0 ORDER BY 1 DESC`,
+        [coin, floor, end])).rows.map(row => new Date(row.minute));
+      this.minutes.set(key, minutes);
+    }
+    while (minutes.length) {
+      if (this.now() >= deadline) return false;
+      await rebuildCandles(this.db, minutes.slice(0, CANDLE_MINUTES).map(minute => ({ coin, minute })));
+      minutes.splice(0, CANDLE_MINUTES);
+    }
     for (;;) {
       if (this.now() >= deadline) return false;
       if (await attributeSwaps(this.db, this.addresses, epoch, end, batch, [coin]) < batch) break;
@@ -415,6 +431,8 @@ export class CoinOnboardingWorker {
       if (this.now() >= deadline) return false;
       if (await attributeLiquidity(this.db, this.addresses, batch, [coin]) < batch) break;
     }
+    // Settled: the next time this coin has work (rows stored later), its lists are read afresh.
+    this.hours.delete(key); this.minutes.delete(key);
     return true;
   }
   /** One coin, through to its launch wallet; 'unfinished' when the pass ran out of time first, 'set_aside' when it cannot be read yet. */
@@ -464,11 +482,17 @@ export class CoinOnboardingWorker {
     // Onboarded coins first. The indexer names and prices their new swaps as it stores them; rows it stores without a
     // wallet arrive later, of any age (a backfill stream, or the stored raw events of a pool that has just become known).
     let settled = 0;
-    const behind = (await this.db.sql.query<{ coin: Uint8Array }>(`SELECT k.address AS coin FROM tokens k WHERE k.deployer IS NOT NULL AND k.launchpad IS NULL
-      AND (EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.address AND s.senders_pending AND s.venue<>'pons_curve')
-        OR EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id AND e.senders_pending WHERE p.currency0=k.address OR p.currency1=k.address)) LIMIT 20`)).rows;
-    const behindUntil = this.now() + (deadline - this.now()) / 3;
-    for (const { coin } of behind) { if (this.now() >= behindUntil || !await this.settle(coin, behindUntil)) break; settled++; }
+    // The probe is one index read per listed coin (1.2 s a pass with 720 coins listed on 2026-10-13), so the list is kept.
+    if (started - this.behindAt >= 120_000) {
+      this.behind = (await this.db.sql.query<{ coin: Uint8Array }>(`SELECT k.address AS coin FROM tokens k WHERE k.deployer IS NOT NULL AND k.launchpad IS NULL
+        AND (EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.address AND s.senders_pending AND s.venue<>'pons_curve')
+          OR EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id AND e.senders_pending WHERE p.currency0=k.address OR p.currency1=k.address)) LIMIT 20`)).rows.map(row => row.coin);
+      this.behindAt = started;
+    }
+    const behind = this.behind.length, behindUntil = this.now() + (deadline - this.now()) / 3;
+    try { while (this.behind.length) { if (this.now() >= behindUntil || !await this.settle(this.behind[0], behindUntil)) break; this.behind.shift(); settled++; } }
+    // A statement that lost a deadlock leaves the coin for the next pass; the coins to onboard still get their turn.
+    catch (error) { if (!['40P01', '40001'].includes(String((error as { code?: unknown })?.code))) throw error; this.log('coin_onboarding_retry', { coin: hex(this.behind[0]), reason: 'database_lock_contention' }); }
     let onboarded = 0, set = 0, unfinished = 0, tried = 0;
     // A coin that does not finish its group's time stays queued for the next pass: its work so far is stored.
     const work = async (list: () => Candidate[], until: number) => {
@@ -494,6 +518,6 @@ export class CoinOnboardingWorker {
     };
     await work(() => this.busy, Math.min(deadline, this.now() + budget / 3));
     await work(() => this.queue, deadline);
-    if (settled || onboarded || set || unfinished) this.log('coin_onboarding', { settled, behind: behind.length, onboarded, setAside: set, unfinished, busy: this.busy.length, queued: this.queue.length, lagSec: Math.round(lagSec), ms: this.now() - started });
+    if (settled || onboarded || set || unfinished) this.log('coin_onboarding', { settled, behind, onboarded, setAside: set, unfinished, busy: this.busy.length, queued: this.queue.length, lagSec: Math.round(lagSec), ms: this.now() - started });
   }
 }

@@ -113,8 +113,9 @@ describe('coin onboarding', () => {
     await db.insert('tokens', { address: binary(usdg), name: 'USDG', symbol: 'USDG', decimals: 6, first_block: '1', block: '1' });
     await swap(db, 900, 30, 1, '2000000000000000000', { quote_asset: binary(usdg), amount_quote: '5000000' });
     await transfer(db, 900, 30, manager, buyer, '2000000000000000000');
+    let clock = now;
     const worker = new CoinOnboardingWorker(db, chain({ decimals: 18, symbol: 'DEMO', name: null, totalSupply: 10n ** 27n }, { wallet: launcher, to: null, block: 99n, tx: hash(0x77), mintTo: launcher }, calls),
-      () => undefined, { now: () => now, assets, addresses });
+      () => undefined, { now: () => clock, assets, addresses });
     await worker.tick();
     const token = (await db.sql.query<{ name: string; symbol: string; decimals: number; total_supply: string; supply_block: string; deployer: Uint8Array }>(
       'SELECT name,symbol,decimals,total_supply::text,supply_block::text,deployer FROM tokens WHERE address=$1', [binary(coin)])).rows[0];
@@ -130,8 +131,13 @@ describe('coin onboarding', () => {
     await db.sql.query('SELECT refresh_read_models(ARRAY[$1::bytea],$2)', [binary(coin), Math.floor(now / 1000)]);
     expect((await db.sql.query('SELECT 1 FROM read_coins WHERE coin=$1', [binary(coin)])).rows).toHaveLength(1);
     // A swap of the onboarded coin stored later without a wallet or a price (here an old one: a pool's stored raw events
-    // turned into rows) is priced and named by the next pass without any chain read.
+    // turned into rows) is priced and named without any chain read, once the list of such coins is read again (every
+    // two minutes).
     await swap(db, 150, 31, -1, '1000000000000000000', { quote_asset: binary(usdg), amount_quote: '3000000' }); await transfer(db, 150, 31, seller, manager, '1000000000000000000');
+    await worker.tick();
+    expect((await swaps(db))[0]).toMatchObject({ tx: 31, pending: true });
+    clock += 120_000;
+    await db.insert('chain_blocks', { number: '991', block: '991', hash: binary(hash(0x991)), parent_hash: null, ts: new Date(clock - 5_000) });
     await worker.tick();
     expect((await swaps(db))[0]).toEqual({ tx: 31, trader: seller, recipient: null, pending: false });
     expect((await db.sql.query<{ usd: number }>('SELECT usd FROM swaps WHERE block=150')).rows[0].usd).toBe(3);

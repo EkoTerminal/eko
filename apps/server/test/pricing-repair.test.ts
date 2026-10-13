@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
-import { PricingRepairWorker, repricePonsSwaps, repricePoolQuotes, retagPairQuotes, type PricingAssets } from '../src/pricing-repair.js';
+import { rebuildCandles, PricingRepairWorker, repricePonsSwaps, repricePoolQuotes, retagPairQuotes, type PricingAssets } from '../src/pricing-repair.js';
 
 // 2026-10-11: 694,000 of 1.96 million Pons swaps in seven days had no USD (USDG quotes, and curve swaps decoded before
 // the coin's decimals were known), so those coins never got wash and curve checks and could never be rated Clear.
 const now = Date.parse('2026-10-11T12:00:00Z');
+// Candles are rebuilt for the two days before the run; the default counts from the machine's clock, which left this
+// file's fixed day behind on 2026-10-13.
+const candleFloor = new Date(now - 2 * 86_400_000);
 const address = (n: number) => `0x${n.toString(16).padStart(40, '0')}`;
 const hash = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
 const weth = address(0xee), usdg = address(0xd0), pool = address(0x77), coin = address(0xa1), other = address(0xb1), native = address(0);
@@ -23,6 +26,25 @@ const priced = async (db: ChainDb) => (await db.sql.query<{ block: string; usd: 
   'SELECT block::text,usd,pricing_pending AS pending,priced_block::text FROM swaps WHERE coin<>$1 ORDER BY swaps.block', [binary(weth)])).rows;
 
 describe('Pons swap repricing', () => {
+  it('rebuilds candles with the coin\'s read-model row taken before the candle table\'s lock', async () => {
+    const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
+    await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(now));
+    await db.insert('tokens', { address: binary(coin), name: 'Sample token', symbol: 'DEMO', decimals: 18, launchpad: 'pons', first_block: '1', block: '1' });
+    const row = await swap(db, 60, coin, native, '1000000000000000000', { usd: 2000, price_quote: 0.5, pricing_pending: false });
+    // 2026-10-13: the indexer holds this row from its swap write when it asks for the candle lock; a rebuild that took
+    // the lock first and the row second deadlocked with it 18 times in a morning.
+    const statements: string[] = [], tx = db.tx.bind(db);
+    (db as { tx: unknown }).tx = (work: (inner: ChainDb) => Promise<unknown>) => tx(inner => {
+      const query = inner.sql.query.bind(inner.sql);
+      (inner.sql as { query: unknown }).query = (text: string, params?: unknown[]) => { statements.push(text.trim().slice(0, 22)); return query(text, params); };
+      return work(inner);
+    });
+    await rebuildCandles(db, [{ coin: binary(coin), minute: new Date(Math.floor(row.ts.getTime() / 60_000) * 60_000) }]);
+    const marked = statements.indexOf('INSERT INTO read_dirty'), locked = statements.indexOf('LOCK TABLE bars_1m IN ');
+    expect(marked).toBe(0);
+    expect(locked).toBeGreaterThan(marked);
+    expect((await db.sql.query<{ volume_usd: number }>('SELECT volume_usd FROM bars_1m WHERE coin=$1', [binary(coin)])).rows).toEqual([{ volume_usd: 2000 }]);
+  });
   it('prices pending ETH swaps at the reference rate of their block and USDG swaps at par, then refreshes candles', async () => {
     const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
     await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(now));
@@ -37,7 +59,7 @@ describe('Pons swap repricing', () => {
     await swap(db, 40, coin, native, '500000000000000000');              // 0.5 ETH at 3,000
     await swap(db, 41, coin, usdg, '25000000', { pricing_pending: false }); // 25 USDG
     await swap(db, 42, other, native, '1000000000000000000');            // not a Pons coin
-    expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now))).toBe(3);
+    expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now), undefined, candleFloor)).toBe(3);
     expect(await priced(db)).toEqual([
       { block: '5', usd: null, pending: true, priced_block: null },
       { block: '20', usd: 2000, pending: false, priced_block: '10' },
@@ -47,7 +69,7 @@ describe('Pons swap repricing', () => {
     ]);
     const bars = (await db.sql.query<{ volume: number }>('SELECT sum(volume_usd) AS volume FROM bars_1m WHERE coin=$1', [binary(coin)])).rows[0];
     expect(Number(bars.volume)).toBe(3525);
-    expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now))).toBe(0);
+    expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now), undefined, candleFloor)).toBe(0);
   });
   it('resumes an hour the budget cut short instead of skipping it', async () => {
     const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
@@ -77,7 +99,7 @@ describe('Pons swap repricing', () => {
     await swap(db, 20, coin, native, '25000000', { pool_id: binary(curve), price_quote: 1e-11, usd: 0.00000005, pricing_pending: false });   // recorded as ETH
     await swap(db, 21, stockCoin, stock, '2000000000000000000', { pool_id: binary(address(0xc2)), pricing_pending: false });                 // 2 stock tokens
     expect(await retagPairQuotes(db)).toBe(1);expect(await retagPairQuotes(db)).toBe(0);
-    expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now))).toBe(2);
+    expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now), undefined, candleFloor)).toBe(2);
     const rows = (await db.sql.query<{ block: string; quote: Uint8Array; usd: number }>('SELECT block::text,quote_asset AS quote,usd FROM swaps WHERE block IN (20,21) ORDER BY swaps.block')).rows;
     expect(rows.map(r => [r.block, `0x${Buffer.from(r.quote).toString('hex')}`, r.usd])).toEqual([['20', usdg, 25], ['21', stock, 300]]);
   });
@@ -97,7 +119,7 @@ describe('Pons swap repricing', () => {
     const reads: string[] = [];
     const spot = async (token: string, decimals: number, block: bigint) => { reads.push(`${token}:${decimals}:${block}`); return token === stock ? 26.5 : null; };
     const prices = new Map<string, number | null>(), from = new Date(now - 200 * 60_000), to = new Date(now);
-    expect(await repricePoolQuotes(db, assets, spot, from, to, prices)).toEqual({ priced: 2, reads: 2 });
+    expect(await repricePoolQuotes(db, assets, spot, from, to, prices, candleFloor)).toEqual({ priced: 2, reads: 2 });
     // One read per token and hour, at the hour's first such swap.
     expect(reads.sort()).toEqual([`${stock}:18:60`, `${unknown}:18:63`].sort());
     const rows = new Map((await priced(db)).map(r => [r.block, r]));
@@ -105,7 +127,7 @@ describe('Pons swap repricing', () => {
     expect(rows.get('61')).toMatchObject({ usd: 26.5, priced_block: '60' });
     expect(rows.get('62')!.usd).toBeNull(); expect(rows.get('63')!.usd).toBeNull();
     // Kept readings are not read again.
-    expect(await repricePoolQuotes(db, assets, spot, from, to, prices)).toEqual({ priced: 0, reads: 0 });
+    expect(await repricePoolQuotes(db, assets, spot, from, to, prices, candleFloor)).toEqual({ priced: 0, reads: 0 });
   });
   it('fills a quiet pair token\'s missing decimals, prices its own swaps, then the curve swaps quoted in it', async () => {
     // 38 of 65 pair tokens had no decimals on 2026-10-12 (the indexer reads them only when the curve trades again).
