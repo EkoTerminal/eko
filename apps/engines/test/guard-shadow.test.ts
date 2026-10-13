@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { keccak256,toHex } from 'viem';
 import { binary,openDb,migrate,migrateEngines,GuardSourceStore,GuardMeasurementStore,guardManifestId,guardRowsKnownAt,GuardVerdictStore,guardStorageHash } from '@eko/db';
 import type { ChainDb } from '@eko/db';
-import { GuardShadowRunSchema, CoinCardSchema, VerdictSchema } from '@eko/shared';
+import { CoinCardSchema, VerdictSchema } from '@eko/shared';
 import type { CoinCard,GuardStoredEvidence,GuardVerdictRevisionInput } from '@eko/shared';
 import { EngineWorker } from '../src/worker.js';
 import { persistShadowGuardV2 } from '../src/shadow-v2.js';
@@ -20,7 +20,7 @@ beforeAll(async()=>{
 afterAll(async()=>{await db?.close();});
 
 describe('033 engine shadow integration, in-memory only, zero upstream acquisition requests',()=>{
-  it('computes/stores explicit unknowns alongside byte-identical V1 card/verdict without adding policy fields',async()=>{
+  it('skips uncaptured journals alongside byte-identical V1 card/verdict without adding policy fields',async()=>{
     const s=(await loadSources(db,coin,block))!, matches=evaluatePlaybooks({...s,history:s.history});
     // The worker applies its existing evaluation manifest/receipt. Compare the independent
     // legacy card construction against those exact resulting fields.
@@ -30,13 +30,10 @@ describe('033 engine shadow integration, in-memory only, zero upstream acquisiti
     expect(card).toEqual(assembleCard(s,card.verdict)); expect(card.verdict.playbooks).toEqual(matches);
     expect(card.verdict.level).not.toBe('danger'); expect(card.verdict).not.toHaveProperty('guardV2');
     const rows=(await db.sql.query<{data:unknown;manifest_id:null;revision_id:null}>('SELECT * FROM guard_shadow_runs')).rows;
-    expect(rows).toHaveLength(1); const run=GuardShadowRunSchema.parse(rows[0].data);
-    expect(run).toMatchObject({manifestId:null,legacyVerdictId:card.verdict.receipt.id,assessment:{mode:'shadow',level:'incomplete',baseScore:0}});
-    expect(run.assessment.completeness.missing).toHaveLength(8); expect(run.assessment.factors.every(f=>f.state==='unknown')).toBe(true);
+    expect(rows).toHaveLength(0);
     expect((await db.sql.query('SELECT * FROM guard_availability')).rows).toHaveLength(0);
-    await worker.processBlock(block,true); expect((await db.sql.query('SELECT * FROM guard_shadow_runs')).rows).toHaveLength(2); // distinct replay identity
-    await worker.processBlock(block,true); expect((await db.sql.query('SELECT * FROM guard_shadow_runs')).rows).toHaveLength(2);
-    await expect(db.sql.query('UPDATE guard_shadow_runs SET status=$1',['missing_cursor'])).rejects.toThrow('append-only');
+    await worker.processBlock(block,true); expect((await db.sql.query('SELECT * FROM guard_shadow_runs')).rows).toHaveLength(0); // uncaptured replay also does no work
+    await worker.processBlock(block,true); expect((await db.sql.query('SELECT * FROM guard_shadow_runs')).rows).toHaveLength(0);
   });
   it('reads captured normalized facts into the revision store, retains shadow High, and never mutates V1',async()=>{
     const before=(await db.sql.query<{data:CoinCard}>('SELECT data FROM coin_card_latest')).rows[0].data;
@@ -55,6 +52,7 @@ describe('033 engine shadow integration, in-memory only, zero upstream acquisiti
     expect((await db.sql.query('SELECT * FROM guard_verdict_revisions')).rows).toHaveLength(1);
     await new GuardVerdictStore(db).invalidateReorg({chainId:4663,fromBlock:String(block),causeId:hash(999),knownAt:m.cut,recordedAt:m.acquiredAt});
     expect(await guardRowsKnownAt(db,'guard_verdict_revisions',{chainId:4663,coin,manifestId:m.id,state:source.cursor,availability:m.cut})).toEqual([]);
+    await expect(db.sql.query('UPDATE guard_shadow_runs SET status=$1',['missing_cursor'])).rejects.toThrow('append-only');
     expect((await db.sql.query('SELECT * FROM guard_shadow_runs WHERE revision_id=$1',[rows[0].id])).rows).toHaveLength(1); // historical journal is retained, never used as canonical verdict
   });
   it('does not invent a cursor or assessment for legacy activity with no indexed hash',async()=>{

@@ -38,8 +38,8 @@ export async function persistShadowGuardV2(db: ChainDb, target: { coin: Address;
   let manifest: GuardAvailabilityManifest | null = null;
   for (const row of rows) { const m=GuardAvailabilityManifestSchema.parse(row.data);
     if (compareGuardCursors(m.watermark,cursor)===0) {manifest=m; break;} }
-  // An uncaptured journal is explicitly separate from authoritative source availability.
-  // All checks/factors are unknown until a normalizer records a versioned observation envelope.
+  // Uncaptured journals have no revision or signal and are not consumed by card/verdict readers.
+  if (!manifest) return;
   let input: GuardScoreInput = GuardScoreInputSchema.parse({coin:target.coin,cursor,
     availabilityCut:manifest?.cut ?? {cursor,acquisitionSequence:'0'},mode:'shadow',observations:[],checks:[],decisive:[],informational:[],
     historySource:null,shadowBooster:false,codeHash,profileHash:guardScoreHash(null),serviceRegistryHash:guardScoreHash(null),calibrationManifestHash:guardScoreHash(null)});

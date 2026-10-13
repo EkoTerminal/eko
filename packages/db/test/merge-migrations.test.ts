@@ -7,7 +7,7 @@ import type { ChainDb } from '../src/index.js';
 // not a synthetic schema, to exercise upgrades from a fully migrated main DB.
 const mainIndexer = ['0101_chain','0102_market','0103_range_errors','0110_rpc_usage','0111_pending_senders','0112_pending_pricing','0117_pons_progress'];
 const mainEngines = ['0104_engines','0105_engine_activity','0106_engine_rules_versions','0107_engine_pons_static','0108_engine_query_indexes','0113_v1_reads','0114_batched_read_models'];
-const mergedIndexer = [...mainIndexer.slice(0,-1),'0115_guard_sources','0117_pons_progress','0136_wallet_protocol','0150_agent_registry','0180_eth_usd_reference_sources','0181_transfer_baselines','0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index','0195_reference_swaps_unnamed'];
+const mergedIndexer = [...mainIndexer.slice(0,-1),'0115_guard_sources','0117_pons_progress','0136_wallet_protocol','0150_agent_registry','0180_eth_usd_reference_sources','0181_transfer_baselines','0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index','0195_reference_swaps_unnamed', '0199_swaps_index_diet'];
 const mergedEngines = [...mainEngines,'0116_guard_revisions','0118_guard_receipts','0119_guard_shadow','0120_receipt_outbox','0121_v3_reference_simulation','0122_private_receipts','0123_receipt_committer','0124_signal_shadow','0134_directional_depth','0135_scan_jobs','0137_v4_reference_simulation','0142_ghost_reports','0147_card_availability','0149_wallet_labels','0153_wallet_fingerprints','0154_wallet_fingerprint_indexes','0158_watcher_flow','0159_watcher_flow_invalidation','0161_campaign_replay','0168_outcome_labels','0169_swarm_worker','0175_swarm_paper','0179_review_api','0182_sell_checks','0183_engine_pool_indexes','0185_read_churn_and_history_prunes','0186_history_prune_ratings','0189_engine_activity_changes','0191_engine_run_written_at','0192_uniswap_coins','0193_refresh_listed_coins','0194_flow_dirty_statements','0196_verdicts_danger','0197_publication_sequence_index','0198_read_model_buyers_mark'];
 async function applyMain(db: ChainDb) {
   for(const [ledger,ids] of [['eko_indexer_migrations',mainIndexer],['eko_engine_migrations',mainEngines]] as const) {
@@ -22,6 +22,14 @@ async function applyMain(db: ChainDb) {
   }
 }
 async function assertMerged(db: ChainDb) {
+  const keptSwapIndexes = ['swaps_pkey','swaps_pool_block','swaps_coin_block','swaps_coin_ts','swaps_priced_ts_block_coin','swaps_trader_block','swaps_pending_coin','swaps_pending_pricing_coin','swaps_block_ts'].sort();
+  expect((await db.sql.query<{ indexname: string }>("SELECT indexname FROM pg_indexes WHERE tablename='swaps' ORDER BY indexname")).rows.map(r=>r.indexname)).toEqual(keptSwapIndexes);
+  expect((await db.sql.query("SELECT indexname FROM pg_indexes WHERE tablename LIKE 'swaps_%' AND indexdef LIKE '%(quote_asset, block)%'")).rows).toHaveLength(0);
+  const partitions = (await db.sql.query<{ relname: string; indexes: number }>(`SELECT c.relname,count(x.indexrelid)::integer AS indexes
+    FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid LEFT JOIN pg_index x ON x.indrelid=c.oid
+    WHERE i.inhparent='swaps'::regclass GROUP BY c.relname`)).rows;
+  expect(partitions.length).toBeGreaterThanOrEqual(3);
+  for (const partition of partitions) expect(partition.indexes).toBe(keptSwapIndexes.length);
   expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename='eth_usd_reference_sources'")).rows).toHaveLength(1);
   expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename IN ('swarm_paper_positions','swarm_paper_events','swarm_paper_grades','swarm_calibration_inputs','swarm_calibration_outcomes','swarm_calibration_baselines','swarm_calibration_reports','swarm_paper_checkpoint','swarm_paper_ticks','swarm_momentum_models','swarm_calibration_cohorts')")).rows).toHaveLength(11);
   expect((await db.sql.query("SELECT tgname FROM pg_trigger WHERE tgname IN ('swarm_paper_events_immutable','swarm_paper_grades_immutable','swarm_calibration_inputs_immutable','swarm_calibration_outcomes_immutable','swarm_calibration_baselines_immutable','swarm_calibration_reports_immutable','swarm_paper_ticks_immutable','swarm_momentum_models_immutable','swarm_calibration_cohorts_immutable')")).rows).toHaveLength(9);
@@ -64,6 +72,8 @@ describe('main and Guard migration union',()=>{
     const db=await openDb({pgliteDir:':memory:'});
     try {
       await applyMain(db);
+      await db.ensurePartitions(new Date('2026-01-01T00:00:00Z'));
+      expect((await db.sql.query("SELECT indexname FROM pg_indexes WHERE tablename='swaps_2026_01' AND indexdef LIKE '%(quote_asset, block)%'")).rows).toHaveLength(1);
       const coin=binary(`0x${'ab'.repeat(20)}`),txHash=binary(`0x${'cd'.repeat(32)}`),data={kind:'launch',graduationThreshold:'1000',creatorTaxBps:250};
       await db.sql.query('INSERT INTO pons_events(block,tx_hash,log_index,token,emitter,kind,data) VALUES(1,$1,0,$2,$2,$3,$4)',[txHash,coin,'launch',JSON.stringify(data)]);
       await db.sql.query("INSERT INTO verdicts(id,coin,valid_from_block,rules_version,signature,data) VALUES('main-fixture',$1,1,'1.0.2','fixture','{}')",[coin]);
@@ -74,7 +84,7 @@ describe('main and Guard migration union',()=>{
       await migrate(db);await migrateEngines(db);await assertMerged(db);
       expect((await db.sql.query<{data:unknown}>('SELECT data FROM pons_events')).rows[0].data).toEqual(data);
       expect((await db.sql.query("SELECT id FROM verdicts WHERE id='main-fixture'")).rows).toHaveLength(1);
-      const after=(await db.sql.query('SELECT * FROM eko_indexer_migrations WHERE id NOT IN ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ORDER BY id',['0115_guard_sources','0136_wallet_protocol','0150_agent_registry','0180_eth_usd_reference_sources','0181_transfer_baselines','0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index','0195_reference_swaps_unnamed'])).rows;
+      const after=(await db.sql.query('SELECT * FROM eko_indexer_migrations WHERE id NOT IN ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ORDER BY id',['0115_guard_sources','0136_wallet_protocol','0150_agent_registry','0180_eth_usd_reference_sources','0181_transfer_baselines','0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index','0195_reference_swaps_unnamed', '0199_swaps_index_diet'])).rows;
       expect(after).toEqual(before);
       expect((await db.sql.query('SELECT * FROM coin_cards')).rows).toEqual(cardsBefore);
       await db.sql.query("INSERT INTO coin_cards VALUES('enriched-card',$1,1,'enriched','{}','1.0.2')",[coin]);
