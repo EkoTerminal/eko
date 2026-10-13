@@ -223,14 +223,17 @@ export function chainOnboarding(metered: () => PublicClient, registry = loadRegi
   };
 }
 
-interface Candidate { coin: Uint8Array; first_block: string }
+interface Candidate { coin: Uint8Array; first_block: string; recent?: string }
+/** Swaps in the last hour from which a coin not yet onboarded goes ahead of the hour's launches. */
+export const BUSY_SWAPS = 50;
 export interface OnboardingOptions { now?: () => number; intervalMs?: number; budgetMs?: number; perTick?: number; batch?: number; assets?: PricingAssets; addresses?: AttributionAddresses;
   /** Seconds the newest indexed block may be behind the clock before a pass does nothing (default 45). */
   maxLagSec?: number }
 const HOUR = 3_600_000;
 /**
  * Worker role. Every 30 s: price and name whatever swaps of already onboarded coins were stored without a wallet,
- * then onboard a few more coins, newest launches first, then the most traded in the last day. Onboarding a coin reads
+ * then onboard a few more coins: those with BUSY_SWAPS swaps in the last hour first (busiest first), then the hour's
+ * launches (newest first), then the most traded in the last day. Onboarding a coin reads
  * its name, symbol, decimals and supply (one call) and the wallet that sent its first mint (its launch wallet, the
  * `deployer` every rating check is written against), prices its stored swaps and names their traders, and only then
  * records the launch wallet: that makes the coin visible to the rating engine and the Radar with its history complete.
@@ -242,11 +245,18 @@ const HOUR = 3_600_000;
  * Rewriting a coin's stored swaps competes with the indexer and the rating engine for the same database (the box ran
  * at a load of 5.7 on four cores on 2026-10-13): a pass works for ten of every thirty seconds, and does nothing while
  * the newest indexed block is more than `maxLagSec` behind the clock.
+ * Within a pass the already onboarded coins get a third of the time, the busy coins a third and the launches what is
+ * left, and time one group does not use goes to the next, so none holds up the others (on 2026-10-13 four listed coins
+ * with swaps that cannot be priced took every pass, and the hour's launches kept the busiest coins from ever being
+ * reached: 30 coins had 90% of the unlisted swaps).
  */
 export class CoinOnboardingWorker {
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
   private queue: Candidate[] = [];
+  private busy: Candidate[] = [];
+  /** Coins whose onboarding threw, and when: left alone for five minutes so one coin's failing read does not end every pass. */
+  private failed = new Map<string, number>();
   private traded: Candidate[] = [];
   private tradedAt = -Infinity;
   /** Per coin being settled: the oldest minute whose candle this process has rebuilt (older ones remain). */
@@ -272,7 +282,10 @@ export class CoinOnboardingWorker {
     }).finally(() => { this.running = undefined; });
     return this.running;
   }
-  /** Coins to onboard: launched in the last hour first (newest first, read every pass), then by swaps in the last day (read every five minutes). */
+  /**
+   * Coins to onboard: those with BUSY_SWAPS swaps in the last hour (busiest first), then the hour's launches (newest
+   * first, read every pass), then by swaps in the last day. The traded lists are read every five minutes.
+   */
   private async candidates(started: number) {
     const skip = `t.deployer IS NULL AND t.launchpad IS NULL AND NOT t.address=ANY($2::bytea[]) AND NOT EXISTS(SELECT 1 FROM coin_onboarding o WHERE o.coin=t.address
       AND o.status IN ('unreadable','no_launch_wallet','skipped') AND o.updated_at>to_timestamp($1::double precision)-interval '6 hours'*least(o.attempts,8))`;
@@ -281,15 +294,21 @@ export class CoinOnboardingWorker {
       WHERE t.first_block>coalesce((SELECT number FROM chain_blocks WHERE ts<to_timestamp($1::double precision)-interval '1 hour' ORDER BY ts DESC LIMIT 1),0) AND ${skip}
         AND EXISTS(SELECT 1 FROM pools p WHERE p.currency0=t.address OR p.currency1=t.address) ORDER BY t.first_block DESC LIMIT 100`, params)).rows;
     if (started - this.tradedAt >= 300_000 || !this.traded.length && started - this.tradedAt >= 60_000) {
-      this.traded = (await this.db.sql.query<Candidate>(`SELECT t.address AS coin,t.first_block::text FROM (SELECT s.coin,count(*) AS n FROM swaps s
+      this.traded = (await this.db.sql.query<Candidate>(`SELECT t.address AS coin,t.first_block::text,a.recent::text FROM (SELECT s.coin,count(*) AS n,
+            count(*) FILTER (WHERE s.ts>to_timestamp($1::double precision)-interval '1 hour') AS recent FROM swaps s
           WHERE s.ts>to_timestamp($1::double precision)-interval '24 hours' AND s.venue<>'pons_curve' GROUP BY s.coin) a JOIN tokens t ON t.address=a.coin
-        WHERE ${skip} ORDER BY a.n DESC,t.address LIMIT 400`, params)).rows;
+        WHERE ${skip} ORDER BY (a.recent>=${BUSY_SWAPS}) DESC,CASE WHEN a.recent>=${BUSY_SWAPS} THEN a.recent ELSE 0 END DESC,a.n DESC,t.address LIMIT 400`, params)).rows;
       this.tradedAt = started;
     }
-    const seen = new Set<string>();
+    for (const [key, at] of this.failed) if (started - at >= 300_000) this.failed.delete(key);
+    this.busy = this.traded.filter(row => Number(row.recent ?? 0) >= BUSY_SWAPS && !this.failed.has(hex(row.coin)));
+    const seen = new Set([...this.busy.map(row => hex(row.coin)), ...this.failed.keys()]);
     this.queue = [...fresh, ...this.traded].filter(row => { const key = hex(row.coin); if (seen.has(key)) return false; seen.add(key); return true; });
   }
-  private done(coin: Uint8Array) { const key = hex(coin); this.candles.delete(key); this.traded = this.traded.filter(row => hex(row.coin) !== key); this.queue = this.queue.filter(row => hex(row.coin) !== key); }
+  private done(coin: Uint8Array) {
+    const key = hex(coin), other = (row: Candidate) => hex(row.coin) !== key;
+    this.candles.delete(key); this.traded = this.traded.filter(other); this.busy = this.busy.filter(other); this.queue = this.queue.filter(other);
+  }
   private async mark(coin: Uint8Array, status: string, data: Record<string, unknown> = {}) {
     // Waits are measured on the worker's clock, so the row's time is too.
     await this.db.sql.query(`INSERT INTO coin_onboarding(coin,status,attempts,data,created_at,updated_at) VALUES($1,$2,1,$3::jsonb,to_timestamp($4::double precision),to_timestamp($4::double precision))
@@ -377,26 +396,41 @@ export class CoinOnboardingWorker {
     return 'onboarded';
   }
   private async pass() {
-    const started = this.now(), deadline = started + (this.options.budgetMs ?? 10_000), batch = this.options.batch ?? ATTRIBUTE_BATCH;
+    const started = this.now();
     // The indexer comes first: no rewriting while it is behind.
     const newest = (await this.db.sql.query<{ ts: Date | null }>('SELECT ts FROM chain_blocks ORDER BY number DESC LIMIT 1')).rows[0]?.ts;
     const lagSec = newest ? (started - new Date(newest).getTime()) / 1000 : 0, maxLag = this.options.maxLagSec ?? 45;
     if (lagSec > maxLag) { if (started - this.pausedAt >= 300_000) { this.pausedAt = started; this.log('coin_onboarding_paused', { lagSec: Math.round(lagSec), maxLagSec: maxLag }); } return; }
+    const budget = this.options.budgetMs ?? 10_000, deadline = started + budget;
     // Onboarded coins first. The indexer names and prices their new swaps as it stores them; rows it stores without a
     // wallet arrive later, of any age (a backfill stream, or the stored raw events of a pool that has just become known).
     let settled = 0;
     const behind = (await this.db.sql.query<{ coin: Uint8Array }>(`SELECT k.address AS coin FROM tokens k WHERE k.deployer IS NOT NULL AND k.launchpad IS NULL
       AND (EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.address AND s.senders_pending AND s.venue<>'pons_curve')
         OR EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id AND e.senders_pending WHERE p.currency0=k.address OR p.currency1=k.address)) LIMIT 20`)).rows;
-    for (const { coin } of behind) { if (this.now() >= deadline || !await this.settle(coin, deadline)) break; settled++; }
+    const behindUntil = started + budget / 3;
+    for (const { coin } of behind) { if (this.now() >= behindUntil || !await this.settle(coin, behindUntil)) break; settled++; }
     await this.candidates(started);
-    let onboarded = 0, set = 0, unfinished = 0;
-    for (let tried = 0; this.queue.length && tried < (this.options.perTick ?? 4) && this.now() < deadline; tried++) {
-      const candidate = this.queue[0], outcome = await this.onboard(candidate, deadline);
-      if (outcome === 'unfinished') { unfinished++; break; }
-      this.done(candidate.coin);
-      if (outcome === 'onboarded') onboarded++; else set++;
-    }
-    if (settled || onboarded || set || unfinished) this.log('coin_onboarding', { settled, behind: behind.length, onboarded, setAside: set, unfinished, queued: this.queue.length, ms: this.now() - started });
+    let onboarded = 0, set = 0, unfinished = 0, tried = 0;
+    // A coin that does not finish its group's time stays queued for the next pass: its work so far is stored.
+    const work = async (list: () => Candidate[], until: number) => {
+      for (; list().length && tried < (this.options.perTick ?? 8) && this.now() < until; tried++) {
+        const candidate = list()[0];
+        let outcome: 'onboarded' | 'set_aside' | 'unfinished';
+        try { outcome = await this.onboard(candidate, until); }
+        catch (error) {
+          if (error instanceof OnboardingReadsSpent) throw error;
+          this.failed.set(hex(candidate.coin), started); this.busy = this.busy.filter(row => row !== candidate); this.queue = this.queue.filter(row => row !== candidate);
+          this.log('coin_onboarding_failed', { coin: hex(candidate.coin), error: String((error as Error)?.message ?? error).slice(0, 200) });
+          continue;
+        }
+        if (outcome === 'unfinished') { unfinished++; return; }
+        this.done(candidate.coin);
+        if (outcome === 'onboarded') onboarded++; else set++;
+      }
+    };
+    await work(() => this.busy, Math.min(deadline, this.now() + budget / 3));
+    await work(() => this.queue, deadline);
+    if (settled || onboarded || set || unfinished) this.log('coin_onboarding', { settled, behind: behind.length, onboarded, setAside: set, unfinished, busy: this.busy.length, queued: this.queue.length, lagSec: Math.round(lagSec), ms: this.now() - started });
   }
 }

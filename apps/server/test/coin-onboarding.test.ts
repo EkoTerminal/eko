@@ -190,6 +190,65 @@ describe('coin onboarding', () => {
     await worker.tick();
     expect(hex((await db.sql.query<{ deployer: Uint8Array }>('SELECT deployer FROM tokens WHERE address=$1', [binary(coin)])).rows[0].deployer)).toBe(launcher);
   });
+  // 2026-10-13 08:25Z: 479 Uniswap coins traded in the hour were not listed, 30 of them with 90% of those swaps. The
+  // hour's 335 launches filled every pass, and from 08:17Z four listed coins with swaps that cannot be priced took all of it.
+  const facts = { decimals: 18, symbol: 'DEMO', name: 'Sample token', totalSupply: 1000n }, mint = { wallet: launcher, to: null, block: 99n, tx: hash(0x77), mintTo: launcher };
+  const other = async (db: ChainDb, token: string, first: number, n: number, extra: Record<string, unknown> = {}) => {
+    await db.insert('tokens', { address: binary(token), first_block: String(first), block: String(first), ...extra });
+    await db.insert('pools', { id: binary(address(0x3200 + n)), venue: 'uniswap_v3', currency0: binary(token), currency1: binary(weth), fee: 3000, tick_spacing: 60, created_block: String(first), block: String(first) });
+  };
+  const deployer = async (db: ChainDb, token: string) => { const row = (await db.sql.query<{ deployer: Uint8Array | null }>('SELECT deployer FROM tokens WHERE address=$1', [binary(token)])).rows[0]; return row.deployer ? hex(row.deployer) : null; };
+  const unnamed = async (db: ChainDb, token: string) => Number((await db.sql.query<{ n: string }>('SELECT count(*) AS n FROM swaps WHERE coin=$1 AND senders_pending', [binary(token)])).rows[0].n);
+  it('onboards a coin with fifty swaps in the last hour before a newer launch', async () => {
+    const db = await open(), launch = address(0xa2);
+    await other(db, launch, 990, 1);
+    for (let i = 0; i < 50; i++) { await swap(db, 900 + i, 600 + i, 1, '10'); await transfer(db, 900 + i, 600 + i, manager, buyer, '10'); }
+    await swap(db, 995, 700, 1, '10', { coin: binary(launch) }); await transfer(db, 995, 700, manager, buyer, '10', launch);
+    const worker = new CoinOnboardingWorker(db, chain(facts, mint), () => undefined, { now: () => now, assets, addresses, perTick: 1 });
+    await worker.tick();
+    expect([await deployer(db, coin), await deployer(db, launch)]).toEqual([launcher, null]);
+    await worker.tick();
+    expect(await deployer(db, launch)).toBe(launcher);
+  });
+  it('gives listed coins, busy coins and launches each a share of a pass, so a long history holds up nothing else', async () => {
+    const db = await open(), listed = address(0xa2), launch = address(0xa3);
+    await other(db, listed, 100, 1, { decimals: 18, name: 'Listed token', symbol: 'LIST', deployer: binary(launcher) });
+    await other(db, launch, 990, 2);
+    // Sixty stored swaps without a wallet for a listed coin and for a traded coin that is not onboarded; one for the launch.
+    for (let i = 0; i < 60; i++) {
+      await swap(db, 900 + i, 800 + i, 1, '10'); await transfer(db, 900 + i, 800 + i, manager, buyer, '10');
+      await swap(db, 900 + i, 900 + i, 1, '10', { coin: binary(listed) }); await transfer(db, 900 + i, 900 + i, manager, buyer, '10', listed);
+    }
+    await swap(db, 995, 1000, 1, '10', { coin: binary(launch) }); await transfer(db, 995, 1000, manager, buyer, '10', launch);
+    // One swap named per statement and a clock that moves with every reading: neither long history fits a pass.
+    let clock = now;
+    const worker = new CoinOnboardingWorker(db, chain(facts, mint), () => undefined, { now: () => (clock += 50), assets, addresses, batch: 1, budgetMs: 3000 });
+    await worker.tick();
+    expect(await deployer(db, launch)).toBe(launcher);
+    expect(await deployer(db, coin)).toBeNull();
+    for (const token of [listed, coin]) { const left = await unnamed(db, token); expect(left).toBeGreaterThan(0); expect(left).toBeLessThan(60); }
+    for (let pass = 0; pass < 20 && (await deployer(db, coin)) == null; pass++) await worker.tick();
+    expect(await deployer(db, coin)).toBe(launcher);
+    await worker.tick(); await worker.tick();
+    expect([await unnamed(db, listed), await unnamed(db, coin), await unnamed(db, launch)]).toEqual([0, 0, 0]);
+  });
+  it('goes on to the next coin when one coin\'s read fails, and leaves that coin alone for five minutes', async () => {
+    const db = await open(), launch = address(0xa2), events: string[] = [];
+    await other(db, launch, 990, 1);
+    await swap(db, 900, 1100, 1, '10'); await transfer(db, 900, 1100, manager, buyer, '10');
+    await swap(db, 995, 1101, 1, '10', { coin: binary(launch) }); await transfer(db, 995, 1101, manager, buyer, '10', launch);
+    // The newer launch is read first; its read fails (the public endpoint answered the box with 403s on 2026-10-13).
+    let clock = now, reads = 0;
+    const failing: OnboardingChain = { ...chain(facts, mint), facts: async token => { if (token === launch) { reads++; throw new Error('HTTP 403'); } return facts; } };
+    const worker = new CoinOnboardingWorker(db, failing, event => events.push(event), { now: () => clock, assets, addresses });
+    await worker.tick();
+    expect([await deployer(db, coin), await deployer(db, launch), reads]).toEqual([launcher, null, 1]);
+    expect(events).toEqual(['coin_onboarding_failed', 'coin_onboarding']);
+    clock += 60_000; await worker.tick();
+    expect(reads).toBe(1);
+    clock += 300_000; await worker.tick();
+    expect(reads).toBe(2);
+  });
   it('searches for the first mint in windows the endpoint accepts, and stops reading once the day\'s reads are spent', async () => {
     const { chainOnboarding, OnboardingReadsSpent } = await import('../src/coin-onboarding.js');
     const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', mintLog = (block: number) => ({ blockNumber: `0x${block.toString(16)}`, logIndex: '0x1', transactionHash: hash(block), topics: [TRANSFER, `0x${'0'.repeat(64)}`, `0x${'0'.repeat(24)}${launcher.slice(2)}`] });

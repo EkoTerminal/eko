@@ -39,9 +39,13 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
       span AS (SELECT min(block) AS lo,max(block) AS hi FROM c WHERE kind='eth'),
       -- The reference pool(s) on record (one in production); the latest reference swap below the batch, then those inside it.
       ref_pools AS (SELECT DISTINCT pool_id FROM eth_usd_reference_sources),
-      ref AS (SELECT x.block,x.log_index,x.price_quote FROM span CROSS JOIN LATERAL (SELECT x.block,x.log_index,x.price_quote FROM swaps x
-          WHERE x.pool_id IN (SELECT pool_id FROM ref_pools) AND x.coin=$2 AND x.quote_asset=$3 AND x.block<span.lo
-            AND x.price_quote>0 AND x.price_quote<'Infinity'::double precision ORDER BY x.block DESC,x.log_index DESC LIMIT 1) x
+      -- The latest one is read per pool, backward through swaps(pool_id,block). As pool_id IN (...) the planner read every
+      -- reference swap below the batch and sorted them: 1.34 million rows and 4.5 s per statement on 2026-10-13 (11 ms this way).
+      ref AS (SELECT x.block,x.log_index,x.price_quote FROM span CROSS JOIN LATERAL (SELECT y.block,y.log_index,y.price_quote FROM ref_pools rp
+          CROSS JOIN LATERAL (SELECT x.block,x.log_index,x.price_quote FROM swaps x
+            WHERE x.pool_id=rp.pool_id AND x.coin=$2 AND x.quote_asset=$3 AND x.block<span.lo
+              AND x.price_quote>0 AND x.price_quote<'Infinity'::double precision ORDER BY x.block DESC,x.log_index DESC LIMIT 1) y
+          ORDER BY y.block DESC,y.log_index DESC LIMIT 1) x
         UNION ALL SELECT x.block,x.log_index,x.price_quote FROM swaps x,span
           WHERE x.pool_id IN (SELECT pool_id FROM ref_pools) AND x.coin=$2 AND x.quote_asset=$3 AND x.block BETWEEN span.lo AND span.hi
             AND x.ts>=$5::timestamptz-interval '1 hour' AND x.ts<$6 AND x.price_quote>0 AND x.price_quote<'Infinity'::double precision),
