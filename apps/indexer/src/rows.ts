@@ -22,7 +22,11 @@ export class BlockRows {
     this.graduations.push(...other.graduations);
   }
   get(table: typeof chainTables[number]): readonly Row[] {return this.rows.get(table)??[];}
-  async flush(db: ChainDb, timings?: FlushTimings) {
+  /**
+   * `notify: false` writes the rows without announcing them: for rows of long-settled blocks (stored raw events turned
+   * into swaps). Every swap notice makes the API look the swap up as a new trade.
+   */
+  async flush(db: ChainDb, timings?: FlushTimings, options: { notify?: boolean } = {}) {
     const notifications: BusMessage[] = [];
     let insertedTransfers: Record<string, unknown>[] = [];
     let mark = performance.now();
@@ -154,7 +158,7 @@ export class BlockRows {
       }
     }
     spent('barsMs');
-    await db.notifyMany(notifications);
+    if (options.notify !== false) await db.notifyMany(notifications);
     spent('notifyMs');
   }
 }

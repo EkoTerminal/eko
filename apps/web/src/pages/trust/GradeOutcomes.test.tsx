@@ -18,5 +18,15 @@ describe('how each grade did', () => {
     expect(html.indexOf('Danger')).toBeLessThan(html.indexOf('Monitor')); expect(html).toContain('No flags'); expect(html).not.toContain('>Clear<');
     expect(html).toContain('36 of 176 · 20%'); expect(html).toContain('23 never up 20% first'); expect(html).toContain('No coins old enough yet');
     expect(html).toContain('not been independently reviewed'); expect(html).toContain('2026-10-12 18:30 UTC');
+    // Without the Uniswap measurement (an older server) there is one table.
+    expect(html.match(/<table/g)).toHaveLength(1);
+  });
+  it('shows coins that launched in a Uniswap pool in their own table, with when their grades began', () => {
+    const html = renderToStaticMarkup(<GradeOutcomesView data={{ since: '2026-10-12T18:30:00Z', computedAt: '2026-10-13T23:30:00.000Z', rows: [row('danger', 3600, 176, 36, 23)],
+      uniswap: { since: '2026-10-13T07:30:00Z', rows: [row('danger', 3600, 40, 31, 30), row('monitor', 3600, 12, 1)] } }} />);
+    expect(html.match(/<table/g)).toHaveLength(2);
+    expect(html).toContain('Pons launches'); expect(html).toContain('Coins that launched in a Uniswap pool');
+    expect(html).toContain('31 of 40 · 78%'); expect(html).toContain('1 of 12 (too few to read a rate)');
+    expect(html).toContain('2026-10-13 07:30 UTC'); expect(html).toContain('thresholds were set on Pons launches');
   });
 });

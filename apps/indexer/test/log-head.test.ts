@@ -9,7 +9,7 @@ import { DeferredEvents } from '../src/deferred.js';
 import { PonsBackfill } from '../src/backfill.js';
 import { BlockDecoder } from '../src/decode.js';
 import { HeadFollower, ReorgDepthError } from '../src/head.js';
-import { LogHeadFollower } from '../src/log-head.js';
+import { LogHeadFollower , lockContention } from '../src/log-head.js';
 import { createClients, lower, native } from '../src/clients.js';
 import { Metrics, type ChainClient, type PoolMetadata, type RpcBlock, type RpcLog, type RpcReceipt } from '../src/types.js';
 const fake = vi.hoisted(() => ({ send: vi.fn() }));
@@ -566,6 +566,21 @@ describe('logs-first head', () => {
     expect((await db.sql.query<{emitter:Uint8Array}>('SELECT DISTINCT emitter FROM pending_pool_events')).rows.map(r=>hex(r.emitter))).toEqual([lower(fake)]);
     // Nothing left of known pools: the next step waits, and a second pass writes nothing twice.
     expect(await deferred.step()).toBe(0);deferred.wake();expect(await deferred.step()).toBe(0);expect(await count(db,'swaps')).toBe(3);
+  });
+
+  it('reads a window again after the database reports a deadlock, instead of halting',async()=>{
+    const db=await database();await seed(db);
+    const data:Data=new Map([[0n,{block:empty(0),receipts:[]}],[1n,trade(1)]]),client=memory(data),events:string[]=[];
+    const live=follower(db,client,{tickMs:1,logger:(event:string,fields?:Record<string,unknown>)=>{if(event==='head_retry')events.push(String(fields?.reason));}});
+    // The first commit is the deadlock's victim; nothing of it is stored.
+    const tx=db.tx.bind(db);let failed=false;
+    db.tx=(async fn=>{if(!failed){failed=true;throw Object.assign(new Error('deadlock detected'),{code:'40P01'});}return tx(fn as never);}) as typeof db.tx;
+    const running=live.run();
+    for(let i=0;i<200&&(await db.cursor('head_logs'))!==1n;i++)await new Promise(resolve=>setTimeout(resolve,10));
+    live.stop();await running;
+    expect(events).toEqual(['database_lock_contention']);
+    expect(await db.cursor('head_logs')).toBe(1n);expect(await count(db,'swaps')).toBe(2);
+    expect(lockContention(new Error('could not serialize access due to concurrent update'))).toBe(true);expect(lockContention(new Error('relation does not exist'))).toBe(false);
   });
 
   it('does not restore sender rows when their stored block is rolled back during enrichment',async()=>{

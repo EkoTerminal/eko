@@ -21,6 +21,9 @@ const v3PoolTopics=new Set(v3Abi.slice(1).map(toEventSelector));
 const identity = (l: RpcLog) => `${lower(l.transactionHash)}:${BigInt(l.logIndex)}`;
 const order = (a: RpcLog, b: RpcLog) => BigInt(a.blockNumber) === BigInt(b.blockNumber) ? Number(BigInt(a.logIndex) - BigInt(b.logIndex)) : BigInt(a.blockNumber) < BigInt(b.blockNumber) ? -1 : 1;
 class ReorgDuringTick extends Error {}
+/** A deadlock or serialization failure reported by the database (SQLSTATE 40P01, 40001): the transaction rolled back whole. */
+export const lockContention = (error: unknown) => { const e = error as { code?: unknown; message?: unknown } | null;
+  return e?.code === '40P01' || e?.code === '40001' || (typeof e?.message === 'string' && /deadlock detected|could not serialize access/i.test(e.message)); };
 /** A single block's logs exceed the provider's reply limits even alone. */
 class SpanTooLarge extends Error {}
 /**
@@ -662,9 +665,14 @@ export class LogHeadFollower {
         // read the public lane cannot serve waits for the budget instead of ending the run.
         // Wrong chain, database, reorg-depth, session-budget and usage-store failures still end it.
         const budget=rpcStopReason(error)==='rpc_budget_exhausted';
-        if (this.stopping || this.client.rpcStopped?.() || !(budget || isTransientRpcUnavailable(error))) throw error;
-        delay=backoffDelay(failures++, this.options.random, this.options.retryBaseMs ?? 1000, this.options.retryCapMs ?? 60_000);
-        this.logger('head_retry', { reason: budget ? 'rpc_budget_exhausted' : 'rpc_unavailable', ...(budget ? { lane: 'public' } : {}), attempt: failures, backoff_ms: Math.round(delay), error: safeError(error) });
+        // The database chose this transaction as the victim of a deadlock, or could not serialize it: nothing was
+        // committed (a batch and its cursors are one transaction), so the same window is read and written again. A
+        // halt here restarted the whole process over a conflict another writer had already resolved by finishing
+        // (2026-10-13: the scanner's wallet labels against the head's swap rows, 74 deadlocks in three days).
+        const contention=lockContention(error);
+        if (this.stopping || this.client.rpcStopped?.() || !(budget || contention || isTransientRpcUnavailable(error))) throw error;
+        delay=contention ? 250 : backoffDelay(failures++, this.options.random, this.options.retryBaseMs ?? 1000, this.options.retryCapMs ?? 60_000);
+        this.logger('head_retry', { reason: budget ? 'rpc_budget_exhausted' : contention ? 'database_lock_contention' : 'rpc_unavailable', ...(budget ? { lane: 'public' } : {}), attempt: failures, backoff_ms: Math.round(delay), error: safeError(error) });
       }
       if (this.stopping || this.client.rpcStopped?.()) break;
       await new Promise<void>(resolve => { const timer = setTimeout(resolve, delay); this.wake = () => { clearTimeout(timer); resolve(); }; });

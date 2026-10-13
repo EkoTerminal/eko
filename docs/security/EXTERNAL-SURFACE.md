@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **595/595 (100.00%)** documented. Minimum: **90%**.
+Measured: **596/596 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -245,11 +245,12 @@ Measured: **595/595 (100.00%)** documented. Minimum: **90%**.
 | `HeadFollower.rollback` | method | [apps/indexer/src/head.ts:101](../../apps/indexer/src/head.ts#L101) | Yes |
 | `HeadFollower.ingest` | method | [apps/indexer/src/head.ts:125](../../apps/indexer/src/head.ts#L125) | Yes |
 | `HeadFollower.run` | method | [apps/indexer/src/head.ts:152](../../apps/indexer/src/head.ts#L152) | Yes |
-| `LogHeadFollower.constructor` | constructor | [apps/indexer/src/log-head.ts:101](../../apps/indexer/src/log-head.ts#L101) | Yes |
-| `LogHeadFollower.stop` | method | [apps/indexer/src/log-head.ts:117](../../apps/indexer/src/log-head.ts#L117) | Yes |
-| `LogHeadFollower.rollback` | method | [apps/indexer/src/log-head.ts:137](../../apps/indexer/src/log-head.ts#L137) | Yes |
-| `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:188](../../apps/indexer/src/log-head.ts#L188) | Yes |
-| `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:639](../../apps/indexer/src/log-head.ts#L639) | Yes |
+| `lockContention` | function | [apps/indexer/src/log-head.ts:25](../../apps/indexer/src/log-head.ts#L25) | Yes |
+| `LogHeadFollower.constructor` | constructor | [apps/indexer/src/log-head.ts:108](../../apps/indexer/src/log-head.ts#L108) | Yes |
+| `LogHeadFollower.stop` | method | [apps/indexer/src/log-head.ts:124](../../apps/indexer/src/log-head.ts#L124) | Yes |
+| `LogHeadFollower.rollback` | method | [apps/indexer/src/log-head.ts:144](../../apps/indexer/src/log-head.ts#L144) | Yes |
+| `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:195](../../apps/indexer/src/log-head.ts#L195) | Yes |
+| `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:646](../../apps/indexer/src/log-head.ts#L646) | Yes |
 | `acquireScanJob` | function | [apps/indexer/src/scan-jobs.ts:13](../../apps/indexer/src/scan-jobs.ts#L13) | Yes |
 | `buildMcpApp` | function | [apps/mcp/src/app.ts:58](../../apps/mcp/src/app.ts#L58) | Yes |
 | `registerHarnessTools` | function | [apps/mcp/src/harness.ts:10](../../apps/mcp/src/harness.ts#L10) | Yes |
@@ -673,7 +674,7 @@ Measured: **595/595 (100.00%)** documented. Minimum: **90%**.
 | `ReceiptOutbox.get` | method | [packages/db/src/receipt-outbox.ts:183](../../packages/db/src/receipt-outbox.ts#L183) | Yes |
 | `guardScoreHash` | function | [packages/playbooks/src/guard-scoring.ts:20](../../packages/playbooks/src/guard-scoring.ts#L20) | Yes |
 | `evaluateGuardV2` | function | [packages/playbooks/src/guard-scoring.ts:48](../../packages/playbooks/src/guard-scoring.ts#L48) | Yes |
-| `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:110](../../packages/playbooks/src/verdict.ts#L110) | Yes |
+| `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:114](../../packages/playbooks/src/verdict.ts#L114) | Yes |
 | `actualBindingHash` | function | [packages/policy/src/actual-order.ts:17](../../packages/policy/src/actual-order.ts#L17) | Yes |
 | `executionPolicyHash` | function | [packages/policy/src/actual-order.ts:25](../../packages/policy/src/actual-order.ts#L25) | Yes |
 | `actualStateHash` | function | [packages/policy/src/actual-order.ts:35](../../packages/policy/src/actual-order.ts#L35) | Yes |

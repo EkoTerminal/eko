@@ -1,12 +1,16 @@
 import { decodeAbiParameters, hexToString, parseAbi, type Hex, type PublicClient } from 'viem';
 import { binary, hex, type ChainDb } from '@eko/db';
 import { isTransientRpcUnavailable, loadRegistry, rpcStopReason } from '@eko/chain';
-import { repricePonsSwaps, pricingAssets, REPRICE_BATCH, type PricingAssets } from './pricing-repair.js';
+import { repricePonsSwaps, pricingAssets, type PricingAssets } from './pricing-repair.js';
 
 const ZERO = '0x0000000000000000000000000000000000000000', DEAD = '0x000000000000000000000000000000000000dead';
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', ZERO_TOPIC = `0x${'0'.repeat(64)}`;
-/** Swaps or liquidity events attributed per statement. */
-export const ATTRIBUTE_BATCH = 2000;
+/**
+ * Swaps or liquidity events settled per statement, and swaps priced per statement while a coin is onboarded. A pass
+ * checks its time between statements, so a statement is kept short: 5,000 swaps priced in one took over twenty
+ * seconds on the loaded box (2026-10-13), three times the pass's whole allowance.
+ */
+export const ATTRIBUTE_BATCH = 1000, ONBOARD_PRICE_BATCH = 1000;
 /**
  * Blocks per mint search request (the paid endpoint refuses a log range over 100,000 blocks, about three hours), and
  * the windows searched back from a coin's first pool: a launch mints in the transaction that opens its pool or shortly
@@ -305,7 +309,7 @@ export class CoinOnboardingWorker {
     for (const { hour } of hours) for (;;) {
       if (this.now() >= deadline) return false;
       const from = new Date(hour);
-      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), REPRICE_BATCH, floor, [coin]) < REPRICE_BATCH) break;
+      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), ONBOARD_PRICE_BATCH, floor, [coin]) < ONBOARD_PRICE_BATCH) break;
     }
     for (;;) {
       if (this.now() >= deadline) return false;

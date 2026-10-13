@@ -3,7 +3,7 @@ import { binary } from '@eko/db';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { seedReadFixture, sampleAddress } from './read-fixture.js';
-import { GRADE_RULES_SINCE } from '../src/read/grade-outcomes.js';
+import { GRADE_RULES_SINCE, UNISWAP_GRADES_SINCE } from '../src/read/grade-outcomes.js';
 
 // Synthetic bars and trades only.
 const hash = (n: number) => `0x${n.toString(16).padStart(64, '0')}`;
@@ -42,6 +42,12 @@ describe('what happened after a grade', () => {
       // A day has not passed since the grade, so the 24-hour horizon has no coin yet.
       expect((await built.ctx.reads.grades.read()).rows.find(r => r.level === 'danger' && r.horizonSec === 86400)!.ratings).toBe(0);
       expect((await built.app.inject('/v1/scoreboard/grades')).json()).toMatchObject({ since: GRADE_RULES_SINCE });
+      // The same coin as a Uniswap launch is counted in the other table, from the time its grades began.
+      await db.sql.query(`UPDATE read_coins SET launchpad=NULL WHERE coin=$1`, [binary(coin)]);
+      const apart = await built.ctx.reads.grades.read();
+      expect(apart.rows.find(r => r.level === 'danger' && r.horizonSec === 3600)!.ratings).toBe(0);
+      expect(apart.uniswap.since).toBe(UNISWAP_GRADES_SINCE);
+      expect(apart.uniswap.rows.find(r => r.level === 'danger' && r.horizonSec === 3600)!.ratings).toBe(Date.parse(UNISWAP_GRADES_SINCE) <= at ? 1 : 0);
     } finally { built.ctx.reads.store.now = () => now; }
   });
 });

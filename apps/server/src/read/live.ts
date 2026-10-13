@@ -54,7 +54,10 @@ export class ReadLive {
       if(card){const projected=await this.services.coins.card(coin);if(projected)this.hub.publish<'coin','card'>(`coin:${coin}`,'card',projected);}
       else this.hub.publish<'coin','verdict'>(`coin:${coin}`,'verdict',VerdictSchema.parse(source.data));
     } else if(message.topic==='swap') {
-      const result=await db.sql.query<{coin:Uint8Array;ts:Date;block:string;usd:number | null;amount_coin:string;decimals:number | null}>(`SELECT s.*,t.decimals FROM swaps s JOIN tokens t ON t.address=s.coin WHERE tx_hash=$1 AND log_index=$2 ORDER BY ts DESC LIMIT 1`,[binary(String(message.ids.txHash)),message.ids.logIndex]);
+      const result=await db.sql.query<{coin:Uint8Array;ts:Date;block:string;usd:number | null;amount_coin:string;decimals:number | null}>(`SELECT s.*,t.decimals FROM swaps s JOIN tokens t ON t.address=s.coin WHERE tx_hash=$1 AND log_index=$2 AND s.ts>to_timestamp($3::double precision)-interval '1 hour' ORDER BY ts DESC LIMIT 1`,
+        // A swap notice is for a trade that just happened. Without the time bound the lookup walks the swaps' time index
+        // backwards until it meets the hash: a notice for an old swap took 18 seconds (2026-10-13).
+        [binary(String(message.ids.txHash)),message.ids.logIndex,this.services.store.now()/1000]);
       const swap=result.rows[0];if(!swap)return;
       const key=`${message.ids.txHash}:${message.ids.logIndex}`;
       if(this.swaps.has(key))return;this.swaps.add(key);if(this.swaps.size>5000)this.swaps.delete(this.swaps.values().next().value!);

@@ -32,7 +32,8 @@ export function reasonForMatch(match: PlaybookMatch): string {
     const leg = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
     const buy = leg('Measured buy tax (%)'), sell = leg('Measured sell tax (%)');
     // Only where no launchpad getter was read: a Pons reason never falls back from its getters to another number.
-    if (!creator && !fee && buy != null && sell != null) return `A buy loses about ${buy}% and a sell about ${sell}% to this coin's tax and fees (measured from trades).`;
+    if (!creator && !fee && buy != null && sell != null) return buy < 0.5 && sell < 0.5 ? 'No transfer tax shows in this coin\'s recent buys and sells.'
+      : `A buy loses about ${buy}% and a sell about ${sell}% to this coin's tax and fees (measured from trades).`;
   }
   if (match.id === 'bundle_dump') {
     const value = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
