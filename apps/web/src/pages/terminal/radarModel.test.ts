@@ -46,6 +46,11 @@ describe('Radar server order and user sorting', () => {
     expect(filterRows([soft, hard], 'All', 'All', true, 'balanced')).toHaveLength(0);
   });
   it('filters stage/verdict/heat and combines filters', () => { const rows=createRadarRows(); expect(filterRows(rows,'Danger','Curve').every(c=>c.verdict==='danger'&&c.stage==='curve')).toBe(true); expect(filterRows(rows,'Hot','All').some(c=>c.verdict==='danger')).toBe(false); expect(filterRows(rows,'All','Migrated').every(c=>c.stage==='graduated')).toBe(true); });
+  it('keeps Curve and Migrated for Pons coins and lists coins that launched in a Uniswap pool under their own stage', () => {
+    const rows=createRadarRows().slice(0,3), pool={...rows[0],launchpad:'other' as const,stage:'graduated' as const}, curve={...rows[1],launchpad:'pons' as const,stage:'curve' as const}, migrated={...rows[2],launchpad:'pons' as const,stage:'graduated' as const};
+    const list=[pool,curve,migrated];
+    expect(filterRows(list,'All','Uniswap')).toEqual([pool]); expect(filterRows(list,'All','Migrated')).toEqual([migrated]); expect(filterRows(list,'All','Curve')).toEqual([curve]); expect(filterRows(list,'All','All')).toHaveLength(3);
+  });
   it('upserts in place, removes, and applies authoritative rerank', () => {
     const rows=createRadarRows().slice(0,3), changed={...rows[1],change1hPct:99};
     const next=applyRadarEvents(rows,[event('row_upsert',changed),event('row_remove',{address:rows[0].address}),event('rerank',{order:[rows[2].address,rows[1].address]})]);

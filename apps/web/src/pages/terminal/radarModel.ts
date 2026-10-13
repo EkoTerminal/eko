@@ -54,7 +54,8 @@ export const refused = (c: Pick<RadarRow, 'verdict' | 'sellCheck' | 'hardDanger'
 export const filterRows = (rows: readonly RadarRow[], show: string, stage: string, hideRefused = false, mode: RiskMode = 'balanced') => rows.filter((c) =>
   !(hideRefused && refused(c, mode)) &&
   (show === 'All' || (show === 'Hot' ? displayHeat(c) === 'hot' : c.verdict === (show === NO_FLAGS ? 'clear' : show.toLowerCase()))) &&
-  (stage === 'All' || c.stage === (stage === 'Curve' ? 'curve' : 'graduated')));
+  // Curve and Migrated are a Pons coin's two stages; a coin that launched in a Uniswap pool has neither.
+  (stage === 'All' || (stage === 'Uniswap' ? c.launchpad !== 'pons' : c.launchpad === 'pons' && c.stage === (stage === 'Curve' ? 'curve' : 'graduated'))));
 export function applyRadarEvents(rows: readonly RadarRow[], events: readonly ChannelEvent<'radar'>[]): RadarRow[] {
   let next = [...rows];
   for (const event of events) {

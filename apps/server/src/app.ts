@@ -12,7 +12,7 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
-import { MARKETS, type ServerMessage, type SystemHealth } from '@eko/shared';
+import { MARKETS, NETWORKS, type ServerMessage, type SystemHealth } from '@eko/shared';
 import { InferenceBudget } from './ai/budget.js';
 import { ProviderRegistry } from './ai/registry.js';
 import type { Config } from './config.js';
@@ -24,7 +24,9 @@ import { PortfolioService } from './exec/portfolio.js';
 import { SanctionsService, SanctionsWorker } from './sanctions/service.js';
 import { RetentionWorker } from './retention-worker.js';
 import { PricingRepairWorker, chainTokenMeta, type TokenSpot } from './pricing-repair.js';
-import { bestUsdgPool, isTransientRpcUnavailable, rpcStopReason, usdgPoolPrice, type SpotRpc, type UsdgPool } from '@eko/chain';
+import { CoinOnboardingWorker, chainOnboarding } from './coin-onboarding.js';
+import { robinhood } from 'viem/chains';
+import { bestUsdgPool, createMeteredPublicClient, isTransientRpcUnavailable, rpcStopReason, usdgPoolPrice, type SpotRpc, type UsdgPool } from '@eko/chain';
 import { QuoteStore } from './exec/quotes.js';
 import { TradeService, type TradeBackend } from './exec/trades.js';
 import { SellGuard } from './exec/sell-guard.js';
@@ -77,6 +79,7 @@ export interface Ctx {
   sanctionsWorker: SanctionsWorker;
   retentionWorker: RetentionWorker;
   pricingRepair: PricingRepairWorker;
+  coinOnboarding: CoinOnboardingWorker;
   dbh: DbHandle;
   reads: ReturnType<typeof readServices>;
   hub: Hub;
@@ -192,6 +195,11 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   };
   const tokenMeta = chainTokenMeta(() => chains.get('robinhood-mainnet'));
   const pricingRepair = new PricingRepairWorker(dbh.chain, (event, fields) => logger.info({ event, ...fields }, event), undefined, undefined, undefined, undefined, undefined, tokenSpot, tokenMeta);
+  // Onboarding reads (token metadata, first mint) go to the public RPC only: they are never billed, and a public
+  // outage delays onboarding instead of spending the paid budget.
+  let publicReads: ReturnType<typeof createMeteredPublicClient> | undefined;
+  const coinOnboarding = new CoinOnboardingWorker(dbh.chain, chainOnboarding(() => publicReads ??= createMeteredPublicClient(chains.meter, robinhood, cfg.RPC_PUBLIC_HTTP_URL ?? NETWORKS['robinhood-mainnet'].publicRpcUrl)),
+    (event, fields) => logger.info({ event, ...fields }, event));
   const receipts = new ReceiptApiStore(dbh.chain, cfg.RECEIPTS_REGISTRY_ADDRESS, chains.get('robinhood-mainnet'));
   const portfolio = new PortfolioService(db);
   const quotes = new QuoteStore();
@@ -245,7 +253,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     },
   );
   const quant = new QuantService(market);
-  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, pricingRepair, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
+  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, pricingRepair, coinOnboarding, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
 
   // Market data → WebSocket, throttled to ~4 Hz per stream (closed bars always go out immediately).
   const pendingCandles = new Map<string, Extract<ServerMessage, { type: 'candle' }>>();
@@ -365,6 +373,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     if (cfg.RUN_WORKER) {
       exec.start();
       if (cfg.APP_ROLE === 'worker' || cfg.APP_ROLE === 'dev') { sanctionsWorker.start(); retentionWorker.start(); pricingRepair.start(); }
+      if (cfg.APP_ROLE === 'worker') coinOnboarding.start();
     } else logger.info('RUN_WORKER=false — API-only process (no order reconciler)');
     if (cfg.LEGACY_API && (cfg.RUN_WORKER || cfg.LIVE_TRADING_ENABLED)) void chains.checkHealth().then(pushHealth);
   }
@@ -393,6 +402,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       await sanctionsWorker.stop();
       await retentionWorker.stop();
       await pricingRepair.stop();
+      await coinOnboarding.stop();
       market.stop();
       hub.closeAll();
       await app.close();

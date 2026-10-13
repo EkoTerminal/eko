@@ -288,6 +288,23 @@ describe('incremental live activity', () => {
     expect(probe.stats!.clockPoints).toBeLessThan(held.length);
     expect(clock[0]).toEqual({ number: late, sec: secOf(late) });expect(clock.slice(1)).toEqual(held);
   });
+  it('does not hold a token without a launch wallet, and takes it once it has one', async () => {
+    // WETH and USDG are in most new pools: held, their whole history was summed again on every poll (2026-10-13).
+    const chain = new Chain(await database());
+    for (const n of [at(8), at(8.5), at(9)]) await chain.header(n);
+    await chain.token(B, at(8)); await chain.swap(B, at(8), 1, t1);
+    await chain.db.insert('tokens', { address: binary(C), deployer: null, curve: null, name: null, symbol: null, launchpad: null, decimals: null, first_block: String(at(8)), block: String(at(8)) });
+    await chain.pair(C, at(8)); await chain.swap(C, at(8.5), 1, t2);
+    const now = secOf(at(9)) + 30, live = new LiveActivity(reopen(chain.db)), options = { cache: new Map(), readBlock, concurrency: 4, stopped: () => false };
+    expect((await live.refresh(at(8.5), now, new Map(), options))!.coins.map(coin => coin.coin)).toEqual([B]);
+    // Onboarded (name, supply and launch wallet), then traded again: held from that poll on, with its whole history.
+    await chain.db.sql.query("UPDATE tokens SET deployer=$2,name='Sample token',symbol='DEMO',decimals=0,total_supply=1000000,supply_block=$3 WHERE address=$1", [binary(C), binary(deployer), at(8.5)]);
+    await chain.swap(C, at(9), -1, t2);
+    const held = (await live.refresh(at(9), now, new Map(), options))!.coins;
+    expect(held.map(coin => coin.coin).sort()).toEqual([B, C].sort());
+    expect(await new EngineWorker(chain.db, { now: () => now, readBlock, liveBacklogSec: 900 }).poll()).toBeGreaterThanOrEqual(2);
+    expect((await chain.db.sql.query('SELECT 1 FROM coin_card_latest WHERE coin=$1', [binary(C)])).rows).toHaveLength(1);
+  });
   it('takes recent launches without stored progress on a cold start that follows the log', async () => {
     const chain = new Chain(await database());
     for (const n of [at(8), at(8.5), at(9)]) await chain.header(n);

@@ -57,9 +57,11 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
           WHERE g->>'logIndex'=${table}.log_index::text))`;
       const position=after?`WHERE (block,tx_hash,log_index)>($${params.length+1}::bigint,$${params.length+2}::bytea,$${params.length+3}::integer)`:'';
       if(after)params.push(after.block,after.tx_hash,after.log_index);
-      const pending=(await db.sql.query<Pending>(`SELECT * FROM (SELECT block,tx_hash,log_index,ts,'swaps' AS source,NULL::jsonb AS raw_data FROM swaps WHERE (coin=$1 OR quote_asset=$1) AND (senders_pending OR pricing_pending OR (${unresolved('swaps','trader')}))
+      // A swap or liquidity event outside the sender scope is stored with the wallet its transfers name and no
+      // transaction sender (decode.ts); enriching the coin reads its receipts once and records the resolved sender.
+      const pending=(await db.sql.query<Pending>(`SELECT * FROM (SELECT block,tx_hash,log_index,ts,'swaps' AS source,NULL::jsonb AS raw_data FROM swaps WHERE (coin=$1 OR quote_asset=$1) AND (senders_pending OR pricing_pending OR (tx_from IS NULL AND venue<>'pons_curve') OR (${unresolved('swaps','trader')}))
         UNION ALL SELECT e.block,e.tx_hash,e.log_index,e.ts,'liquidity' AS source,NULL::jsonb AS raw_data FROM liquidity_events e JOIN pools p ON p.id=e.pool_id
-        WHERE (p.currency0=$1 OR p.currency1=$1) AND (e.senders_pending OR (${unresolved('e','actor')}))
+        WHERE (p.currency0=$1 OR p.currency1=$1) AND (e.senders_pending OR e.tx_from IS NULL OR (${unresolved('e','actor')}))
         UNION ALL SELECT e.block,e.tx_hash,e.log_index,b.ts,'raw' AS source,e.data AS raw_data FROM pending_pool_events e LEFT JOIN chain_blocks b ON b.number=e.block WHERE e.emitter IN (${rawIds.map((_,i)=>`$${i+2}`).join(',')||'NULL'})) p ${position} ORDER BY block,tx_hash,log_index LIMIT 1000`,params)).rows;
       if(!pending.length){if(fresh.length)await db.tx(async tx=>{for(const a of fresh){const m=metadata.get(lower(a))!;await tx.sql.query('UPDATE tokens SET name=coalesce(name,$2),symbol=coalesce(symbol,$3),decimals=coalesce(decimals,$4),total_supply=coalesce(total_supply,$5::numeric),supply_block=coalesce(supply_block,$6::bigint) WHERE address=$1',[binary(a),m.name,m.symbol,m.decimals,m.totalSupply?.toString()??null,m.totalSupply==null?null:(m.supplyBlock??BigInt(firstBlock)).toString()]);}});break;}
       const numbers=[...new Set(pending.map(r=>r.block))].slice(0,32);
@@ -109,7 +111,7 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
             const params:unknown[]=[];
             const values=rows.slice(offset,offset+250).map(r=>`(${fields.map((f,i)=>{params.push(r[f]);return `$${params.length}::${types[i]}`;}).join(',')})`);
             const changes=fields.slice(3).map(f=>['trader','actor','tx_from','tx_to'].includes(f) ? `${f}=coalesce(p.${f},s.${f})` : `${f}=p.${f}`).join(',');
-            const result=await tx.sql.query(`UPDATE ${table} s SET ${changes},senders_pending=false FROM (VALUES ${values}) AS p(${fields}) WHERE s.tx_hash=p.tx_hash AND s.log_index=p.log_index AND s.block=p.block AND (s.senders_pending OR s.${table==='swaps'?'trader':'actor'} IS NULL${table==='swaps'?' OR (s.pricing_pending AND NOT p.pricing_pending)':''}) RETURNING s.tx_hash`,params);
+            const result=await tx.sql.query(`UPDATE ${table} s SET ${changes},senders_pending=false FROM (VALUES ${values}) AS p(${fields}) WHERE s.tx_hash=p.tx_hash AND s.log_index=p.log_index AND s.block=p.block AND (s.senders_pending OR s.tx_from IS NULL OR s.${table==='swaps'?'trader':'actor'} IS NULL${table==='swaps'?' OR (s.pricing_pending AND NOT p.pricing_pending)':''}) RETURNING s.tx_hash`,params);
             enriched+=result.rows.length;
           }
         }

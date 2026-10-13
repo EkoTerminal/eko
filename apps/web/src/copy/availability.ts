@@ -16,6 +16,10 @@ export const NO_FLAGS_NOTE = 'No flags is not a recommendation.';
 /** Run-up score (lib/runUp.ts): the number beside a grade on a coin still on its launch curve. */
 export const runUpTitle = (score: number) => `Run-up score ${score} of 100: if the price fell back to the launch curve's starting price, that would be a ${score}% drop.`;
 export const runUpDetail = (score: number, multiple: number) => `Run-up score ${score} of 100. The price is ${multiple >= 10 ? Math.round(multiple) : Math.round(multiple * 10) / 10}× the launch curve's starting price, so a fall back to the start would be a ${score}% drop. On past launches the typical coin was back near its start a day later (measured October 2026). The score is a distance, not a forecast.`;
+/** A coin whose launch transaction was sent by a relayer, a bundler or a bot: no wallet is recorded as its deployer. */
+export const NO_DEPLOYER_TITLE = 'This coin was launched through a relayer or bot, so the wallet that sent the launch is not its creator\'s. Checks that read the deployer\'s wallet have nothing to read; holders that never bought still show under holder concentration.';
+/** A coin that launched in a Uniswap pool: what its "In pool" figure counts. */
+export const IN_POOL_TITLE = 'ETH, WETH or USDG held in this coin\'s pools right now: what all sellers together could take out. Coins still waiting above the price are not counted.';
 export const RUN_UP_LEGEND = 'The number beside a grade is the run-up score, 0 to 100: how far the price would drop if it fell back to the launch curve\'s starting price.';
 export const NOT_CHECKED = 'not checked yet';
 export const PENDING_ORDER = 'Not fully checked. Some required checks have not run; review the missing checks before placing an order.';

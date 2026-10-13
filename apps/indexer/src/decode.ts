@@ -7,6 +7,7 @@ import { decodeEventLog, toEventSelector, toHex, type AbiEvent, type Address, ty
 import { native, lower } from './clients.js';
 import { AsyncCache, settle } from './concurrency.js';
 import { priceSampleBlock } from './price.js';
+import { liquidityWallet, swapWallet } from './beneficiary.js';
 import { BlockRows } from './rows.js';
 import { json, Metrics, type ChainClient, type RpcBlock, type RpcReceipt, type RpcLog, type RpcTransaction, type TokenMetadata, type PoolMetadata, type EthUsdRate, type Logger, log } from './types.js';
 interface Token extends TokenMetadata { address: Address; curve: Address | null; launchpad: string | null }
@@ -289,7 +290,12 @@ export class BlockDecoder {
     }
     return state;
   }
-  collect(block: RpcBlock, receipts: RpcReceipt[], state: Prepared, options: { ponsOnly?: boolean } = {}) {
+  /**
+   * `transfers`: the receipts carry every Transfer log of the indexed tokens in each transaction (the head followers'
+   * do; a backfill stream reads one kind of log at a time). Only then can a transaction's own logs name the wallet
+   * behind a swap or liquidity event outside the sender scope; without it those rows stay senders_pending.
+   */
+  collect(block: RpcBlock, receipts: RpcReceipt[], state: Prepared, options: { ponsOnly?: boolean; transfers?: boolean } = {}) {
     const rows = new BlockRows();
     rows.merge(state.protocolRows);
     const n = BigInt(block.number); const ts = dateOf(block);
@@ -312,6 +318,12 @@ export class BlockDecoder {
       for (const address of [pool.currency0,pool.currency1]) if (![native, lower(this.registry.requireAddress('tokens.WETH')), lower(this.registry.requireAddress('tokens.USDG'))].includes(lower(address))) rows.graduation(address, pool.id, pool.createdBlock);
     }
     const txs = new Map(block.transactions.map(t => [lower(t.hash), t]));
+    // A transaction's own logs name the wallet behind its swaps and liquidity events in pools outside the sender scope.
+    const txLogs = new Map<string, RpcLog[]>();
+    for (const r of receipts) txLogs.set(lower(r.transactionHash), [...(txLogs.get(lower(r.transactionHash)) ?? []), ...r.logs]);
+    const poolManager = lower(this.registry.requireAddress('uniswapV4.poolManager'));
+    const knownPool = (address: string) => state.pools.has(address) || state.scope.pools.has(address);
+    const reference = new Set([native, lower(this.registry.requireAddress('tokens.WETH')), lower(this.registry.requireAddress('tokens.USDG'))]);
     for (const l of receipts.flatMap(r => r.logs).sort((a,b) => Number(BigInt(a.logIndex) - BigInt(b.logIndex)))) {
       const tx = txs.get(lower(l.transactionHash))!;
       const ctx = state.actors.get(key(l)) ?? {};
@@ -359,10 +371,23 @@ export class BlockDecoder {
           const coinAmount = coin0 ? e.args.amount0 : e.args.amount1; const quoteAmount = coin0 ? e.args.amount1 : e.args.amount0;
           if (coinAmount === 0n || quoteAmount === 0n) continue;
           const bought = e.source === 'uniswap_v3' ? coinAmount < 0n : coinAmount > 0n;
-          this.swap(rows, state, base, ts, tx, actor, { pool: id, venue: e.source, coin: coin0 ? pool.currency0 : pool.currency1, quote: coin0 ? pool.currency1 : pool.currency0, side: bought ? 1 : -1, amountCoin: abs(coinAmount), amountQuote: abs(quoteAmount), ...(e.source === 'uniswap_v3' ? { recipient: e.args.recipient } : {}) });
+          this.swap(rows, state, base, ts, tx, actor, { pool: id, venue: e.source, coin: coin0 ? pool.currency0 : pool.currency1, quote: coin0 ? pool.currency1 : pool.currency0, side: bought ? 1 : -1, amountCoin: abs(coinAmount), amountQuote: abs(quoteAmount), ...(e.source === 'uniswap_v3' ? { recipient: e.args.recipient } : {}) },
+            options.transfers ? { logs: txLogs.get(lower(l.transactionHash)) ?? [], poolManager, knownPool } : undefined);
         } else if ((e.source === 'uniswap_v3' || e.source === 'uniswap_v4') && e.eventName !== 'PoolCreated') {
           const id = e.source === 'uniswap_v4' ? lower(e.args.id) : lower(l.address);
-          rows.add('liquidity_events', { ...base, ts, venue: e.source, pool_id: binary(id), kind: e.eventName, actor: (state.forceSenders||ponsPool(state.scope,id)) && actor ? binary(actor) : null, tx_from:state.forceSenders||ponsPool(state.scope,id) ? binary(tx.from):null, tx_to:state.forceSenders||ponsPool(state.scope,id) ? binary(tx.to??native):null,senders_pending:!state.forceSenders&&!ponsPool(state.scope,id), data: json(e.args) });
+          const scoped = state.forceSenders || ponsPool(state.scope, id);
+          // Outside the sender scope the transaction's sender is not read: the wallet whose coins went into or came out of
+          // the pool in this transaction, else the owner or sender the event names, else the pool manager or pool.
+          let provider: Address | null = null;
+          if (!scoped && options.transfers) {
+            const args = e.args as { owner?: Address; sender?: Address; liquidityDelta?: bigint }, pool = state.pools.get(id);
+            const way = e.eventName === 'Mint' || (e.eventName === 'ModifyLiquidity' && (args.liquidityDelta ?? 0n) > 0n) ? -1 : e.eventName === 'Burn' || (e.eventName === 'ModifyLiquidity' && (args.liquidityDelta ?? 0n) < 0n) ? 1 : 0;
+            const coins = pool ? [pool.currency0, pool.currency1].map(lower).filter(a => !reference.has(a)) : [];
+            const paid = way ? liquidityWallet(txLogs.get(lower(l.transactionHash)) ?? [], l.transactionHash, coins, id, poolManager, way, knownPool) : null;
+            provider = paid ?? args.owner ?? args.sender ?? (e.source === 'uniswap_v4' ? poolManager as Address : id as Address);
+            if (paid) rows.add('wallets', { address: binary(paid), block: n.toString() });
+          }
+          rows.add('liquidity_events', { ...base, ts, venue: e.source, pool_id: binary(id), kind: e.eventName, actor: scoped ? (actor ? binary(actor) : null) : provider ? binary(provider) : null, tx_from:scoped ? binary(tx.from):null, tx_to:scoped ? binary(tx.to??native):null,senders_pending:!scoped && !provider, data: json(e.args) });
         } else if (e.source === 'erc20' && state.tokens.has(lower(l.address))) {
           rows.add('token_transfers', { ...base, ts, token: binary(l.address), from_address: binary(e.args.from), to_address: binary(e.args.to), amount: e.args.value.toString() });
           for (const wallet of [e.args.from, e.args.to]) if(wallet) rows.add('wallets', { address: binary(wallet), block: n.toString() });
@@ -374,15 +399,26 @@ export class BlockDecoder {
     }
     return rows;
   }
-  async write(db: ChainDb, block: RpcBlock, receipts: RpcReceipt[], state: Prepared, options: { ponsOnly?: boolean } = {}) {
+  async write(db: ChainDb, block: RpcBlock, receipts: RpcReceipt[], state: Prepared, options: { ponsOnly?: boolean; transfers?: boolean } = {}) {
     await this.collect(block, receipts, state, options).flush(db);
   }
-  private swap(rows: BlockRows, state: Prepared, base: Record<string, unknown>, ts: Date, tx: RpcTransaction, actor: Address | null, s: { pool: Hex; venue: string; coin: Address; quote: Address; side: 1 | -1; amountCoin: bigint; amountQuote: bigint; recipient?: Address }) {
+  private swap(rows: BlockRows, state: Prepared, base: Record<string, unknown>, ts: Date, tx: RpcTransaction, actor: Address | null, s: { pool: Hex; venue: string; coin: Address; quote: Address; side: 1 | -1; amountCoin: bigint; amountQuote: bigint; recipient?: Address },
+    context?: { logs: RpcLog[]; poolManager: string; knownPool: (address: string) => boolean }) {
     const decimals = (a: Address) => lower(a) === native ? 18 : state.tokens.get(lower(a))?.decimals;
     const coinDecimals = decimals(s.coin); const quoteDecimals = decimals(s.quote);
-    const pending=!state.forceSenders && s.venue!=='pons_curve' && !ponsPool(state.scope,s.pool);
+    // A pool outside the sender scope: the transaction's sender is not read (no receipts for its block). The wallet
+    // behind the swap comes from the coin's own transfers in the transaction (beneficiary.ts). Until 2026-10-13 these
+    // swaps were stored without a trader and marked senders_pending, so coins that never launched on Pons had no
+    // buyers, holder checks or sell check.
+    const outside=!state.forceSenders && s.venue!=='pons_curve' && !ponsPool(state.scope,s.pool);
     const pricingPending=coinDecimals==null || quoteDecimals==null;
     if (s.amountCoin === 0n) return;
+    const found=outside && context ? swapWallet(context.logs,tx.hash,s.coin,s.pool,context.poolManager,s.side,context.knownPool) : null;
+    // A buy that moved no coins (one hop of a route inside the v4 pool manager) was delivered to nobody: the pool manager is recorded as its recipient.
+    const delivered=found?.wallet ?? (found && !found.moved && s.venue==='uniswap_v4' && s.side===1 ? context!.poolManager as Address : null);
+    const trader=outside ? found?.wallet ?? null : actor;
+    const recipient=outside && s.side===1 && delivered ? delivered : s.recipient;
+    const pending=outside && !found;
     const amountQuote = quoteDecimals==null ? null : scaled(s.amountQuote, quoteDecimals);
     const price = amountQuote==null || coinDecimals==null ? null : amountQuote / scaled(s.amountCoin, coinDecimals);
     const ethQuote = lower(s.quote) === native || lower(s.quote) === lower(this.registry.requireAddress('tokens.WETH'));
@@ -391,7 +427,7 @@ export class BlockDecoder {
     // unpriced (TODO(spec): no USD conversion is defined for them).
     const dollarQuote = lower(s.quote) === lower(this.registry.requireAddress('tokens.USDG'));
     const usd = pricingPending || amountQuote==null ? null : dollarQuote ? amountQuote : ethQuote && state.rate ? amountQuote * state.rate.value : null;
-    rows.add('swaps', { ...base, ts, venue: s.venue, pool_id: binary(s.pool), coin: binary(s.coin), quote_asset: binary(s.quote), trader: pending || actor == null ? null:binary(actor), tx_from: pending?null:binary(tx.from), tx_to:pending?null:binary(tx.to ?? native),senders_pending:pending, recipient: s.recipient ? binary(s.recipient) : null, side: s.side, amount_coin: s.amountCoin.toString(), amount_quote: s.amountQuote.toString(), price_quote: price, pricing_pending:pricingPending, usd, priced_block: usd == null ? null : dollarQuote ? String(base.block) : state.rate!.block.toString() });
-    if(!pending && actor) rows.add('wallets', { address: binary(actor), block: String(base.block) });
+    rows.add('swaps', { ...base, ts, venue: s.venue, pool_id: binary(s.pool), coin: binary(s.coin), quote_asset: binary(s.quote), trader: trader == null ? null:binary(trader), tx_from: outside?null:binary(tx.from), tx_to:outside?null:binary(tx.to ?? native),senders_pending:pending, recipient: recipient ? binary(recipient) : null, side: s.side, amount_coin: s.amountCoin.toString(), amount_quote: s.amountQuote.toString(), price_quote: price, pricing_pending:pricingPending, usd, priced_block: usd == null ? null : dollarQuote ? String(base.block) : state.rate!.block.toString() });
+    if(trader) rows.add('wallets', { address: binary(trader), block: String(base.block) });
   }
 }

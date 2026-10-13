@@ -133,7 +133,7 @@ export class HeadFollower {
     await this.db.tx(async tx => {
       await tx.ensurePartitions(new Date(Number(BigInt(block.timestamp)) * 1000));
       const inserted = await tx.insert('chain_blocks', { number: n.toString(), block: n.toString(), hash: binary(block.hash), parent_hash: binary(block.parentHash), ts: new Date(Number(BigInt(block.timestamp)) * 1000) });
-      await this.decoder.write(tx, block, receipts, prepared);
+      await this.decoder.write(tx, block, receipts, prepared, { transfers: true });
       const cursor = await tx.cursor('head');
       if (cursor == null || n >= cursor) await tx.setCursor('head', n, block.hash);
       if (inserted) await tx.notify('chain_block', { n: n.toString() });

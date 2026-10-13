@@ -397,7 +397,8 @@ describe('logs-first head', () => {
   it('commits liquidity events with unknown token decimals without scaling their raw data',async()=>{
     const {db,pool}=await deferredToken();
     const row=(await db.sql.query('SELECT * FROM liquidity_events WHERE pool_id=$1',[binary(pool)])).rows[0];
-    expect(row).toMatchObject({kind:'Mint',senders_pending:true,actor:null});expect(row.data).toMatchObject({amount:'7',amount0:'11',amount1:'13'});
+    // Outside the sender scope the event's own owner stands in for the sender (no coins left a wallet in this transaction).
+    expect(row).toMatchObject({kind:'Mint',senders_pending:false,tx_from:null});expect(hex(row.actor as Uint8Array)).toBe(lower(actor));expect(row.data).toMatchObject({amount:'7',amount0:'11',amount1:'13'});
     expect(await db.cursor('head_logs')).toBe(2n);
   });
 
@@ -467,7 +468,7 @@ describe('logs-first head', () => {
     ]);
   });
 
-  it('keeps non-Pons senders pending in head and backfill, then enriches one coin idempotently to the full receipt rows',async()=>{
+  it('names non-Pons traders from the coin’s transfers in head and backfill without receipts, then enriches one coin idempotently to the full receipt rows',async()=>{
     const db=await database(),backfillDb=await database(),truth=await database();
     const other=address(150),pool=address(151),weth=registry.requireAddress('tokens.WETH');
     const data:Data=new Map([[0n,{block:empty(0),receipts:[]}]]);
@@ -482,13 +483,16 @@ describe('logs-first head', () => {
     await follower(db,client).tick();expect(client.receipts).not.toHaveBeenCalled();expect(client.code).not.toHaveBeenCalled();expect(client.tokenMetadataBatch).not.toHaveBeenCalled();
     expect((await db.sql.query('SELECT creation_verified FROM pools')).rows[0]).toEqual({creation_verified:false});
     const pending=(await db.sql.query('SELECT trader,tx_from,tx_to,senders_pending,price_quote FROM swaps')).rows;
-    expect(pending).toHaveLength(3);expect(pending.every(r=>r.trader===null&&r.tx_from===null&&r.tx_to===null&&r.senders_pending===true&&r.price_quote===null)).toBe(true);
-    expect((await db.sql.query('SELECT actor,tx_from,tx_to,senders_pending FROM liquidity_events')).rows.every(r=>r.actor===null&&r.tx_from===null&&r.tx_to===null&&r.senders_pending===true)).toBe(true);
+    // Each buy's coins went from the pool to one wallet: that wallet is the trader. The transaction sender is not read.
+    expect(pending).toHaveLength(3);expect(pending.every(r=>hex(r.trader as Uint8Array)===lower(actor)&&r.tx_from===null&&r.tx_to===null&&r.senders_pending===false&&r.price_quote===null)).toBe(true);
+    expect((await db.sql.query('SELECT actor,tx_from,tx_to,senders_pending FROM liquidity_events')).rows.every(r=>hex(r.actor as Uint8Array)===lower(actor)&&r.tx_from===null&&r.tx_to===null&&r.senders_pending===false)).toBe(true);
     // The pool stream records event facts without archive metadata; pair swaps use the same pending scope.
     const backfill=new PonsBackfill(client,backfillDb,new BlockDecoder(client,registry,new Metrics(quiet),quiet),{workers:1,logRange:200});
     await backfill.run('logs:pools',1n,3n);await backfill.run('logs:pair_swaps',1n,3n);await backfill.run('logs:holders',1n,3n);
     expect(client.receipts).not.toHaveBeenCalled();expect(client.code).not.toHaveBeenCalled();
-    expect((await backfillDb.sql.query('SELECT trader,tx_from,tx_to,senders_pending,price_quote FROM swaps ORDER BY block')).rows).toEqual(pending);
+    // A backfill stream reads swaps without the transaction's transfers: those rows stay pending, as before.
+    const streamed=(await backfillDb.sql.query('SELECT trader,tx_from,tx_to,senders_pending,price_quote FROM swaps ORDER BY block')).rows;
+    expect(streamed).toHaveLength(3);expect(streamed.every(r=>r.trader===null&&r.tx_from===null&&r.tx_to===null&&r.senders_pending===true&&r.price_quote===null)).toBe(true);
     const truthDecoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);
     for(const {block,receipts} of [...data.values()].slice(1)){
       const state=await truthDecoder.prepare(truth,block,receipts,{forceSenders:true});
@@ -497,8 +501,15 @@ describe('logs-first head', () => {
     const before=vi.mocked(client.receipts).mock.calls.length;
     expect(await enrichSenders(db,other,client)).toEqual({enriched:6}); // Three swaps plus three Mint events.
     expect(vi.mocked(client.receipts).mock.calls.length-before).toBe(3);
-    for(const table of ['swaps','liquidity_events','bars_1m'] as const){const query=`SELECT * FROM ${table} ORDER BY ${table==='bars_1m'?'minute':'block,log_index'}`;expect((await db.sql.query(query)).rows).toEqual((await truth.sql.query(query)).rows);}
-    for(const table of ['tokens','pools','wallets'] as const)expect((await snapshot(db))[table]).toEqual((await snapshot(truth))[table]);
+    // The receipts cannot resolve this sender (its delegation is unknown), so the full-receipt rows have no trader or
+    // actor; the enriched rows keep the wallet the transfers named and match in every other column.
+    for(const [table,field] of [['swaps','trader'],['liquidity_events','actor']] as const){
+      const query=`SELECT * FROM ${table} ORDER BY block,log_index`,rows=(await db.sql.query<Record<string,unknown>>(query)).rows,full=(await truth.sql.query<Record<string,unknown>>(query)).rows;
+      expect(full.every(r=>r[field]===null)).toBe(true);expect(rows.every(r=>hex(r[field] as Uint8Array)===lower(actor))).toBe(true);
+      expect(rows.map(r=>({...r,[field]:null}))).toEqual(full);
+    }
+    expect((await db.sql.query('SELECT * FROM bars_1m ORDER BY minute')).rows).toEqual((await truth.sql.query('SELECT * FROM bars_1m ORDER BY minute')).rows);
+    for(const table of ['tokens','pools'] as const)expect((await snapshot(db))[table]).toEqual((await snapshot(truth))[table]);
     const enrichedCalls=vi.mocked(client.receipts).mock.calls.length;expect(await enrichSenders(db,other,client)).toEqual({enriched:0});expect(vi.mocked(client.receipts).mock.calls.length).toBe(enrichedCalls);
     expect((await db.sql.query('SELECT decimals,symbol FROM tokens WHERE address=$1',[binary(other)])).rows[0]).toEqual({decimals:18,symbol:'<sample>'});
   });
@@ -622,7 +633,7 @@ describe('logs-first head', () => {
     const ticks:Record<string,unknown>[]=[];
     await follower(db,client,{logger:(event:string,fields:Record<string,unknown>)=>{if(event==='head_tick')ticks.push(fields);}}).tick();
     expect(ticks.some(t=>Number((t.receipts_by_reason as Record<string,number>).launch)>0)).toBe(true);
-    expect((await db.sql.query('SELECT * FROM liquidity_events WHERE senders_pending AND actor IS NULL')).rows.length).toBeGreaterThan(0);
+    expect((await db.sql.query('SELECT * FROM liquidity_events WHERE tx_from IS NULL AND actor IS NOT NULL AND NOT senders_pending')).rows.length).toBeGreaterThan(0);
     expect(price).toHaveBeenCalledTimes(new Set([...data.values()].filter(b=>b.receipts.length).map(b=>BigInt(b.block.number)/600n)).size); expect(reads).not.toHaveBeenCalled();
     expect(await snapshot(db)).toEqual(await snapshot(oldDb));
     const swaps = (await db.sql.query<{ recipient: Uint8Array; trader: Uint8Array; usd: number }>("SELECT * FROM swaps WHERE venue='pons_curve'")).rows;

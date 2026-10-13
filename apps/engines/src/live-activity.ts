@@ -197,8 +197,11 @@ export class LiveActivity {
     const unread = [...candidates].filter(coin => !this.known.has(coin) || changed.get(coin)?.tokens);
     for (const chunk of chunks(unread)) {
       const params = [chunk.map(binary), to];
+      // A token without a launch wallet (WETH, USDG, a coin not onboarded yet) never gets a card, so it is not held: WETH and
+      // USDG are in most new pools, which invalidated their progress on every poll and re-summed their whole history
+      // (2026-10-13: 57 of a poll's 60 seconds). It is read again on each poll it moves in, and held once it has one.
       const tokens = (await this.db.sql.query<{ address: Uint8Array; first_block: string; supply_block: string | null; graduated_block: string | null }>(
-        'SELECT address,first_block,supply_block,graduated_block FROM tokens WHERE address=ANY($1) AND first_block<=$2', params)).rows;
+        'SELECT address,first_block,supply_block,graduated_block FROM tokens WHERE address=ANY($1) AND first_block<=$2 AND deployer IS NOT NULL', params)).rows;
       const states = new Map((await this.db.sql.query<{ coin: Uint8Array; revision: string; through_block: string; base_block: string | null; base_sum: string | null; base_sec: number | null; last_sec: number | null }>(
         'SELECT coin,revision,through_block::text,base_block::text,base_sum,base_sec,last_sec FROM engine_activity_state WHERE coin=ANY($1)', [chunk.map(binary)])).rows
         .map(row => [hex(row.coin) as Address, { revision: row.revision, through: Number(row.through_block), base: decodeBase(row.base_block, row.base_sum, row.base_sec), lastSec: row.last_sec } satisfies Stored]));

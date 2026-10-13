@@ -47,8 +47,16 @@ export interface LoadedSources extends CardSources {
   sellCheckReference?: { runId: string; block: number };
   /** Independent sellers that completed the honeypot check where the sell check cannot probe (sell-check-reference.ts). */
   observedSellers?: { sellers: number; block: number };
+  /** The pool most of the coin's trades of the last day went through (all its trades when none is that recent), and its hook. */
+  mainPool?: { id: Address; hooks: Address | null };
 }
 export const seconds = (date: string | Date) => new Date(date).getTime() / 1000;
+/** The swaps of the trailing day among the first `end` (block order; times do not decrease with height). */
+function recentDay(swaps: readonly SwapRow[], end: number, asOfSec: number): SwapRow[] {
+  let from = end;
+  while (from > 0 && (swaps[from - 1].sec ?? seconds(swaps[from - 1].ts)) > asOfSec - 86_400) from--;
+  return swaps.slice(from, end);
+}
 export const evidence = (r: { tx_hash: Uint8Array; log_index: number; block: string }, label: string): EvidenceRef =>
   ({ kind: 'log', ref: `${rowHex(r.tx_hash)}:${r.log_index}`, block: Number(r.block), label });
 const eq = (a: Uint8Array, b: Uint8Array) => rowHex(a) === rowHex(b);
@@ -98,17 +106,20 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   // Early buyers (bundle_dump): buys in the first blocks after launch (same-funder groups) or the first cohortSec
   // seconds (the cohort: bundles wait out the 5-second anti-snipe tax), credited to the wallet that received the coins.
   const launchBlock=Number(token.first_block),early=(r:SwapRow)=>Number(r.block)-launchBlock<CONFIG_V1.bundle_dump.firstBlocks || seconds(r.ts)-createdAtSec<CONFIG_V1.bundle_dump.cohortSec;
+  // Pools hold liquidity, not a holder's bag: skipped in the top holders (the curve and burn addresses never rank).
+  const poolHolders=new Set<string>([...poolRows.map(p=>rowHex(p.id)),...[loadRegistry().addressOf('uniswapV4.poolManager')].filter((a):a is Address=>!!a).map(a=>a.toLowerCase())]);
   // What a wallet sold again inside the window comes off what it bought there: a wallet flipping in and out several
   // times would otherwise count each buy, and a busy first minute would add up to more than the whole supply.
   const earlyRows:SwapRow[]=[],earlySold=new Map<string,number>();
-  for(let i=0;i<swapEnd && early(swaps[i]);i++){const r=swaps[i];if(Number(r.block)<launchBlock)continue;
-    if(r.side===1)earlyRows.push(r);else if(r.trader){const w=rowHex(r.trader);earlySold.set(w,(earlySold.get(w) ?? 0)+Number(r.amount_coin));}}
   const buyerOf=(r:SwapRow)=>r.recipient ?? (r.senders_pending ? null : r.trader);
+  // A buy delivered to a pool or the pool manager moved no coins to any wallet (one hop of a route, coin-onboarding.ts):
+  // it has no buyer to count.
+  const undelivered=(r:SwapRow)=>{const b=buyerOf(r);return b!=null && poolHolders.has(rowHex(b));};
+  for(let i=0;i<swapEnd && early(swaps[i]);i++){const r=swaps[i];if(Number(r.block)<launchBlock)continue;
+    if(r.side===1){if(!undelivered(r))earlyRows.push(r);}else if(r.trader){const w=rowHex(r.trader);earlySold.set(w,(earlySold.get(w) ?? 0)+Number(r.amount_coin));}}
   const earlyWallets=[...new Set(earlyRows.map(buyerOf).filter((w):w is Uint8Array=>w!=null).map(rowHex))];
   const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...poolRows.map(p=>rowHex(p.id)),...earlyWallets];
   if(!cache){holdings=await holdingsAt(db,coin,block);previousHoldings=priorBlock ? await holdingsAt(db,coin,Number(priorBlock.number)) : [];}
-  // Pools hold liquidity, not a holder's bag: skipped in the top holders (the curve and burn addresses never rank).
-  const poolHolders=new Set<string>([...poolRows.map(p=>rowHex(p.id)),...[loadRegistry().addressOf('uniswapV4.poolManager')].filter((a):a is Address=>!!a).map(a=>a.toLowerCase())]);
   const holderView=cache ? await cache.holderViewAt(coin,block,wallets,'now',poolHolders) : (()=>{const a=makeHolders(holdings);return {count:a.count,top10:a.top10(),burned:a.burned,inventory:a.inventory,amounts:new Map(wallets.map(wallet=>[wallet,a.amount(wallet)])),top:a.top(12,wallet=>poolHolders.has(wallet))};})();
   const previousCount=priorBlock ? cache ? (await cache.holderViewAt(coin,Number(priorBlock.number),[],'previous')).count : makeHolders(previousHoldings).count : 0;
   const scratch=cache ? undefined : new TradeAggregate(swaps);
@@ -196,7 +207,9 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
       heldShare: [...exSet].sort().reduce((n,wallet)=>n+Number(holderView.amounts.get(wallet) ?? 0n),0) / Number(s.supply.total) };
   }
   const recent=trade.recent;
-  if (s.usdComplete) {
+  // Wash trading reads the trailing hour. A Pons coin's curve check beside it needs every swap of its life priced; a
+  // coin without a curve needs only that hour's (one old swap quoted in an unpriced token would otherwise hold it back).
+  if (s.usdComplete || (s.launchpad!=='pons' && !token.curve && recent.every(r=>r.usd!=null))) {
     const trips: NonNullable<CardSources['wash']>['roundTrips'] = [];
     const cfg = CONFIG_V1.wash_to_trend;
     const actors=trade.actors;
@@ -233,16 +246,21 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     for (const e of pe) {
       if (!['Mint', 'Burn', 'ModifyLiquidity'].includes(e.kind)) continue;
       if(e.actor==null || e.senders_pending)continue;
-      const actor = (e.data.owner ?? e.data.sender ?? rowHex(e.actor)).toLowerCase() as Address;
-      const key = `${actor}:${e.data.tickLower}:${e.data.tickUpper}:${e.data.salt ?? ''}`;
-      const o = owned.get(key) ?? { actor, amount: 0n, refs: [] };
+      // The position is the one the event names (most are held through a position manager contract). For a coin that
+      // did not launch on Pons its controller is the wallet that paid the coins in: the indexer names it from the
+      // transaction's transfers (decode.ts), the first event of the position decides.
+      const named = (e.data.owner ?? e.data.sender ?? rowHex(e.actor)).toLowerCase() as Address;
+      const key = `${named}:${e.data.tickLower}:${e.data.tickUpper}:${e.data.salt ?? ''}`;
+      const o = owned.get(key) ?? { actor: s.launchpad === 'pons' ? named : rowHex(e.actor), amount: 0n, refs: [] };
       const delta = BigInt(e.data.liquidityDelta ?? e.data.amount ?? '0');
       o.amount += e.kind === 'Burn' ? -delta : delta; o.refs.push(evidence(e, 'Liquidity position')); owned.set(key, o);
     }
     const positive = [...owned.values()].filter(o => o.amount > 0n);
     const total = positive.reduce((n, o) => n + Number(o.amount), 0);
     const locked = token.graduated_pool && eq(p.id, token.graduated_pool) && Number(token.graduated_block) <= block;
-    for (const o of positive) positions.push({ owner: o.actor, controlledBy: o.actor === deployer ? 'deployer' : 'other', share: total ? Number(o.amount) / total : 0, pool:rowHex(p.id),
+    // A coin recorded with its own address as launch wallet was launched by a relayer or bot (coin-onboarding.ts): it has
+    // no deployer wallet, and liquidity its own contract pays in is not a deployer's.
+    for (const o of positive) positions.push({ owner: o.actor, controlledBy: o.actor === deployer && deployer !== coin ? 'deployer' : 'other', share: total ? Number(o.amount) / total : 0, pool:rowHex(p.id),
       status: locked ? 'pons_locked' : 'removable', evidence: o.refs });
     // Only address-based v3 pool token balances expose reserves; v4 PoolManager balances are shared.
     const reserve = p.venue === 'uniswap_v3' ? holderView.amounts.get(rowHex(p.id)) : undefined;
@@ -252,6 +270,23 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     s.poolRefs.push({ id: rowHex(p.id), venue: p.venue, ...(p.id.length === 20 ? { address: rowHex(p.id) } : { poolId: rowHex(p.id) }),
       quote: rowHex(eq(p.currency0, token.address) ? p.currency1 : p.currency0), feeBps: p.fee / 100,
       ...(p.hooks ? { hooks: rowHex(p.hooks) } : {}), liquidityUsd: usd, executable: false });
+  }
+  // The pool the coin trades in: the one with most of its swaps in the last day (of all of them when none is that
+  // recent). Anyone can open another pool with any hook for any coin, so only this pool's hook is the coin's.
+  const perPool=new Map<string,number>(),count=(rows:readonly SwapRow[])=>{for(const r of rows)if(r.venue!=='pons_curve')perPool.set(r.poolHex!,(perPool.get(r.poolHex!) ?? 0)+1);};
+  count(recentDay(swaps,swapEnd,asOfSec));
+  if(!perPool.size)for(let i=0;i<swapEnd;i++)if(swaps[i].venue!=='pons_curve')perPool.set(swaps[i].poolHex!,(perPool.get(swaps[i].poolHex!) ?? 0)+1);
+  const busiest=[...perPool].sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0]))[0]?.[0],main=poolRows.find(p=>rowHex(p.id)===busiest) ?? (poolRows.length===1 ? poolRows[0] : undefined);
+  if(main) {
+    const hooks=main.hooks ? rowHex(main.hooks) : null;
+    s.mainPool={id:rowHex(main.id),hooks};
+    // What the hook may do is in its address (the low 14 bits; the low four let it change what a swap pays or receives).
+    // The launchpad's own verified graduation hook is not a third party's.
+    if(hooks && !/^0x0{40}$/.test(hooks) && hooks!==loadRegistry().addressOf('pons.v4Hook')?.toLowerCase()) {
+      const bits=Number(BigInt(hooks) & 0x3fffn);
+      s.hook={address:hooks,reviewed:false,sourceVerified:false,permissionBits:bits,returnDeltaPermissionBits:bits & 0xf,quoteSimGapPct:null,buyFeePct:null,sellFeePct:null,
+        evidence:[{kind:'address',ref:rowHex(main.id),label:'Pool with this hook'}]};
+    }
   }
   const reserveTotal = [...weights.values()].reduce((n,v) => n+v,0), maxReserve = Math.max(0,...weights.values());
   s.pools = poolRows.filter(p=>p.fee<0x800000).map(p => ({ id: rowHex(p.id), feeBps: p.fee / 100, liquidityShare: reserveTotal ? weights.get(rowHex(p.id))! / reserveTotal : 0,

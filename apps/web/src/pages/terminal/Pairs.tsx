@@ -1,4 +1,4 @@
-import { DANGER_ACCEPTED_TITLE, REFUSED_TITLE, TRADING_PAUSED_TITLE, runUpTitle } from '../../copy/availability';
+import { DANGER_ACCEPTED_TITLE, IN_POOL_TITLE, REFUSED_TITLE, TRADING_PAUSED_TITLE, runUpTitle } from '../../copy/availability';
 import { CompactVerdictChip, GuardLegend } from '../../components/GuardCompact';
 import { AnalysisPolicyNotice } from '../../components/PolicyLinks';
 import { CHECK_LEGEND, NEAR_GRAD, SELL_FAILS, SELL_FAILS_TITLE } from '../../copy/availability';
@@ -29,7 +29,7 @@ import './radar.css';
 import './secondary.css';
 
 const META = {
-  new: { title: 'New', sub: 'On the bonding curve, newest first', about: 'Pairs still on the Pons bonding curve. New launches start with a decaying anti-sniper tax.' },
+  new: { title: 'New', sub: 'New launches, newest first', about: 'Pairs still on the Pons bonding curve, and coins that launched straight into a Uniswap pool. A Pons launch starts with a decaying anti-sniper tax.' },
   near_grad: { title: 'Near graduation', sub: NEAR_GRAD, about: 'At 100% the curve fills and the pair migrates to a pool. The guard rescans at migration.' },
   migrated: { title: 'Migrated', sub: 'Graduated to a pool, most recent first', about: 'Pairs that have graduated to a pool. Trading routes and fees appear in the guarded panel.' },
 };
@@ -41,8 +41,8 @@ const hasGuardLabels = (row: PairRow) => row.guardV2 != null || !!row.guardRefre
 /** Dollar amounts on a card keep one decimal under $100K so a coin's liquidity and market cap visibly move. */
 export const cardUsd = (v: number) => v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e5 ? `$${Math.round(v / 1000)}K` : v >= 1000 ? `$${(v / 1000).toFixed(1)}K` : `$${Math.round(v)}`;
 const share = (v: number) => `${v >= 10 ? Math.round(v) : Math.round(v * 10) / 10}%`;
-function Metric({ label, children, tone }: { label: string; children: React.ReactNode; tone?: 'up' | 'down' }) {
-  return <div className="pr-m"><span className="pr-ml">{label}</span><span className={`pr-mv num${tone ? ` ${tone}` : ''}`}>{children}</span></div>;
+function Metric({ label, children, tone, title }: { label: string; children: React.ReactNode; tone?: 'up' | 'down'; title?: string }) {
+  return <div className="pr-m" title={title}><span className="pr-ml">{label}</span><span className={`pr-mv num${tone ? ` ${tone}` : ''}`}>{children}</span></div>;
 }
 /** Holder share with the lines the rules use: the first is where a check starts watching, the second where it flags Danger. */
 function Held({ label, value, watch, danger }: { label: string; value: number | undefined; watch: number; danger: number }) {
@@ -62,7 +62,7 @@ export function PairView({ row, now, at, select, trade, stale }: { row: PairRow;
     <div className="pr-sub"><span className="pr-name"><UntrustedText value={row.name} /></span><span>·</span><span>{launchpadLabel(row.launchpad, row.column === 'migrated')}</span>{!pending && row.topPlaybook && <span className={`pr-play${row.verdict === 'danger' ? ' bad' : ''}`}>· {PLAYBOOK_NAMES[row.topPlaybook]}</span>}{left > 0 && <span className="pr-snipe num pr-end">{tax}% buy tax → 0 in {left} s</span>}</div>
     <div className="pr-metrics">
       <Metric label="Mkt cap">{row.marketCapUsd === undefined || un('marketCap') ? <UnavailableValue /> : <Roll value={cardUsd(row.marketCapUsd)} />}</Metric>
-      <Metric label={row.column === 'migrated' ? 'Liquidity' : 'In curve'}>{un('liquidity') ? <UnavailableValue /> : <Roll value={cardUsd(row.liquidityUsd)} />}</Metric>
+      <Metric label={row.launchpad !== 'pons' ? 'In pool' : row.column === 'migrated' ? 'Liquidity' : 'In curve'} title={row.launchpad !== 'pons' ? IN_POOL_TITLE : undefined}>{un('liquidity') ? <UnavailableValue /> : <Roll value={cardUsd(row.liquidityUsd)} />}</Metric>
       <Metric label="Vol 1h">{row.volume1hUsd === undefined || un('volume') ? <UnavailableValue /> : <Roll value={cardUsd(row.volume1hUsd)} />}</Metric>
       <Metric label="Trades 1h">{row.trades1h === undefined || un('volume') ? <UnavailableValue /> : <Roll value={row.trades1h.toLocaleString('en-US')} />}</Metric>
       <Metric label="1h" tone={change === undefined || change === 0 ? undefined : change > 0 ? 'up' : 'down'}>{change === undefined ? <UnavailableValue /> : <Roll value={pct(change)} />}</Metric>
@@ -72,7 +72,7 @@ export function PairView({ row, now, at, select, trade, stale }: { row: PairRow;
       {!un('buyers') && <span>Buyers <b className="num">{row.buyers.toLocaleString('en-US')}</b></span>}
       {!un('flow') && <span>Agents <b className="num">{Math.round(row.flow.agentPct)}%</b></span>}
     </div>
-    <div className="pr-grid tone-dim"><div className="pr-cell">{row.column === 'migrated' ? <span className="pr-l">Graduated to a pool</span> : <><span className="pr-l">Curve <b className="num">{row.curvePct === undefined ? <UnavailableValue /> : `${Math.floor(row.curvePct)}%`}</b></span><div className="pr-bar" hidden={row.curvePct === undefined}><div className="bar"><i style={{ width: `${row.curvePct ?? 0}%` }} /></div></div></>}</div><div className="pr-cell pr-spark">{row.spark8h && row.spark8h.length > 1 && !un('spark') ? <Spark series={row.spark8h} height={30} /> : null}</div><div className="pr-cell pr-exit"><span className="pr-l">Exit at $100</span><span className={`pr-v num${row.sellCheck?.status === 'refused' || (!un('exitCost') && row.exitCost100Pct > 15) ? ' bad' : ''}`} title={row.sellCheck?.status === 'refused' ? SELL_FAILS_TITLE : undefined}>{row.sellCheck?.status === 'refused' ? SELL_FAILS : un('exitCost') ? <UnavailableValue /> : exitText(row.exitCost100Pct)}</span></div><button className={`btn btn-sm${row.verdict === 'danger' || !tradingLive ? '' : ' btn-primary'}`} disabled={pairTradeDisabled(row, stale, tradingLive, riskMode)} title={row.verdictPending ? "Waiting for the guard's first scan." : stale ? 'Waiting for current data.' : no ? REFUSED_TITLE(riskMode, row.hardDanger === true) : row.verdict === 'danger' ? DANGER_ACCEPTED_TITLE : !tradingLive ? TRADING_PAUSED_TITLE : undefined} aria-label={`Trade $${row.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(row, e.currentTarget); }}>{no ? 'Refused' : 'Trade'}</button></div>
+    <div className="pr-grid tone-dim"><div className="pr-cell">{row.launchpad !== 'pons' ? <span className="pr-l">Launched in a Uniswap pool</span> : row.column === 'migrated' ? <span className="pr-l">Graduated to a pool</span> : <><span className="pr-l">Curve <b className="num">{row.curvePct === undefined ? <UnavailableValue /> : `${Math.floor(row.curvePct)}%`}</b></span><div className="pr-bar" hidden={row.curvePct === undefined}><div className="bar"><i style={{ width: `${row.curvePct ?? 0}%` }} /></div></div></>}</div><div className="pr-cell pr-spark">{row.spark8h && row.spark8h.length > 1 && !un('spark') ? <Spark series={row.spark8h} height={30} /> : null}</div><div className="pr-cell pr-exit"><span className="pr-l">Exit at $100</span><span className={`pr-v num${row.sellCheck?.status === 'refused' || (!un('exitCost') && row.exitCost100Pct > 15) ? ' bad' : ''}`} title={row.sellCheck?.status === 'refused' ? SELL_FAILS_TITLE : undefined}>{row.sellCheck?.status === 'refused' ? SELL_FAILS : un('exitCost') ? <UnavailableValue /> : exitText(row.exitCost100Pct)}</span></div><button className={`btn btn-sm${row.verdict === 'danger' || !tradingLive ? '' : ' btn-primary'}`} disabled={pairTradeDisabled(row, stale, tradingLive, riskMode)} title={row.verdictPending ? "Waiting for the guard's first scan." : stale ? 'Waiting for current data.' : no ? REFUSED_TITLE(riskMode, row.hardDanger === true) : row.verdict === 'danger' ? DANGER_ACCEPTED_TITLE : !tradingLive ? TRADING_PAUSED_TITLE : undefined} aria-label={`Trade $${row.symbol.text}`} onClick={(e) => { e.stopPropagation(); trade(row, e.currentTarget); }}>{no ? 'Refused' : 'Trade'}</button></div>
   </li>;
 }
 function Column({ column, rows, now, times, select, trade, stale }: { column: PairRow['column']; rows: PairRow[]; now: number; times: Map<string, number>; select: (r: PairRow, el: HTMLElement) => void; trade: (r: PairRow, el: HTMLElement) => void; stale: boolean }) {

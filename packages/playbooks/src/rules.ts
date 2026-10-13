@@ -241,14 +241,15 @@ export const maliciousHook: Rule<'malicious_hook'> = {
     // TODO(spec): caller decodes return-delta bits from verified v4 permissions.
     // Unverified bits alone use the table's Monitor exception. Observed quote/
     // fee anomalies remain Danger even on a reviewed hook; review is not a bypass.
-    const anomaly = Math.abs(hook.quoteSimGapPct) > cfg.quoteSimGapPct || hook.sellFeePct - hook.buyFeePct > cfg.asymmetricFeePp;
+    const asymmetry = hook.sellFeePct == null || hook.buyFeePct == null ? null : hook.sellFeePct - hook.buyFeePct;
+    const anomaly = (hook.quoteSimGapPct != null && Math.abs(hook.quoteSimGapPct) > cfg.quoteSimGapPct) || (asymmetry != null && asymmetry > cfg.asymmetricFeePp);
     const bits = !hook.reviewed && hook.returnDeltaPermissionBits !== 0;
     if (!anomaly && !bits) return null;
     return match(s, h, this.id, anomaly || (bits && hook.sourceVerified) ? 'danger' : 'monitor', [
       address(hook.address, 'v4 hook'), stat(s, this.id, 'bits', 'Hook permission bits', hook.permissionBits),
       stat(s, this.id, 'deltaBits', 'Return-delta permission bits', hook.returnDeltaPermissionBits),
-      stat(s, this.id, 'gap', 'Quote versus simulation gap (%)', hook.quoteSimGapPct),
-      stat(s, this.id, 'asymmetry', 'Sell minus buy fee (pp)', hook.sellFeePct - hook.buyFeePct), ...hook.evidence,
+      stat(s, this.id, 'gap', 'Quote versus simulation gap (%)', hook.quoteSimGapPct ?? 'unavailable'),
+      stat(s, this.id, 'asymmetry', 'Sell minus buy fee (pp)', asymmetry ?? 'unavailable'), ...hook.evidence,
     ]);
   },
 };

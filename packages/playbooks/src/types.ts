@@ -94,10 +94,14 @@ export interface CardSources {
   graduation?: { atSec: number; tx: EvidenceRef; insiderSells: {
     atSec: number; soldShare: number; priceImpactShare: number; evidence: EvidenceRef[];
   }[] };
+  /**
+   * The v4 hook of the pool the coin trades in. Permission bits are the low 14 bits of the hook's address (what it may
+   * do); the quote gap and fees are measurements, null when not measured (no reference simulation ran).
+   */
   hook?: {
     address: Address; reviewed: boolean; sourceVerified: boolean;
     permissionBits: number; returnDeltaPermissionBits: number;
-    quoteSimGapPct: number; buyFeePct: number; sellFeePct: number; evidence: EvidenceRef[];
+    quoteSimGapPct: number | null; buyFeePct: number | null; sellFeePct: number | null; evidence: EvidenceRef[];
   };
   tokenText?: { ref: string; raw: string }[];
 }

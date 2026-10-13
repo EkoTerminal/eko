@@ -21,6 +21,8 @@ const isPonsHook = (hook: string) => { if (ponsHook === undefined) ponsHook = lo
  * graduation pool, no stuck curve after graduation, no hook abuse on a coin whose pools have no hook or only the
  * launchpad's own verified graduation hook (187 graduated Pons coins on 2026-10-11). Before 2026-10-10
  * these counted as not run, so no Pons coin could ever be Clear.
+ * A coin that never had a Pons curve (it launched in a Uniswap pool) has no curve to be stuck on, no graduation to dump
+ * into and no snipe-tax exemptions; its hook check reads the pool it trades in, not every pool anyone opened for it.
  */
 export function evaluatedPlaybooks(s: LoadedSources): PlaybookId[] {
   const pons = s.launchpad === 'pons';
@@ -30,11 +32,12 @@ export function evaluatedPlaybooks(s: LoadedSources): PlaybookId[] {
     honeypot: [100,1000].every(size=>s.referenceResults?.some(r=>r.sizeUsd===size && r.complete)) || s.sellCheckReference != null || s.observedSellers != null,
     agent_bait: true, serial_deployer: true, clone_swarm: s.trending != null,
     wash_to_trend: s.wash != null, fee_trap_pool: s.pools != null,
-    exempt_insiders: s.pons != null, tax_trap: s.taxes != null && (s.launchpad!=='pons' || s.antiSnipeActive === false),
+    exempt_insiders: s.pons != null || !pons, tax_trap: s.taxes != null && (s.launchpad!=='pons' || s.antiSnipeActive === false),
     removable_liquidity: s.liquidity != null || curveOnly || (pons && graduated),
-    migration_dump: s.graduation != null || (pons && !graduated),
-    stuck_at_bonding: s.curve != null || (pons && graduated),
-    malicious_hook: s.hook != null || s.poolRefs.every(p => !p.hooks || zeroHook.test(p.hooks) || isPonsHook(p.hooks)),
+    migration_dump: s.graduation != null || (pons && !graduated) || (!pons && !s.token.curve),
+    stuck_at_bonding: s.curve != null || (pons && graduated) || (!pons && !s.token.curve),
+    malicious_hook: s.hook != null || s.poolRefs.every(p => !p.hooks || zeroHook.test(p.hooks) || isPonsHook(p.hooks))
+      || (s.mainPool != null && (!s.mainPool.hooks || zeroHook.test(s.mainPool.hooks) || isPonsHook(s.mainPool.hooks))),
     // Every buy in the early window named its buyer (sources.ts); an empty cohort is a check that ran and found none.
     bundle_dump: s.earlyBuyers != null,
     holder_concentration: s.holders != null, dev_dump: s.dev != null,

@@ -11,7 +11,8 @@ export const pricingAssets = (registry = loadRegistry()): PricingAssets => ({
 });
 
 /**
- * Price a Pons coin's swaps the decoder left without USD, newest first within [from, to), and refresh their candles.
+ * Price the swaps the decoder left without USD, newest first within [from, to), and refresh their candles: those of
+ * Pons coins and of coins with a launch wallet (Uniswap launches the worker onboarded, coin-onboarding.ts), or of `coins`.
  * Two causes on 2026-10-11 (694,000 of 1.96 million Pons swaps in seven days): USDG quotes had no USD conversion,
  * though USDG is the dollar the ETH/USD reference is quoted in, and curve swaps decoded before the coin's decimals
  * were known stayed pricing_pending. A coin with one unpriced swap never gets its wash and curve checks, so it could
@@ -31,7 +32,7 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
           CASE WHEN s.quote_asset=$3 THEN 'dollar' WHEN s.quote_asset=ANY($1::bytea[]) THEN 'eth' ELSE 'token' END AS kind,
           CASE WHEN s.quote_asset=$3 THEN $4 WHEN s.quote_asset=ANY($1::bytea[]) THEN 18 ELSE q.decimals END AS qdec
         FROM swaps s JOIN tokens t ON t.address=s.coin LEFT JOIN tokens q ON q.address=s.quote_asset
-        WHERE s.ts>=$5 AND s.ts<$6 AND s.usd IS NULL AND ${coins ? 's.coin=ANY($8::bytea[])' : "t.launchpad='pons'"} AND t.decimals IS NOT NULL AND s.amount_coin>0 AND s.amount_quote>0
+        WHERE s.ts>=$5 AND s.ts<$6 AND s.usd IS NULL AND ${coins ? 's.coin=ANY($8::bytea[])' : "(t.launchpad='pons' OR t.deployer IS NOT NULL)"} AND t.decimals IS NOT NULL AND s.amount_coin>0 AND s.amount_quote>0
           AND (s.quote_asset=ANY($1::bytea[]) OR (q.decimals IS NOT NULL AND EXISTS(SELECT 1 FROM swaps x WHERE x.coin=s.quote_asset AND x.block<=s.block
             AND x.ts>=s.ts-interval '1 day' AND x.usd>0 AND x.amount_coin>0)))
         ORDER BY s.ts DESC LIMIT $7),
@@ -127,7 +128,7 @@ export type TokenSpot = (token: string, decimals: number, block: bigint) => Prom
  */
 export async function repricePoolQuotes(db: ChainDb, assets: PricingAssets, spot: TokenSpot, from: Date, to: Date, prices: Map<string, number | null> = new Map(),
   candleFloor = new Date(Date.now() - 2 * 86_400_000)): Promise<{ priced: number; reads: number }> {
-  const unpriceable = `s.usd IS NULL AND t.launchpad='pons' AND t.decimals IS NOT NULL AND q.decimals IS NOT NULL AND s.amount_coin>0 AND s.amount_quote>0
+  const unpriceable = `s.usd IS NULL AND (t.launchpad='pons' OR t.deployer IS NOT NULL) AND t.decimals IS NOT NULL AND q.decimals IS NOT NULL AND s.amount_coin>0 AND s.amount_quote>0
     AND NOT s.quote_asset=ANY($3::bytea[]) AND NOT EXISTS(SELECT 1 FROM swaps x WHERE x.coin=s.quote_asset AND x.block<=s.block
       AND x.ts>=s.ts-interval '1 day' AND x.usd>0 AND x.amount_coin>0)`;
   const quotes = [NATIVE, assets.weth, assets.usdg].map(binary);

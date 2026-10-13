@@ -1,6 +1,6 @@
 import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
-import { readCurveStates, readPoolLiquidity } from './pool-liquidity.js';
+import { readCurveStates, readPoolLiquidity, readPoolMoney } from './pool-liquidity.js';
 import { CoinCardSchema, VerdictSchema, findingsFirst, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
@@ -154,6 +154,8 @@ export class ReadStore {
     // own progress is as of its rating, minutes behind a coin that is trading.
     const curves=await readCurveStates(this.db,result.rows.filter(t=>t.graduated_block==null && t.launchpad==='pons').map(t=>hex(t.address)));
     for(const [coin,state] of curves)pools.set(coin,state.usd);
+    // A coin that never had a curve (it launched in a Uniswap pool) shows the ETH, WETH or USDG in its pools.
+    for(const [coin,usd] of await readPoolMoney(this.db,result.rows.filter(t=>t.graduated_block==null && t.curve==null && t.launchpad!=='pons').map(t=>hex(t.address)),this.now()))pools.set(coin,usd);
     // A coin with only a few minutes of bars gets its series from its trades instead (the latest 96 priced ones), so a
     // launch shows a line from its second trade on.
     const thin=result.rows.filter(t=>!t.pricing_pending && (t.spark?.length ?? 0)<6).map(t=>t.address);

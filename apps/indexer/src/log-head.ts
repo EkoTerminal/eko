@@ -553,7 +553,8 @@ export class LogHeadFollower {
             const filtered = receipts.map(r => ({ ...r, logs: r.logs.filter(l => keys.has(identity(l))) }));
             for(const r of filtered)for(const l of r.logs)if(v3PoolTopics.has(l.topics[0])&&!prepared.pools.has(lower(l.address))&&lower(l.address)!==lower(registry.requireAddress('uniswapV4.poolManager'))){const hints=candidates.filter(t=>lower(t.transactionHash)===lower(l.transactionHash)&&t.topics[0]===transferTopic&&t.topics.slice(1,3).some(a=>lower(`0x${a.slice(-40)}`)===lower(l.address))).map(t=>lower(t.address));(l as RpcLog&{currencyHints?:string[]}).currencyHints=[...new Set(hints)];}
             batch.add('chain_blocks',{ number:n.toString(),block:n.toString(),hash:binary(block.hash),parent_hash:block.parentHash==='0x'?null:binary(block.parentHash),ts:new Date(Number(BigInt(block.timestamp))*1000) });
-            batch.merge(this.decoder.collect(block,filtered,prepared));
+            // Candidate logs include every Transfer of the indexed tokens, so a transaction's own logs can name its traders.
+            batch.merge(this.decoder.collect(block,filtered,prepared,{transfers:true}));
             for (const [id,pool] of prepared.pools) pending.pools.set(id,{...pool,currency0:lower(pool.currency0) as Address,currency1:lower(pool.currency1) as Address,...(pool.hooks?{hooks:lower(pool.hooks) as Address}:{})});
             for (const [id,token] of prepared.tokens) pending.tokens.set(id,{...token,address:lower(token.address) as Address,curve:token.curve?lower(token.curve) as Address:null});
             states.push(prepared); last=block;

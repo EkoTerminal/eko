@@ -286,6 +286,13 @@ describe('malicious_hook', () => {
     level('malicious_hook', input, 'danger'); input.hook!.sourceVerified = false; level('malicious_hook', input, 'monitor');
     input.hook!.reviewed = true; level('malicious_hook', input, null);
     input.hook!.quoteSimGapPct = 3; level('malicious_hook', input, 'danger');
+    // Permissions read from the hook's address with nothing measured (no reference simulation): Monitor, never Danger,
+    // and the evidence says the measurements are unavailable instead of reporting zeros.
+    const unmeasured = hook(); Object.assign(unmeasured.hook!, { returnDeltaPermissionBits: 4, permissionBits: 0x44, sourceVerified: false, reviewed: false, quoteSimGapPct: null, buyFeePct: null, sellFeePct: null });
+    level('malicious_hook', unmeasured, 'monitor');
+    const found = evaluatePlaybooks(unmeasured).find(m => m.id === 'malicious_hook')!;
+    expect(found.evidence.filter(e => e.kind === 'stat' && /gap|fee/i.test(e.label ?? '')).map(e => e.value)).toEqual(['unavailable', 'unavailable']);
+    unmeasured.hook!.returnDeltaPermissionBits = 0; level('malicious_hook', unmeasured, null);
   });
 });
 

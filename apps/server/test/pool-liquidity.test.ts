@@ -66,3 +66,39 @@ describe('pool liquidity of a graduated coin', () => {
     expect((await readPoolLiquidity(db, [coin])).get(coin)).toBeCloseTo(2_000_000, 3);
   });
 });
+
+describe('money in the pools of a coin that launched on Uniswap', () => {
+  it('counts the quote side of each position at the pool price: nothing above the price, everything below', async () => {
+    const { positionQuote } = await import('../src/read/pool-liquidity.js');
+    // Ticks -6932 and 6932 are prices of about 0.5 and 2 (token1 per token0); `low` is the square root of the lower one.
+    // At a price of 1, token1 as the quote: L x (1 - sqrt(0.5)); token0 as the quote: L x (1 - 1/sqrt(2)), the same.
+    const low = 1.0001 ** (-6932 / 2);
+    expect(positionQuote(1e6, -6932, 6932, 1, true)).toBeCloseTo(1e6 * (1 - low), 3);
+    expect(positionQuote(1e6, -6932, 6932, 1, false)).toBeCloseTo(1e6 * (1 - low), 3);
+    expect(1 - low).toBeCloseTo(1 - Math.SQRT1_2, 4);
+    // A launch's coins placed above the price hold no quote currency until they are bought; a position wholly below the price is all quote.
+    expect(positionQuote(1e6, 6932, 13864, 1, true)).toBe(0);
+    expect(positionQuote(1e6, -13864, -6932, 1, true)).toBeCloseTo(1e6 * (low - low * low), 3);
+    expect(positionQuote(0, -10, 10, 1, true)).toBe(0); expect(positionQuote(1e6, 10, -10, 1, true)).toBe(0);
+  });
+  it('sums a coin\'s pools from indexed events and its latest priced trades, and skips coins with a curve', async () => {
+    const { readPoolMoney } = await import('../src/read/pool-liquidity.js');
+    const db = built.ctx.dbh.chain, other = sampleAddress(0x77), quote = sampleAddress(0), poolId = `0x${'cd'.repeat(32)}`;
+    await db.insert('tokens', { address: binary(other), name: 'Sample token', symbol: 'DEMO', decimals: 0, first_block: '10', block: '10' });
+    // The coin sorts after the native currency: token0 is the quote. One position around the price, one above it in coin terms.
+    await db.insert('pools', { id: binary(poolId), venue: 'uniswap_v4', currency0: binary(quote), currency1: binary(other), fee: 3000, tick_spacing: 60, created_block: '10', block: '10' });
+    const event = (n: number, data: Record<string, string | number>) => db.insert('liquidity_events', { block: '10', tx_hash: binary(hash(0x900 + n)), log_index: n, ts: new Date(now - 60_000), venue: 'uniswap_v4', pool_id: binary(poolId),
+      kind: 'ModifyLiquidity', actor: null, senders_pending: false, data: JSON.stringify(data) });
+    await event(1, { liquidityDelta: '3000000', tickLower: -6932, tickUpper: 6932 });
+    await event(2, { liquidityDelta: '-1000000', tickLower: -6932, tickUpper: 6932 });
+    // A trade of 100 coin units for 100 quote units worth $200: the price is 1 and a quote unit is worth $2.
+    await db.insert('swaps', { ts: new Date(now - 30_000), block: '11', tx_hash: binary(hash(0x950)), log_index: 0, venue: 'uniswap_v4', pool_id: binary(poolId), coin: binary(other), quote_asset: binary(quote),
+      trader: null, tx_from: null, tx_to: null, side: 1, amount_coin: '100', amount_quote: '100', price_quote: 1, usd: 200, priced_block: '11' });
+    const money = await readPoolMoney(db, [other, coin], now);
+    // Net liquidity 2,000,000 around a price of 1: 2e6 x (1 - sqrt(0.5)) quote units, about 585,800, worth $2 each.
+    expect(money.get(other)).toBeCloseTo(2e6 * (1 - 1.0001 ** (-6932 / 2)) * 2, 2);
+    expect(money.get(other)! / 1e6).toBeCloseTo(1.1716, 3);
+    // The fixture's own coin has a Pons curve: its figure comes from the curve, not from here.
+    expect(money.has(coin)).toBe(false);
+  });
+});

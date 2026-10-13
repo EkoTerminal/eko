@@ -28,6 +28,11 @@ export function reasonForMatch(match: PlaybookMatch): string {
     const fee = match.evidence.find((e) => e.kind === 'stat' && e.label === 'Pons fee getter (%)');
     if (typeof creator?.value === 'number' && Number.isFinite(creator.value) && typeof fee?.value === 'number' && Number.isFinite(fee.value))
       return `Observed creator-tax getter ${creator.value}% and Pons-fee getter ${fee.value}%.`;
+    // Measured from executed trades (a sell check's round trip, or what a coin's own buys and sells delivered).
+    const leg = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
+    const buy = leg('Measured buy tax (%)'), sell = leg('Measured sell tax (%)');
+    // Only where no launchpad getter was read: a Pons reason never falls back from its getters to another number.
+    if (!creator && !fee && buy != null && sell != null) return `A buy loses about ${buy}% and a sell about ${sell}% to this coin's tax and fees (measured from trades).`;
   }
   if (match.id === 'bundle_dump') {
     const value = (label: string) => { const v = match.evidence.find((e) => e.kind === 'stat' && e.label === label)?.value; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
@@ -65,6 +70,19 @@ export function reasonForMatch(match: PlaybookMatch): string {
       if (held != null && held >= 0.05) parts.push(`${parts.length ? 'it' : 'The deployer'} still holds ${pct(held)} of supply`);
     }
     if (parts.length) return `${parts.join('; ')}.`.replace(/^./, (c) => c.toUpperCase());
+  }
+  if (match.id === 'removable_liquidity') {
+    const share = match.evidence.find((e) => e.kind === 'stat' && e.label === 'Removable deployer/crew LP share')?.value;
+    // A lock or burn of the position is not read, so the reason says who added the liquidity, not that it can be pulled.
+    if (typeof share === 'number' && Number.isFinite(share) && share > 0)
+      return `The deployer added ${Math.round(share * 1000) / 10}% of this coin's pool liquidity${match.level === 'danger' ? ' and removed liquidity from an earlier launch' : ''}; EKO does not check whether it is locked.`;
+  }
+  if (match.id === 'malicious_hook') {
+    const bits = match.evidence.find((e) => e.kind === 'stat' && e.label === 'Return-delta permission bits')?.value;
+    const gap = match.evidence.find((e) => e.kind === 'stat' && e.label === 'Quote versus simulation gap (%)')?.value;
+    // Permissions alone (no measured quote or fee anomaly): say what the hook may do, not that it does it.
+    if (match.level === 'monitor' && typeof bits === 'number' && bits !== 0 && typeof gap !== 'number')
+      return 'This coin trades in a pool whose hook may change what a swap pays or receives; EKO has not reviewed the hook.';
   }
   if (match.id === 'serial_deployer' && match.level === 'danger') {
     for (const relation of ['deployer', 'crew'] as const) for (const outcome of ['rugged', 'honeypot', 'dumped'] as const) {

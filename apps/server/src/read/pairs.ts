@@ -3,7 +3,9 @@ import { InputError } from '../http/v1/helpers.js';
 import type { PairRow } from '@eko/shared';
 import type { ReadRow, ReadStore } from './store.js';
 import { decodeCursor, encodeCursor } from './pagination.js';
-export function pairStage(row: Pick<PairRow,'stage'|'curvePct'>): PairRow['column'] {
+export function pairStage(row: Pick<PairRow,'stage'|'curvePct'|'launchpad'>): PairRow['column'] {
+  // A coin that launched in a Uniswap pool never migrates: it stays under New by its launch (as read_coins.pair_column has it).
+  if(row.launchpad!=='pons')return 'new';
   // TODO(spec): Owner tunes the near-graduation threshold; use 75% until then.
   return row.stage==='graduated' ? 'migrated' : (row.curvePct ?? 0)>=75 ? 'near_grad' : 'new';
 }
@@ -12,7 +14,7 @@ function exit100(entry:ReadRow):Pick<PairRow,'exitCost100Pct'|'unavailable'> {
   const unavailable=(entry.row.unavailable ?? []).filter(field=>field!=='exitCost');
   return {exitCost100Pct:entry.exit100 ?? 0,unavailable:entry.exit100==null ? [...unavailable,'exitCost'] : unavailable};
 }
-/** New pairs header: Pons launches since UTC midnight, their median seconds from launch block to first scan, and how many were Danger at that first scan. */
+/** New pairs header: launches since UTC midnight (Pons curves and Uniswap pools), their median seconds from launch block to first scan, and how many were Danger at that first scan. */
 export interface PairsToday { launches:number; medianFirstScanSec:number|null; refused:number }
 /** Holder shares for a pair card, from the coin's card: each only when the card measured it. */
 function holders(entry:ReadRow):Pick<PairRow,'top10Pct'|'devPct'|'earlyHeldPct'> {
@@ -48,7 +50,7 @@ export class PairsService {
           (SELECT min(coalesce(e.created_at,to_timestamp(e.sec))) FROM engine_runs e WHERE e.coin=r.coin) AS scanned,
           (SELECT v.data->>'level' FROM verdicts v WHERE v.coin=r.coin ORDER BY v.valid_from_block LIMIT 1) AS first_level
         FROM read_coins r CROSS JOIN cut LEFT JOIN engine_block_times bt ON bt.number=r.first_block LEFT JOIN chain_blocks cb ON cb.number=r.first_block
-        WHERE r.launchpad='pons' AND r.first_block>=cut.block)
+        WHERE r.first_block>=cut.block)
       SELECT count(*) AS launches,
         (extract(epoch FROM percentile_cont(0.5) WITHIN GROUP (ORDER BY scanned-at) FILTER (WHERE scanned IS NOT NULL AND at IS NOT NULL)))::float8 AS median,
         count(*) FILTER (WHERE first_level='danger') AS refused FROM launched`,[midnight])).rows[0];
@@ -56,7 +58,7 @@ export class PairsService {
   }
   async row(address:Hex):Promise<PairRow | null> {
     const entry=(await this.store.rows(address))[0];
-    if(!entry?.eligible || entry.row.launchpad!=='pons')return null;
+    if(!entry?.eligible)return null;
     const count=await this.store.db.sql.query<{count:string}>('SELECT buyers AS count FROM read_coins WHERE coin=$1',[binary(address)]);
     return {...entry.row,column:pairStage(entry.row),buyers:Number(count.rows[0]?.count ?? 0),...exit100(entry),...holders(entry),
       antiSnipe:entry.card?.meta?.tradeability?.missing?.includes('antiSnipeTiming') ? undefined : entry.card?.tradeability.antiSnipe,
@@ -68,7 +70,7 @@ export class PairsService {
     if(key && (key.length!==2 || !Number.isSafeInteger(key[0]) || typeof key[1]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[1])))throw new InputError('Invalid pairs cursor');
     const params:unknown[]=[stage];if(key)params.push(key[0],binary(key[1] as Hex));
     const selected=await this.store.db.sql.query<{coin:Uint8Array;pair_block:string;buyers:string}>(`SELECT coin,pair_block,buyers FROM read_coins
-      WHERE launchpad='pons' AND pair_column=$1 ${key ? 'AND (pair_block,coin)<($2,$3)' : ''} ORDER BY pair_block DESC,coin DESC LIMIT 101`,params);
+      WHERE pair_column=$1 ${key ? 'AND (pair_block,coin)<($2,$3)' : ''} ORDER BY pair_block DESC,coin DESC LIMIT 101`,params);
     const page=selected.rows.slice(0,100),details=await this.store.rows(undefined,page.map(r=>hex(r.coin)));
     const indexed=new Map(details.map(e=>[e.row.address,e]));
     const last=page.at(-1);

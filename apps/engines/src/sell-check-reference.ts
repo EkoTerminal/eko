@@ -18,7 +18,14 @@ interface StoredProbe { sizeUsd: number; status: 'sellable' | 'sell_failed' | 'b
  * is Info (contract_restricted, §6.2), never Danger without a deep simulation. Live cards only; replay never reads it.
  */
 export async function loadSellCheckReference(db: ChainDb, s: LoadedSources) {
-  if (s.launchpad !== 'pons') return;
+  // A coin that never had a Pons curve trades in Uniswap pools the sell check does not probe, and its reference
+  // simulation needs the simulation host. Its own market is the evidence: independent sellers, and the tax measured
+  // from what its trades delivered.
+  if (s.launchpad !== 'pons') {
+    if (![100, 1000].every(size => s.referenceResults?.some(r => r.sizeUsd === size && r.complete))) await loadObservedReference(db, s, true);
+    if (!s.taxes) await loadTransferTaxes(db, s);
+    return;
+  }
   const graduated = s.token.graduated_block != null && Number(s.token.graduated_block) <= s.asOfBlock;
   const venues = graduated ? ['uniswap_v3', 'uniswap_v4'] : ['pons_curve'];
   const run = (await db.sql.query<{ id: string; block: string; data: { probes?: StoredProbe[] } }>(
@@ -48,6 +55,31 @@ export async function loadSellCheckReference(db: ChainDb, s: LoadedSources) {
     const pct = Math.round(legPct * 100) / 100;
     s.taxes = { buyPct: pct, sellPct: pct, mutable: null, changes: [] };
   }
+}
+
+/** Trades of each side a transfer-tax measurement needs, and the newest swaps of the day it reads. */
+export const TAX_SAMPLES = 3, TAX_SWAPS = 400;
+/**
+ * Transfer tax of a coin outside Pons, measured from its own trades of the last day: on a buy, the share of the coins
+ * the pool paid out that did not reach the buyer; on a sell, the share of the coins the seller sent that did not reach
+ * the pool (a token or hook that keeps part of every transfer). The median of each side over transactions holding one
+ * swap of the coin, whose trader the transaction's transfers named. Both sides need TAX_SAMPLES trades, or nothing is
+ * measured. It does not see a charge taken in the quote currency.
+ */
+async function loadTransferTaxes(db: ChainDb, s: LoadedSources) {
+  const legs = (await db.sql.query<{ side: number; n: number; pct: number | null }>(`WITH recent AS (SELECT w.block,w.tx_hash,w.log_index,w.side,w.trader,w.amount_coin FROM swaps w
+      WHERE w.coin=$1 AND w.block<=$2 AND w.ts>=to_timestamp($3::double precision) AND w.venue=ANY($4::text[]) AND w.trader IS NOT NULL AND NOT w.senders_pending AND w.amount_coin>0
+      ORDER BY w.block DESC,w.log_index DESC LIMIT $5),
+    solo AS (SELECT r.* FROM recent r WHERE NOT EXISTS(SELECT 1 FROM swaps x WHERE x.coin=$1 AND x.block=r.block AND x.tx_hash=r.tx_hash AND x.log_index<>r.log_index)),
+    moved AS (SELECT r.side,r.amount_coin,(SELECT coalesce(sum(CASE WHEN t.to_address=r.trader THEN t.amount ELSE 0 END),0)-coalesce(sum(CASE WHEN t.from_address=r.trader THEN t.amount ELSE 0 END),0)
+        FROM token_transfers t WHERE t.token=$1 AND t.block=r.block AND t.tx_hash=r.tx_hash AND t.kind='Transfer') AS net FROM solo r)
+    SELECT side::integer AS side,count(*)::integer AS n,
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY (CASE WHEN side=1 THEN 100*(1-net/amount_coin) ELSE 100*(1-amount_coin/(-net)) END)::double precision) AS pct
+    FROM moved WHERE (side=1 AND net>0) OR (side=-1 AND net<0) GROUP BY side`,
+    [binary(s.coin), s.asOfBlock, s.asOfSec - SELL_CHECK_CARD_MAX_AGE_SEC, ['uniswap_v3', 'uniswap_v4'], TAX_SWAPS])).rows;
+  const leg = (side: number) => { const row = legs.find(l => Number(l.side) === side); return row && Number(row.n) >= TAX_SAMPLES && row.pct != null ? Math.round(Math.min(100, Math.max(0, Number(row.pct))) * 100) / 100 : null; };
+  const buy = leg(1), sell = leg(-1);
+  if (buy != null && sell != null) s.taxes = { buyPct: buy, sellPct: sell, mutable: null, changes: [] };
 }
 
 /** Independent sellers within a day before the card that complete a coin's honeypot check without a sell check. */

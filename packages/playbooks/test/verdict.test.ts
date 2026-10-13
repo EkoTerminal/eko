@@ -43,6 +43,22 @@ it('Pons reason has no universal fee fallback', () => {
   expect(reasonForMatch(match)).toBe('Observed creator-tax getter 4% and Pons-fee getter 1.73%.');
   match.evidence = match.evidence.filter(e => e.label !== 'Pons fee getter (%)');
   expect(reasonForMatch(match)).toBe('Measured trading tax meets a fixed-tax or mutable-tax threshold.');
+  // With no launchpad getter read at all (a coin outside Pons), the reason gives the tax measured from its trades.
+  match.evidence = match.evidence.filter(e => e.label !== 'Creator tax getter (%)');
+  expect(reasonForMatch(match)).toBe("A buy loses about 5% and a sell about 5% to this coin's tax and fees (measured from trades).");
+});
+it('says who added a coin\'s liquidity and what an unreviewed hook may do, without claiming a lock was checked', () => {
+  const stat = (label: string, value: number | string) => ({ kind: 'stat' as const, ref: `demo:${label}`, label, value });
+  const base = { title: 'x', history: { priorRuns: 0, coins: [] } };
+  expect(reasonForMatch({ ...base, id: 'removable_liquidity', level: 'monitor', evidence: [stat('Removable deployer/crew LP share', 0.8)] } as never))
+    .toBe("The deployer added 80% of this coin's pool liquidity; EKO does not check whether it is locked.");
+  expect(reasonForMatch({ ...base, id: 'removable_liquidity', level: 'danger', evidence: [stat('Removable deployer/crew LP share', 1)] } as never))
+    .toBe("The deployer added 100% of this coin's pool liquidity and removed liquidity from an earlier launch; EKO does not check whether it is locked.");
+  expect(reasonForMatch({ ...base, id: 'malicious_hook', level: 'monitor', evidence: [stat('Return-delta permission bits', 4), stat('Quote versus simulation gap (%)', 'unavailable')] } as never))
+    .toBe('This coin trades in a pool whose hook may change what a swap pays or receives; EKO has not reviewed the hook.');
+  // A measured gap keeps the rule's own wording.
+  expect(reasonForMatch({ ...base, id: 'malicious_hook', level: 'danger', evidence: [stat('Return-delta permission bits', 4), stat('Quote versus simulation gap (%)', 3)] } as never))
+    .toBe('Hook permissions or observed quote/fee behavior meet a threshold.');
 });
 it('token text cannot supply reasons, even when evidence includes malicious text', () => {
   const match = make('agent_bait', 'danger');

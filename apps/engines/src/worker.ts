@@ -34,6 +34,12 @@ export const RERATE_WIDTH=16;
 export const FIRST_SCAN_RETRY_BLOCKS=600;
 /** A coin that traded after its card is rated again once that card is at least this old (seconds). */
 export const TRADED_RERATE_SEC=300;
+/**
+ * The same for a coin that never had a Pons curve. Its checks read holders, the deployer and the pool, which move more
+ * slowly than a curve's run-up, and the busiest of them trade every block: at the curve coins' pace they would take every
+ * re-rating slot (2026-10-13: about 260 such coins traded in an hour, 130 Pons coins).
+ */
+export const TRADED_RERATE_OTHER_SEC=1800;
 /** Outcome horizons the end of a live poll may evaluate, so first scans and re-ratings can skip them per write. */
 export const OUTCOME_LOADS_PER_POLL=40;
 /** Blocks to wait before reloading a coin whose sources were unavailable: doubles per attempt, from about two minutes to about twelve hours. */
@@ -782,11 +788,12 @@ export class EngineWorker {
  * Radar coins (active since `since`) whose last trade is later than their card's block and whose card was written
  * before `settledBefore` (seconds), most recently traded first, with their card ids.
  */
-export async function tradedSinceCard(db:ChainDb,since:number,settledBefore:number,limit:number):Promise<{coin:Address;card:string}[]> {
+export async function tradedSinceCard(db:ChainDb,since:number,settledBefore:number,limit:number,otherSettledBefore=settledBefore-(TRADED_RERATE_OTHER_SEC-TRADED_RERATE_SEC)):Promise<{coin:Address;card:string}[]> {
   if(limit<=0)return [];
   return (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT r.coin,l.card_id AS card FROM read_coins r JOIN coin_card_latest l ON l.coin=r.coin
-    JOIN engine_block_times b ON b.number=l.as_of_block WHERE r.activity>to_timestamp($1) AND r.activity>b.ts AND b.ts<to_timestamp($2)
-    ORDER BY r.activity DESC,r.coin LIMIT $3`,[since,settledBefore,limit])).rows.map(row=>({coin:hex(row.coin) as Address,card:row.card}));
+    JOIN engine_block_times b ON b.number=l.as_of_block WHERE r.activity>to_timestamp($1) AND r.activity>b.ts
+      AND b.ts<to_timestamp(CASE WHEN r.launchpad='pons' THEN $2::double precision ELSE $4::double precision END)
+    ORDER BY r.activity DESC,r.coin LIMIT $3`,[since,settledBefore,limit,otherSettledBefore])).rows.map(row=>({coin:hex(row.coin) as Address,card:row.card}));
 }
 
 /**
