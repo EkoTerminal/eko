@@ -12,7 +12,7 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
-import { MARKETS, NETWORKS, type ServerMessage, type SystemHealth } from '@eko/shared';
+import { MARKETS, type ServerMessage, type SystemHealth } from '@eko/shared';
 import { InferenceBudget } from './ai/budget.js';
 import { ProviderRegistry } from './ai/registry.js';
 import type { Config } from './config.js';
@@ -25,8 +25,7 @@ import { SanctionsService, SanctionsWorker } from './sanctions/service.js';
 import { RetentionWorker } from './retention-worker.js';
 import { PricingRepairWorker, chainTokenMeta, type TokenSpot } from './pricing-repair.js';
 import { CoinOnboardingWorker, chainOnboarding } from './coin-onboarding.js';
-import { robinhood } from 'viem/chains';
-import { bestUsdgPool, createMeteredPublicClient, isTransientRpcUnavailable, rpcStopReason, usdgPoolPrice, type SpotRpc, type UsdgPool } from '@eko/chain';
+import { bestUsdgPool, isTransientRpcUnavailable, rpcStopReason, usdgPoolPrice, type SpotRpc, type UsdgPool } from '@eko/chain';
 import { QuoteStore } from './exec/quotes.js';
 import { TradeService, type TradeBackend } from './exec/trades.js';
 import { SellGuard } from './exec/sell-guard.js';
@@ -195,10 +194,10 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   };
   const tokenMeta = chainTokenMeta(() => chains.get('robinhood-mainnet'));
   const pricingRepair = new PricingRepairWorker(dbh.chain, (event, fields) => logger.info({ event, ...fields }, event), undefined, undefined, undefined, undefined, undefined, tokenSpot, tokenMeta);
-  // Onboarding reads (token metadata, first mint) go to the public RPC only: they are never billed, and a public
-  // outage delays onboarding instead of spending the paid budget.
-  let publicReads: ReturnType<typeof createMeteredPublicClient> | undefined;
-  const coinOnboarding = new CoinOnboardingWorker(dbh.chain, chainOnboarding(() => publicReads ??= createMeteredPublicClient(chains.meter, robinhood, cfg.RPC_PUBLIC_HTTP_URL ?? NETWORKS['robinhood-mainnet'].publicRpcUrl)),
+  // Onboarding reads (token metadata, first mint, its sender) go through the metered client like the pricing reads
+  // above: four or five per coin, with their own daily ceiling (chainOnboarding). The public RPC answers most requests
+  // from this host's Node services with an HTTP 403 challenge (2026-10-13: seven of eight), so it cannot carry them.
+  const coinOnboarding = new CoinOnboardingWorker(dbh.chain, chainOnboarding(() => chains.get('robinhood-mainnet')),
     (event, fields) => logger.info({ event, ...fields }, event));
   const receipts = new ReceiptApiStore(dbh.chain, cfg.RECEIPTS_REGISTRY_ADDRESS, chains.get('robinhood-mainnet'));
   const portfolio = new PortfolioService(db);

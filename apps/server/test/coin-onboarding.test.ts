@@ -105,7 +105,6 @@ describe('coin onboarding', () => {
   const chain = (facts: Awaited<ReturnType<OnboardingChain['facts']>>, mint: Awaited<ReturnType<OnboardingChain['firstMint']>>, calls: string[] = [], txs: number | null = 12): OnboardingChain => ({
     facts: async token => { calls.push(`facts:${token}`); return facts; },
     firstMint: async (token, upTo) => { calls.push(`mint:${token}:${upTo}`); return mint; },
-    transaction: async tx => { calls.push(`sender:${tx}`); return { from: launcher, to: null }; },
     sent: async wallet => { calls.push(`sent:${wallet}`); return txs; },
   });
   it('fills in the coin, prices and names its swaps, and records the launch wallet last', async () => {
@@ -134,7 +133,7 @@ describe('coin onboarding', () => {
     expect((await swaps(db)).at(-1)).toEqual({ tx: 31, trader: seller, recipient: null, pending: false });
     expect(calls).toHaveLength(3);
   });
-  it('sets aside a token it cannot read or whose first mint it cannot find, and falls back to its first stored transfer', async () => {
+  it('sets aside a token it cannot read, and records no deployer wallet when its first mint is not found', async () => {
     const db = await open();
     await swap(db, 900, 40, 1, '1000');
     const unreadable = new CoinOnboardingWorker(db, chain({ decimals: null, symbol: 'DEMO', name: 'Sample token', totalSupply: null }, null), () => undefined, { now: () => now, assets, addresses });
@@ -144,13 +143,15 @@ describe('coin onboarding', () => {
     // Set aside for six hours: the same worker does not read it again.
     await unreadable.tick();
     expect((await db.sql.query<{ attempts: number }>('SELECT attempts FROM coin_onboarding WHERE coin=$1', [binary(coin)])).rows[0].attempts).toBe(1);
-    // Later (past the wait) the token reads, has no mint from the zero address, and its first stored transfer names the sender.
+    // Later (past the wait) the token reads but has no mint near its first pool: it is listed with no deployer wallet
+    // (its own address), never with the sender of some later transfer.
     await transfer(db, 120, 41, launcher, buyer, '5');
     const calls: string[] = [];
     const later = new CoinOnboardingWorker(db, chain({ decimals: 18, symbol: 'DEMO', name: 'Sample token', totalSupply: 1000n }, null, calls), () => undefined, { now: () => now + 7 * 3_600_000, assets, addresses });
     await later.tick();
-    expect(calls).toEqual([`facts:${coin}`, `mint:${coin}:200`, `sender:${hash(41)}`, `sent:${launcher}`]);
-    expect(hex((await db.sql.query<{ deployer: Uint8Array }>('SELECT deployer FROM tokens WHERE address=$1', [binary(coin)])).rows[0].deployer)).toBe(launcher);
+    expect(calls).toEqual([`facts:${coin}`, `mint:${coin}:200`]);
+    expect(hex((await db.sql.query<{ deployer: Uint8Array }>('SELECT deployer FROM tokens WHERE address=$1', [binary(coin)])).rows[0].deployer)).toBe(coin);
+    expect((await db.sql.query<{ data: { shared?: string } }>('SELECT data FROM coin_onboarding WHERE coin=$1', [binary(coin)])).rows[0].data.shared).toBe('mint_not_found');
   });
   it('records no deployer wallet for a launch sent by a bot, a bundler or a sender seen launching many coins', async () => {
     const facts = { decimals: 18, symbol: 'DEMO', name: 'Sample token', totalSupply: 1000n };
@@ -184,6 +185,32 @@ describe('coin onboarding', () => {
     await db.insert('chain_blocks', { number: '991', block: '991', hash: binary(hash(0x991)), parent_hash: null, ts: new Date(now - 5_000) });
     await worker.tick();
     expect(hex((await db.sql.query<{ deployer: Uint8Array }>('SELECT deployer FROM tokens WHERE address=$1', [binary(coin)])).rows[0].deployer)).toBe(launcher);
+  });
+  it('searches for the first mint in windows the endpoint accepts, and stops reading once the day\'s reads are spent', async () => {
+    const { chainOnboarding, OnboardingReadsSpent } = await import('../src/coin-onboarding.js');
+    const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', mintLog = (block: number) => ({ blockNumber: `0x${block.toString(16)}`, logIndex: '0x1', transactionHash: hash(block), topics: [TRANSFER, `0x${'0'.repeat(64)}`, `0x${'0'.repeat(24)}${launcher.slice(2)}`] });
+    const fixture = (mints: number[], limit = 100) => {
+      const requests: string[] = [];
+      const client = { request: async ({ method, params }: { method: string; params: unknown[] }) => {
+        requests.push(method);
+        if (method === 'eth_getLogs') { const f = params[0] as { fromBlock: string; toBlock: string }; expect(Number(BigInt(f.toBlock) - BigInt(f.fromBlock))).toBeLessThanOrEqual(100_000);
+          return mints.filter(n => n >= Number(BigInt(f.fromBlock)) && n <= Number(BigInt(f.toBlock))).map(mintLog); }
+        if (method === 'eth_getTransactionByHash') return { from: launcher, to: buyer };
+        throw new Error(`unexpected ${method}`);
+      } };
+      return { requests, chain: chainOnboarding(() => client as never, undefined, limit, () => now) };
+    };
+    // Minted 150,000 blocks before its first pool: found in the second window, confirmed by the third.
+    const old = fixture([850_000]);
+    expect(await old.chain.firstMint(coin, 1_000_000n)).toMatchObject({ wallet: launcher, to: buyer, block: 850_000n });
+    expect(old.requests).toEqual(['eth_getLogs', 'eth_getLogs', 'eth_getLogs', 'eth_getTransactionByHash']);
+    // A token that mints in every window: its first mint is not established. One with none nearby: none.
+    expect(await fixture([999_000, 880_000, 760_000]).chain.firstMint(coin, 1_000_000n)).toBeNull();
+    expect(await fixture([]).chain.firstMint(coin, 1_000_000n)).toBeNull();
+    // Two reads allowed today: the third is refused before it is sent.
+    const capped = fixture([999_000], 2);
+    await expect(capped.chain.firstMint(coin, 1_000_000n)).rejects.toBeInstanceOf(OnboardingReadsSpent);
+    expect(capped.requests).toEqual(['eth_getLogs', 'eth_getLogs']);
   });
   it('reads token text returned as a string or as bytes32', () => {
     expect(decodeText('0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000444454d4f00000000000000000000000000000000000000000000000000000000')).toBe('DEMO');

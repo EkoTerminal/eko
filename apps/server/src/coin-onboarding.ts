@@ -7,8 +7,12 @@ const ZERO = '0x0000000000000000000000000000000000000000', DEAD = '0x00000000000
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', ZERO_TOPIC = `0x${'0'.repeat(64)}`;
 /** Swaps or liquidity events attributed per statement. */
 export const ATTRIBUTE_BATCH = 2000;
-/** Blocks per mint search request (the public RPC serves at most ten million). */
-const MINT_SPAN = 9_000_000n;
+/**
+ * Blocks per mint search request (the paid endpoint refuses a log range over 100,000 blocks, about three hours), and
+ * the windows searched back from a coin's first pool: a launch mints in the transaction that opens its pool or shortly
+ * before it. A coin minted more than about eight hours before its first pool has no launch wallet identified.
+ */
+const MINT_SPAN = 100_000n, MINT_WINDOWS = 3;
 
 /**
  * Addresses that are never a coin's buyer or seller (the mint and burn addresses and the v4 pool manager), the
@@ -101,13 +105,14 @@ export async function attributeLiquidity(db: ChainDb, a: AttributionAddresses, l
 
 export interface TokenFacts { decimals: number | null; symbol: string | null; name: string | null; totalSupply: bigint | null }
 export interface LaunchWallet { wallet: string; to: string | null; block: bigint; tx: string; mintTo: string | null }
-/** The chain reads onboarding needs (the worker uses the public RPC; tests supply fixtures). */
+/** The chain reads onboarding needs (the worker's metered client; tests supply fixtures). */
 export interface OnboardingChain {
   facts(token: string): Promise<TokenFacts>;
-  /** The sender (and target) of the transaction that first minted the token at or below `upTo`, or null when it has no mint there. */
+  /**
+   * The sender (and target) of the transaction that first minted the token, searched back from `upTo`; null when no
+   * mint is found there or the first one cannot be told from later ones (a token that mints all the time).
+   */
   firstMint(token: string, upTo: bigint): Promise<LaunchWallet | null>;
-  /** A transaction's sender and target. */
-  transaction(tx: string): Promise<{ from: string; to: string | null } | null>;
   /** Transactions the wallet has sent (its nonce), or null when unreadable. */
   sent(wallet: string): Promise<number | null>;
 }
@@ -130,10 +135,26 @@ const sizeLimited = (error: unknown) => { const e = error as { details?: string;
   return /more than \d+ results|too many results|query returned more|response size|result set too large|exceeds? (the )?max/i.test(`${e?.details ?? ''} ${e?.shortMessage ?? ''} ${e?.message ?? ''}`); };
 /** Log requests one token's mint search may make. */
 const MINT_REQUESTS = 24;
-/** Onboarding reads through a metered client (the worker passes one bound to the public RPC, so nothing here is billed). */
-export function chainOnboarding(client: () => PublicClient, registry = loadRegistry()): OnboardingChain {
+/** Chain reads onboarding may make in a UTC day: about four per coin, so some 7,000 coins. */
+export const ONBOARDING_DAILY_READS = 30_000;
+/** Thrown when the day's onboarding reads are spent; the pass stops and the next day's first pass resumes. */
+export class OnboardingReadsSpent extends Error { constructor() { super('Onboarding chain reads are spent for today'); } }
+/**
+ * Onboarding reads through the worker's metered client, which bills them to the paid endpoint under the process's
+ * daily budget. They also have their own ceiling per UTC day (`dailyReads`), so onboarding can never be what spends
+ * that budget: the indexer and the rating engine read from the same one.
+ */
+export function chainOnboarding(metered: () => PublicClient, registry = loadRegistry(), dailyReads = ONBOARDING_DAILY_READS, now: () => number = () => Date.now()): OnboardingChain {
   const multicall = registry.requireAddress('multicall3');
-  const stop = (error: unknown) => { if (rpcStopReason(error) || isTransientRpcUnavailable(error)) throw error; };
+  let day = '', reads = 0;
+  const client = () => {
+    const today = new Date(now()).toISOString().slice(0, 10);
+    if (today !== day) { day = today; reads = 0; }
+    if (reads >= dailyReads) throw new OnboardingReadsSpent();
+    reads++;
+    return metered();
+  };
+  const stop = (error: unknown) => { if (error instanceof OnboardingReadsSpent || rpcStopReason(error) || isTransientRpcUnavailable(error)) throw error; };
   const mints = (token: string, from: bigint, to: bigint) => client().request({ method: 'eth_getLogs',
     params: [{ address: token as Hex, topics: [TRANSFER, ZERO_TOPIC], fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}` }] } as never) as Promise<{ blockNumber: Hex; logIndex: Hex; transactionHash: Hex; topics: Hex[] }[]>;
   const earliest = async (token: string, from: bigint, to: bigint, budget: { left: number }): Promise<{ blockNumber: Hex; logIndex: Hex; transactionHash: Hex; topics: Hex[] } | null> => {
@@ -157,7 +178,6 @@ export function chainOnboarding(client: () => PublicClient, registry = loadRegis
     } catch (error) { stop(error); return null; }
   };
   return {
-    transaction,
     async sent(wallet) {
       try { return Number(BigInt((await client().request({ method: 'eth_getTransactionCount', params: [wallet as Hex, 'latest'] } as never)) as Hex)); }
       catch (error) { stop(error); return null; }
@@ -173,19 +193,20 @@ export function chainOnboarding(client: () => PublicClient, registry = loadRegis
       return { decimals: d != null && d <= 36n ? Number(d) : null, symbol: symbol.success ? decodeText(symbol.returnData) : null, name: name.success ? decodeText(name.returnData) : null, totalSupply: total };
     },
     async firstMint(token, upTo) {
-      let found: Awaited<ReturnType<typeof earliest>> = null;
+      let found: Awaited<ReturnType<typeof earliest>> = null, first = false;
       const budget = { left: MINT_REQUESTS };
-      // Newest window first; the first window without a mint below one that had some ends the search.
-      for (let hi = upTo; hi >= 0n;) {
+      // Newest window first. The mint found is the first one only when the window below it has none (or the chain
+      // starts there): running out of windows while every one still holds mints establishes nothing.
+      for (let hi = upTo, windows = 0; hi >= 0n && windows < MINT_WINDOWS; windows++) {
         let log: Awaited<ReturnType<typeof earliest>>;
         const lo = hi > MINT_SPAN ? hi - MINT_SPAN : 0n;
         try { log = await earliest(token, lo, hi, budget); }
-        catch (error) { stop(error); if (found) break; return null; }
-        if (log) found = log; else if (found) break;
-        if (lo === 0n) break;
+        catch (error) { stop(error); return null; }
+        if (log) found = log; else if (found) { first = true; break; }
+        if (lo === 0n) { first = found != null; break; }
         hi = lo - 1n;
       }
-      if (!found) return null;
+      if (!found || !first) return null;
       const sent = await transaction(found.transactionHash);
       return sent ? { wallet: sent.from, to: sent.to, block: BigInt(found.blockNumber), tx: found.transactionHash, mintTo: found.topics[2] ? `0x${found.topics[2].slice(-40)}`.toLowerCase() : null } : null;
     },
@@ -203,11 +224,11 @@ const HOUR = 3_600_000;
  * its name, symbol, decimals and supply (one call) and the wallet that sent its first mint (its launch wallet, the
  * `deployer` every rating check is written against), prices its stored swaps and names their traders, and only then
  * records the launch wallet: that makes the coin visible to the rating engine and the Radar with its history complete.
- * A launch sent by a relayer, a bundler or a bot (launchWallet below) has no wallet that is its creator's: the coin's
- * own address is recorded instead, which every check reads as "no deployer wallet" (it never trades, holds only what
+ * A launch sent by a relayer, a bundler or a bot, or whose first mint is not found near its first pool, has no wallet
+ * that is its creator's: the coin's own address is recorded instead, which every check reads as "no deployer wallet" (it never trades, holds only what
  * the contract holds, and has no other launches), so hundreds of unrelated coins are not tied to one sender.
  * A coin whose history does not fit a pass is resumed on the next. A token without readable decimals, or without a
- * name and symbol, or with no mint to find, is retried after a growing wait (six hours to two days).
+ * name and symbol, is retried after a growing wait (six hours to two days).
  * Rewriting a coin's stored swaps competes with the indexer and the rating engine for the same database (the box ran
  * at a load of 5.7 on four cores on 2026-10-13): a pass works for ten of every thirty seconds, and does nothing while
  * the newest indexed block is more than `maxLagSec` behind the clock.
@@ -232,7 +253,11 @@ export class CoinOnboardingWorker {
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
     if (this.running) return this.running;
-    this.running = this.pass().catch(error => this.log('coin_onboarding_failed', { error: String((error as Error)?.message ?? error).slice(0, 200) })).finally(() => { this.running = undefined; });
+    this.running = this.pass().catch(error => {
+      // Spent reads are a pause, said once every five minutes; anything else is a failed pass.
+      if (error instanceof OnboardingReadsSpent) { if (this.now() - this.pausedAt >= 300_000) { this.pausedAt = this.now(); this.log('coin_onboarding_paused', { reason: 'daily_reads_spent' }); } return; }
+      this.log('coin_onboarding_failed', { error: String((error as Error)?.message ?? error).slice(0, 200) });
+    }).finally(() => { this.running = undefined; });
     return this.running;
   }
   /** Coins to onboard: launched in the last hour first (newest first, read every pass), then by swaps in the last day (read every five minutes). */
@@ -291,18 +316,11 @@ export class CoinOnboardingWorker {
     if (!wallet) {
       // The mint is at or before the coin's first pool or trade; a few blocks of slack for a pool opened in the same block.
       const mint = await this.chain.firstMint(address, BigInt(candidate.first_block) + 100n);
-      let sent: { from: string; to: string | null } | null = mint ? { from: mint.wallet, to: mint.to } : null;
-      let found: Record<string, unknown> | undefined = mint ? { mintBlock: mint.block.toString(), mintTx: mint.tx, mintTo: mint.mintTo } : undefined;
-      if (!sent) {
-        // No mint from the zero address: the sender of the coin's first stored transfer.
-        const first = (await this.db.sql.query<{ tx_hash: Uint8Array; block: string }>('SELECT tx_hash,block::text FROM token_transfers WHERE token=$1 ORDER BY block,log_index LIMIT 1', [coin])).rows[0];
-        sent = first ? await this.chain.transaction(hex(first.tx_hash)) : null;
-        if (sent) found = { firstTransferBlock: first!.block, firstTransferTx: hex(first!.tx_hash) };
-      }
-      if (!sent || !found) { await this.mark(coin, 'no_launch_wallet'); return 'set_aside'; }
-      const shared = await this.shared(sent);
-      wallet = shared ? address : sent.from;
-      await this.mark(coin, 'working', { ...found, launchWallet: wallet, sender: sent.from, senderTo: sent.to, ...(shared ? { shared } : {}) });
+      // No first mint found near the coin's first pool (it was minted long before, or mints all the time): no wallet is
+      // its launch wallet. The sender of some later transfer would be a guess.
+      const shared = mint ? await this.shared({ from: mint.wallet, to: mint.to }) : 'mint_not_found';
+      wallet = mint && !shared ? mint.wallet : address;
+      await this.mark(coin, 'working', { launchWallet: wallet, ...(mint ? { sender: mint.wallet, senderTo: mint.to, mintBlock: mint.block.toString(), mintTx: mint.tx, mintTo: mint.mintTo } : {}), ...(shared ? { shared } : {}) });
     }
     // Stored swaps: priced, then named, a batch at a time. Liquidity events the same way. Pricing goes an hour at a
     // time, newest first: each hour reads only that hour's ETH/USD reference swaps.
