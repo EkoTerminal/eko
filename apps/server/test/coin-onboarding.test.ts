@@ -171,6 +171,20 @@ describe('coin onboarding', () => {
     expect(await launched(mint, 3, async db => { for (let i = 0; i < 20; i++) await db.sql.query(`INSERT INTO coin_onboarding(coin,status,data,created_at) VALUES($1,'done',$2::jsonb,$3)`,
       [binary(address(0x7000 + i)), JSON.stringify({ sender: launcher }), new Date(now - 3_600_000)]); })).toEqual({ deployer: coin, shared: 'many_launches', sender: launcher });
   });
+  it('does nothing while the indexer is behind, and resumes once it has caught up', async () => {
+    const db = await open(), events: string[] = [];
+    await swap(db, 900, 60, 1, '1000');
+    // The newest indexed block is two minutes old.
+    await db.insert('chain_blocks', { number: '990', block: '990', hash: binary(hash(0x990)), parent_hash: null, ts: new Date(now - 120_000) });
+    const facts = { decimals: 18, symbol: 'DEMO', name: 'Sample token', totalSupply: 1000n }, mint = { wallet: launcher, to: null, block: 99n, tx: hash(0x77), mintTo: launcher };
+    const worker = new CoinOnboardingWorker(db, chain(facts, mint), event => events.push(event), { now: () => now, assets, addresses });
+    await worker.tick(); await worker.tick();
+    expect(events).toEqual(['coin_onboarding_paused']);
+    expect((await db.sql.query('SELECT 1 FROM coin_onboarding')).rows).toHaveLength(0);
+    await db.insert('chain_blocks', { number: '991', block: '991', hash: binary(hash(0x991)), parent_hash: null, ts: new Date(now - 5_000) });
+    await worker.tick();
+    expect(hex((await db.sql.query<{ deployer: Uint8Array }>('SELECT deployer FROM tokens WHERE address=$1', [binary(coin)])).rows[0].deployer)).toBe(launcher);
+  });
   it('reads token text returned as a string or as bytes32', () => {
     expect(decodeText('0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000444454d4f00000000000000000000000000000000000000000000000000000000')).toBe('DEMO');
     expect(decodeText('0x44454d4f00000000000000000000000000000000000000000000000000000000')).toBe('DEMO');

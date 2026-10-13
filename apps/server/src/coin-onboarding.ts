@@ -193,7 +193,9 @@ export function chainOnboarding(client: () => PublicClient, registry = loadRegis
 }
 
 interface Candidate { coin: Uint8Array; first_block: string }
-export interface OnboardingOptions { now?: () => number; intervalMs?: number; budgetMs?: number; perTick?: number; batch?: number; assets?: PricingAssets; addresses?: AttributionAddresses }
+export interface OnboardingOptions { now?: () => number; intervalMs?: number; budgetMs?: number; perTick?: number; batch?: number; assets?: PricingAssets; addresses?: AttributionAddresses;
+  /** Seconds the newest indexed block may be behind the clock before a pass does nothing (default 45). */
+  maxLagSec?: number }
 const HOUR = 3_600_000;
 /**
  * Worker role. Every 30 s: name the traders and liquidity providers of new Uniswap swaps of coins already onboarded,
@@ -206,6 +208,9 @@ const HOUR = 3_600_000;
  * the contract holds, and has no other launches), so hundreds of unrelated coins are not tied to one sender.
  * A coin whose history does not fit a pass is resumed on the next. A token without readable decimals, or without a
  * name and symbol, or with no mint to find, is retried after a growing wait (six hours to two days).
+ * Rewriting a coin's stored swaps competes with the indexer and the rating engine for the same database (the box ran
+ * at a load of 5.7 on four cores on 2026-10-13): a pass works for ten of every thirty seconds, and does nothing while
+ * the newest indexed block is more than `maxLagSec` behind the clock.
  */
 export class CoinOnboardingWorker {
   private timer?: NodeJS.Timeout;
@@ -213,6 +218,7 @@ export class CoinOnboardingWorker {
   private queue: Candidate[] = [];
   private traded: Candidate[] = [];
   private tradedAt = -Infinity;
+  private pausedAt = -Infinity;
   private readonly now: () => number;
   private readonly addresses: AttributionAddresses;
   private assets?: PricingAssets;
@@ -323,7 +329,11 @@ export class CoinOnboardingWorker {
     return 'onboarded';
   }
   private async pass() {
-    const started = this.now(), deadline = started + (this.options.budgetMs ?? 20_000), batch = this.options.batch ?? ATTRIBUTE_BATCH;
+    const started = this.now(), deadline = started + (this.options.budgetMs ?? 10_000), batch = this.options.batch ?? ATTRIBUTE_BATCH;
+    // The indexer comes first: no rewriting while it is behind.
+    const newest = (await this.db.sql.query<{ ts: Date | null }>('SELECT ts FROM chain_blocks ORDER BY number DESC LIMIT 1')).rows[0]?.ts;
+    const lagSec = newest ? (started - new Date(newest).getTime()) / 1000 : 0, maxLag = this.options.maxLagSec ?? 45;
+    if (lagSec > maxLag) { if (started - this.pausedAt >= 300_000) { this.pausedAt = started; this.log('coin_onboarding_paused', { lagSec: Math.round(lagSec), maxLagSec: maxLag }); } return; }
     // New swaps and liquidity events of onboarded coins first: the two hours behind the head, newest first.
     let swaps = 0, liquidity = 0;
     for (let n = batch; n === batch && this.now() < deadline;) { n = await attributeSwaps(this.db, this.addresses, new Date(started - 2 * HOUR), new Date(started + HOUR), batch); swaps += n; }
