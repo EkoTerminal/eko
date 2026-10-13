@@ -218,7 +218,7 @@ describe('incremental live activity', () => {
       await chain.db.sql.query(`UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','"danger"') WHERE coin=$1`, [binary(C)]);
       for (const horizon of ['1h', '24h', '7d']) await chain.db.sql.query("INSERT INTO outcomes VALUES($1,$2,$3,'rugged','{}') ON CONFLICT DO NOTHING", [binary(C), horizon, at(7)]);
       await chain.header(at(9.3)); await chain.swap(E, at(9.3), -1, t3, 0.9);
-      expect(await runRetention(chain.db, { quoteTokens: [], dangerQuietDays: 2, now: () => (secOf(at(9.3)) + 30) * 1000 })).toMatchObject({ dangerCoins: 1 });
+      expect(await runRetention(chain.db, { dryRun:false,pauseMs:0,quoteTokens: [], dangerQuietDays: 2, now: () => (secOf(at(9.3)) + 30) * 1000 })).toMatchObject({ dangerCoins: 1 });
     });
     await poll(secOf(at(9.3)) + 30);
 

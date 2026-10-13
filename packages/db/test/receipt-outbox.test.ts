@@ -100,3 +100,42 @@ it('092 recovers private commitments independently of deleted harness rows, with
   }
   await expect(db.sql.query('DELETE FROM receipt_private_publications WHERE id=$1',[id])).rejects.toThrow('append-only');
 });
+
+describe('rating retention receipt tombstones',()=>{
+  it('keeps immutable hashes and supersession references, verifies Merkle chains and recovers after payload removal',async()=>{
+    const {runRetention,retentionLog}=await import('../src/index.js');
+    const outbox=new ReceiptOutbox(db),a=payload('retention-a'),b=payload('retention-b',{supersedes:a.receiptId}),c=payload('retention-c',{supersedes:b.receiptId});
+    await publishReceipt(db,'engines',a);await publishReceipt(db,'engines',b);await publishReceipt(db,'engines',c);
+    const itemA=await outbox.enqueue(a.receiptId),originalTree=codec.buildReceiptTree([itemA,{id:b.receiptId,kind:b.kind,hash:codec.hash(b)},{id:c.receiptId,kind:c.kind,hash:codec.hash(c)}]);
+    const headers=async()=> (await db.sql.query('SELECT id,publication_sequence,producer,kind,chain_id,revision_id,payload_hash,recorded_at FROM receipt_publications WHERE id=ANY($1::text[]) ORDER BY id',[[a.receiptId,b.receiptId,c.receiptId]])).rows;
+    const original=await headers(),before=(await db.sql.query('SELECT * FROM receipt_publications WHERE id=ANY($1::text[]) ORDER BY id',[[a.receiptId,b.receiptId,c.receiptId]])).rows;
+    const report=await runRetention(db,{quoteTokens:[],ratingDays:7,now:()=>Date.parse('2026-11-01T00:00:00Z')});
+    expect((await db.sql.query('SELECT * FROM receipt_publications WHERE id=ANY($1::text[]) ORDER BY id',[[a.receiptId,b.receiptId,c.receiptId]])).rows).toEqual(before);
+    expect(report.tables?.find(t=>t.table==='receipt_publications')).toMatchObject({rows:2});
+    expect(retentionLog(true,{table:'swaps',rows:10,estimatedBytes:1000})).toBe('retention dry_run=true table=swaps rows=10 estimated_bytes=1000');
+    await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,batchRows:1,now:()=>Date.parse('2026-11-01T00:00:00Z')});
+    expect(await headers()).toEqual(original);
+    const archived=(await db.sql.query<{id:string;data:unknown;canonical_payload:string|null;summary:{supersedes:string|null}}>('SELECT id,data,canonical_payload,summary FROM receipt_publications WHERE id=ANY($1::text[]) ORDER BY id',[[a.receiptId,b.receiptId,c.receiptId]])).rows;
+    expect(archived[0]).toMatchObject({data:null,canonical_payload:null});expect(archived[1]).toMatchObject({data:null,summary:{supersedes:a.receiptId}});expect(archived[2]!.data).toEqual(c);
+    // A producer crash left b unconsumed. Recovery can build its original leaf from the retained hash.
+    const itemB=await outbox.enqueue(b.receiptId),itemC=await outbox.enqueue(c.receiptId);
+    expect(await outbox.getItem(a.receiptId,'verdict')).toEqual(itemA);
+    const tree=codec.buildReceiptTree([itemA,itemB,itemC]);expect(tree.root).toBe(originalTree.root);
+    for(const [i,item] of [itemA,itemB,itemC].entries())expect(codec.verifyReceiptProof(item,tree.proofs[i]!,tree.root)).toBe(true);
+    await publishReceipt(db,'engines',payload('retention-d',{supersedes:b.receiptId,reorgOf:a.receiptId}));
+    await publishReceipt(db,'engines',a); // Exact retry remains idempotent after original bytes are dropped.
+    await expect(publishReceipt(db,'engines',payload(a.receiptId,{decision:{level:'danger'}}))).rejects.toThrow('different input');
+    await expect(db.sql.query('UPDATE receipt_publications SET payload_hash=$2 WHERE id=$1',[a.receiptId,codec.hash('changed')])).rejects.toThrow('append-only');
+    await expect(db.sql.query('DELETE FROM receipt_items WHERE id=$1',[a.receiptId])).rejects.toThrow('append-only');
+  });
+});
+
+it('refuses to discard a corrupt publication and rolls the payload batch back',async()=>{
+  const {runRetention}=await import('../src/index.js'),raw=payload('retention-corrupt');
+  await db.sql.query(`INSERT INTO receipt_publications(id,producer,kind,chain_id,revision_id,payload_hash,canonical_payload,data,recorded_at)
+    VALUES($1,'engines','verdict',4663,$1,$2,$3,$4,$5)`,[raw.receiptId,codec.hash('corrupted'),canonicalize(raw),raw,at]);
+  await publishReceipt(db,'engines',payload('retention-valid-tail'));
+  const before=(await db.sql.query('SELECT * FROM receipt_publications ORDER BY id')).rows;
+  await expect(runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,now:()=>Date.parse('2026-11-01T00:00:00Z')})).rejects.toThrow('integrity');
+  expect((await db.sql.query('SELECT * FROM receipt_publications ORDER BY id')).rows).toEqual(before);
+});

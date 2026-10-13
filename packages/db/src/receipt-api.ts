@@ -14,7 +14,7 @@ export interface ReceiptRegistryReader extends Omit<GuardRegistryReader, 'getBlo
 }
 interface ItemRow {
   id: string; producer: string; kind: 'verdict' | 'forecast' | 'harness_private'; chain_id: string;
-  revision_id: string; payload_hash: Hex; canonical_payload: string; data: unknown; recorded_at: Date; leaf: Hex | null;
+  revision_id: string; payload_hash: Hex; canonical_payload: string | null; data: unknown; recorded_at: Date; leaf: Hex | null;
 }
 interface AnchorRow {
   data: ReceiptCommitAnchor & { receiptId?: string; payloadHash?: Hex }; proof: Hex[];
@@ -59,13 +59,15 @@ export class ReceiptApiStore {
     if (!row) return null;
     const item = ReceiptItemSchema.parse({ id: row.id, kind: row.kind, hash: row.payload_hash });
     const leaf = codec.encodeReceiptLeaf(item);
+    const archived=row.data==null && row.canonical_payload==null;
+    if(archived && (row.producer!=='engines' || row.kind!=='verdict'))throw new Error('Receipt archived header integrity failure');
     if (Number(row.chain_id) !== 4663 || (row.leaf !== null && row.leaf !== leaf)
-      || canonicalize(row.data) !== row.canonical_payload) throw new Error('Receipt integrity failure');
+      || (!archived && canonicalize(row.data) !== row.canonical_payload)) throw new Error('Receipt integrity failure');
     let durationSec = 0;
     if (item.kind === 'harness_private') {
       if (row.producer !== 'harness' || row.revision_id !== id || row.canonical_payload !== canonicalize(item))
         throw new Error('Receipt commitment integrity failure');
-    } else {
+    } else if (!archived) {
       if (!codec.verifyPayload(row.data, item)) throw new Error('Receipt payload integrity failure');
       const version = (row.data as { schemaVersion?: string }).schemaVersion;
       if (version === 'guard-receipt-2' || version === 'public-receipt-1') {
@@ -129,7 +131,7 @@ export class ReceiptApiStore {
     if (matches.length !== 1) throw new Error('Receipt registry event mismatch');
     // Snapshot verdicts have no future window. Forecast time starts at the
     // authenticated commit block, never recordedAt or a prepared batch time.
-    const reveal = item.kind !== 'harness_private' && this.now() >= (Number(block.timestamp) + durationSec) * 1000;
+    const reveal = !archived && item.kind !== 'harness_private' && this.now() >= (Number(block.timestamp) + durationSec) * 1000;
     return ReceiptLookupSchema.parse({ ...base, status: 'anchored', merkleRoot: a.root, proof: anchor.proof,
       batchId: a.batchId, txHash: a.txHash, block: Number(a.blockNumber), blockHash: a.blockHash,
       registry: this.registry, chainId: 4663, logIndex: a.logIndex,

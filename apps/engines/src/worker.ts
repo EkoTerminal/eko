@@ -325,7 +325,7 @@ export class EngineWorker {
       clock=(await this.db.sql.query<{number:string;ts:Date}>('SELECT number,ts FROM engine_block_times WHERE number<=$1 ORDER BY number',[to])).rows.map(row=>({number:Number(row.number),sec:seconds(row.ts)}));
       inputs=coins.map(coin=>({coin:coin.coin,firstBlock:coin.firstBlock,lastSec:coin.events.reduce((latest,event)=>Math.max(latest,event.sec),coin.createdSec),
         revision:digest({activity:coin.revision,rulesVersion:RULES_VERSION}),base:coin.base ?? null,
-        revived:watermark=>coin.events.find(event=>event.block>watermark && (event.kind==='swap' || event.kind==='transfer'))?.block,
+        revived:watermark=>coin.events.find(event=>event.block>watermark && (event.kind==='swap' || event.kind==='transfer' || !!prunes.get(coin.coin)?.preserved))?.block,
         inRange:coin.firstBlock>=from || coin.events.some(event=>event.block>=from && event.block<=to),activity:coin}));
     }
     // A token without a deployer (WETH, USDG and every other non-launchpad token) never gets a card (readSources). It

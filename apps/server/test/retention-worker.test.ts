@@ -10,6 +10,12 @@ const handles: ChainDb[] = [];
 afterEach(async () => { await Promise.all(handles.splice(0).map(db => db.close())); });
 
 describe('chain retention settings', () => {
+  it('defaults to report-only settlement, a seven-day cap and seven-day rating history',()=>{
+    const c=loadConfig(base);expect([c.RETENTION_DRY_RUN,c.RETENTION_SETTLE_HOURS,c.RETENTION_RAW_DAYS,c.RETENTION_RATING_DAYS]).toEqual([true,24,7,7]);
+    expect(loadConfig({...base,RETENTION_DRY_RUN:'false'}).RETENTION_DRY_RUN).toBe(false);
+    for(const key of ['RETENTION_SETTLE_HOURS','RETENTION_RAW_DAYS','RETENTION_RATING_DAYS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
+    expect(()=>loadConfig({...base,RETENTION_DRY_RUN:'false',SECURITY_COLLECTORS:walletCollectors})).toThrow('wallet outflow collectors');
+  });
   it('are off by default, bounded, and refused alongside the wallet outflow collectors', () => {
     const off = loadConfig(base);
     expect([off.RETENTION_QUOTE_TRANSFER_DAYS, off.RETENTION_IDLE_TOKEN_DAYS, off.RETENTION_PENDING_POOL_DAYS, off.RETENTION_FEED_DAYS,
@@ -42,7 +48,7 @@ describe('retention worker', () => {
     const report = vi.fn(), on = new RetentionWorker(db, { quoteDays: 2, pendingPoolDays: 3, feedDays: 3 }, report, 60_000);
     on.start(); await on.tick(); await on.stop();
     expect(report).toHaveBeenCalledWith({ quoteRows: 0, idleTokens: 0, idleRows: 0, pendingRows: 0, feedRows: 0, dangerCoins: 0, quietCoins: 0,
-      historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true });
+      historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, dryRun:true,tables:[] });
     expect(new RetentionWorker(db, { quietCoinDays: 8 }, vi.fn(), 60_000).enabled).toBe(true);
     expect(new RetentionWorker(db, { feedDays: 3 }, vi.fn(), 60_000).enabled).toBe(true);
     const failing = vi.fn(), broken = new RetentionWorker({ sql: { query: async () => { throw new Error('fixture failure with row data'); } } } as unknown as ChainDb,

@@ -166,13 +166,19 @@ export class ScoreboardService {
     // 2026-10-13 to return nothing, and 0.44 of a backend in production; 0.19 s this way.
     const head = BigInt((await db.sql.query<{ seq: string | null }>('SELECT max(publication_sequence)::text AS seq FROM receipt_publications')).rows[0]?.seq ?? '0');
     const above = this.consumedThrough == null ? null : this.consumedThrough - PUBLICATION_OVERLAP;
-    const calls = (await db.sql.query<{ id: string; data: unknown }>(`SELECT p.id,p.data FROM receipt_publications p WHERE p.kind='verdict' AND p.chain_id=4663
+    const calls = (await db.sql.query<{ id: string; data: unknown;summary:{coin:Address;recordedAt:string;level:ScoreboardRow['level'];rulesVersion:string;revisionId:string;receiptId:string;window:{kind:string;blockNumber:number}}|null }>(`SELECT p.id,p.data,p.summary FROM receipt_publications p WHERE p.kind='verdict' AND p.chain_id=4663
       ${above == null ? '' : 'AND p.publication_sequence>$1'}
       AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='call:'||p.id) ORDER BY p.publication_sequence LIMIT ${CONSUME_BATCH}`, above == null ? [] : [above.toString()])).rows;
     if (calls.length < CONSUME_BATCH) this.stagedThrough = head;
     const callRows: { source: string; row: Omit<ScoreboardRow, 'id'> }[] = [];
     for (const c of calls) {
       const p = PublicReceiptPayloadSchema.safeParse(c.data);
+      if(!p.success && c.summary) {
+        const a=c.summary;
+        callRows.push({source:`call:${c.id}`,row:{kind:'calls',ts:a.recordedAt,coin:a.coin,level:a.level,receiptId:a.receiptId,
+          detail:{event:'call',gradeStatus:'unavailable',rulesVersion:a.rulesVersion,revisionId:a.revisionId,decisionBlock:a.window.kind==='snapshot' ? a.window.blockNumber : 'unavailable'}}});
+        continue;
+      }
       if (!p.success || p.data.kind !== 'verdict') continue; // Candidate V2/shadow is not an active V1 call.
       const verdict = VerdictSchema.omit({receipt:true}).safeParse(p.data.decision);
       if (!verdict.success) continue;
@@ -244,10 +250,11 @@ export class ScoreboardService {
         const coin = hex(l.coin);
         // The original publication must have been available by launch+60s. A
         // backdated chain state, later correction or later Clear cannot join it.
-        const publications = (await db.sql.query<{ data: unknown }>(`SELECT data FROM receipt_publications WHERE kind='verdict' AND data->>'coin'=$1
+        const publications = (await db.sql.query<{ data: unknown;summary:{level:string;window:{kind:string;blockNumber:number}}|null }>(`SELECT data,summary FROM receipt_publications WHERE kind='verdict' AND coalesce(data->>'coin',summary->>'coin')=$1
           AND recorded_at<=$2 AND recorded_at<=to_timestamp($3) ORDER BY recorded_at,publication_sequence`, [coin, new Date(new Date(l.ts).getTime() + 60000), input.cut.cursor.timestampSec])).rows;
         let clear = false;
         for (const r of publications) {
+          if(r.data==null && r.summary?.window.kind==='snapshot' && r.summary.window.blockNumber<=Number(input.cut.cursor.blockNumber)) {clear=r.summary.level==='clear';break;}
           const p = PublicReceiptPayloadSchema.safeParse(r.data);
           if (!p.success || p.data.window.kind !== 'snapshot' || p.data.window.blockNumber > Number(input.cut.cursor.blockNumber)) continue;
           const v = VerdictSchema.omit({receipt:true}).safeParse(p.data.decision); if (v.success) { clear = v.data.level === 'clear'; break; }

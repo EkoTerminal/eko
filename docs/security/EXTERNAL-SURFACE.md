@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **597/597 (100.00%)** documented. Minimum: **90%**.
+Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -285,7 +285,7 @@ Measured: **597/597 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
 | `buildApp` | function | [apps/server/src/app.ts:120](../../apps/server/src/app.ts#L120) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:396](../../apps/server/src/app.ts#L396) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:401](../../apps/server/src/app.ts#L401) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |
@@ -552,9 +552,9 @@ Measured: **597/597 (100.00%)** documented. Minimum: **90%**.
 | `ScoreboardService.recordCoverage` | method | [apps/server/src/read/scoreboard.ts:84](../../apps/server/src/read/scoreboard.ts#L84) | Yes |
 | `ScoreboardService.recordRefusal` | method | [apps/server/src/read/scoreboard.ts:92](../../apps/server/src/read/scoreboard.ts#L92) | Yes |
 | `ScoreboardService.acceptOutcome` | method | [apps/server/src/read/scoreboard.ts:111](../../apps/server/src/read/scoreboard.ts#L111) | Yes |
-| `ScoreboardService.publishCohort` | method | [apps/server/src/read/scoreboard.ts:227](../../apps/server/src/read/scoreboard.ts#L227) | Yes |
-| `ScoreboardService.attachPostMortem` | method | [apps/server/src/read/scoreboard.ts:297](../../apps/server/src/read/scoreboard.ts#L297) | Yes |
-| `ScoreboardService.list` | method | [apps/server/src/read/scoreboard.ts:314](../../apps/server/src/read/scoreboard.ts#L314) | Yes |
+| `ScoreboardService.publishCohort` | method | [apps/server/src/read/scoreboard.ts:233](../../apps/server/src/read/scoreboard.ts#L233) | Yes |
+| `ScoreboardService.attachPostMortem` | method | [apps/server/src/read/scoreboard.ts:304](../../apps/server/src/read/scoreboard.ts#L304) | Yes |
+| `ScoreboardService.list` | method | [apps/server/src/read/scoreboard.ts:321](../../apps/server/src/read/scoreboard.ts#L321) | Yes |
 | `SensesReadService.constructor` | constructor | [apps/server/src/read/senses.ts:37](../../apps/server/src/read/senses.ts#L37) | Yes |
 | `SensesReadService.verdict` | method | [apps/server/src/read/senses.ts:49](../../apps/server/src/read/senses.ts#L49) | Yes |
 | `SensesReadService.card` | method | [apps/server/src/read/senses.ts:64](../../apps/server/src/read/senses.ts#L64) | Yes |
@@ -665,14 +665,15 @@ Measured: **597/597 (100.00%)** documented. Minimum: **90%**.
 | `ReceiptCommitJournal.anchor` | method | [packages/db/src/receipt-committer.ts:156](../../packages/db/src/receipt-committer.ts#L156) | Yes |
 | `ReceiptCommitJournal.unfinalized` | method | [packages/db/src/receipt-committer.ts:177](../../packages/db/src/receipt-committer.ts#L177) | Yes |
 | `ReceiptCommitJournal.anchorEvent` | method | [packages/db/src/receipt-committer.ts:187](../../packages/db/src/receipt-committer.ts#L187) | Yes |
-| `publishPrivateReceipt` | function | [packages/db/src/receipt-outbox.ts:37](../../packages/db/src/receipt-outbox.ts#L37) | Yes |
-| `publishReceipt` | function | [packages/db/src/receipt-outbox.ts:69](../../packages/db/src/receipt-outbox.ts#L69) | Yes |
-| `ReceiptOutbox.constructor` | constructor | [packages/db/src/receipt-outbox.ts:108](../../packages/db/src/receipt-outbox.ts#L108) | Yes |
-| `ReceiptOutbox.enqueue` | method | [packages/db/src/receipt-outbox.ts:116](../../packages/db/src/receipt-outbox.ts#L116) | Yes |
-| `ReceiptOutbox.recover` | method | [packages/db/src/receipt-outbox.ts:141](../../packages/db/src/receipt-outbox.ts#L141) | Yes |
-| `ReceiptOutbox.getPrivate` | method | [packages/db/src/receipt-outbox.ts:155](../../packages/db/src/receipt-outbox.ts#L155) | Yes |
-| `ReceiptOutbox.getItem` | method | [packages/db/src/receipt-outbox.ts:169](../../packages/db/src/receipt-outbox.ts#L169) | Yes |
-| `ReceiptOutbox.get` | method | [packages/db/src/receipt-outbox.ts:183](../../packages/db/src/receipt-outbox.ts#L183) | Yes |
+| `publishPrivateReceipt` | function | [packages/db/src/receipt-outbox.ts:38](../../packages/db/src/receipt-outbox.ts#L38) | Yes |
+| `validateReceiptPublication` | function | [packages/db/src/receipt-outbox.ts:49](../../packages/db/src/receipt-outbox.ts#L49) | Yes |
+| `publishReceipt` | function | [packages/db/src/receipt-outbox.ts:75](../../packages/db/src/receipt-outbox.ts#L75) | Yes |
+| `ReceiptOutbox.constructor` | constructor | [packages/db/src/receipt-outbox.ts:114](../../packages/db/src/receipt-outbox.ts#L114) | Yes |
+| `ReceiptOutbox.enqueue` | method | [packages/db/src/receipt-outbox.ts:122](../../packages/db/src/receipt-outbox.ts#L122) | Yes |
+| `ReceiptOutbox.recover` | method | [packages/db/src/receipt-outbox.ts:156](../../packages/db/src/receipt-outbox.ts#L156) | Yes |
+| `ReceiptOutbox.getPrivate` | method | [packages/db/src/receipt-outbox.ts:170](../../packages/db/src/receipt-outbox.ts#L170) | Yes |
+| `ReceiptOutbox.getItem` | method | [packages/db/src/receipt-outbox.ts:184](../../packages/db/src/receipt-outbox.ts#L184) | Yes |
+| `ReceiptOutbox.get` | method | [packages/db/src/receipt-outbox.ts:206](../../packages/db/src/receipt-outbox.ts#L206) | Yes |
 | `guardScoreHash` | function | [packages/playbooks/src/guard-scoring.ts:20](../../packages/playbooks/src/guard-scoring.ts#L20) | Yes |
 | `evaluateGuardV2` | function | [packages/playbooks/src/guard-scoring.ts:48](../../packages/playbooks/src/guard-scoring.ts#L48) | Yes |
 | `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:114](../../packages/playbooks/src/verdict.ts#L114) | Yes |

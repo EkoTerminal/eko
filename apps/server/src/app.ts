@@ -139,10 +139,15 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   const sanctions = new SanctionsService(dbh.chain);
   const sanctionsWorker = new SanctionsWorker(dbh.chain, cfg.OFAC_SDN_URL, undefined, Date.now,
     failed => logger[failed ? 'warn' : 'info']({ failed }, 'Sanctions dataset refresh'));
-  const retentionWorker = new RetentionWorker(dbh.chain, { quoteDays: cfg.RETENTION_QUOTE_TRANSFER_DAYS,
-    idleTokenDays: cfg.RETENTION_IDLE_TOKEN_DAYS, pendingPoolDays: cfg.RETENTION_PENDING_POOL_DAYS, feedDays: cfg.RETENTION_FEED_DAYS,
+  const retentionWorker = new RetentionWorker(dbh.chain, { settleHours:cfg.RETENTION_SETTLE_HOURS,rawDays:cfg.RETENTION_RAW_DAYS,ratingDays:cfg.RETENTION_RATING_DAYS,dryRun:cfg.RETENTION_DRY_RUN,
+    quoteDays: cfg.RETENTION_QUOTE_TRANSFER_DAYS,
+    idleTokenDays: cfg.RETENTION_IDLE_TOKEN_DAYS, pendingPoolDays: cfg.RETENTION_PENDING_POOL_DAYS ?? cfg.RETENTION_RAW_DAYS, feedDays: cfg.RETENTION_FEED_DAYS,
     dangerQuietDays: cfg.RETENTION_DANGER_QUIET_DAYS, quietCoinDays: cfg.RETENTION_QUIET_COIN_DAYS },
-    result => logger['failed' in result ? 'warn' : 'info']({ retention: result }, 'Chain retention pass'));
+    result => {
+      if(!('failed' in result))for(const table of result.tables ?? [])logger.info({dryRun:result.dryRun ?? false,...table},
+        `retention dry_run=${result.dryRun ?? false} table=${table.table} rows=${table.rows} estimated_bytes=${table.estimatedBytes}`);
+      logger['failed' in result ? 'warn' : 'info']({retention:result},'Chain retention pass');
+    });
 
 
 

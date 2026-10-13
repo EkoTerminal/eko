@@ -2,10 +2,10 @@ import { pgTable, bigint, bigserial, integer, text, jsonb, timestamp, primaryKey
 const publication = () => ({
   id: text('id').primaryKey(), producer: text('producer').notNull(), kind: text('kind').notNull(),
   chainId: bigint('chain_id', {mode:'number'}).notNull(), revisionId: text('revision_id').notNull(),
-  payloadHash: text('payload_hash').notNull(), canonicalPayload: text('canonical_payload').notNull(),
-  data: jsonb('data').notNull(), recordedAt: timestamp('recorded_at', {withTimezone:true}).notNull(),
+  payloadHash: text('payload_hash').notNull(), canonicalPayload: text('canonical_payload'),
+  data: jsonb('data'), recordedAt: timestamp('recorded_at', {withTimezone:true}).notNull(),
 });
-export const receiptPublications = pgTable('receipt_publications', {...publication(),publicationSequence:bigserial('publication_sequence',{mode:'bigint'}).notNull()}, t => [unique().on(t.producer,t.revisionId), index('receipt_publications_recovery').on(t.recordedAt,t.id)]);
+export const receiptPublications = pgTable('receipt_publications', {...publication(),summary:jsonb('summary'),publicationSequence:bigserial('publication_sequence',{mode:'bigint'}).notNull()}, t => [unique().on(t.producer,t.revisionId), index('receipt_publications_recovery').on(t.recordedAt,t.id)]);
 export const receiptItems = pgTable('receipt_items', {...publication(), leaf:text('leaf').notNull()}, t => [unique().on(t.producer,t.revisionId),index('receipt_items_pending').on(t.chainId,t.recordedAt,t.id)]);
 export const receiptBatches = pgTable('receipt_batches', {
   id:text('id').primaryKey(),chainId:bigint('chain_id',{mode:'number'}).notNull(),root:text('root').notNull(),leafCount:integer('leaf_count').notNull(),

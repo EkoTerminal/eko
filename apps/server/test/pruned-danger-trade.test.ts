@@ -52,7 +52,7 @@ describe('a revived coin that was Danger when its history was pruned', () => {
     await db.sql.query(`UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','"danger"') WHERE coin=$1`, [binary(coin)]);
     for (const horizon of ['1h', '24h', '7d']) await db.sql.query("INSERT INTO outcomes VALUES($1,$2,1,'rugged','{}') ON CONFLICT DO NOTHING", [binary(coin), horizon]);
     await block(db, 20, 8 * DAY);
-    expect(await runRetention(db, { quoteTokens: [], dangerQuietDays: 2, now: () => (epoch + 8 * DAY) * 1000 })).toMatchObject({ dangerCoins: 1 });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], dangerQuietDays: 2, now: () => (epoch + 8 * DAY) * 1000 })).toMatchObject({ dangerCoins: 1 });
     // It trades again and the engines re-card it.
     await block(db, 21, 8 * DAY + 3600); await swap(db, 21, 8 * DAY + 3600, newcomer); await transfer(db, 21, 8 * DAY + 3600, traders[2]!, newcomer, 5);
     expect(await worker(8 * DAY + 3700).poll()).toBeGreaterThan(0);

@@ -4,7 +4,7 @@ import type { Abi, Hex } from 'viem';
 import { canonicalize, createGuardReceiptCodec, GuardAssessmentV2Schema, GuardReceiptPayloadSchema,
   ReceiptLookupSchema, type ReceiptItem, type PublicReceiptPayload } from '@eko/shared';
 import { GuardReceiptStore, GuardSourceStore, GuardVerdictStore, ReceiptOutbox, guardManifestId,
-  publishPrivateReceipt, publishReceipt, type ReceiptCommitAnchor, type ReceiptRegistryReader } from '@eko/db';
+  publishPrivateReceipt, publishReceipt, runRetention, type ReceiptCommitAnchor, type ReceiptRegistryReader } from '@eko/db';
 import fixture from '../../../packages/shared/test/fixtures/receipts/guard-v2.json' with { type: 'json' };
 import registryAbi from '../../../packages/chain/abi/eko/ReceiptsRegistry.json' with { type: 'json' };
 import { buildApp } from '../src/app.js';
@@ -205,5 +205,21 @@ describe('081 receipt API: synthetic PGlite/logs and HTTP injection, no live evi
     }
     await db.sql.query('DELETE FROM harness_journal WHERE receipt_item_id=$1', [id]);
     expect((await get(id)).json()).toEqual(expected);
+  });
+});
+
+
+describe('retained receipt proof without the old payload',()=>{
+  it('verifies the same live anchor/root after payload removal, without inventing a reveal',async()=>{
+    const db=built.ctx.dbh.chain;
+    const old:PublicReceiptPayload={...payload('retention-api-old'),kind:'verdict',decision:{level:'clear'},window:{kind:'snapshot',blockNumber:20,blockHash:codec.hash('retention-api-block')}};
+    const next:PublicReceiptPayload={...old,receiptId:'retention-api-next',revisionId:'retention-api-next',supersedes:old.receiptId};
+    await publishReceipt(db,'engines',old);await publishReceipt(db,'engines',next);
+    const outbox=new ReceiptOutbox(db),items=[await outbox.enqueue(old.receiptId),await outbox.enqueue(next.receiptId)];
+    await anchor(items,9001);const before=(await get(old.receiptId)).json();expect(before.status).toBe('anchored');expect(before.revealed).toEqual(old);
+    await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,now:()=>Date.parse('2026-11-01T00:00:00Z')});
+    const after=(await get(old.receiptId)).json();expect(after.status).toBe('anchored');expect(after.revealed).toBeUndefined();expect(after.canonicalPayload).toBeUndefined();
+    const {revealed:_r,canonicalPayload:_c,...proof}=before;expect(after).toEqual(proof);
+    expect(codec.verifyReceiptProof(items[0]!,after.proof,after.merkleRoot)).toBe(true);
   });
 });

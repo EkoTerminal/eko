@@ -1,7 +1,7 @@
-import { attributionGap } from './attribution-coverage.js';
+import { gapFromTotals, attributionGap } from './attribution-coverage.js';
 import { loadReferenceInputs } from './reference-simulation.js';
 import { loadSellCheckReference } from './sell-check-reference.js';
-import { binary, trendingAt, type ChainDb } from '@eko/db';
+import { binary, trendingAt, readLifetime, addLifetimeSwaps, addLifetimePons, addLifetimeLiquidity, type Lifetime, packSwap, unpackSwap, type ChainDb } from '@eko/db';
 import { loadRegistry, type PonsProfileClient } from '@eko/chain';
 import { toUntrusted } from '@eko/untrusted';
 import { CONFIG_V1, RULES_VERSION, type CardSources, type HistoryView, type PriorLaunch } from '@eko/playbooks';
@@ -31,6 +31,7 @@ export interface PoolRow { id: Uint8Array; currency0: Uint8Array; currency1: Uin
 export interface EventRow { block: string; ts: Date; tx_hash: Uint8Array; log_index: number; kind: string; actor: Uint8Array | null; senders_pending?:boolean; pool_id: Uint8Array; data: Record<string, string> }
 export interface Holding { holder: Uint8Array; amount: string; block: string; holderHex?:Address }
 export interface LoadedSources extends CardSources {
+  lifetime?: Lifetime;
   blueChipHolderCount?: number;
   attributionCoverage?: Record<string,import('@eko/shared').AttributionCoverageGap>;
   referenceResults?: import('@eko/chain').ReferenceResult[];
@@ -81,12 +82,14 @@ export async function historyAt(db: ChainDb, deployer: Address, coin: Address, b
   return { launches: stats.map(r => r.data) };
 }
 /** Reads shared by every coin evaluated in one live poll (most of them at the same head block). */
+export const RETENTION_RULE_INPUTS={firstBlocks:CONFIG_V1.bundle_dump.firstBlocks,cohortSec:CONFIG_V1.bundle_dump.cohortSec};
 export interface SourceMemo { ranks: Map<string, Promise<Map<Address, number>>> }
 async function readSources(db: ChainDb, coin: Address, block: number, client?: PonsProfileClient, clock?:ClockCache,cache?:ReplayCache,retrospective=false,memo?:SourceMemo): Promise<LoadedSources | null> {
   // A coin whose raw history retention dropped is evaluated again only after it trades or moves again; its earlier
   // checkpoints and quiet period cannot be rebuilt from what is left (docs/operations/retention.md).
   const prune=await historyPrune(db,coin);
-  if(prune && (block<=prune.watermark || !(await revivedBy(db,coin,prune,block))))return unavailable(db,coin,block,'history_pruned');
+  const savedLifetime=await readLifetime(db,binary(coin));
+  if(prune && (block<=prune.watermark || !(savedLifetime && retrospective) && !(await revivedBy(db,coin,prune,block))))return unavailable(db,coin,block,'history_pruned');
   const token = cache ? cache.tokens.get(coin) : (await db.sql.query<TokenRow>('SELECT * FROM tokens WHERE address=$1 AND first_block<=$2', [binary(coin), block])).rows[0];
   if(token && Number(token.first_block)>block)return unavailable(db,coin,block,'launch_after_checkpoint');
   if (!token?.deployer || token.name == null || token.symbol == null) return unavailable(db,coin,block,'missing_launch_identity');
@@ -118,17 +121,34 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   const undelivered=(r:SwapRow)=>{const b=buyerOf(r);return b!=null && poolHolders.has(rowHex(b));};
   for(let i=0;i<swapEnd && early(swaps[i]);i++){const r=swaps[i];if(Number(r.block)<launchBlock)continue;
     if(r.side===1){if(!undelivered(r))earlyRows.push(r);}else if(r.trader){const w=rowHex(r.trader);earlySold.set(w,(earlySold.get(w) ?? 0)+Number(r.amount_coin));}}
-  const earlyWallets=[...new Set(earlyRows.map(buyerOf).filter((w):w is Uint8Array=>w!=null).map(rowHex))];
+  const earlyWallets=[...new Set([...Object.keys(savedLifetime?.early ?? {}) as Address[],...earlyRows.map(buyerOf).filter((w):w is Uint8Array=>w!=null).map(rowHex)])];
   const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...[...poolHolders].map(w=>w as Address),...earlyWallets];
   if(!cache){holdings=await holdingsAt(db,coin,block);previousHoldings=priorBlock ? await holdingsAt(db,coin,Number(priorBlock.number)) : [];}
   const holderView=cache ? await cache.holderViewAt(coin,block,wallets,'now',poolHolders) : (()=>{const a=makeHolders(holdings);return {count:a.count,top10:a.top10(),burned:a.burned,inventory:a.inventory,amounts:new Map(wallets.map(wallet=>[wallet,a.amount(wallet)])),top:a.top(12,wallet=>poolHolders.has(wallet))};})();
   const previousCount=priorBlock ? cache ? (await cache.holderViewAt(coin,Number(priorBlock.number),[],'previous')).count : makeHolders(previousHoldings).count : 0;
   const scratch=cache ? undefined : new TradeAggregate(swaps);
   const trade=cache ? await cache.tradeAt(coin,block,asOfSec,exSet) : {...scratch!.advance(swapEnd,asOfSec),bought:scratch!.boughtFor(exSet)};
+  const lifetime=savedLifetime ? structuredClone(savedLifetime) : undefined;
+  if(lifetime)addLifetimeSwaps(lifetime,swaps.slice(0,swapEnd).map(r=>packSwap(r as unknown as Record<string,unknown>)),{
+    deployer,firstBlock:launchBlock,createdSec:createdAtSec,pools:poolHolders,
+    firstBlocks:CONFIG_V1.bundle_dump.firstBlocks,cohortSec:CONFIG_V1.bundle_dump.cohortSec});
+  if(lifetime) {
+    addLifetimeLiquidity(lifetime,events,token.launchpad ?? 'other',deployer);
+    trade.count=lifetime.count; trade.usdComplete=lifetime.usdComplete; trade.hasEth=lifetime.hasEth;
+    trade.curveVolume=lifetime.curveVolume; trade.curveProgress=Math.max(0,lifetime.curveNet);
+    trade.attribution=gapFromTotals({totalCount:lifetime.count,unattributedCount:lifetime.missing,totalVolumeUsd:lifetime.volume,
+      unattributedVolumeUsd:lifetime.missingVolume,unknownVolumeCount:lifetime.unknown},'launch_to_checkpoint');
+    const last=lifetime.last ? prepareSwap(unpackSwap(lifetime.last)) : undefined;
+    if(last && (!trade.last || Number(last.block)>=Number(trade.last.block)))trade.last=last;
+    if(lifetime.lastPriced)trade.lastPriced=prepareSwap(unpackSwap(lifetime.lastPriced));
+    if(last && last.sec!<=asOfSec-300 && !trade.previous5m)trade.previous5m=last;
+    if(last && last.sec!<=asOfSec-3600 && !trade.previous1h)trade.previous1h=last;
+  }
   const history=await historyAt(db,deployer,coin,block,cache);
   const s:LoadedSources={coin,deployer,asOfBlock:block,asOfSec,createdAtBlock:Number(token.first_block),createdAtSec,
     launchpad:token.launchpad ?? 'other',name:toUntrusted(token.name,120).text,symbol:toUntrusted(token.symbol,32).text,
     tokenText:[{ref:`${coin}:name`,raw:token.name},{ref:`${coin}:symbol`,raw:token.symbol}],token,swaps,holdings,previousHoldings,events,history,trade,
+    ...(lifetime ? {lifetime}:{}),
     holderSummary:{count:holderView.count,previousCount,top10:holderView.top10,dev:!isSink(deployer,coin) && (!token.curve || deployer!==rowHex(token.curve)) ? Number(holderView.amounts.get(deployer) ?? 0n) : 0,burned:holderView.burned,inventory:holderView.inventory},
     blueChipHolderCount:holderView.count-[...poolHolders].filter(w=>!isSink(w as Address,coin) && (!token.curve || w!==rowHex(token.curve)) && (holderView.amounts.get(w as Address) ?? 0n)>0n).length,
     poolRefs:[],exemptionWallets:[...exSet],usdComplete:trade.usdComplete,sectionBlocks:{identity:Number(token.first_block)},...(priorBlock ? {previousHolderBlock:Number(priorBlock.number)} : {})};
@@ -138,6 +158,12 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
       const progress=cachedRows ? cachedRows.progress : curveProgress((await db.sql.query<PonsEventRow>(
         "SELECT block,kind,data FROM pons_events WHERE token=$1 AND block<=$2 AND kind IN ('launch','trade') ORDER BY block,log_index,tx_hash",[binary(coin),block])).rows,Number(token.first_block));
       s.curvePct=curveProgressAt(progress,block);
+      if(lifetime) {
+        const raw=(await db.sql.query<PonsEventRow>("SELECT block,kind,data FROM pons_events WHERE token=$1 AND block<=$2 AND kind IN ('launch','trade') ORDER BY block,log_index,tx_hash",[binary(coin),block])).rows;
+        addLifetimePons(lifetime,raw,Number(token.first_block));
+        const curve=lifetime.curve;
+        s.curvePct=curve.valid && curve.threshold ? Math.min(100,Number(BigInt(curve.reserve)*10000n/BigInt(curve.threshold))/100) : undefined;
+      }
     }
   }
   // Full historical arrays are materialized only for horizon outcomes/debug consumers.
@@ -253,7 +279,10 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   for (const e of events) { const key = rowHex(e.pool_id), list = poolEvents.get(key); if (list) list.push(e); else poolEvents.set(key, [e]); }
   for (const p of poolRows) {
     const pe = poolEvents.get(rowHex(p.id)) ?? [];
-    const owned = new Map<string, { actor: Address; amount: bigint; refs: EvidenceRef[] }>();
+    const initial=savedLifetime?.liquidity?.[rowHex(p.id)];
+    if(initial)liquidityOf.set(rowHex(p.id),{events:initial.events,first:initial.first as Address|undefined,lastAdd:initial.lastAdd,
+      wallets:new Map(Object.entries(initial.wallets).map(([w,v])=>[w as Address,{held:BigInt(v.held),peak:BigInt(v.peak),removals:v.removals,lastRemoval:v.lastRemoval}]))});
+    const owned = new Map<string, { actor: Address; amount: bigint; refs: EvidenceRef[] }>(Object.entries(initial?.positions ?? {}).map(([k,v])=>[k,{actor:v.actor as Address,amount:BigInt(v.amount),refs:v.refs}]));
     for (const e of pe) {
       if (!['Mint', 'Burn', 'ModifyLiquidity'].includes(e.kind)) continue;
       if(e.actor==null || e.senders_pending)continue;
@@ -299,7 +328,8 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   // recent). Anyone can open another pool with any hook for any coin, so only this pool's hook is the coin's.
   const perPool=new Map<string,number>(),count=(rows:readonly SwapRow[])=>{for(const r of rows)if(r.venue!=='pons_curve')perPool.set(r.poolHex!,(perPool.get(r.poolHex!) ?? 0)+1);};
   count(recentDay(swaps,swapEnd,asOfSec));
-  if(!perPool.size)for(let i=0;i<swapEnd;i++)if(swaps[i].venue!=='pons_curve')perPool.set(swaps[i].poolHex!,(perPool.get(swaps[i].poolHex!) ?? 0)+1);
+  if(!perPool.size) { if(lifetime)for(const [id,n] of Object.entries(lifetime.pools))perPool.set(id,n);
+    else for(let i=0;i<swapEnd;i++)if(swaps[i].venue!=='pons_curve')perPool.set(swaps[i].poolHex!,(perPool.get(swaps[i].poolHex!) ?? 0)+1); }
   const busiest=[...perPool].sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0]))[0]?.[0],main=poolRows.find(p=>rowHex(p.id)===busiest) ?? (poolRows.length===1 ? poolRows[0] : undefined);
   if(main) {
     const hooks=main.hooks ? rowHex(main.hooks) : null;
@@ -345,6 +375,9 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     const priorCoins = history.launches.map(p => p.coin);
     if (priorCoins.length) s.liquidity.priorRemovals = (await db.sql.query<EventRow>(`SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id JOIN tokens t ON t.address=p.currency0 OR t.address=p.currency1
       WHERE t.deployer=$1 AND t.address<>$2 AND e.actor=$1 AND e.block<=$3 AND (e.kind='Burn' OR (e.kind='ModifyLiquidity' AND (e.data->>'liquidityDelta')::numeric<0)) ORDER BY e.block,e.log_index`, [binary(deployer), binary(coin), block])).rows.map(e => evidence(e, 'Prior liquidity removal'));
+    const priorLifetime=(await db.sql.query<{data:import('@eko/db').Lifetime}>(`SELECT l.data FROM coin_lifetime l JOIN tokens t ON t.address=l.coin WHERE t.deployer=$1 AND t.address<>$2`,[binary(deployer),binary(coin)])).rows;
+    s.liquidity.priorRemovalCount=s.liquidity.priorRemovals.length+priorLifetime.reduce((n,r)=>n+((r.data.priorRemovalLastBlock ?? Infinity)<=block ? r.data.priorRemovalCount ?? 0 : (r.data.priorRemovals ?? []).filter(e=>e.block<=block).length),0);
+    s.liquidity.priorRemovals.push(...priorLifetime.flatMap(r=>(r.data.priorRemovals ?? []).filter(e=>e.block<=block)));
     s.sectionBlocks.liquidity = block;
   }
   if (token.graduated_block != null && Number(token.graduated_block) <= block) {
@@ -356,13 +389,22 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     const first=candidate && Number(candidate.block)<=block ? candidate : undefined;
     if (gt && first) {
       const atSec = seconds(gt.ts), insiders = new Set([deployer, ...exemptions.map(e => rowHex(e.wallet))]);
-      const held=cache ? [...(await cache.holderViewAt(coin,gb-1,[...insiders],'graduation')).amounts].sort(([a],[b])=>a.localeCompare(b)).reduce((n,[,amount])=>n+Number(amount),0) : (await holdingsAt(db,coin,gb-1)).filter(r=>insiders.has(rowHex(r.holder))).reduce((n,r)=>n+Number(r.amount),0);
-      const before=swaps[Math.min(postBlock,swapEnd)-1];
+      const retainedOpening=(await db.sql.query<{graduation_holdings:Record<string,string>|null}>('SELECT graduation_holdings FROM coin_lifetime WHERE coin=$1',[binary(coin)])).rows[0]?.graduation_holdings;
+      const held=retainedOpening ? [...insiders].reduce((n,w)=>n+Number(retainedOpening[w.slice(2)] ?? 0),0) : cache ? [...(await cache.holderViewAt(coin,gb-1,[...insiders],'graduation')).amounts].sort(([a],[b])=>a.localeCompare(b)).reduce((n,[,amount])=>n+Number(amount),0) : (await holdingsAt(db,coin,gb-1)).filter(r=>insiders.has(rowHex(r.holder))).reduce((n,r)=>n+Number(r.amount),0);
+      const before=swaps[Math.min(postBlock,swapEnd)-1] ?? (savedLifetime?.last && Number(savedLifetime.last.block)<gb ? prepareSwap(unpackSwap(savedLifetime.last)) : undefined);
       s.graduation = { atSec, tx: evidence(first,'Graduation marker: first indexed pool swap'), insiderSells: held > 0 ? timeWindow(swaps,atSec-0.001,atSec+300,swapEnd,trade.monotonic).filter(r=>r.side===-1 && insiders.has(r.traderHex!) && r.usd!=null).map(r => ({
         atSec: r.sec!, soldShare: Number(r.amount_coin) / held,
         priceImpactShare: before?.usd != null ? Math.max(0,1 - (r.usd! / Number(r.amount_coin)) / (before.usd / Number(before.amount_coin))) : 0,
         evidence: [evidence(r,'Insider sell after graduation')] })) : [] };
     }
+  }
+  if(lifetime?.graduation && token.graduated_block!=null) {
+    const g=lifetime.graduation,insiders=new Set([deployer,...exSet]);
+    const opening=(await db.sql.query<{graduation_holdings:Record<string,string>|null}>('SELECT graduation_holdings FROM coin_lifetime WHERE coin=$1',[binary(coin)])).rows[0]?.graduation_holdings;
+    const held=opening ? [...insiders].reduce((n,w)=>n+Number(opening[w.slice(2)] ?? 0),0) : (await holdingsAt(db,coin,g.block-1)).filter(r=>insiders.has(rowHex(r.holder))).reduce((n,r)=>n+Number(r.amount),0);
+    s.graduation={atSec:g.atSec,tx:evidence(unpackSwap(g.first),'Graduation marker: first indexed pool swap'),insiderSells:held>0 ? Object.entries(g.actors).filter(([w])=>insiders.has(w as Address)).map(([,a])=>({
+      atSec:a.atSec,soldShare:a.amount/held,priceImpactShare:g.before?.usd!=null ? Math.max(0,1-a.minPrice/(g.before.usd/Number(g.before.amount_coin))) : 0,
+      evidence:a.refs.map(r=>evidence(unpackSwap(r),'Insider sell after graduation'))})) : []};
   }
   // TODO(spec): trend onset is not indexed; use the first priced trade in the preceding hourly window.
   // Retention saves this list before deleting swaps it reads (trending_snapshots), so it survives pruned coins.
@@ -371,19 +413,43 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   s.trending=cache ? await cache.trending(s.createdAtBlock,trending) : await trending();
   const ranked=cache ? await cache.ranked(block,asOfSec) : memo ? await sharedRanks(db,memo,block,asOfSec) : await liveRanks(db,block,asOfSec);
   const rank=ranked.get(coin);if(rank!=null)s.trendingRank=rank;
-  const lifetime=trade.attribution,hour=attributionGap(trade.recent,'trailing_1h');
-  const liquidityMissing=events.filter(e=>e.actor==null || e.senders_pending).length;
+  const lifetimeGap=trade.attribution,hour=attributionGap(trade.recent,'trailing_1h');
+  const compactedLiquidity=Object.values(savedLifetime?.liquidity ?? {}).reduce((v,p)=>({events:v.events+p.events,missing:v.missing+p.missing}),{events:0,missing:0});
+  const liquidityMissing=compactedLiquidity.missing+events.filter(e=>e.actor==null || e.senders_pending).length;
   const deferred=Number((await db.sql.query<{n:string}>(`SELECT count(*) AS n FROM pending_pool_events e JOIN pools p ON p.id=e.emitter
     WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block<=$2`,[binary(coin),block])).rows[0].n);
   const liquidityGap:import('@eko/shared').AttributionCoverageGap={reason:'unattributed_liquidity',window:'pool_creation_to_checkpoint',status:liquidityMissing || deferred ? 'incomplete':'complete',
-    threshold:0,totalCount:events.length+deferred,unattributedCount:liquidityMissing+deferred,countShare:events.length+deferred ? (liquidityMissing+deferred)/(events.length+deferred):0,
+    threshold:0,totalCount:events.length+compactedLiquidity.events+deferred,unattributedCount:liquidityMissing+deferred,countShare:events.length+compactedLiquidity.events+deferred ? (liquidityMissing+deferred)/(events.length+compactedLiquidity.events+deferred):0,
     totalVolumeUsd:null,unattributedVolumeUsd:null,volumeShare:null,unknownVolumeCount:liquidityMissing+deferred};
-  let graduationGap=lifetime;
-  if(s.graduation)graduationGap=attributionGap(timeWindow(swaps,s.graduation.atSec-0.001,s.graduation.atSec+300,swapEnd,trade.monotonic),'graduation_to_5m');
-  const coverage={holder_concentration:lifetime,insider_sells:graduationGap,deployer_sells:lifetime,bundles:lifetime,fresh_wallet_share:lifetime,
-    wallet_flow:hour,wash_trading:hour,exempt_insiders:lifetime,liquidity_ownership:liquidityGap};
+  let graduationGap=lifetimeGap;
+  if(lifetime?.graduation) {const g=lifetime.graduation;graduationGap=gapFromTotals({totalCount:g.count,unattributedCount:g.missing,totalVolumeUsd:g.volume,unattributedVolumeUsd:g.missingVolume,unknownVolumeCount:g.unknown},'graduation_to_5m');}
+  else if(s.graduation)graduationGap=attributionGap(timeWindow(swaps,s.graduation.atSec-0.001,s.graduation.atSec+300,swapEnd,trade.monotonic),'graduation_to_5m');
+  const coverage={holder_concentration:lifetimeGap,insider_sells:graduationGap,deployer_sells:lifetimeGap,bundles:lifetimeGap,fresh_wallet_share:lifetimeGap,
+    wallet_flow:hour,wash_trading:hour,exempt_insiders:lifetimeGap,liquidity_ownership:liquidityGap};
+  if(lifetime && s.supply && s.supply.total>0n) {
+    const total=Number(s.supply.total),buyerSet=new Set(lifetime.buyers),top=holderView.top.slice(0,10);
+    if(!lifetime.unknownBuyers) {
+      const largest=top.find(h=>h.wallet!==deployer),transferred=top.filter(h=>h.wallet!==deployer && !buyerSet.has(h.wallet));
+      s.holders={top10Share:top.reduce((n,h)=>n+h.amount,0)/total,largestShare:(largest?.amount ?? 0)/total,largest:largest?.wallet ?? null,
+        transferredShare:transferred.reduce((n,h)=>n+h.amount,0)/total,transferredWallets:transferred.length,evidence:transferred.map(h=>({kind:'address',ref:h.wallet,label:'Holder that never bought'}))};
+    }
+    const dev=lifetime.devByActor?.[deployer] ?? lifetime.dev;
+    if(dev.complete)s.dev={heldShare:s.holderSummary.dev/total,cashInUsd:dev.cashIn,cashOutUsd:dev.cashOut,soldShare:dev.sold/total,
+      firstSellSec:dev.sells.length ? Date.parse(dev.sells[0].ts)/1000-createdAtSec : null,evidence:dev.sells.map(r=>evidence(unpackSwap(r),'Deployer sell'))};
+    else delete s.dev;
+    if(lifetime.earlyComplete) {
+      const early=Object.entries(lifetime.early),othersNet=lifetime.net-early.reduce((n,[,e])=>n+e.gross-e.sold,0);
+      s.earlyBuyers=early.map(([wallet,e])=>({wallet:wallet as Address,funder:(e.first.trader ?? wallet) as Address,
+        fundedAtSec:Date.parse(e.first.ts)/1000,buyAtSec:Date.parse(e.first.ts)/1000,buyBlock:Number(e.first.block),
+        boughtShare:Math.max(0,e.gross-e.soldEarly)/total,heldShare:Number(holderView.amounts.get(wallet as Address) ?? 0n)/total,
+        deployer:e.deployer || wallet===deployer || (e.funders ?? []).includes(deployer),sellingIntoNetInflow:e.sold>=e.gross*0.5 && othersNet>0,evidence:[evidence(unpackSwap(e.first),'Early-block buy')]}));
+    } else delete s.earlyBuyers;
+    if(s.pons)s.pons.boughtShare=[...exSet].reduce((n,w)=>n+(lifetime.exemptBought[w] ?? 0),0)/total;
+    if(s.runUp)s.runUp.outShare=Math.max(0,lifetime.net)/total;
+    if(lifetime.usdComplete && s.curve) { s.curve.volumeUsd=lifetime.curveVolume;s.curve.progressUsd=Math.max(0,lifetime.curveNet); }
+  }
   s.attributionCoverage=coverage;
-  if(prune) {
+  if(prune && !savedLifetime) {
     // Checks over the coin's whole life or early history lost their raw rows. Holdings stay exact (balances and
     // baselines) and the trailing-hour checks read only new activity, so those are still measured.
     if(prune.swaps)for(const key of ['deployer_sells','bundles','fresh_wallet_share','exempt_insiders'] as const)coverage[key]=prunedGap(prune.swaps,swapEnd);
@@ -416,6 +482,13 @@ function sharedRanks(db:ChainDb,memo:SourceMemo,block:number,sec:number) {
   return found;
 }
 export async function loadSources(db:ChainDb,coin:Address,block:number,client?:PonsProfileClient,clock?:ClockCache,cache?:ReplayCache,retrospective=false,memo?:SourceMemo) {
-  try {return await readSources(db,coin,block,client,clock,cache,retrospective,memo);}
+  try {
+    const revision=async()=> (await db.sql.query<{revision:string}>('SELECT revision::text FROM coin_lifetime WHERE coin=$1',[binary(coin)])).rows[0]?.revision ?? 'absent';
+    for(let attempt=0;attempt<2;attempt++) {
+      const before=await revision(),sources=await readSources(db,coin,block,client,clock,cache,retrospective,memo);
+      if(before===await revision())return sources;
+    }
+    return unavailable(db,coin,block,'retention_in_progress');
+  }
   catch(error){await unavailable(db,coin,block,'source_load_failed');throw error;}
 }

@@ -56,8 +56,8 @@ async function card(db: ChainDb, coin: `0x${string}`, level: string) {
   // A Danger card names its Danger playbooks (one listed twice, and a Monitor one that is not recorded).
   const playbooks = level === 'danger' ? [{ id: 'honeypot', level: 'danger' }, { id: 'wash_to_trend', level: 'monitor' }, { id: 'bundle_dump', level: 'danger' }, { id: 'honeypot', level: 'danger' }] : [];
   const data = JSON.stringify({ verdict: { level, playbooks } });
-  await db.sql.query('INSERT INTO coin_cards VALUES($1,$2,1,$3,$4,$5)', [`card:${coin}`, binary(coin), 'sample-hash', data, '1.0.0']);
-  await db.sql.query('INSERT INTO coin_card_latest VALUES($1,$2,1,$3) ON CONFLICT(coin) DO UPDATE SET data=excluded.data', [binary(coin), `card:${coin}`, data]);
+  await db.sql.query('INSERT INTO coin_cards VALUES($1,$2,$3,$4,$5,$6)', [`card:${coin}`, binary(coin), block, 'sample-hash', data, '1.0.0']);
+  await db.sql.query('INSERT INTO coin_card_latest VALUES($1,$2,$3,$4) ON CONFLICT(coin) DO UPDATE SET data=excluded.data', [binary(coin), `card:${coin}`, block, data]);
 }
 async function outcomes(db: ChainDb, coin: `0x${string}`, horizons = ['1h', '24h', '7d']) {
   for (const horizon of horizons) await db.sql.query("INSERT INTO outcomes VALUES($1,$2,1,'rugged','{}')", [binary(coin), horizon]);
@@ -118,7 +118,7 @@ describe('per-coin history retention', () => {
     const summaries = await kept(db);
     const trending = await trendingAt(db, blockOf(0.01), (at(0.01).getTime() / 1000) - 3600);
     expect(trending.map(r => r.coin)).toContain(coins.dead);
-    const result = await runRetention(db, { quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, batchRows: 2, now });
+    const result = await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, batchRows: 2, now });
     expect(result).toMatchObject({ finished: true, dangerCoins: 1, quietCoins: 2 });
     // Dead for 37 days: transfers rolled into baselines, liquidity, Pons and swaps gone, except the deployer's removal.
     expect(await counts(db, coins.dead)).toEqual({ transfers: 0, swaps: 0, liquidity: 1, pons: 0, bars: before.dead.bars });
@@ -149,25 +149,25 @@ describe('per-coin history retention', () => {
     expect(result.trendingSnapshots).toBeGreaterThan(0);
     expect(await trendingAt(db, blockOf(0.01), (at(0.01).getTime() / 1000) - 3600)).toEqual(trending);
     // Nothing is left to do on the next pass.
-    expect(await runRetention(db, { quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, now })).toMatchObject({ finished: true, dangerCoins: 0, quietCoins: 0,
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, now })).toMatchObject({ finished: true, dangerCoins: 0, quietCoins: 0,
       historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0 });
     // A Danger rating survives a later prune made under a weaker card, and Danger playbooks accumulate.
     await db.sql.query(`UPDATE coin_card_latest SET data='{"verdict":{"level":"monitor","playbooks":[{"id":"fee_trap_pool","level":"danger"}]}}' WHERE coin=$1`, [binary(coins.danger)]);
     await pons(db, blockOf(37), coins.danger, 'trade');
-    await runRetention(db, { quoteTokens: [weth], quietCoinDays: 8, now: () => epoch + 46 * DAY });
+    await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], quietCoinDays: 8, now: () => epoch + 46 * DAY });
     expect(await counts(db, coins.danger)).toMatchObject({ pons: 0 });
     expect(await prune(db, coins.danger)).toMatchObject({ rule: 'danger_quiet', verdict_level: 'danger', danger_playbooks: ['bundle_dump', 'fee_trap_pool', 'honeypot'] });
   });
 
   it('stops at its time budget and finishes over later passes with the same result', async () => {
     const full = await fixture();
-    await runRetention(full, { quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, now });
+    await runRetention(full, { dryRun: false, pauseMs: 0, quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, now });
     const expected = await Promise.all(Object.values(coins).map(c => counts(full, c)));
     const db = await fixture();
     let clock = now(), passes = 0;
     for (;;) {
       passes++;
-      const result = await runRetention(db, { quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, batchRows: 1, budgetMs: 10, now: () => (clock += 1) });
+      const result = await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], dangerQuietDays: 2, quietCoinDays: 8, batchRows: 1, budgetMs: 10, now: () => (clock += 1) });
       clock = now();
       if (result.finished) break;
       expect(passes).toBeLessThan(200);
@@ -194,13 +194,13 @@ describe('per-coin history retention', () => {
 
   it('keeps tracking a revived coin, refuses an eight-day window inside the engines window, and is off unless configured', async () => {
     const db = await fixture();
-    expect(await runRetention(db, { quoteTokens: [weth], now })).toMatchObject({ dangerCoins: 0, quietCoins: 0, historyTransfers: 0 });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], now })).toMatchObject({ dangerCoins: 0, quietCoins: 0, historyTransfers: 0 });
     expect((await db.sql.query('SELECT 1 FROM history_prunes')).rows).toHaveLength(0);
-    await expect(runRetention(db, { quoteTokens: [weth], quietCoinDays: 7, now })).rejects.toThrow('idle window');
-    await expect(runRetention(db, { quoteTokens: [weth], dangerQuietDays: 0, now })).rejects.toThrow('quiet day');
+    await expect(runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], quietCoinDays: 7, now })).rejects.toThrow('idle window');
+    await expect(runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], dangerQuietDays: 0, now })).rejects.toThrow('quiet day');
     // The API keeps the read models current; buyers and the last trade survive the swaps they came from.
     await refreshReads(db);
-    await runRetention(db, { quoteTokens: [weth], quietCoinDays: 8, now });
+    await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], quietCoinDays: 8, now });
     await refreshReads(db);
     const summary = (await db.sql.query<{ buyers: string; activity: Date }>('SELECT buyers::text,activity FROM read_coins WHERE coin=$1', [binary(coins.dead)])).rows[0]!;
     expect(summary).toEqual({ buyers: '2', activity: at(3) });
@@ -209,7 +209,125 @@ describe('per-coin history retention', () => {
     await swap(db, n, 40.5, coins.dead, address(0x99), 1); await transfer(db, n, 40.5, coins.dead, holders[2]!, address(0x99), 5);
     await refreshReads(db);
     expect((await db.sql.query('SELECT buyers::text,activity FROM read_coins WHERE coin=$1', [binary(coins.dead)])).rows[0]).toEqual({ buyers: '3', activity: at(40.5) });
-    expect(await runRetention(db, { quoteTokens: [weth], quietCoinDays: 8, now: () => epoch + 41 * DAY })).toMatchObject({ quietCoins: 0 });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], quietCoinDays: 8, now: () => epoch + 41 * DAY })).toMatchObject({ quietCoins: 0 });
     expect(await counts(db, coins.dead)).toMatchObject({ swaps: 1, transfers: 1 });
+  });
+});
+
+describe('determination retention',()=>{
+  it('settles rated coins and caps active coins while preserving their cards, balances and read projections',async()=>{
+    const db=await fixture();await refreshReads(db);
+    const before=await kept(db),active=await counts(db,coins.active);
+    const result=await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,batchRows:2,now});
+    expect(result.historyTransfers).toBeGreaterThan(0);expect(result.historySwaps).toBeGreaterThan(0);
+    expect(await counts(db,coins.dead)).toMatchObject({transfers:0,swaps:0,liquidity:0,pons:0});
+    expect((await counts(db,coins.active)).transfers).toBeLessThan(active.transfers);
+    await db.tx(tx=>rebuildBalances(tx));await refreshReads(db);
+    expect(await kept(db)).toEqual(before);
+    const state=(await db.sql.query<{data:{count:number;buyers:string[];curveVolume:number}}>('SELECT data FROM coin_lifetime WHERE coin=$1',[binary(coins.dead)])).rows[0]!.data;
+    expect(state.count).toBe(5);expect(state.buyers).toHaveLength(2);
+    expect(await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now})).toMatchObject({historyTransfers:0,historySwaps:0,historyLiquidity:0,historyPons:0});
+  });
+  it('defaults to a read-only report and does not create snapshots, baselines or deletion invalidations',async()=>{
+    const db=await fixture(),tables=['tokens','swaps','token_transfers','liquidity_events','pons_events','transfer_baselines','history_prunes','coin_lifetime','trending_snapshots','read_dirty','flow_dirty','engine_activity_changes'];
+    const snapshot=()=>Promise.all(tables.map(t=>table(db,`SELECT * FROM ${t} ORDER BY 1,2`)));
+    const before=await snapshot();
+    const report=await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,ratingDays:7,now});
+    expect(report.dryRun).toBe(true);expect(report.tables?.find(t=>t.table==='token_transfers')?.rows).toBeGreaterThan(0);
+    expect(report.tables?.find(t=>t.table==='swaps')?.estimatedBytes).toBeGreaterThan(0);
+    expect(await snapshot()).toEqual(before);
+  });
+  it('keeps ordered swap evidence for 28 days and leaves undecided past horizons and pending attribution alone',async()=>{
+    const db=await fixture(),pending=await counts(db,coins.pending),unlabeled=await counts(db,coins.unlabeled);
+    await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now});
+    expect((await counts(db,coins.calm)).swaps).toBe(5);
+    expect(await counts(db,coins.pending)).toEqual(pending);expect(await counts(db,coins.unlabeled)).toEqual(unlabeled);
+    expect((await counts(db,coins.calm)).transfers).toBe(0);
+  });
+});
+
+describe('rating record boundaries',()=>{
+  it('keeps latest versions, first/correction verdicts and FK targets, and compacts old matches and unlabelled dependencies',async()=>{
+    const db=await fixture(),coin=coins.dead;
+    const {publishReceipt}=await import('../src/index.js');
+    const {createGuardReceiptCodec}=await import('@eko/shared');
+    const {concat,encodeAbiParameters,keccak256,stringToHex}=await import('viem');
+    const codec=createGuardReceiptCodec({concat,encodeAbiParameters,keccak256,stringToHex}),input={fixture:true};
+    await blockAt(db,2);
+    const versions=[['retention-first',1],['retention-old',2],['retention-target',1501],['retention-correction',2001],['retention-latest',3001]] as const;
+    for(const [id,n] of versions) {
+      await db.sql.query('INSERT INTO verdicts VALUES($1,$2,$3,$4,$5,$6)',[id,binary(coin),n,'1.0.0',id,{level:id==='retention-old' ? 'danger':'clear'}]);
+      await db.sql.query('INSERT INTO verdict_events VALUES($1,$2,$3,$4,$5)',[`${id}:created`,id,'created',n,{}]);
+      await publishReceipt(db,'engines',{schemaVersion:'public-receipt-1',canonicalization:'jcs-rfc8785/v1',receiptId:id,revisionId:id,kind:'verdict',chainId:4663,coin,
+        recordedAt:at(3).toISOString(),modelIds:[],personaSetVersion:null,cardSchemaVersion:'fixture-card',rulesVersion:'1.0.0',outputSchemaVersion:'verdict-1',
+        snapshotHash:codec.hash(input),deterministicInput:input,decision:{level:'clear'},window:{kind:'snapshot',blockNumber:n,blockHash:hash(n)},supersedes:null,reorgOf:null});
+    }
+    await db.sql.query("INSERT INTO verdict_events VALUES('retention-correction:event','retention-correction','corrected',2001,'{}')");
+    for(const [id,n] of [['retention-card-old',2],['retention-card-current',3001]] as const)await db.sql.query('INSERT INTO coin_cards VALUES($1,$2,$3,$4,$5,$6)',[id,binary(coin),n,id,{verdict:{level:'clear'}},'1.0.0']);
+    await db.sql.query("UPDATE coin_card_latest SET card_id='retention-card-current',as_of_block=3001 WHERE coin=$1",[binary(coin)]);
+    for(const [id,n,verdict] of [[hash(900),2,'retention-old'],[hash(901),3001,'retention-target']] as const)await db.sql.query("INSERT INTO guard_shadow_runs(id,coin,block,legacy_verdict_id,status,data,recorded_at) VALUES($1,$2,$3,$4,'missing_cursor','{}',$5)",[id,coin,n,verdict,at(3)]);
+    for(const [n,id,level] of [[2,'honeypot','danger'],[3001,'wash_to_trend','monitor']] as const)await db.sql.query('INSERT INTO playbook_matches VALUES($1,$2,$3,$4,$5)',[binary(coin),n,'1.0.0',id,{id,level,confidence:1,evidence:[]}]);
+    for(const id of ['retention-unlabelled','retention-labelled']) {
+      await db.sql.query('INSERT INTO wallet_fingerprint_runs VALUES($1,$2,2,$3,$4,$5,$6,0.5)',[id,binary(holders[id.endsWith('unlabelled') ? 0:1]!),binary(hash(2)),'fixture-model',id,{}]);
+      await db.sql.query('INSERT INTO wallet_fingerprint_dependencies VALUES($1,2,$2)',[id,binary(hash(2))]);
+    }
+    await db.sql.query("INSERT INTO wallet_labels(id,address,label,confidence,source,features,model_version,valid_from_block) VALUES('retention-label',$1,'likely_agent',0.5,'fingerprint','{}','fixture-model',2)",[binary(holders[1]!)]);
+    await db.sql.query("INSERT INTO wallet_label_fingerprint_dependencies VALUES('retention-label','retention-labelled')");
+    const before=(await db.sql.query('SELECT * FROM verdicts WHERE coin=$1 ORDER BY id',[binary(coin)])).rows;
+    const dry=await runRetention(db,{quoteTokens:[],ratingDays:7,now});
+    expect(dry.tables?.find(t=>t.table==='coin_cards')?.rows).toBeGreaterThan(0);
+    expect(dry.tables?.find(t=>t.table==='verdicts')?.rows).toBe(1);
+    expect(dry.tables?.find(t=>t.table==='verdict_events')?.rows).toBe(1);
+    expect((await db.sql.query('SELECT * FROM verdicts WHERE coin=$1 ORDER BY id',[binary(coin)])).rows).toEqual(before);
+    await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,batchRows:1,now});
+    const ids=(await db.sql.query<{id:string}>('SELECT id FROM verdicts WHERE coin=$1 ORDER BY id',[binary(coin)])).rows.map(r=>r.id);
+    expect(ids).toEqual(['retention-correction','retention-first','retention-latest','retention-target']);
+    expect((await db.sql.query('SELECT coin FROM read_blue_chip_danger WHERE coin=$1',[binary(coin)])).rows).toHaveLength(1);
+    expect((await db.sql.query('SELECT id FROM coin_cards WHERE coin=$1',[binary(coin)])).rows).toEqual([{id:'retention-card-current'}]);
+    expect((await db.sql.query('SELECT id FROM guard_shadow_runs')).rows).toEqual([{id:hash(901)}]);
+    expect((await db.sql.query('SELECT playbook_id,level,first_block::text FROM coin_match_lifetime')).rows).toEqual([{playbook_id:'honeypot',level:'danger',first_block:'2'}]);
+    expect((await db.sql.query('SELECT run_id FROM wallet_fingerprint_dependencies')).rows).toEqual([{run_id:'retention-labelled'}]);
+    expect((await db.sql.query('SELECT block::text FROM read_first_verdict WHERE coin=$1',[binary(coin)])).rows).toEqual([{block:'1'}]);
+  });
+  it('preserves Blue chip current state and historical card Danger when rating and raw history are compacted',async()=>{
+    const db=await fixture(),coin=address(0xe1);
+    await blockAt(db,2);
+    await db.sql.query("INSERT INTO coin_cards VALUES('blue-old',$1,2,'old','{\"verdict\":{\"level\":\"danger\"}}','1.0.0'),('blue-current',$1,3001,'current','{\"verdict\":{\"level\":\"clear\"}}','1.0.0')",[binary(coin)]);
+    await db.sql.query("INSERT INTO coin_card_latest VALUES($1,'blue-current',3001,'{\"verdict\":{\"level\":\"clear\"}}')",[binary(coin)]);
+    expect((await db.sql.query('SELECT coin FROM read_blue_chip_danger WHERE coin=$1',[binary(coin)])).rows).toHaveLength(0);
+    await db.sql.query("INSERT INTO coin_listings(coin,source,external_id,active,first_seen,last_seen) VALUES($1,'sample-source','sample',false,$2,$2)",[binary(coins.danger),at(0)]);
+    await db.sql.query('INSERT INTO read_blue_chip VALUES($1,1,$2,true,25000,100)',[binary(coins.danger),at(0)]);
+    const states=async()=>Promise.all(['coin_listings','read_blue_chip','read_blue_chip_danger'].map(async table=>(await db.sql.query(`SELECT * FROM ${table} ORDER BY coin`)).rows));
+    const before=await states();
+    const options={quoteTokens:[weth],settleHours:24,rawDays:7,ratingDays:7,dangerQuietDays:2,now:()=>now()+30*DAY};
+    const dry=await runRetention(db,options);
+    expect(await states()).toEqual(before);
+    expect(dry.tables?.some(t=>['coin_listings','read_blue_chip','read_blue_chip_danger'].includes(t.table))).toBe(false);
+    await runRetention(db,{...options,dryRun:false,pauseMs:0});
+    expect((await db.sql.query("SELECT id FROM coin_cards WHERE id='blue-old'")).rows).toHaveLength(0);
+    expect((await db.sql.query('SELECT coin FROM read_blue_chip_danger WHERE coin=$1',[binary(coin)])).rows).toHaveLength(1);
+    const after=await states();
+    expect(after.slice(0,2)).toEqual(before.slice(0,2));
+    for(const row of before[2]!)expect(after[2]).toContainEqual(row);
+    expect((await db.sql.query('SELECT 1 FROM history_prunes WHERE coin=$1',[binary(coins.danger)])).rows).toHaveLength(1);
+    expect((await db.sql.query('SELECT 1 FROM swaps WHERE coin=$1',[binary(coins.danger)])).rows).toHaveLength(0);
+  });
+});
+
+describe('settlement evidence floor',()=>{
+  it('keeps the day of tax transfer evidence when a shorter settlement window is configured',async()=>{
+    const db=await fixture();
+    const n=await blockAt(db,39.5);
+    await db.sql.query("INSERT INTO pons_events(tx_hash,log_index,block,kind,token,emitter,data) VALUES($1,999,$2,'trade',$3,$3,'{}')",[binary(hash(n)),n,binary(coins.active)]);
+    await db.sql.query('UPDATE coin_card_latest SET as_of_block=$2 WHERE coin=$1',[binary(coins.active),n]);
+    await runRetention(db,{quoteTokens:[weth],settleHours:1,dryRun:false,pauseMs:0,now});
+    expect((await db.sql.query('SELECT 1 FROM token_transfers WHERE token=$1 AND ts>=$2',[binary(coins.active),at(39)])).rows).toHaveLength(1);
+    expect((await db.sql.query("SELECT 1 FROM pons_events WHERE token=$1 AND block=$2",[binary(coins.active),n])).rows).toHaveLength(1);
+  });
+  it('does not freeze an old card by compacting activity the rating engine has not evaluated',async()=>{
+    const db=await fixture(),before=await counts(db,coins.dead);
+    await db.sql.query('UPDATE coin_card_latest SET as_of_block=1 WHERE coin=$1',[binary(coins.dead)]);
+    await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now});
+    expect(await counts(db,coins.dead)).toEqual(before);
   });
 });

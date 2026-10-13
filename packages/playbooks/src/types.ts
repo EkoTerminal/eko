@@ -53,6 +53,7 @@ export interface CardSources {
       status: 'burned' | 'locked' | 'pons_locked' | 'removable'; evidence: EvidenceRef[] }[];
     depth2Usd?: number;
     priorRemovals: EvidenceRef[];
+    priorRemovalCount?: number;
     /**
      * Liquidity the coin launched with has been taken out of the pool it trades in by the wallet that paid it in: the
      * identified deployer, or the wallet that provided the pool's first liquidity. `share` is the part of that wallet's

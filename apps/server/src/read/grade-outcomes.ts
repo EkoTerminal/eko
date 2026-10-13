@@ -1,12 +1,13 @@
+import { GRADE_CUTS } from '@eko/db';
 import type { ReadStore } from './store.js';
 
 /** The rules the grades are measured under went live at this time (RATING_CODE_AT in the engines, 2026-10-12). */
-export const GRADE_RULES_SINCE = '2026-10-12T18:30:00Z';
+export const GRADE_RULES_SINCE = GRADE_CUTS[0];
 /**
  * Coins that launched in a Uniswap pool were first graded on 2026-10-13, by rules whose thresholds were set on Pons
  * launches; their grades are measured apart, from the time the liquidity check could see a pull (UNISWAP_RATING_CODE_AT).
  */
-export const UNISWAP_GRADES_SINCE = '2026-10-13T07:30:00Z';
+export const UNISWAP_GRADES_SINCE = GRADE_CUTS[1];
 export const GRADE_HORIZONS_SEC = [3600, 86400] as const;
 export interface GradeOutcome {
   level: 'clear' | 'monitor' | 'danger'; horizonSec: typeof GRADE_HORIZONS_SEC[number];
@@ -53,15 +54,15 @@ export class GradeOutcomesService {
         WITH cut AS (SELECT (SELECT number FROM engine_block_times WHERE ts>=$1 ORDER BY ts,number LIMIT 1) AS first),
         graded AS (
           SELECT DISTINCT ON (v.coin) v.coin,v.data->>'level' AS level,bt.ts
-          FROM verdicts v JOIN read_coins r ON r.coin=v.coin AND (r.launchpad IS NOT DISTINCT FROM 'pons')=$4::boolean CROSS JOIN cut JOIN engine_block_times bt ON bt.number=v.valid_from_block
+          FROM verdicts v LEFT JOIN receipt_publications publication ON publication.id=v.id JOIN read_coins r ON r.coin=v.coin AND (r.launchpad IS NOT DISTINCT FROM 'pons')=$4::boolean CROSS JOIN cut JOIN engine_block_times bt ON bt.number=v.valid_from_block
           WHERE v.valid_from_block>=cut.first AND bt.ts>=$1 AND bt.ts<=$2 AND v.data->>'level' IN ('clear','monitor','danger')
-          ORDER BY v.coin,v.valid_from_block),
+          ORDER BY v.coin,v.valid_from_block,publication.publication_sequence ASC NULLS FIRST,v.id),
         priced AS (
           SELECT g.level,
-            (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=g.coin AND s.ts<=g.ts AND s.ts>g.ts-interval '1 hour' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1) AS p0,
-            (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=g.coin AND s.ts<=g.ts+$3*interval '1 second' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1) AS p1,
-            (SELECT max(s.usd/s.amount_coin::double precision) FROM swaps s WHERE s.coin=g.coin AND s.ts>g.ts AND s.ts<=g.ts+$3*interval '1 second' AND s.usd>0 AND s.amount_coin>0) AS hi
-          FROM graded g)
+            CASE WHEN saved.coin IS NOT NULL THEN saved.p0 ELSE (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=g.coin AND s.ts<=g.ts AND s.ts>g.ts-interval '1 hour' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1) END AS p0,
+            CASE WHEN saved.coin IS NOT NULL THEN saved.p1 ELSE (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=g.coin AND s.ts<=g.ts+$3*interval '1 second' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1) END AS p1,
+            CASE WHEN saved.coin IS NOT NULL THEN saved.hi ELSE (SELECT max(s.usd/s.amount_coin::double precision) FROM swaps s WHERE s.coin=g.coin AND s.ts>g.ts AND s.ts<=g.ts+$3*interval '1 second' AND s.usd>0 AND s.amount_coin>0) END AS hi
+          FROM graded g LEFT JOIN retention_grade_prices saved ON saved.coin=g.coin AND saved.since=$1 AND saved.horizon_sec=$3)
         SELECT level,count(*) AS ratings,count(*) FILTER (WHERE p1<=0.5*p0) AS down50,count(*) FILTER (WHERE p1<=0.5*p0 AND coalesce(hi,p0)<1.2*p0) AS never_up
         FROM priced WHERE p0 IS NOT NULL GROUP BY level`, [new Date(since), new Date(now - horizonSec * 1000), horizonSec, pons]);
       for (const level of ['clear', 'monitor', 'danger'] as const) {

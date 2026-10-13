@@ -57,7 +57,7 @@ describe('chain retention roll-up', () => {
   it('compacts old quote and idle-token transfers while every recomputed balance stays exact', async () => {
     const db = await fixture(), before = await balances(db);
     const quoteBefore = await count(db, quote), activeBefore = await count(db, active);
-    const result = await runRetention(db, { quoteTokens: [quote], quoteDays: 2, idleTokenDays: 8, batchRows: 5, now: () => epoch + 20.5 * DAY });
+    const result = await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], quoteDays: 2, idleTokenDays: 8, batchRows: 5, now: () => epoch + 20.5 * DAY });
     expect(result).toMatchObject({ finished: true, idleTokens: 1 });
     expect(result.quoteRows).toBeGreaterThan(0);
     // Quote: only the last two days remain. Idle token: nothing remains. Active token: untouched.
@@ -78,17 +78,17 @@ describe('chain retention roll-up', () => {
     expect(amount(after, holders[0]!)).toBe(amount(before, holders[0]!) - 7n);
     expect(amount(after, holders[1]!)).toBe(amount(before, holders[1]!) + 7n);
     // A second pass has nothing left to do.
-    expect(await runRetention(db, { quoteTokens: [quote], quoteDays: 2, idleTokenDays: 8, now: () => epoch + 20.5 * DAY }))
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], quoteDays: 2, idleTokenDays: 8, now: () => epoch + 20.5 * DAY }))
       .toMatchObject({ quoteRows: 0, idleRows: 0, idleTokens: 0, finished: true });
   });
 
   it('is off unless configured, refuses an idle window inside the engines window, and stops at its time budget', async () => {
     const db = await fixture(), total = await count(db, quote) + await count(db, idle) + await count(db, active);
-    expect(await runRetention(db, { quoteTokens: [quote], now: () => epoch + 20.5 * DAY })).toMatchObject({ quoteRows: 0, idleRows: 0, pendingRows: 0, feedRows: 0 });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], now: () => epoch + 20.5 * DAY })).toMatchObject({ quoteRows: 0, idleRows: 0, pendingRows: 0, feedRows: 0 });
     expect(await count(db, quote) + await count(db, idle) + await count(db, active)).toBe(total);
-    await expect(runRetention(db, { quoteTokens: [quote], idleTokenDays: 7, now: () => epoch + 20.5 * DAY })).rejects.toThrow('idle window');
+    await expect(runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], idleTokenDays: 7, now: () => epoch + 20.5 * DAY })).rejects.toThrow('idle window');
     let clock = epoch + 20.5 * DAY;
-    const partial = await runRetention(db, { quoteTokens: [quote], quoteDays: 2, batchRows: 2, budgetMs: 1, now: () => (clock += 1) });
+    const partial = await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], quoteDays: 2, batchRows: 2, budgetMs: 1, now: () => (clock += 1) });
     expect(partial.finished).toBe(false);
   });
 
@@ -99,7 +99,7 @@ describe('chain retention roll-up', () => {
       await db.sql.query('INSERT INTO pending_pool_events(block,tx_hash,log_index,emitter,currency_hints,data) VALUES($1,$2,0,$3,$4,$5)',
         [String(blockNumber), binary(hash(5000 + n)), pool(emitter), '[]', '{}']);
     }
-    expect(await runRetention(db, { quoteTokens: [], pendingPoolDays: 3, now: () => epoch + 20.5 * DAY })).toMatchObject({ pendingRows: 1 });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], pendingPoolDays: 3, now: () => epoch + 20.5 * DAY })).toMatchObject({ pendingRows: 1 });
     expect((await db.sql.query<{ block: string; emitter: Uint8Array }>('SELECT block::text, emitter FROM pending_pool_events ORDER BY block')).rows
       .map(r => [r.block, hex(r.emitter)])).toEqual([['2', address(0xd1)], ['20', address(0xd2)]]);
   });
@@ -112,7 +112,7 @@ describe('chain retention roll-up', () => {
     }
     // One row per batch and a three-tick budget: the quote rule runs out with old quote transfers left over.
     let clock = epoch + 20.5 * DAY;
-    const result = await runRetention(db, { quoteTokens: [quote], quoteDays: 2, pendingPoolDays: 3, batchRows: 1, budgetMs: 3, now: () => (clock += 1) });
+    const result = await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], quoteDays: 2, pendingPoolDays: 3, batchRows: 1, budgetMs: 3, now: () => (clock += 1) });
     expect(result.finished).toBe(false);
     expect(result.quoteRows).toBeGreaterThan(0);
     expect(Number((await db.sql.query<{ n: string }>('SELECT count(*)::text AS n FROM token_transfers WHERE token=$1 AND ts < $2', [binary(quote), at(18.5)])).rows[0]!.n)).toBeGreaterThan(0);
@@ -153,7 +153,7 @@ describe('Feed retention', () => {
     const before = await ids(db), counted = await sources();
     expect(before).toHaveLength(11);
     expect(await firstVerdict(db, coin)).toBe('2');
-    const result = await runRetention(db, { quoteTokens: [], feedDays: 3, batchRows: 1, now: () => epoch + 20.5 * DAY });
+    const result = await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], feedDays: 3, batchRows: 1, now: () => epoch + 20.5 * DAY });
     expect(result).toMatchObject({ feedRows: 4, finished: true });
     const deleted = ['sample-verdict-a2:created', matchId(coin, 6, 'deployer_dump'), matchId(coin, 7, 'wash_to_trend'), matchId(other, 8, 'deployer_dump')];
     expect(await ids(db)).toEqual(before.filter(id => !deleted.includes(id)));
@@ -163,21 +163,25 @@ describe('Feed retention', () => {
     // A later verdict recomputes the first verdict from the remaining rows and still finds the original one.
     await verdict(db, 'sample-verdict-a4', coin, 21);
     expect(await firstVerdict(db, coin)).toBe('2');
-    expect(await runRetention(db, { quoteTokens: [], feedDays: 3, now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 0, finished: true });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], feedDays: 3, now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 0, finished: true });
   });
 
   it('is off unless configured, caps its batches below the transfer batch size and stops at its time budget', async () => {
     const db = await feedFixture(), before = await ids(db);
-    expect(await runRetention(db, { quoteTokens: [], now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 0, finished: true });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 0, finished: true });
     expect(await ids(db)).toEqual(before);
     let clock = epoch + 20.5 * DAY;
-    expect(await runRetention(db, { quoteTokens: [], feedDays: 3, budgetMs: 1, now: () => (clock += 1) })).toMatchObject({ feedRows: 0, finished: false });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], feedDays: 3, budgetMs: 1, now: () => (clock += 1) })).toMatchObject({ feedRows: 0, finished: false });
     expect(await ids(db)).toEqual(before);
     // Each Feed delete statement removes at most FEED_BATCH_ROWS rows, however large batchRows is.
     expect(FEED_BATCH_ROWS).toBeLessThan(20_000);
-    const statements: unknown[][] = [], query = db.sql.query.bind(db.sql);
-    db.sql.query = (async (sql: string, params?: unknown[]) => { if (sql.includes('DELETE FROM read_feed')) statements.push(params ?? []); return query(sql, params); }) as typeof db.sql.query;
-    expect(await runRetention(db, { quoteTokens: [], feedDays: 3, batchRows: 50_000, now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 4, finished: true });
+    const statements: unknown[][] = [], transact=db.tx.bind(db);
+    db.tx=fn=>transact(async tx=>{
+      const query=tx.sql.query.bind(tx.sql);
+      tx.sql.query=(async (sql:string,params?:unknown[])=>{if(sql.includes('DELETE FROM read_feed'))statements.push(params ?? []);return query(sql,params);}) as typeof tx.sql.query;
+      return fn(tx);
+    });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], feedDays: 3, batchRows: 50_000, now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 4, finished: true });
     expect(statements.map(params => params[2])).toEqual([FEED_BATCH_ROWS]);
   });
 });

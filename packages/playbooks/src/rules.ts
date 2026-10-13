@@ -97,7 +97,7 @@ export const removableLiquidity: Rule<'removable_liquidity'> = {
     const share = controlled.reduce((sum, p) => sum + p.share, 0);
     const removable = share >= cfg.deployerLpShare;
     if (!removable && (l.depth2Usd == null || l.depth2Usd >= cfg.thinDepth2PctUsd)) return null;
-    return match(s, h, this.id, removable && l.priorRemovals.length >= cfg.priorRemovalsDanger ? 'danger' : 'monitor', [
+    return match(s, h, this.id, removable && (l.priorRemovalCount ?? l.priorRemovals.length) >= cfg.priorRemovalsDanger ? 'danger' : 'monitor', [
       stat(s, this.id, 'share', 'Removable deployer/crew LP share', share), stat(s, this.id, 'depth', 'Depth within 2% (USD)', l.depth2Usd ?? 'unavailable'),
       ...controlled.flatMap((p) => [address(p.owner, 'LP owner'), ...p.evidence]), ...l.priorRemovals,
     ]);

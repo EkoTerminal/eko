@@ -1,11 +1,12 @@
 import { runRetention, type ChainDb, type RetentionResult } from '@eko/db';
+import { RETENTION_RULE_INPUTS } from '@eko/engines';
 import { loadRegistry } from '@eko/chain';
 
-export interface RetentionSettings { quoteDays?: number; idleTokenDays?: number; pendingPoolDays?: number; feedDays?: number; dangerQuietDays?: number; quietCoinDays?: number }
+export interface RetentionSettings { settleHours?: number; rawDays?: number; ratingDays?: number; dryRun?: boolean; quoteDays?: number; idleTokenDays?: number; pendingPoolDays?: number; feedDays?: number; dangerQuietDays?: number; quietCoinDays?: number }
 
 /**
  * Run the configured retention (packages/db/src/retention.ts) on the singleton worker every ten minutes, each enabled
- * rule bounded to about a minute of batched work per pass. Nothing runs unless a retention setting is configured. Quote
+ * rule bounded to about a minute of batched work per pass. The app supplies report-only defaults. Quote
  * tokens are the address registry's verified `tokens.*` entries.
  */
 export class RetentionWorker {
@@ -27,10 +28,11 @@ export class RetentionWorker {
   }
   private async pass() {
     try {
-      const quoteTokens = loadRegistry().entries()
+      const registry=loadRegistry();
+      const quoteTokens = registry.entries()
         .filter(([key, entry]) => key.startsWith('tokens.') && entry.address !== 'TODO')
         .map(([, entry]) => String(entry.address).toLowerCase());
-      this.report(await runRetention(this.db, { quoteTokens, ...this.settings }));
+      this.report(await runRetention(this.db, { quoteTokens, ...RETENTION_RULE_INPUTS, poolManager:registry.addressOf('uniswapV4.poolManager') ?? undefined, ...this.settings }));
     } catch { this.report({ failed: true }); } // Retry next interval; no SQL or row data enters logs.
   }
 }

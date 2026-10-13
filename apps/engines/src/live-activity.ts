@@ -279,11 +279,15 @@ export class LiveActivity {
       entry.live = live;
       result.push(live);
     }
-    // Pruned coins: their first swap or transfer above the watermark.
+    // Preserved coins revive on any new indexed evidence, legacy gaps still require a swap or transfer.
     const pruned = result.filter(coin => prunes.has(coin.coin)), byCoin = new Map(result.map(coin => [coin.coin, coin]));
     for (const chunk of chunks(pruned)) for (const row of (await this.db.sql.query<{ coin: Uint8Array; block: string | null }>(`SELECT r.c AS coin,least(
-        (SELECT min(block) FROM swaps WHERE coin=r.c AND block>r.w AND block<=$3),(SELECT min(block) FROM token_transfers WHERE token=r.c AND block>r.w AND block<=$3))::text AS block
-      FROM unnest($1::bytea[],$2::bigint[]) AS r(c,w)`, [chunk.map(coin => binary(coin.coin)), chunk.map(coin => prunes.get(coin.coin)!.watermark), to])).rows) {
+        (SELECT min(block) FROM swaps WHERE coin=r.c AND block>r.w AND block<=$3),(SELECT min(block) FROM token_transfers WHERE token=r.c AND block>r.w AND block<=$3),
+        CASE WHEN r.preserved THEN (SELECT min(e.block) FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE (p.currency0=r.c OR p.currency1=r.c) AND e.block>r.w AND e.block<=$3) END,
+        CASE WHEN r.preserved THEN (SELECT min(block) FROM pons_events WHERE token=r.c AND block>r.w AND block<=$3) END,
+        CASE WHEN r.preserved THEN (SELECT min(block) FROM pons_exemptions WHERE token=r.c AND block>r.w AND block<=$3) END,
+        CASE WHEN r.preserved THEN (SELECT min(created_block) FROM pools WHERE (currency0=r.c OR currency1=r.c) AND created_block>r.w AND created_block<=$3) END)::text AS block
+      FROM unnest($1::bytea[],$2::bigint[],$4::boolean[]) AS r(c,w,preserved)`, [chunk.map(coin => binary(coin.coin)), chunk.map(coin => prunes.get(coin.coin)!.watermark), to,chunk.map(coin=>prunes.get(coin.coin)!.preserved ?? false)])).rows) {
       const coin = byCoin.get(hex(row.coin) as Address);
       if (coin && row.block != null) coin.revived = Number(row.block);
     }

@@ -20,15 +20,15 @@ export async function readPoolLiquidity(db: ChainDb, coins: Address[]): Promise<
   const found = new Map<Address, number>();
   if (!coins.length) return found;
   const rows = (await db.sql.query<{ coin: Uint8Array; liquidity: number | null; coin_amount: number | null; quote_amount: number | null; usd: number | null }>(`
-    SELECT t.address AS coin,l.liquidity::float8 AS liquidity,s.amount_coin::float8 AS coin_amount,s.amount_quote::float8 AS quote_amount,s.usd
-    FROM tokens t
+    SELECT t.address AS coin,CASE WHEN l.liquidity IS NOT NULL OR life.data->'liquidity'->('0x'||encode(t.graduated_pool,'hex')) ? 'fullRangeDelta' THEN (coalesce(l.liquidity,0)+coalesce((life.data->'liquidity'->('0x'||encode(t.graduated_pool,'hex'))->>'fullRangeDelta')::numeric,0))::float8 END AS liquidity,s.amount_coin::float8 AS coin_amount,s.amount_quote::float8 AS quote_amount,s.usd
+    FROM tokens t LEFT JOIN coin_lifetime life ON life.coin=t.address
     LEFT JOIN LATERAL (SELECT sum((e.data->>'liquidityDelta')::numeric) AS liquidity FROM liquidity_events e
       WHERE e.pool_id=t.graduated_pool AND e.kind='ModifyLiquidity' AND (e.data->>'tickLower')::int<=-887000 AND (e.data->>'tickUpper')::int>=887000) l ON true
     -- The coin's latest 50 swaps by its (coin, block) index, then the newest of them on its pool with a price. Filtering
     -- by pool inside the index scan made the planner sort every swap of a busy coin: 2.5 s for one Radar page.
     LEFT JOIN LATERAL (SELECT recent.amount_coin,recent.amount_quote,recent.usd FROM (
-        SELECT s.amount_coin,s.amount_quote,s.usd,s.pool_id,s.block FROM swaps s WHERE s.coin=t.address AND s.block>=t.graduated_block ORDER BY s.block DESC LIMIT 50) recent
-      WHERE recent.pool_id=t.graduated_pool AND recent.usd>0 AND recent.amount_coin>0 AND recent.amount_quote>0 ORDER BY recent.block DESC LIMIT 1) s ON true
+        SELECT s.amount_coin,s.amount_quote,s.usd,s.pool_id,s.block,s.log_index,s.tx_hash FROM retention_read_swaps s WHERE s.coin=t.address AND s.block>=t.graduated_block ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC LIMIT 50) recent
+      WHERE recent.pool_id=t.graduated_pool AND recent.usd>0 AND recent.amount_coin>0 AND recent.amount_quote>0 ORDER BY recent.block DESC,recent.log_index DESC,recent.tx_hash DESC LIMIT 1) s ON true
     WHERE t.address=ANY($1::bytea[]) AND t.graduated_pool IS NOT NULL AND t.graduated_block IS NOT NULL`, [coins.map(binary)])).rows;
   for (const row of rows) {
     if (row.liquidity == null || row.coin_amount == null || row.quote_amount == null || row.usd == null) continue;
@@ -57,11 +57,11 @@ export async function readCurveStates(db: ChainDb, coins: Address[]): Promise<Ma
   const found = new Map<Address, { curvePct: number; usd: number }>();
   if (!coins.length) return found;
   const rows = (await db.sql.query<{ coin: Uint8Array; threshold: number | null; supply: number | null; coin_amount: number | null; quote_amount: number | null; usd: number | null }>(`
-    SELECT t.address AS coin,(e.data->>'graduationThreshold')::numeric::float8 AS threshold,t.total_supply::float8 AS supply,
+    SELECT t.address AS coin,coalesce(e.data->>'graduationThreshold',life.data->'curve'->>'launchThreshold')::numeric::float8 AS threshold,t.total_supply::float8 AS supply,
       s.amount_coin::float8 AS coin_amount,s.amount_quote::float8 AS quote_amount,s.usd
-    FROM tokens t
-    JOIN LATERAL (SELECT data FROM pons_events e WHERE e.token=t.address AND e.kind='launch' ORDER BY e.block,e.log_index LIMIT 1) e ON true
-    JOIN LATERAL (SELECT amount_coin,amount_quote,usd FROM swaps s WHERE s.coin=t.address AND s.usd>0 AND s.amount_quote>0 AND s.amount_coin>0 ORDER BY s.block DESC LIMIT 1) s ON true
+    FROM tokens t LEFT JOIN coin_lifetime life ON life.coin=t.address
+    LEFT JOIN LATERAL (SELECT data FROM pons_events e WHERE e.token=t.address AND e.kind='launch' ORDER BY e.block,e.log_index LIMIT 1) e ON true
+    JOIN LATERAL (SELECT amount_coin,amount_quote,usd FROM retention_read_swaps s WHERE s.coin=t.address AND s.usd>0 AND s.amount_quote>0 AND s.amount_coin>0 ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC LIMIT 1) s ON true
     WHERE t.address=ANY($1::bytea[]) AND t.launchpad='pons' AND t.graduated_block IS NULL AND t.total_supply>0`, [coins.map(binary)])).rows;
   for (const row of rows) {
     const state = curveState(Number(row.threshold), Number(row.supply), Number(row.coin_amount), Number(row.quote_amount), Number(row.usd));
@@ -98,9 +98,15 @@ async function loadPositions(db: ChainDb, cache: Map<string, PoolPositions>, ids
   const amount = "CASE WHEN e.kind='Mint' THEN (e.data->>'amount')::numeric WHEN e.kind='Burn' THEN -(e.data->>'amount')::numeric ELSE (e.data->>'liquidityDelta')::numeric END";
   const read = new Map<string, PoolPositions>(ids.map(id => [id, { at: now, positions: [], seen: false }]));
   for (const row of (await db.sql.query<{ pool_id: Uint8Array; lower: number; upper: number; liquidity: number }>(`
-    SELECT e.pool_id,(e.data->>'tickLower')::int AS lower,(e.data->>'tickUpper')::int AS upper,sum(${amount})::float8 AS liquidity
-    FROM liquidity_events e WHERE e.pool_id=ANY($1::bytea[]) AND e.kind IN ('Mint','Burn','ModifyLiquidity') AND e.data ? 'tickLower' AND e.data ? 'tickUpper'
-    GROUP BY 1,2,3`, [ids.map(binary)])).rows) { const entry = read.get(hex(row.pool_id))!; entry.seen = true; if (Number(row.liquidity) > 0) entry.positions.push({ lower: Number(row.lower), upper: Number(row.upper), liquidity: Number(row.liquidity) }); }
+    SELECT pool_id,lower,upper,sum(liquidity)::float8 AS liquidity FROM (
+      SELECT e.pool_id,(e.data->>'tickLower')::int AS lower,(e.data->>'tickUpper')::int AS upper,${amount} AS liquidity
+      FROM liquidity_events e WHERE e.pool_id=ANY($1::bytea[]) AND e.kind IN ('Mint','Burn','ModifyLiquidity') AND e.data ? 'tickLower' AND e.data ? 'tickUpper'
+      UNION ALL
+      SELECT p.id,(v.value->>'lower')::int,(v.value->>'upper')::int,(v.value->>'liquidity')::numeric FROM pools p
+      JOIN LATERAL (SELECT l.data->'liquidity'->('0x'||encode(p.id,'hex'))->'moneyPositions' AS positions FROM coin_lifetime l
+        WHERE l.coin IN(p.currency0,p.currency1) AND l.data->'liquidity' ? ('0x'||encode(p.id,'hex')) LIMIT 1) kept ON true
+      CROSS JOIN LATERAL jsonb_each(coalesce(kept.positions,'{}')) v WHERE p.id=ANY($1::bytea[])
+    ) combined GROUP BY 1,2,3`, [ids.map(binary)])).rows) { const entry = read.get(hex(row.pool_id))!; entry.seen = true; if (Number(row.liquidity) > 0) entry.positions.push({ lower: Number(row.lower), upper: Number(row.upper), liquidity: Number(row.liquidity) }); }
   for (const [id, entry] of read) cache.set(id, entry);
   // A long-lived process sees every pool on the Radar in time: old entries go first.
   if (cache.size > 5000) for (const key of [...cache.keys()].slice(0, cache.size - 4000)) cache.delete(key);
@@ -119,8 +125,8 @@ export async function readPoolMoney(db: ChainDb, coins: Address[], now = Date.no
   const pools = (await db.sql.query<{ coin: Uint8Array; pool_id: Uint8Array; coin_first: boolean; coin_amount: number; quote_amount: number; usd: number }>(`
     SELECT t.address AS coin,r.pool_id,(p.currency0=t.address) AS coin_first,r.amount_coin::float8 AS coin_amount,r.amount_quote::float8 AS quote_amount,r.usd
     FROM tokens t CROSS JOIN LATERAL (SELECT DISTINCT ON (x.pool_id) x.pool_id,x.amount_coin,x.amount_quote,x.usd FROM (
-        SELECT s.pool_id,s.amount_coin,s.amount_quote,s.usd,s.block,s.log_index FROM swaps s WHERE s.coin=t.address ORDER BY s.block DESC LIMIT 60) x
-      WHERE x.usd>0 AND x.amount_coin>0 AND x.amount_quote>0 ORDER BY x.pool_id,x.block DESC,x.log_index DESC) r
+        SELECT s.pool_id,s.amount_coin,s.amount_quote,s.usd,s.block,s.log_index,s.tx_hash FROM retention_read_swaps s WHERE s.coin=t.address ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC LIMIT 60) x
+      WHERE x.usd>0 AND x.amount_coin>0 AND x.amount_quote>0 ORDER BY x.pool_id,x.block DESC,x.log_index DESC,x.tx_hash DESC) r
     JOIN pools p ON p.id=r.pool_id
     WHERE t.address=ANY($1::bytea[]) AND t.curve IS NULL AND t.graduated_block IS NULL`, [coins.map(binary)])).rows;
   if (!pools.length) return found;

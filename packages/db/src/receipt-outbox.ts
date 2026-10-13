@@ -7,8 +7,9 @@ import { currentReceiptAnchor } from './receipt-anchors.js';
 import { hex } from './types.js';
 
 const codec = createGuardReceiptCodec({concat,encodeAbiParameters,keccak256,stringToHex});
-interface Publication {
+export interface Publication {
   id:string; producer:string; kind:'verdict'|'forecast'|'harness_private'; chain_id:string; revision_id:string;
+  summary?: {coin?:string};
   payload_hash:Hex; canonical_payload:string; data:unknown; recorded_at:Date;
 }
 // Guard 034's immutable raw payload journal is already a durable producer outbox.
@@ -40,7 +41,12 @@ export async function publishPrivateReceipt(db: ChainDb, id: string, commitment:
   const row = (await db.sql.query<{commitment:string}>('SELECT commitment FROM receipt_private_publications WHERE id=$1', [id])).rows[0];
   if (row?.commitment !== commitment) throw new Error('Private receipt identity reused');
 }
-function validate(row: Publication) {
+/** Verify original public payload schema, canonical bytes, identity, hash and snapshot before retention removes it.
+ * Host retention/outbox caller only. Invalid or private payloads reject, no database or network mutation occurs.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
+ */
+export function validateReceiptPublication(row: Publication) {
   const payload = row.producer === 'guard' ? GuardReceiptPayloadSchema.parse(row.data) : PublicReceiptPayloadSchema.parse(row.data);
   const chainId = 'chainId' in payload ? payload.chainId : payload.decision.chainId;
   if (payload.receiptId !== row.id || payload.revisionId !== row.revision_id || payload.kind !== row.kind
@@ -52,7 +58,7 @@ function validate(row: Publication) {
 }
 function same(a:Publication,b:Publication) {
   return a.id===b.id && a.producer===b.producer && a.kind===b.kind && Number(a.chain_id)===Number(b.chain_id)
-    && a.revision_id===b.revision_id && a.payload_hash===b.payload_hash && a.canonical_payload===b.canonical_payload;
+    && a.revision_id===b.revision_id && a.payload_hash===b.payload_hash && (a.canonical_payload===null || b.canonical_payload===null || a.canonical_payload===b.canonical_payload);
 }
 
 /** Call in the producer's persistence transaction. A crash after commit leaves
@@ -72,7 +78,7 @@ export async function publishReceipt(db:ChainDb, producer:string, raw:PublicRece
   if (canonicalize(raw)!==canonicalPayload) throw new Error('Noncanonical receipt input');
   const row:Publication={id:payload.receiptId,producer,kind:payload.kind,chain_id:String(payload.chainId),revision_id:payload.revisionId,
     payload_hash:codec.hash(payload),canonical_payload:canonicalPayload,data:payload,recorded_at:new Date(payload.recordedAt)};
-  validate(row);
+  validateReceiptPublication(row);
   return db.tx(async tx=>{
     for (const reference of new Set([payload.supersedes,payload.reorgOf].filter((id):id is string=>id!==null))) {
       const old=(await tx.sql.query<Publication>('SELECT * FROM receipt_publications WHERE id=$1',[reference])).rows[0];
@@ -83,7 +89,7 @@ export async function publishReceipt(db:ChainDb, producer:string, raw:PublicRece
         if (legacy && hex(legacy.coin)===payload.coin) continue;
       }
       if (!old || old.producer!==producer || old.kind!==row.kind || Number(old.chain_id)!==payload.chainId
-        || PublicReceiptPayloadSchema.parse(old.data).coin!==payload.coin) throw new Error('Invalid receipt revision reference');
+        || (old.data==null ? old.summary?.coin : PublicReceiptPayloadSchema.parse(old.data).coin)!==payload.coin) throw new Error('Invalid receipt revision reference');
     }
     await tx.sql.query(`INSERT INTO receipt_publications(id,producer,kind,chain_id,revision_id,payload_hash,canonical_payload,data,recorded_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`,
@@ -115,14 +121,23 @@ export class ReceiptOutbox {
    */
   async enqueue(id:string) {
     return this.db.tx(async tx=>{
+      const archived=(await tx.sql.query<Publication & {leaf:Hex}>('SELECT * FROM receipt_items WHERE id=$1 AND data IS NULL',[id])).rows[0];
+      if(archived) {
+        if(archived.producer!=='engines' || archived.kind!=='verdict' || Number(archived.chain_id)!==4663)throw new Error('Archived receipt header integrity failure');
+        const item:ReceiptItem={id:archived.id,kind:archived.kind,hash:archived.payload_hash};
+        if(codec.encodeReceiptLeaf(item)!==archived.leaf)throw new Error('Archived receipt leaf integrity failure');
+        return item;
+      }
+      await tx.sql.query('SELECT id FROM receipt_publications WHERE id=$1 FOR KEY SHARE',[id]);
       const rows=(await tx.sql.query<Publication>(`SELECT * FROM (${sources}) p WHERE id=$1`,[id])).rows;
       if (rows.length!==1) throw new Error('Exactly one durable receipt publication required');
       const row=rows[0]!;
-      if (row.kind === 'harness_private') { privateItem(row); row.canonical_payload = canonicalize(row.data); } else validate(row);
+      if (row.kind === 'harness_private') { privateItem(row); row.canonical_payload = canonicalize(row.data); } else if(row.data!=null)validateReceiptPublication(row);
+      else if(row.producer!=='engines' || row.kind!=='verdict' || Number(row.chain_id)!==4663 || !/^0x[0-9a-f]{64}$/.test(row.payload_hash))throw new Error('Archived receipt header integrity failure');
       const item:ReceiptItem={id:row.id,kind:row.kind,hash:row.payload_hash},leaf=codec.encodeReceiptLeaf(item);
       await tx.sql.query(`INSERT INTO receipt_items(id,producer,kind,chain_id,revision_id,payload_hash,leaf,canonical_payload,data,recorded_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING`,
-      [row.id,row.producer,row.kind,row.chain_id,row.revision_id,row.payload_hash,leaf,row.canonical_payload,JSON.stringify(row.data),row.recorded_at]);
+      [row.id,row.producer,row.kind,row.chain_id,row.revision_id,row.payload_hash,leaf,row.canonical_payload,row.data==null ? null : JSON.stringify(row.data),row.recorded_at]);
       const stored=(await tx.sql.query<Publication & {leaf:Hex}>('SELECT * FROM receipt_items WHERE id=$1',[id])).rows[0];
       if (!stored || !same(stored,row) || stored.leaf!==leaf) throw new Error('Receipt identity reused for different input');
       return item;
@@ -167,7 +182,15 @@ export class ReceiptOutbox {
    * @see {@link ../../../docs/security/INVARIANTS.md | Receipt payload, proof and canonical anchor invariants}
    */
   async getItem(id: string, kind: ReceiptItem['kind']): Promise<ReceiptItem> {
-    const item = kind === 'harness_private' ? await this.getPrivate(id) : (await this.get(id))?.item;
+    if(kind==='harness_private') {const item=await this.getPrivate(id);if(!item)throw new Error('Receipt item integrity failure: selected item missing');if(item.id!==id || item.kind!==kind)throw new Error('Receipt item integrity failure: selected kind mismatch');return item;}
+    const archived=(await this.db.sql.query<Publication & {leaf:Hex}>('SELECT * FROM receipt_items WHERE id=$1 AND data IS NULL',[id])).rows[0];
+    if(archived && archived.data==null) {
+      if(archived.producer!=='engines' || archived.kind!=='verdict' || Number(archived.chain_id)!==4663)throw new Error('Archived receipt header integrity failure');
+      const item:ReceiptItem={id,kind:archived.kind,hash:archived.payload_hash};
+      if(item.kind!==kind || codec.encodeReceiptLeaf(item)!==archived.leaf)throw new Error('Archived receipt leaf integrity failure');
+      return item;
+    }
+    const item = (await this.get(id))?.item;
     if (!item) throw new Error('Receipt item integrity failure: selected item missing');
     if (item.id !== id || item.kind !== kind) throw new Error('Receipt item integrity failure: selected kind mismatch');
     return item;
@@ -182,8 +205,8 @@ export class ReceiptOutbox {
    */
   async get(id:string) {
     const row=(await this.db.sql.query<Publication & {leaf:Hex}>('SELECT * FROM receipt_items WHERE id=$1',[id])).rows[0];
-    if (!row || row.kind === 'harness_private') return null;
-    const payload=validate(row),item:ReceiptItem={id,kind:row.kind,hash:row.payload_hash};
+    if (!row || row.kind === 'harness_private' || row.data == null) return null;
+    const payload=validateReceiptPublication(row),item:ReceiptItem={id,kind:row.kind,hash:row.payload_hash};
     if (codec.encodeReceiptLeaf(item)!==row.leaf) throw new Error('Stored receipt leaf integrity failure');
     // Reuse authenticated Guard anchor facts; a prepared batch is never a public anchor.
     const anchor=await currentReceiptAnchor(this.db,id) ?? (row.producer==='guard' ? (await this.db.sql.query<{data:{root:Hex;batchId:number;proof:Hex[];txHash:Hex}}>(`SELECT a.data FROM guard_receipt_anchors a WHERE a.receipt_id=$1
