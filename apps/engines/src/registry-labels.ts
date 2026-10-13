@@ -39,7 +39,16 @@ export async function walletLabelsAt(db:ChainDb,addresses:Address[],block:bigint
 export async function writeRegistryLabels(db:ChainDb,options:RegistryLabelOptions={}) {
   const model=options.modelVersion??REGISTRY_LABEL_MODEL;
   const snapshots=(await db.sql.query<RegistryRow>('SELECT * FROM agent_registry ORDER BY wallet_block,agent_id')).rows.map(r=>({...r,agent_id:String(r.agent_id),wallet_block:String(r.wallet_block),registered_block:String(r.registered_block)}));
-  const independent=(await db.sql.query<WalletLabelRow>(`SELECT l.* FROM wallet_labels l WHERE source<>'erc8004' AND ${fingerprintCanonical('l')} AND NOT EXISTS(SELECT 1 FROM wallet_label_supersessions s WHERE s.prior_id=l.id AND EXISTS(SELECT 1 FROM wallet_labels r WHERE r.id=s.replacement_id AND r.source=l.source AND ${fingerprintCanonical('r')})) ORDER BY valid_from_block,id`)).rows.map(r=>{
+  // The labels whose fingerprint run depends on a block that is no longer canonical, found once and per label: each
+  // label's run has about five dependency rows. Written as the correlated check on `l` and again on `r`, the planner
+  // compared every dependency row with every block, twice (8.9 million rows against 6.3 million on a copy of
+  // 2026-10-13: 23.6 s, on three backends, each time a label was added; 3.1 s and the same rows this way).
+  const independent=(await db.sql.query<WalletLabelRow>(`WITH orphaned AS MATERIALIZED (SELECT f.label_id FROM wallet_label_fingerprint_dependencies f
+      CROSS JOIN LATERAL (SELECT 1 FROM wallet_fingerprint_dependencies d WHERE d.run_id=f.run_id
+        AND NOT EXISTS(SELECT 1 FROM chain_blocks b WHERE b.number=d.block AND b.hash=d.block_hash) LIMIT 1) dependency)
+    SELECT l.* FROM wallet_labels l WHERE source<>'erc8004' AND NOT EXISTS(SELECT 1 FROM orphaned o WHERE o.label_id=l.id)
+      AND NOT EXISTS(SELECT 1 FROM wallet_label_supersessions s WHERE s.prior_id=l.id AND EXISTS(SELECT 1 FROM wallet_labels r WHERE r.id=s.replacement_id AND r.source=l.source
+        AND NOT EXISTS(SELECT 1 FROM orphaned o WHERE o.label_id=r.id))) ORDER BY valid_from_block,id`)).rows.map(r=>{
     const behavioral=r.source==='fingerprint'?r.features.behavioral as {label:WalletLabel;confidence:number;tier:LabelTier|null;crewId:string|null}|undefined:undefined;
     return behavioral?{...r,label:behavioral.label,confidence:behavioral.confidence,tier:behavioral.tier,crew_id:behavioral.crewId}:r;
   });

@@ -50,7 +50,7 @@ export class GradeOutcomesService {
     const rows: GradeOutcome[] = [];
     for (const horizonSec of GRADE_HORIZONS_SEC) {
       const result = await this.store.db.sql.query<{ level: GradeOutcome['level']; ratings: string; down50: string; never_up: string }>(`
-        WITH cut AS (SELECT (SELECT min(number) FROM engine_block_times WHERE ts>=$1) AS first),
+        WITH cut AS (SELECT (SELECT number FROM engine_block_times WHERE ts>=$1 ORDER BY ts,number LIMIT 1) AS first),
         graded AS (
           SELECT DISTINCT ON (v.coin) v.coin,v.data->>'level' AS level,bt.ts
           FROM verdicts v JOIN read_coins r ON r.coin=v.coin AND (r.launchpad IS NOT DISTINCT FROM 'pons')=$4::boolean CROSS JOIN cut JOIN engine_block_times bt ON bt.number=v.valid_from_block

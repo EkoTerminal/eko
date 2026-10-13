@@ -42,10 +42,12 @@ export class PairsService {
   }
   private async computeToday():Promise<PairsToday> {
     const midnight=new Date(Math.floor(this.store.now()/86400000)*86400000);
-    // The first block of the UTC day is found once (either block-time table can lack a block); a launch's first scan is
-    // its earliest engine run by wall clock, and its first verdict the earliest by block.
+    // The first block of the UTC day is found once (either block-time table can lack a block), through the (ts,number)
+    // indexes: as min(number) the planner walked the blocks from the oldest until one passed midnight (6 million rows
+    // in each table, 8 s on a copy of 2026-10-13, every minute the page was open; 2 ms and the same block this way).
+    // A launch's first scan is its earliest engine run by wall clock, and its first verdict the earliest by block.
     const row=(await this.store.db.sql.query<{launches:string;median:number|null;refused:string}>(`WITH cut AS (
-        SELECT least((SELECT min(number) FROM engine_block_times WHERE ts>=$1),(SELECT min(number) FROM chain_blocks WHERE ts>=$1)) AS block),
+        SELECT least((SELECT number FROM engine_block_times WHERE ts>=$1 ORDER BY ts,number LIMIT 1),(SELECT number FROM chain_blocks WHERE ts>=$1 ORDER BY ts,number LIMIT 1)) AS block),
       launched AS (SELECT r.coin,coalesce(bt.ts,cb.ts) AS at,
           (SELECT min(coalesce(e.created_at,to_timestamp(e.sec))) FROM engine_runs e WHERE e.coin=r.coin) AS scanned,
           (SELECT v.data->>'level' FROM verdicts v WHERE v.coin=r.coin ORDER BY v.valid_from_block LIMIT 1) AS first_level

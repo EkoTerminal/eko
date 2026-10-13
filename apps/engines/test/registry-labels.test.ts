@@ -30,6 +30,24 @@ describe('Watcher-owned point-in-time declarations',()=>{
     expect((await label(next,11)).label).toBe('declared_agent');expect(await label(next,12)).toMatchObject({label:'human',confidence:0,tier:null,features:{withdrawn:true,unclassified:true}});
     expect(await label(zero,20)).toBeUndefined();
   });
+  it('restores independent evidence only while its fingerprint run depends on canonical blocks',async()=>{
+    // The behaviour label comes from a fingerprint run that read block 4. When block 4 is no longer the block it read
+    // (a reorganisation), the label is unavailable and the wallet reads as withdrawn once the declaration moves on.
+    const seed=async(canonical:boolean)=>{
+      await db.sql.query("INSERT INTO wallet_labels VALUES('behavior-fixture',$1,'likely_agent',0.8,'medium','fingerprint',NULL,'{}','fp-fixture',1)",[binary(wallet)]);
+      await db.sql.query("INSERT INTO wallet_fingerprint_runs(id,address,block,block_hash,model_version,input_hash,features,score) VALUES('run-fixture',$1,4,$2,'fp-fixture','input','{}',0.8)",[binary(wallet),binary(hash(4))]);
+      await db.sql.query("INSERT INTO wallet_fingerprint_dependencies VALUES('run-fixture',4,$1)",[binary(hash(4))]);
+      await db.sql.query("INSERT INTO wallet_label_fingerprint_dependencies VALUES('behavior-fixture','run-fixture')");
+      await db.insert('chain_blocks',{number:'4',block:'4',hash:binary(hash(canonical?4:404)),parent_hash:null,ts:new Date(0)});
+      await snapshot(1,5,wallet);await snapshot(1,8,next);
+      await writeRegistryLabels(db);
+    };
+    await seed(true);
+    expect(await label(wallet,8)).toMatchObject({label:'likely_agent',confidence:0.8});
+    await db.close();db=await openDb({pgliteDir:':memory:'});await migrate(db);await migrateEngines(db);
+    await seed(false);
+    expect(await label(wallet,8)).toMatchObject({label:'human',confidence:0,features:{withdrawn:true}});
+  });
   it('does not write on unchanged declarations and is replay idempotent',async()=>{
     await snapshot(1,5,wallet);await snapshot(1,8,wallet);
     expect(await writeRegistryLabels(db)).toMatchObject({written:1});

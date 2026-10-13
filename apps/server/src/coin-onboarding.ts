@@ -61,30 +61,35 @@ export const AUTOMATED_SENDER_TXS = 1000, SHARED_LAUNCHES = 20;
  * swaps settled.
  */
 export async function attributeSwaps(db: ChainDb, a: AttributionAddresses, from: Date, to: Date, limit = ATTRIBUTE_BATCH, coins?: Uint8Array[]): Promise<number> {
-  const scope = coins ? 's.coin=ANY($6::bytea[])' : 'EXISTS(SELECT 1 FROM tokens k WHERE k.address=s.coin AND k.deployer IS NOT NULL AND k.launchpad IS NULL)';
+  // One coin is matched by equality, so its swaps are read newest first through swaps(coin,block). As coin=ANY(...) the
+  // planner walked every coin's swaps backward to find them: 3.3 million rows for a batch 50,000 swaps into one coin's
+  // history on a copy of 2026-10-13 (3.2 s, against 78 ms).
+  const scope = !coins ? 'EXISTS(SELECT 1 FROM tokens k WHERE k.address=s.coin AND k.deployer IS NOT NULL AND k.launchpad IS NULL)'
+    : coins.length === 1 ? 's.coin=$6::bytea' : 's.coin=ANY($6::bytea[])';
+  // The wallet is picked per swap inside the lateral: joined back as a separate ranked set, the planner re-read that set
+  // once per swap (a 1,000-swap batch took 2.6 s on the same copy, 0.23 s this way).
   return (await db.sql.query(`WITH c AS MATERIALIZED (
       SELECT s.ts,s.tx_hash,s.log_index,s.block,s.coin,s.pool_id,s.side,s.venue,s.recipient FROM swaps s
       WHERE s.senders_pending AND s.venue<>'pons_curve' AND s.ts>=$1 AND s.ts<$2 AND ${scope} ORDER BY s.block DESC,s.log_index DESC LIMIT $3),
-    m AS (SELECT c.ts,c.tx_hash,c.log_index,c.side,x.addr,x.net,x.gin,x.gout,x.from_pool,x.to_pool FROM c CROSS JOIN LATERAL (
-      SELECT d.addr,sum(d.delta) AS net,coalesce(sum(d.delta) FILTER (WHERE d.delta>0),0) AS gin,coalesce(-sum(d.delta) FILTER (WHERE d.delta<0),0) AS gout,
-        bool_or(d.delta>0 AND (d.other=c.pool_id OR d.other=$4)) AS from_pool,bool_or(d.delta<0 AND (d.other=c.pool_id OR d.other=$4)) AS to_pool
-      FROM (SELECT t.to_address AS addr,t.amount AS delta,t.from_address AS other FROM token_transfers t WHERE t.token=c.coin AND t.block=c.block AND t.tx_hash=c.tx_hash AND t.kind='Transfer'
-        UNION ALL SELECT t.from_address,-t.amount,t.to_address FROM token_transfers t WHERE t.token=c.coin AND t.block=c.block AND t.tx_hash=c.tx_hash AND t.kind='Transfer') d
-      WHERE NOT d.addr=ANY($5::bytea[]) AND d.addr<>c.pool_id AND NOT EXISTS(SELECT 1 FROM pools p WHERE p.id=d.addr)
-      GROUP BY d.addr) x),
-    ranked AS (SELECT m.*,CASE WHEN (side=1 AND net>0) OR (side=-1 AND net<0) THEN 0 WHEN (side=1 AND from_pool) OR (side=-1 AND to_pool) THEN 1
-        WHEN (side=1 AND gin>0) OR (side=-1 AND gout>0) THEN 2 END AS tier FROM m),
-    pick AS (SELECT DISTINCT ON (ts,tx_hash,log_index) ts,tx_hash,log_index,addr FROM ranked WHERE tier IS NOT NULL
-      ORDER BY ts,tx_hash,log_index,tier,CASE WHEN tier=0 THEN abs(net) WHEN side=1 THEN gin ELSE gout END DESC,addr),
     -- No coins moved: nobody took delivery, when the coin's transfers were being stored by then.
     r AS (SELECT c.*,p.addr,p.addr IS NULL AND c.venue='uniswap_v4' AND c.side=1
         AND NOT EXISTS(SELECT 1 FROM token_transfers t WHERE t.token=c.coin AND t.block=c.block AND t.tx_hash=c.tx_hash)
         AND EXISTS(SELECT 1 FROM token_transfers t WHERE t.token=c.coin AND t.block<c.block) AS undelivered
-      FROM c LEFT JOIN pick p ON p.ts=c.ts AND p.tx_hash=c.tx_hash AND p.log_index=c.log_index)
+      FROM c LEFT JOIN LATERAL (SELECT x.addr FROM (
+          SELECT d.addr,sum(d.delta) AS net,coalesce(sum(d.delta) FILTER (WHERE d.delta>0),0) AS gin,coalesce(-sum(d.delta) FILTER (WHERE d.delta<0),0) AS gout,
+            bool_or(d.delta>0 AND (d.other=c.pool_id OR d.other=$4)) AS from_pool,bool_or(d.delta<0 AND (d.other=c.pool_id OR d.other=$4)) AS to_pool
+          FROM (SELECT t.to_address AS addr,t.amount AS delta,t.from_address AS other FROM token_transfers t WHERE t.token=c.coin AND t.block=c.block AND t.tx_hash=c.tx_hash AND t.kind='Transfer'
+            UNION ALL SELECT t.from_address,-t.amount,t.to_address FROM token_transfers t WHERE t.token=c.coin AND t.block=c.block AND t.tx_hash=c.tx_hash AND t.kind='Transfer') d
+          WHERE NOT d.addr=ANY($5::bytea[]) AND d.addr<>c.pool_id AND NOT EXISTS(SELECT 1 FROM pools p WHERE p.id=d.addr)
+          GROUP BY d.addr) x
+        CROSS JOIN LATERAL (SELECT CASE WHEN (c.side=1 AND x.net>0) OR (c.side=-1 AND x.net<0) THEN 0 WHEN (c.side=1 AND x.from_pool) OR (c.side=-1 AND x.to_pool) THEN 1
+          WHEN (c.side=1 AND x.gin>0) OR (c.side=-1 AND x.gout>0) THEN 2 END AS tier) k
+        WHERE k.tier IS NOT NULL
+        ORDER BY k.tier,CASE WHEN k.tier=0 THEN abs(x.net) WHEN c.side=1 THEN x.gin ELSE x.gout END DESC,x.addr LIMIT 1) p ON true)
     UPDATE swaps s SET trader=r.addr,senders_pending=false,
       recipient=CASE WHEN r.side<>1 THEN s.recipient WHEN r.addr IS NOT NULL THEN r.addr WHEN r.undelivered THEN $4 ELSE s.recipient END
     FROM r WHERE s.ts=r.ts AND s.tx_hash=r.tx_hash AND s.log_index=r.log_index RETURNING 1`,
-    [from, to, limit, binary(a.poolManager), [ZERO, DEAD, a.poolManager].map(binary), ...(coins ? [coins] : [])])).rows.length;
+    [from, to, limit, binary(a.poolManager), [ZERO, DEAD, a.poolManager].map(binary), ...(coins ? [coins.length === 1 ? coins[0] : coins] : [])])).rows.length;
 }
 
 /**

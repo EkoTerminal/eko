@@ -38,16 +38,22 @@ export class RadarService {
     return {rows,cursor:selected.rows.length>100 && last ? encodeCursor('radar',[last.tier,last.volume,hex(last.coin),(key ? Number(key[3]) : 0)+page.length]) : null,delayedSec:0,totals};
   }
   private cachedTotals?: { at: number; value: ReturnType<RadarService['computeTotals']> };
-  /** Header counts change slowly; serve them from a 30-second cache so a radar request never recomputes them inline. */
+  private refreshingTotals=false;
+  /**
+   * Header counts change slowly. With the background refresher running, a request gets the last computed counts at
+   * once; when they are 30 seconds old a recompute starts and replaces them when it is done, so no request waits for
+   * it (the request that found them expired did: 3.4 to 7.5 s on 2026-10-13, against 0.9 s for the next). Only the
+   * first request after start waits, and a failed recompute leaves the counts it had.
+   */
   totals() {
     if(!this.store.background)return this.computeTotals();
-    const now=this.store.now();
-    if(!this.cachedTotals || now-this.cachedTotals.at>=30_000) {
-      const value=this.computeTotals();
-      this.cachedTotals={at:now,value};
-      value.catch(()=>{ if(this.cachedTotals?.value===value)this.cachedTotals=undefined; });
-    }
-    return this.cachedTotals.value;
+    const now=this.store.now(),cached=this.cachedTotals;
+    if(cached && (now-cached.at<30_000 || this.refreshingTotals))return cached.value;
+    const value=this.computeTotals();
+    this.refreshingTotals=true;
+    if(!cached)this.cachedTotals={at:now,value};
+    value.then(()=>{ this.cachedTotals={at:now,value}; },()=>{ if(this.cachedTotals?.value===value)this.cachedTotals=undefined; }).finally(()=>{ this.refreshingTotals=false; });
+    return cached?.value ?? value;
   }
   private async computeTotals() {
     const result=await this.store.db.sql.query<{tier:number;n:string}>('SELECT tier,count(*) AS n FROM read_coins WHERE activity>$1 GROUP BY tier',[new Date(this.store.now()-7*86400000)]);
