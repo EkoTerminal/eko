@@ -28,6 +28,13 @@ export const CLEAR_RULES_AT='2026-10-10T21:05:00Z';
  * a sell check landing after a card is caught by staleRatings without it.
  */
 export const RATING_CODE_AT='2026-10-12T18:30:00Z';
+/**
+ * The same for coins that did not launch on Pons, whatever their grade: cards written before this time could not see a
+ * deployer taking its liquidity out (the check read only positions still in the pool) and left the liquidity check
+ * not run on a coin with a second pool. They are few (onboarding began that morning) and are re-rated once.
+ */
+export const UNISWAP_RATING_CODE_AT='2026-10-13T07:30:00Z';
+const NO_OTHER_RERATE='1970-01-01T00:00:00Z';
 /** Stale pending cards the re-rating loop loads at once and writes in one transaction. */
 export const RERATE_WIDTH=16;
 /** Blocks before the loop tries again to first-scan a coin it could not load (about two minutes at 0.2 s blocks). */
@@ -64,6 +71,8 @@ export interface WorkerOptions {
   rerate?: boolean; rerateIdleMs?: number; onRerate?: (cards: number, firstScans: number, traded: number) => void; onRerateError?: (error: unknown) => void;
   /** Live: re-rate pending cards written before this ISO time (the CLI passes RATING_CODE_AT). Wall-clock, like engine_runs.created_at. */
   rerateBefore?: string;
+  /** Live: cards of coins that did not launch on Pons written before this time are re-rated once (the CLI passes UNISWAP_RATING_CODE_AT). */
+  rerateOtherBefore?: string;
   concurrency?: number; pollMs?: number; client?: PonsProfileClient; bus?: EngineBus; readBlock?: BlockReader; now?: () => number; replayCache?:boolean;marketWindow?:boolean; onPlanned?:(plan:{tasks:number;coins:number;from:number;to:number})=>void; onProgress?: (completed:number,block:number) => void;
   /**
    * Live only. Checkpoints older than this many seconds behind the indexed head are not replayed one by one:
@@ -124,6 +133,8 @@ export class EngineWorker {
   private rerateMemo:SourceMemo={ranks:new Map()};
   /** Pending cards written before this time are re-rated once (options.rerateBefore, never before CLEAR_RULES_AT). */
   private get rulesAt() { return new Date(Math.max(Date.parse(CLEAR_RULES_AT),Date.parse(this.options.rerateBefore ?? CLEAR_RULES_AT))).toISOString(); }
+  /** Cards of coins outside Pons written before this time are re-rated once (options.rerateOtherBefore; none without it). */
+  private get otherRulesAt() { return this.options.rerateOtherBefore ?? NO_OTHER_RERATE; }
   /**
    * Return replay/work counters and card-failure totals without new I/O or authentication. Host
    * diagnostic read; counters describe this worker instance, not whole-system completeness.
@@ -165,6 +176,7 @@ export class EngineWorker {
     if (!Number.isInteger(options.concurrency ?? 4) || (options.concurrency ?? 4)<1 || (options.concurrency ?? 4)>32) throw new Error('Invalid engine concurrency');
     if (!Number.isFinite(options.pollMs ?? 2000) || (options.pollMs ?? 2000)<1) throw new Error('Invalid engine poll interval');
     if (options.rerateBefore!==undefined && !Number.isFinite(Date.parse(options.rerateBefore))) throw new Error('Invalid engine re-rate time');
+    if (options.rerateOtherBefore!==undefined && !Number.isFinite(Date.parse(options.rerateOtherBefore))) throw new Error('Invalid engine re-rate time');
   }
   /**
    * Set stop state and wake polling sleeps. Host lifecycle only; in-flight source reads/current
@@ -383,7 +395,7 @@ export class EngineWorker {
     const rerateRank=new Map<Address,number>();
     if(live && head && now-head.sec<7*86400) {
       const byCoin=new Map(inputs.map(input=>[input.coin,input]));
-      for(const {coin,card} of await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL,this.rerated,this.rulesAt)) {
+      for(const {coin,card} of await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL,this.rerated,this.rulesAt,this.otherRulesAt)) {
         // A coin still pending after its re-rating is not selected again until its card changes.
         this.rerated.set(coin,card);rerateRank.set(coin,rerateRank.size);revised.add(coin);
         if(!tasks.some(task=>task.coin===coin && task.block===head.number))tasks.push({coin,block:head.number,sec:head.sec});
@@ -573,7 +585,7 @@ export class EngineWorker {
         // nine hours before). Beside them, pending cards that would rate differently now.
         const traded=first.length || head==null ? [] : await tradedSinceCard(this.db,since,(this.options.now?.() ?? Date.now()/1000)-TRADED_RERATE_SEC,RERATE_WIDTH*2);
         // Coins the radar lists (active in the last seven days), by this worker's clock.
-        const stale=first.length || head==null ? [] : (await staleRatings(this.db,(await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>to_timestamp($1)',[since])).rows.map(row=>hex(row.coin) as Address),RERATE_WIDTH*2,this.rerated,this.rulesAt))
+        const stale=first.length || head==null ? [] : (await staleRatings(this.db,(await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>to_timestamp($1)',[since])).rows.map(row=>hex(row.coin) as Address),RERATE_WIDTH*2,this.rerated,this.rulesAt,this.otherRulesAt))
           .filter(entry=>!traded.some(t=>t.coin===entry.coin));
         const work:{coin:Address;card?:string}[]=first.length ? first.map(coin=>({coin})) : [...traded,...stale];
         const tradedCoins=new Set(traded.map(t=>t.coin));let tradedCards=0;
@@ -820,7 +832,7 @@ export async function unscannedCoins(db:ChainDb,since:number,block:number,limit:
  * next checkpoint); or, for a Pons coin that has traded, missing the wash or curve check (both need every swap priced)
  * while no swap is unpriced any more (pricing repair). `skip` holds card ids already re-rated that are still current.
  */
-export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:ReadonlyMap<Address,string>=new Map(),rulesAt=CLEAR_RULES_AT):Promise<{coin:Address;card:string}[]> {
+export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:ReadonlyMap<Address,string>=new Map(),rulesAt=CLEAR_RULES_AT,otherRulesAt=NO_OTHER_RERATE):Promise<{coin:Address;card:string}[]> {
   if(!coins.length || limit<=0)return [];
   const found:{coin:Address;card:string}[]=[];
   for(const row of (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT l.coin,l.card_id AS card FROM coin_card_latest l JOIN read_coins r ON r.coin=l.coin
@@ -832,8 +844,9 @@ export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:
       OR (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'honeypot'
         AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused')))
       OR (t.launchpad='pons' AND (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'wash_to_trend' OR NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'stuck_at_bonding')
-        AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL))))
-    ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,rulesAt,RULES_VERSION,[...skip.values()]])).rows)
+        AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL)))
+      OR (t.launchpad IS DISTINCT FROM 'pons' AND coalesce(e.created_at,to_timestamp(e.sec))<$6::timestamptz))
+    ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,rulesAt,RULES_VERSION,[...skip.values()],otherRulesAt])).rows)
     found.push({coin:hex(row.coin) as Address,card:row.card});
   return found;
 }

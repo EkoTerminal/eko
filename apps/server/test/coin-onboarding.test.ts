@@ -95,7 +95,7 @@ describe('liquidity providers from the pool’s transfers', () => {
     await event(101, 21, 'ModifyLiquidity', { sender: positions, liquidityDelta: '5000', tickLower: '-600', tickUpper: '600' }); await transfer(db, 101, 21, launcher, manager, '800000');
     await event(300, 22, 'ModifyLiquidity', { sender: positions, liquidityDelta: '-5000', tickLower: '-600', tickUpper: '600' }); await transfer(db, 300, 22, manager, seller, '750000');
     await event(301, 23, 'ModifyLiquidity', { sender: positions, liquidityDelta: '100', tickLower: '-600', tickUpper: '600' });
-    expect(await attributeLiquidity(db, addresses, 100, { coins: [binary(coin)] })).toBe(4);
+    expect(await attributeLiquidity(db, addresses, 100, [binary(coin)])).toBe(4);
     const rows = (await db.sql.query<{ actor: Uint8Array; senders_pending: boolean }>('SELECT actor,senders_pending FROM liquidity_events ORDER BY block', [])).rows;
     expect(rows.map(r => [hex(r.actor), r.senders_pending])).toEqual([[manager, false], [launcher, false], [seller, false], [positions, false]]);
   });
@@ -127,10 +127,12 @@ describe('coin onboarding', () => {
     // The read model lists it once it has a launch wallet, before any card.
     await db.sql.query('SELECT refresh_read_models(ARRAY[$1::bytea],$2)', [binary(coin), Math.floor(now / 1000)]);
     expect((await db.sql.query('SELECT 1 FROM read_coins WHERE coin=$1', [binary(coin)])).rows).toHaveLength(1);
-    // A later swap of the onboarded coin is named by the next pass without any chain read.
-    await swap(db, 950, 31, -1, '1000', { quote_asset: binary(usdg), amount_quote: '1000' }); await transfer(db, 950, 31, seller, manager, '1000');
+    // A swap of the onboarded coin stored later without a wallet or a price (here an old one: a pool's stored raw events
+    // turned into rows) is priced and named by the next pass without any chain read.
+    await swap(db, 150, 31, -1, '1000000000000000000', { quote_asset: binary(usdg), amount_quote: '3000000' }); await transfer(db, 150, 31, seller, manager, '1000000000000000000');
     await worker.tick();
-    expect((await swaps(db)).at(-1)).toEqual({ tx: 31, trader: seller, recipient: null, pending: false });
+    expect((await swaps(db))[0]).toEqual({ tx: 31, trader: seller, recipient: null, pending: false });
+    expect((await db.sql.query<{ usd: number }>('SELECT usd FROM swaps WHERE block=150')).rows[0].usd).toBe(3);
     expect(calls).toHaveLength(3);
   });
   it('sets aside a token it cannot read, and records no deployer wallet when its first mint is not found', async () => {

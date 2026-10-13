@@ -64,11 +64,16 @@ async function fixture() {
 const coins = [coinA, coinB, coinC, coinD].map(binary);
 const tables = ['read_coins', 'read_buyers', 'read_feed', 'read_first_verdict'] as const;
 const order = { read_coins: 'coin', read_buyers: 'coin,trader', read_feed: 'id', read_first_verdict: 'coin' };
-/** Every projection row, by value. */
-async function rows(db: ChainDb) {
+/**
+ * Every projection row, by value, of the coins that can be listed. coinD has no launch wallet: the 0114 refresh still
+ * wrote its buyers and pool rows, the current one leaves a token that can never be listed alone (0193), so its rows
+ * are compared separately (`unlisted`).
+ */
+async function rows(db: ChainDb, unlisted = false) {
   const result: Record<string, unknown[]> = {};
   for (const table of tables) result[table] = (await db.sql.query(`SELECT * FROM ${table} ORDER BY ${order[table]}`)).rows
-    .map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v instanceof Uint8Array ? Buffer.from(v).toString('hex') : v instanceof Date ? v.toISOString() : v])));
+    .map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v instanceof Uint8Array ? Buffer.from(v).toString('hex') : v instanceof Date ? v.toISOString() : v])))
+    .filter(row => ((row as { coin?: string }).coin === coinD.slice(2)) === unlisted);
   return result;
 }
 /** Every projection row version: a rewritten or reinserted row gets a new xmin and ctid. */
@@ -84,7 +89,9 @@ describe('read-model refresh churn', () => {
     const db = await fixture(), store = new ReadStore(db, () => now);
     await store.refreshModels();
     const before = await versions(db), values = await rows(db);
-    expect(values.read_buyers).toHaveLength(4);
+    expect(values.read_buyers).toHaveLength(3);
+    // A token without a launch wallet is never listed, so the refresh does not read it: no buyer, no pool row.
+    expect(Object.values(await rows(db, true)).flat()).toEqual([]);
     expect(values.read_feed.map(r => (r as { id: string }).id)).toEqual(expect.arrayContaining([`pool:${poolB1.slice(2)}:${coinB.slice(2)}`, `token:${coinA.slice(2)}`]));
     // Every coin is queued again with no source change: no projection row gets a new version.
     await db.sql.query('INSERT INTO read_dirty(coin) SELECT unnest($1::bytea[]) ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision', [coins]);
@@ -112,9 +119,9 @@ describe('read-model refresh churn', () => {
     expect(first.read_coins).toHaveLength(3);
     // New buyers, repeat buys and a reorg that removes a buyer.
     await swap(db, 30, coinA, poolA, traders[3]!, 1); await swap(db, 31, coinA, poolA, traders[0]!, 1);
-    expect((await same()).read_buyers).toHaveLength(5);
-    await db.sql.query('DELETE FROM swaps WHERE coin=$1 AND trader=$2', [binary(coinA), binary(traders[1]!)]);
     expect((await same()).read_buyers).toHaveLength(4);
+    await db.sql.query('DELETE FROM swaps WHERE coin=$1 AND trader=$2', [binary(coinA), binary(traders[1]!)]);
+    expect((await same()).read_buyers).toHaveLength(3);
     // Sender enrichment fills a pending buyer; pricing enrichment clears the pending price.
     await db.sql.query('UPDATE swaps SET trader=$1,tx_from=$1,senders_pending=false WHERE trader IS NULL', [binary(traders[2]!)]);
     await db.sql.query('UPDATE swaps SET pricing_pending=false,usd=20 WHERE pricing_pending');
@@ -130,8 +137,11 @@ describe('read-model refresh churn', () => {
     // Card changes move the tier; a deleted token drops every projection row.
     await card(db, coinB, 33, 'clear'); await card(db, coinC, 33, 'monitor');
     await db.sql.query('DELETE FROM tokens WHERE address=$1', [binary(coinD)]);
+    // (The 0114 reference run above wrote coinD's buyer and pool rows; with the token gone the current refresh drops them.)
+    expect(Object.values(await rows(db, true)).flat().length).toBeGreaterThan(0);
     const last = await same();
-    expect(last.read_buyers.some(r => (r as { coin: string }).coin === coinD.slice(2))).toBe(false);
+    await refresh(db);
+    expect(Object.values(await rows(db, true)).flat()).toEqual([]);
     expect(last.read_coins.map(r => (r as { tier: number }).tier)).toEqual([3, 0, 1]);
   });
 

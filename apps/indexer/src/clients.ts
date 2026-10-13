@@ -263,6 +263,23 @@ export function createClients(env: RpcEnv, registry: AddressRegistry, meter: Rpc
         throw error;
       }
     },
+    /**
+     * Read the registry's canonical v3 factory for the pool of a currency pair and fee at a pin: the address a
+     * contract must have to be that factory's pool (v3Pool's own factory() answer proves nothing). Indexer host call
+     * without wallet auth; a zero address or a revert returns null while transport/budget failures reject.
+     * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+     * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
+     */
+    async canonicalV3Pool(token0, token1, fee, blockNumber) {
+      try {
+        const pool = await pinned(stateReads, c => c.readContract({ address: registry.requireAddress('uniswapV3.factory'), abi: factoryAbi, functionName: 'getPool', args: [token0, token1, fee], blockNumber })) as Address;
+        return lower(pool) === native ? null : pool;
+      } catch (error) {
+        if (rpcStopReason(error) || isRpcUnavailable(error)) throw error;
+        if (error instanceof Error && /revert|returned no data/i.test(error.message)) return null;
+        throw error;
+      }
+    },
     ...(headWs ? { /**
    * Subscribe to metered WebSocket block-number notifications with missed-head emission and caller
    * error callback. Indexer host call without wallet auth; returned unwatch releases the

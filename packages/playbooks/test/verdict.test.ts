@@ -54,6 +54,10 @@ it('says who added a coin\'s liquidity and what an unreviewed hook may do, witho
     .toBe("The deployer added 80% of this coin's pool liquidity; EKO does not check whether it is locked.");
   expect(reasonForMatch({ ...base, id: 'removable_liquidity', level: 'danger', evidence: [stat('Removable deployer/crew LP share', 1)] } as never))
     .toBe("The deployer added 100% of this coin's pool liquidity and removed liquidity from an earlier launch; EKO does not check whether it is locked.");
+  expect(reasonForMatch({ ...base, id: 'removable_liquidity', level: 'danger', evidence: [stat('Deployer liquidity removed (share of its peak)', 1)] } as never))
+    .toBe("The deployer took all the liquidity it had added out of this coin's pool.");
+  expect(reasonForMatch({ ...base, id: 'removable_liquidity', level: 'danger', evidence: [stat('Deployer liquidity removed (share of its peak)', 0.62)] } as never))
+    .toBe("The deployer took 62% of the liquidity it had added out of this coin's pool.");
   expect(reasonForMatch({ ...base, id: 'malicious_hook', level: 'monitor', evidence: [stat('Return-delta permission bits', 4), stat('Quote versus simulation gap (%)', 'unavailable')] } as never))
     .toBe('This coin trades in a pool whose hook may change what a swap pays or receives; EKO has not reviewed the hook.');
   // A measured gap keeps the rule's own wording.

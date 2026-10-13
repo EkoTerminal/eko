@@ -84,6 +84,11 @@ describe('removable_liquidity', () => {
   it.each([[0.4999, null], [0.5, 'monitor'], [0.5001, 'monitor']] as const)('controlled share %s → %s', (share, expected) => level('removable_liquidity', lp(share), expected));
   it.each([[499.99, 'monitor'], [500, null], [500.01, null]] as const)('2%% depth %s → %s', (depth, expected) => level('removable_liquidity', lp(0, depth), expected));
   it.each([[0, 'monitor'], [1, 'danger'], [2, 'danger']] as const)('prior removals %s → %s', (n, expected) => level('removable_liquidity', lp(0.5, 500, n), expected));
+  it.each([[0.4999, null], [0.5, 'danger'], [1, 'danger']] as const)('deployer took out %s of its liquidity → %s', (share, expected) => {
+    // A pull leaves no position behind: nothing removable is left, and the removal itself is the finding.
+    const input = lp(0); input.liquidity!.positions = []; input.liquidity!.pulled = { share, evidence: [] };
+    level('removable_liquidity', input, expected);
+  });
   it.each(['burned', 'locked', 'pons_locked'] as const)('excludes %s LP', (status) => {
     const input = lp(1, 500, 1); input.liquidity!.positions[0].status = status;
     level('removable_liquidity', input, null);

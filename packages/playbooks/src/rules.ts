@@ -87,6 +87,11 @@ export const removableLiquidity: Rule<'removable_liquidity'> = {
   id: 'removable_liquidity', evaluate(s, h, cfg) {
     if (!s.liquidity) return null;
     const l = s.liquidity;
+    // The pull itself: the deployer already took out at least the share of its liquidity that, still in the pool, would
+    // make it a finding. Nothing is left to call removable, and a holder sells into whatever remains.
+    if (l.pulled && l.pulled.share >= cfg.deployerLpShare) return match(s, h, this.id, 'danger', [
+      stat(s, this.id, 'pulled', 'Deployer liquidity removed (share of its peak)', l.pulled.share), address(s.deployer, 'Deployer'), ...l.pulled.evidence, ...l.priorRemovals,
+    ]);
     const controlled = l.positions.filter((p) => p.status === 'removable' && p.controlledBy !== 'other');
     const share = controlled.reduce((sum, p) => sum + p.share, 0);
     const removable = share >= cfg.deployerLpShare;

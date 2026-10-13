@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
+Measured: **595/595 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -186,19 +186,19 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `refreshCoinFlow` | function | [apps/engines/src/watcher/flow-store.ts:41](../../apps/engines/src/watcher/flow-store.ts#L41) | Yes |
 | `refreshFlows` | function | [apps/engines/src/watcher/flow-store.ts:77](../../apps/engines/src/watcher/flow-store.ts#L77) | Yes |
 | `refreshCensus` | function | [apps/engines/src/watcher/flow-store.ts:95](../../apps/engines/src/watcher/flow-store.ts#L95) | Yes |
-| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:46](../../apps/engines/src/worker.ts#L46) | Yes |
-| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:133](../../apps/engines/src/worker.ts#L133) | Yes |
-| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:142](../../apps/engines/src/worker.ts#L142) | Yes |
-| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:161](../../apps/engines/src/worker.ts#L161) | Yes |
-| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:175](../../apps/engines/src/worker.ts#L175) | Yes |
-| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:184](../../apps/engines/src/worker.ts#L184) | Yes |
-| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:219](../../apps/engines/src/worker.ts#L219) | Yes |
-| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:256](../../apps/engines/src/worker.ts#L256) | Yes |
-| `EngineWorker.run` | method | [apps/engines/src/worker.ts:522](../../apps/engines/src/worker.ts#L522) | Yes |
-| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:639](../../apps/engines/src/worker.ts#L639) | Yes |
-| `tradedSinceCard` | function | [apps/engines/src/worker.ts:791](../../apps/engines/src/worker.ts#L791) | Yes |
-| `unscannedCoins` | function | [apps/engines/src/worker.ts:804](../../apps/engines/src/worker.ts#L804) | Yes |
-| `staleRatings` | function | [apps/engines/src/worker.ts:823](../../apps/engines/src/worker.ts#L823) | Yes |
+| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:53](../../apps/engines/src/worker.ts#L53) | Yes |
+| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:144](../../apps/engines/src/worker.ts#L144) | Yes |
+| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:153](../../apps/engines/src/worker.ts#L153) | Yes |
+| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:172](../../apps/engines/src/worker.ts#L172) | Yes |
+| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:187](../../apps/engines/src/worker.ts#L187) | Yes |
+| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:196](../../apps/engines/src/worker.ts#L196) | Yes |
+| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:231](../../apps/engines/src/worker.ts#L231) | Yes |
+| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:268](../../apps/engines/src/worker.ts#L268) | Yes |
+| `EngineWorker.run` | method | [apps/engines/src/worker.ts:534](../../apps/engines/src/worker.ts#L534) | Yes |
+| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:651](../../apps/engines/src/worker.ts#L651) | Yes |
+| `tradedSinceCard` | function | [apps/engines/src/worker.ts:803](../../apps/engines/src/worker.ts#L803) | Yes |
+| `unscannedCoins` | function | [apps/engines/src/worker.ts:816](../../apps/engines/src/worker.ts#L816) | Yes |
+| `staleRatings` | function | [apps/engines/src/worker.ts:835](../../apps/engines/src/worker.ts#L835) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |
@@ -236,7 +236,8 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `returned.agentWallets` | method | [apps/indexer/src/clients.ts:182](../../apps/indexer/src/clients.ts#L182) | Yes |
 | `returned.ethUsdRate` | method | [apps/indexer/src/clients.ts:205](../../apps/indexer/src/clients.ts#L205) | Yes |
 | `returned.v3Pool` | method | [apps/indexer/src/clients.ts:248](../../apps/indexer/src/clients.ts#L248) | Yes |
-| `returned.watch` | method | [apps/indexer/src/clients.ts:274](../../apps/indexer/src/clients.ts#L274) | Yes |
+| `returned.canonicalV3Pool` | method | [apps/indexer/src/clients.ts:273](../../apps/indexer/src/clients.ts#L273) | Yes |
+| `returned.watch` | method | [apps/indexer/src/clients.ts:291](../../apps/indexer/src/clients.ts#L291) | Yes |
 | `enrichSenders` | function | [apps/indexer/src/enrich.ts:23](../../apps/indexer/src/enrich.ts#L23) | Yes |
 | `HeadFollower.constructor` | constructor | [apps/indexer/src/head.ts:75](../../apps/indexer/src/head.ts#L75) | Yes |
 | `HeadFollower.assertChain` | method | [apps/indexer/src/head.ts:85](../../apps/indexer/src/head.ts#L85) | Yes |
@@ -244,11 +245,11 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `HeadFollower.rollback` | method | [apps/indexer/src/head.ts:101](../../apps/indexer/src/head.ts#L101) | Yes |
 | `HeadFollower.ingest` | method | [apps/indexer/src/head.ts:125](../../apps/indexer/src/head.ts#L125) | Yes |
 | `HeadFollower.run` | method | [apps/indexer/src/head.ts:152](../../apps/indexer/src/head.ts#L152) | Yes |
-| `LogHeadFollower.constructor` | constructor | [apps/indexer/src/log-head.ts:89](../../apps/indexer/src/log-head.ts#L89) | Yes |
-| `LogHeadFollower.stop` | method | [apps/indexer/src/log-head.ts:105](../../apps/indexer/src/log-head.ts#L105) | Yes |
-| `LogHeadFollower.rollback` | method | [apps/indexer/src/log-head.ts:125](../../apps/indexer/src/log-head.ts#L125) | Yes |
-| `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:176](../../apps/indexer/src/log-head.ts#L176) | Yes |
-| `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:593](../../apps/indexer/src/log-head.ts#L593) | Yes |
+| `LogHeadFollower.constructor` | constructor | [apps/indexer/src/log-head.ts:101](../../apps/indexer/src/log-head.ts#L101) | Yes |
+| `LogHeadFollower.stop` | method | [apps/indexer/src/log-head.ts:117](../../apps/indexer/src/log-head.ts#L117) | Yes |
+| `LogHeadFollower.rollback` | method | [apps/indexer/src/log-head.ts:137](../../apps/indexer/src/log-head.ts#L137) | Yes |
+| `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:188](../../apps/indexer/src/log-head.ts#L188) | Yes |
+| `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:639](../../apps/indexer/src/log-head.ts#L639) | Yes |
 | `acquireScanJob` | function | [apps/indexer/src/scan-jobs.ts:13](../../apps/indexer/src/scan-jobs.ts#L13) | Yes |
 | `buildMcpApp` | function | [apps/mcp/src/app.ts:58](../../apps/mcp/src/app.ts#L58) | Yes |
 | `registerHarnessTools` | function | [apps/mcp/src/harness.ts:10](../../apps/mcp/src/harness.ts#L10) | Yes |
@@ -282,8 +283,8 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.drain` | method | [apps/server/src/ai/swarm-worker.ts:109](../../apps/server/src/ai/swarm-worker.ts#L109) | Yes |
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
-| `buildApp` | function | [apps/server/src/app.ts:118](../../apps/server/src/app.ts#L118) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:392](../../apps/server/src/app.ts#L392) | Yes |
+| `buildApp` | function | [apps/server/src/app.ts:117](../../apps/server/src/app.ts#L117) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:391](../../apps/server/src/app.ts#L391) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |
@@ -672,7 +673,7 @@ Measured: **594/594 (100.00%)** documented. Minimum: **90%**.
 | `ReceiptOutbox.get` | method | [packages/db/src/receipt-outbox.ts:183](../../packages/db/src/receipt-outbox.ts#L183) | Yes |
 | `guardScoreHash` | function | [packages/playbooks/src/guard-scoring.ts:20](../../packages/playbooks/src/guard-scoring.ts#L20) | Yes |
 | `evaluateGuardV2` | function | [packages/playbooks/src/guard-scoring.ts:48](../../packages/playbooks/src/guard-scoring.ts#L48) | Yes |
-| `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:107](../../packages/playbooks/src/verdict.ts#L107) | Yes |
+| `assembleVerdict` | function | [packages/playbooks/src/verdict.ts:110](../../packages/playbooks/src/verdict.ts#L110) | Yes |
 | `actualBindingHash` | function | [packages/policy/src/actual-order.ts:17](../../packages/policy/src/actual-order.ts#L17) | Yes |
 | `executionPolicyHash` | function | [packages/policy/src/actual-order.ts:25](../../packages/policy/src/actual-order.ts#L25) | Yes |
 | `actualStateHash` | function | [packages/policy/src/actual-order.ts:35](../../packages/policy/src/actual-order.ts#L35) | Yes |

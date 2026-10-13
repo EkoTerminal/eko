@@ -5,6 +5,7 @@ import { AddressRegistry, createMeteredClients, decodeResult, loadRegistry, pons
 import { decodeFunctionData, encodeFunctionResult, encodeAbiParameters, encodeEventTopics, parseAbi, toEventSelector, toHex, type AbiEvent, type Address, type Hex } from 'viem';
 import { BlockRows } from '../src/rows.js';
 import { enrichSenders } from '../src/enrich.js';
+import { DeferredEvents } from '../src/deferred.js';
 import { PonsBackfill } from '../src/backfill.js';
 import { BlockDecoder } from '../src/decode.js';
 import { HeadFollower, ReorgDepthError } from '../src/head.js';
@@ -57,6 +58,7 @@ async function seed(db: ChainDb) {
   await db.ensurePartitions(new Date(Number(BigInt(empty(0).timestamp)) * 1000));
   await db.insert('swaps', { ts: new Date(Number(BigInt(empty(0).timestamp)) * 1000), block: '0', tx_hash: binary(hash(9000)), log_index: 0, venue: 'uniswap_v3', pool_id: binary(address(110)), coin: binary(registry.requireAddress('tokens.WETH')), quote_asset: binary(registry.requireAddress('tokens.USDG')), trader: binary(actor), tx_from: binary(actor), tx_to: binary(target), side: 1, amount_coin: '1', amount_quote: '2000', price_quote: 2000 });
 }
+const count = async (db: ChainDb, table: string) => Number((await db.sql.query<{ n: string }>(`SELECT count(*) AS n FROM ${table}`)).rows[0].n);
 async function snapshot(db: ChainDb) {
   const tables: Record<string, unknown[]> = {};
   // Full-block and logs-first paths have different protocol input coverage; compare the existing chain facts here.
@@ -529,6 +531,41 @@ describe('logs-first head', () => {
     const swap=(await db.sql.query('SELECT * FROM swaps')).rows[0];expect(swap).toMatchObject({senders_pending:false,price_quote:.01});expect(hex(swap.trader as Uint8Array)).toBe(lower(actor));
     expect((await db.sql.query('SELECT * FROM pending_pool_events')).rows).toHaveLength(0);expect((await db.sql.query('SELECT * FROM pools')).rows[0]).toMatchObject({creation_verified:false});
     await expect(enrichSenders(db,other,client)).resolves.toEqual({enriched:0});expect(client.receipts).toHaveBeenCalledOnce();
+  });
+
+  it('indexes an unknown v3 pool once the canonical factory names it, rejects a contract that only answers like a pool, and turns its stored events into rows',async()=>{
+    const db=await database();await seed(db);
+    const other=address(190),pool=address(191),fake=address(192),weth=registry.requireAddress('tokens.WETH');
+    const swap=(n:number,emitter:Address)=>{const b=trade(n),tx=b.block.transactions[0].hash;
+      b.receipts[0].logs=[event(v3Abi[1],emitter,{sender:target,recipient:actor,amount0:-100n*10n**18n,amount1:10n**18n,sqrtPriceX96:2n**96n,liquidity:1000n,tick:0},b.block,tx,0),event(erc20Abi[0],other,{from:emitter,to:actor,value:100n*10n**18n},b.block,tx,1)];return b;};
+    const data:Data=new Map([[0n,{block:empty(0),receipts:[]}],[1n,swap(1,pool)],[2n,swap(2,fake)]]),client=memory(data);
+    // Without a factory to ask, both stay stored as raw events (as before).
+    client.v3Pool=vi.fn(async()=>({currency0:other,currency1:weth,fee:3000,tickSpacing:60}));
+    await follower(db,client).tick();
+    expect(client.v3Pool).not.toHaveBeenCalled();expect(await count(db,'pending_pool_events')).toBe(2);expect(await count(db,'swaps')).toBe(1);
+    // The factory names only `pool` for that pair and fee.
+    client.canonicalV3Pool=vi.fn(async()=>pool);
+    data.set(3n,swap(3,pool));data.set(4n,swap(4,fake));
+    const live=follower(db,client);await live.tick();
+    expect(client.v3Pool).toHaveBeenCalledTimes(2);
+    const rows=(await db.sql.query<{block:string;trader:Uint8Array;senders_pending:boolean}>('SELECT block::text,trader,senders_pending FROM swaps WHERE pool_id=$1 ORDER BY block',[binary(pool)])).rows;
+    // From its discovery on, the pool's swaps are rows with the wallet their transfers name.
+    expect(rows.map(r=>[r.block,hex(r.trader),r.senders_pending])).toEqual([['3',lower(actor),false]]);
+    expect((await db.sql.query('SELECT creation_verified FROM pools WHERE id=$1',[binary(pool)])).rows).toEqual([{creation_verified:false}]);
+    expect((await db.sql.query('SELECT 1 FROM pools WHERE id=$1',[binary(fake)])).rows).toHaveLength(0);
+    // The rejected emitter is not read again.
+    data.set(5n,swap(5,fake));await live.tick();expect(client.v3Pool).toHaveBeenCalledTimes(2);expect(await count(db,'pending_pool_events')).toBe(4);
+    // The pool's earlier event (block 1) is still raw: materialized without a chain read once it is deeper than the reorg depth.
+    const reads=vi.mocked(client.v3Pool).mock.calls.length,deferred=new DeferredEvents(db,client,registry,{reorgDepth:2,logger:quiet});
+    expect(await deferred.step()).toBe(1);
+    expect(vi.mocked(client.v3Pool).mock.calls.length).toBe(reads);
+    const old=(await db.sql.query<{trader:Uint8Array|null;recipient:Uint8Array;senders_pending:boolean;price_quote:number|null;usd:number|null}>('SELECT trader,recipient,senders_pending,price_quote,usd FROM swaps WHERE pool_id=$1 AND block=1',[binary(pool)])).rows[0];
+    // Stored without its transfers in hand: no trader yet, the event's own recipient. The token's decimals are not read
+    // here either: the worker's onboarding reads them and prices the swap.
+    expect({...old,recipient:hex(old.recipient)}).toEqual({trader:null,recipient:lower(actor),senders_pending:true,price_quote:null,usd:null});
+    expect((await db.sql.query<{emitter:Uint8Array}>('SELECT DISTINCT emitter FROM pending_pool_events')).rows.map(r=>hex(r.emitter))).toEqual([lower(fake)]);
+    // Nothing left of known pools: the next step waits, and a second pass writes nothing twice.
+    expect(await deferred.step()).toBe(0);deferred.wake();expect(await deferred.step()).toBe(0);expect(await count(db,'swaps')).toBe(3);
   });
 
   it('does not restore sender rows when their stored block is rolled back during enrichment',async()=>{

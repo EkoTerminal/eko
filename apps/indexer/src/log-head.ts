@@ -29,6 +29,12 @@ class SpanTooLarge extends Error {}
  * in one long reply.
  */
 const MAX_LOG_SPAN = 500;
+/**
+ * Unknown emitters of v3 pool events checked against the canonical factory per window. Each costs two pinned reads on
+ * the lane the head's own reads use, so the first minutes after a start (thousands of unknown emitters) are spread
+ * over many windows instead of holding one up.
+ */
+const POOL_CHECKS = 16;
 interface WindowData { deepLinks:Set<bigint>;from:bigint;to:bigint;head:bigint;scope:SenderScope;candidates:RpcLog[];blocks:Map<bigint,RpcLog[]>;hashes:Map<bigint,Hex>;headers:Map<bigint,RpcBlock>;receiptsByBlock:Map<bigint,RpcReceipt[]>;discoveredPools:Map<string,import('./types.js').PoolMetadata>;timings:LogHeadFollower['timings'];meterBefore:ReturnType<NonNullable<ChainClient['rpcTiming']>>|undefined }
 type ReceiptReason = 'pons_coin_trade' | 'other_indexed_token' | 'launch' | 'liquidity' | 'other_event';
 const emptyReasons = (): Record<ReceiptReason,number> => ({pons_coin_trade:0,other_indexed_token:0,launch:0,liquidity:0,other_event:0});
@@ -54,7 +60,14 @@ interface Options { pipeline?:boolean; startBlock?: bigint; tickMs?: number; max
   /** Once public logs are known to lack blockTimestamp, read candidates on the paid lane instead of twice (default true). */
   paidLogs?: boolean;
   /** Prepare the next commit batch while the previous one writes (default true). */
-  overlapWrites?: boolean; }
+  overlapWrites?: boolean;
+  /**
+   * Check emitters of v3 pool events the scope does not know against the canonical factory, and index the ones that are
+   * its pools from then on (default true when the client can ask the factory). `onPools` reports each window's finds.
+   */
+  discoverPools?: boolean; onPools?: (found: number) => void;
+  /** Runs after a tick that ended at the head (a bounded background step); its failure is logged, never the head's. */
+  afterTick?: () => Promise<unknown>; }
 interface StagedBatch { batch: BlockRows; states: Prepared[]; dates: Date[]; last: RpcBlock | null; newest: Hex | null }
 
 /** Sparse head anchor plus a separate scan cursor: empty windows need neither headers nor chain rows. */
@@ -78,6 +91,9 @@ export class LogHeadFollower {
   /** Public logs lack blockTimestamp and paid logs carry it: read candidates on the paid lane instead of twice. */
   private paidLogs?: boolean;
   private budgetSpent = false;
+  /** Emitters of v3 pool events found not to be pools of the canonical factory: not read again by this process. */
+  private rejectedEmitters = new Set<string>();
+  private caughtUp = false;
   private timings = emptyTimings();
   private async remote<T>(read:()=>Promise<T>): Promise<T> { const began=performance.now(); try { return await read(); } finally { this.timings.rpcWallMs += performance.now()-began; } }
   /**
@@ -320,6 +336,7 @@ export class LogHeadFollower {
       const known = new Set((['pons.factory', 'uniswapV3.factory', 'uniswapV4.poolManager', 'tokens.WETH'] as const).map(k => lower(registry.requireAddress(k))));
       const discoveryBegan=performance.now();
       const discoveredPools = await remote(()=>this.decoder.discoverV3Pools(candidates,pools,scope));
+      for (const [id,pool] of await remote(()=>this.discoverCanonical(candidates,new Set([...pools,...discoveredPools.keys()])))) discoveredPools.set(id,pool);
       timings.discoveryMs=performance.now()-discoveryBegan;
       for (const [id,pool] of discoveredPools) { poolCurrencies.set(id,[lower(pool.currency0),lower(pool.currency1)]); pools.add(id); scope.pools.set(id,pool); tokens.add(lower(pool.currency0)); tokens.add(lower(pool.currency1)); }
       const deferredTopics=v3PoolTopics;
@@ -456,6 +473,38 @@ export class LogHeadFollower {
       timings.headersMs=performance.now()-headerBegan;
       return {deepLinks,from,to,head,scope,candidates,blocks,hashes:rawHashes,headers,receiptsByBlock,discoveredPools,timings,meterBefore};
   }
+  /**
+   * Pools of the registry's canonical v3 factory among emitters of v3 pool events the scope does not hold. The head
+   * discovered a v3 pool only when it paired a Pons coin (or WETH with USDG); every other pool created before the
+   * indexer followed the factory stayed unknown, its events stored raw and its coins invisible (2026-10-13: 5,853 such
+   * emitters, 290,000 events a day). An emitter is accepted only when the factory itself names it as the pool of the
+   * currencies and fee it reports: a contract that merely answers like a pool is rejected, and not read again by this
+   * process. Two pinned reads per emitter, at most `POOL_CHECKS` emitters per window. A provider failure or a spent
+   * budget leaves the emitter for a later window; any other failure rejects it, so no contract can stall the head.
+   */
+  private async discoverCanonical(candidates:RpcLog[],known:Set<string>) {
+    const found=new Map<string,import('./types.js').PoolMetadata>();
+    if(this.options.discoverPools===false||!this.client.canonicalV3Pool)return found;
+    const manager=lower(this.decoder.registry.requireAddress('uniswapV4.poolManager')),first=new Map<string,RpcLog>();
+    for(const l of candidates){
+      const address=lower(l.address);
+      if(!v3PoolTopics.has(l.topics[0])||known.has(address)||address===manager||this.rejectedEmitters.has(address)||first.has(address))continue;
+      first.set(address,l);if(first.size>=POOL_CHECKS)break;
+    }
+    await settle([...first].map(([address,l])=>this.rpc.run(async()=>{
+      try {
+        const n=BigInt(l.blockNumber),pool=await this.client.v3Pool(l.address,n);
+        const canonical=pool?await this.client.canonicalV3Pool!(pool.currency0,pool.currency1,pool.fee,n):null;
+        if(pool&&canonical&&lower(canonical)===address)found.set(address,pool);else this.rejectedEmitters.add(address);
+      } catch(error) {
+        if(this.stopping||this.client.rpcStopped?.())throw error;
+        if(rpcStopReason(error)||isTransientRpcUnavailable(error))return;
+        this.rejectedEmitters.add(address);
+      }
+    })));
+    if(found.size){this.logger('v3_pools_discovered',{pools:found.size,rejected:this.rejectedEmitters.size});this.options.onPools?.(found.size);}
+    return found;
+  }
   private async applyWindow(data:WindowData) {
       const {from,to,head,scope,blocks}=data;
       const knownTokens=new Map<string,TokenMetadata>(scope.tokenRows.map(r=>[hex(r.address),{...r,totalSupply:r.total_supply==null?null:BigInt(r.total_supply),supplyBlock:r.supply_block==null?null:BigInt(r.supply_block)}]));
@@ -486,6 +535,7 @@ export class LogHeadFollower {
         this.decoder.invalidate();throw error;
       }
       if(!entries.length){await this.db.setCursor('head_logs',to,null);this.options.onProgress?.(to);}
+      this.caughtUp=head-to<=BigInt(this.maxRange);
       this.decoder.metrics.observeLogs(newest, head - to);
   }
   /** Validate, enrich and prepare one commit batch in block order; undefined when the follower is stopping. */
@@ -597,7 +647,14 @@ export class LogHeadFollower {
     try { while (!this.stopping && !this.client.rpcStopped?.()) {
       const began = Date.now();
       let delay:number;
-      try { await this.tick(); failures=0; delay=Math.max(0, (this.options.tickMs ?? 1000) - (Date.now() - began)); }
+      try {
+        await this.tick(); failures=0;
+        // Background work only while the head is followed closely; it gets what is left of the tick, and its own failures.
+        if(this.options.afterTick&&this.caughtUp&&!this.stopping&&!this.client.rpcStopped?.()){
+          try{await this.options.afterTick();}catch(error){this.logger('after_tick_failed',{error:safeError(error)});}
+        }
+        delay=Math.max(0, (this.options.tickMs ?? 1000) - (Date.now() - began));
+      }
       catch (error) {
         // Providers that stay unavailable past the meter's own retry window (timeouts, 429/5xx,
         // malformed replies) back off here instead of halting the process. So does a spent paid

@@ -53,6 +53,11 @@ export interface CardSources {
       status: 'burned' | 'locked' | 'pons_locked' | 'removable'; evidence: EvidenceRef[] }[];
     depth2Usd?: number;
     priorRemovals: EvidenceRef[];
+    /**
+     * The deployer has taken out liquidity it paid into the pool the coin trades in: the share of its peak liquidity
+     * there that is gone (1 when none is left). Absent when it never removed any, or no deployer wallet is identified.
+     */
+    pulled?: { share: number; evidence: EvidenceRef[] };
   };
   pools?: { id: string; feeBps: number; liquidityShare: number; deepest: boolean; defaultRoute: boolean; evidence: EvidenceRef[] }[];
   curve?: {

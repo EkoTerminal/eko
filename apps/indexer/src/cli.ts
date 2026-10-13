@@ -2,6 +2,7 @@ import { AgentRegistryCollector, type RegistryWalletEventProfile } from './agent
 import { readFile } from 'node:fs/promises';
 import { acquireScanJob } from './scan-jobs.js';
 import { enrichSenders } from './enrich.js';
+import { DeferredEvents } from './deferred.js';
 import { isAddress, type Address } from 'viem';
 import { reportIndexerError } from './guard-stop.js';
 import { z } from 'zod';
@@ -78,6 +79,7 @@ async function main() {
       log('agent_registry_coverage',await agentRegistry.coverage());return;
     }
     const decoder = new BlockDecoder(client, registry, liveMetrics);
+    const deferred = new DeferredEvents(db, client, registry, { reorgDepth: env.INDEX_REORG_DEPTH });
     decoder.storeWalletProtocol = env.INDEX_WALLET_PROTOCOL === 'on';
     const backfill = args[0] === 'backfill';
     let from = 0n, to = 0n, stream: Stream = 'logs:pons_factory';
@@ -95,7 +97,9 @@ async function main() {
       worker = env.INDEX_HEAD_MODE === 'blocks'
         ? new HeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, prefetchBlocks: env.INDEX_PREFETCH_BLOCKS, reorgDepth: env.INDEX_REORG_DEPTH, ...hooks })
         : new LogHeadFollower(client, db, decoder, { startBlock: env.INDEX_START_BLOCK, tickMs: env.INDEX_HEAD_TICK_MS, maxRange: env.INDEX_HEAD_MAX_RANGE, codeCacheSec: env.INDEX_CODE_CACHE_SEC, reorgDepth: env.INDEX_REORG_DEPTH,
-          catchUpRange: env.INDEX_HEAD_CATCHUP_RANGE, commitRange: env.INDEX_HEAD_COMMIT_BLOCKS, deepParents: env.INDEX_HEAD_DEEP_PARENTS, ...hooks });
+          catchUpRange: env.INDEX_HEAD_CATCHUP_RANGE, commitRange: env.INDEX_HEAD_COMMIT_BLOCKS, deepParents: env.INDEX_HEAD_DEEP_PARENTS, ...hooks,
+          // Stored raw events of pools that have become known are turned into rows a batch at a time, between ticks at the head.
+          onPools: () => deferred.wake(), afterTick: () => deferred.step() });
     }
     if (interrupted) return;
     try { log('indexer_started', { role: env.APP_ROLE, mode: backfill ? 'backfill' : 'head' }); if (worker instanceof HeadFollower || worker instanceof LogHeadFollower) {

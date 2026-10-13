@@ -240,6 +240,9 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   }
   const positions: (NonNullable<CardSources['liquidity']>['positions'][number] & { pool:string })[] = [];
   const weights = new Map<string, number>();
+  // Per pool: whether it has any liquidity event with a wallet, and the deployer's own liquidity over time (running
+  // total, its peak, and its removals), for a coin that did not launch on Pons.
+  const liquidityOf = new Map<string, { events: number; held: bigint; peak: bigint; removals: EvidenceRef[] }>();
   for (const p of poolRows) {
     const pe = events.filter(e => eq(e.pool_id, p.id));
     const owned = new Map<string, { actor: Address; amount: bigint; refs: EvidenceRef[] }>();
@@ -252,8 +255,18 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
       const named = (e.data.owner ?? e.data.sender ?? rowHex(e.actor)).toLowerCase() as Address;
       const key = `${named}:${e.data.tickLower}:${e.data.tickUpper}:${e.data.salt ?? ''}`;
       const o = owned.get(key) ?? { actor: s.launchpad === 'pons' ? named : rowHex(e.actor), amount: 0n, refs: [] };
-      const delta = BigInt(e.data.liquidityDelta ?? e.data.amount ?? '0');
-      o.amount += e.kind === 'Burn' ? -delta : delta; o.refs.push(evidence(e, 'Liquidity position')); owned.set(key, o);
+      const delta = BigInt(e.data.liquidityDelta ?? e.data.amount ?? '0'), change = e.kind === 'Burn' ? -delta : delta;
+      o.amount += change; o.refs.push(evidence(e, 'Liquidity position')); owned.set(key, o);
+      const pooled = liquidityOf.get(rowHex(p.id)) ?? { events: 0, held: 0n, peak: 0n, removals: [] };
+      pooled.events++;
+      // The deployer's liquidity is what it paid in less what it took out, whichever position it sits in. Only events
+      // whose own wallet is the deployer count: positions held through a position manager share one key per range, so
+      // another provider's removal from the same range is not the deployer's.
+      if (s.launchpad !== 'pons' && deployer !== coin && rowHex(e.actor) === deployer) {
+        pooled.held += change; if (pooled.held > pooled.peak) pooled.peak = pooled.held;
+        if (change < 0n) pooled.removals.push(evidence(e, 'Deployer liquidity removal'));
+      }
+      liquidityOf.set(rowHex(p.id), pooled);
     }
     const positive = [...owned.values()].filter(o => o.amount > 0n);
     const total = positive.reduce((n, o) => n + Number(o.amount), 0);
@@ -294,8 +307,18 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     defaultRoute: !!token.graduated_pool && Number(token.graduated_block) <= block && eq(p.id, token.graduated_pool), evidence: events.filter(e => eq(e.pool_id,p.id)).map(e => evidence(e,'Pool liquidity')) }));
   // TODO(spec): aggregate LP shares across pools only when observed reserve USD supplies a denominator.
   // Single-pool ownership uses its actual position units; incomparable multi-pool units remain absent.
-  if (positions.length && (poolRows.length===1 || [...weights.values()].every(v=>v>0))) {
+  // A coin that did not launch on Pons is read in the pool it trades in: who paid in the liquidity that is there now,
+  // and whether the deployer has taken out liquidity it paid in (a pull leaves no position behind to find). Its other
+  // pools, which anyone can open, do not hold the check back.
+  const traded = s.launchpad !== 'pons' && main ? liquidityOf.get(rowHex(main.id)) : undefined;
+  if (traded?.events) {
+    const mine = positions.filter(p => p.pool === rowHex(main!.id));
+    const held = traded.held > 0n ? traded.held : 0n, pulledShare = traded.peak > 0n ? 1 - Number(held) / Number(traded.peak) : 0;
+    s.liquidity = { positions: mine.map(({ pool: _pool, ...p }) => p), priorRemovals: [], ...(pulledShare > 0 ? { pulled: { share: pulledShare, evidence: traded.removals.slice(-5) } } : {}) };
+  } else if (s.launchpad === 'pons' && positions.length && (poolRows.length===1 || [...weights.values()].every(v=>v>0))) {
     s.liquidity = { positions:positions.map(({ pool,...p })=>({...p,share:p.share*(poolRows.length===1 ? 1 : weights.get(pool)!/reserveTotal)})), priorRemovals: [] };
+  }
+  if (s.liquidity) {
     const priorCoins = history.launches.map(p => p.coin);
     if (priorCoins.length) s.liquidity.priorRemovals = (await db.sql.query<EventRow>(`SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id JOIN tokens t ON t.address=p.currency0 OR t.address=p.currency1
       WHERE t.deployer=$1 AND t.address<>$2 AND e.actor=$1 AND e.block<=$3 AND (e.kind='Burn' OR (e.kind='ModifyLiquidity' AND (e.data->>'liquidityDelta')::numeric<0)) ORDER BY e.block,e.log_index`, [binary(deployer), binary(coin), block])).rows.map(e => evidence(e, 'Prior liquidity removal'));

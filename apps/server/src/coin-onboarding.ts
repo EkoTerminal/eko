@@ -79,12 +79,10 @@ export async function attributeSwaps(db: ChainDb, a: AttributionAddresses, from:
  * Name the wallet behind liquidity events stored without one, the same way: whoever's balance of the pool's coin (its
  * token other than WETH and USDG) fell most in the transaction added the liquidity, whoever's rose most took it out. Most positions are held
  * through a position manager contract, so the event's own owner says nothing about who controls them; an event with
- * no such wallet keeps the owner or sender it names, or the pool manager or pool. `coins` limits it to pools of those
- * coins, otherwise events from `fromBlock` on in pools of coins with a launch wallet that are not Pons launches.
+ * no such wallet keeps the owner or sender it names, or the pool manager or pool. Events of the pools of `coins`.
  */
-export async function attributeLiquidity(db: ChainDb, a: AttributionAddresses, limit = ATTRIBUTE_BATCH, scope: { coins: Uint8Array[] } | { fromBlock: string }): Promise<number> {
-  const where = 'coins' in scope ? '(p.currency0=ANY($4::bytea[]) OR p.currency1=ANY($4::bytea[]))'
-    : 'e.block>=$4::bigint AND EXISTS(SELECT 1 FROM tokens k WHERE k.address IN (p.currency0,p.currency1) AND k.deployer IS NOT NULL AND k.launchpad IS NULL)';
+export async function attributeLiquidity(db: ChainDb, a: AttributionAddresses, limit: number, coins: Uint8Array[]): Promise<number> {
+  const where = '(p.currency0=ANY($4::bytea[]) OR p.currency1=ANY($4::bytea[]))';
   const word = (field: string) => `CASE WHEN lower(e.data->>'${field}') ~ '^0x[0-9a-f]{40}$' THEN decode(substr(lower(e.data->>'${field}'),3),'hex') END`;
   return (await db.sql.query(`WITH c AS MATERIALIZED (
       SELECT e.tx_hash,e.log_index,e.block,e.pool_id,p.currency0,p.currency1,
@@ -100,7 +98,7 @@ export async function attributeLiquidity(db: ChainDb, a: AttributionAddresses, l
         WHERE c.way<>0 AND d.net*c.way>0 ORDER BY abs(d.net) DESC,d.addr LIMIT 1) AS addr FROM c)
     UPDATE liquidity_events e SET actor=coalesce(pick.addr,c.named),senders_pending=false FROM c JOIN pick USING (tx_hash,log_index)
     WHERE e.tx_hash=c.tx_hash AND e.log_index=c.log_index RETURNING 1`,
-    [limit, binary(a.poolManager), [ZERO, DEAD, a.poolManager].map(binary), 'coins' in scope ? scope.coins : scope.fromBlock, a.reference.map(binary)])).rows.length;
+    [limit, binary(a.poolManager), [ZERO, DEAD, a.poolManager].map(binary), coins, a.reference.map(binary)])).rows.length;
 }
 
 export interface TokenFacts { decimals: number | null; symbol: string | null; name: string | null; totalSupply: bigint | null }
@@ -219,7 +217,7 @@ export interface OnboardingOptions { now?: () => number; intervalMs?: number; bu
   maxLagSec?: number }
 const HOUR = 3_600_000;
 /**
- * Worker role. Every 30 s: name the traders and liquidity providers of new Uniswap swaps of coins already onboarded,
+ * Worker role. Every 30 s: price and name whatever swaps of already onboarded coins were stored without a wallet,
  * then onboard a few more coins, newest launches first, then the most traded in the last day. Onboarding a coin reads
  * its name, symbol, decimals and supply (one call) and the wallet that sent its first mint (its launch wallet, the
  * `deployer` every rating check is written against), prices its stored swaps and names their traders, and only then
@@ -296,9 +294,32 @@ export class CoinOnboardingWorker {
     const txs = await this.chain.sent(sent.from);
     return txs == null ? 'unreadable_sender' : txs >= AUTOMATED_SENDER_TXS ? 'automated_sender' : null;
   }
+  /**
+   * A coin's stored swaps priced, then named, a batch at a time, and its liquidity events the same way; false when the
+   * pass ran out of time first (every step picks up where it stopped). Pricing goes an hour at a time, newest first:
+   * each hour reads only that hour's ETH/USD reference swaps.
+   */
+  private async settle(coin: Uint8Array, deadline: number): Promise<boolean> {
+    const batch = this.options.batch ?? ATTRIBUTE_BATCH, epoch = new Date(0), end = new Date(this.now() + HOUR), floor = new Date(this.now() - 2 * 24 * HOUR);
+    const hours = (await this.db.sql.query<{ hour: Date }>(`SELECT DISTINCT date_trunc('hour',ts) AS hour FROM swaps WHERE coin=$1 AND usd IS NULL AND amount_coin>0 AND amount_quote>0 ORDER BY 1 DESC`, [coin])).rows;
+    for (const { hour } of hours) for (;;) {
+      if (this.now() >= deadline) return false;
+      const from = new Date(hour);
+      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), REPRICE_BATCH, floor, [coin]) < REPRICE_BATCH) break;
+    }
+    for (;;) {
+      if (this.now() >= deadline) return false;
+      if (await attributeSwaps(this.db, this.addresses, epoch, end, batch, [coin]) < batch) break;
+    }
+    for (;;) {
+      if (this.now() >= deadline) return false;
+      if (await attributeLiquidity(this.db, this.addresses, batch, [coin]) < batch) break;
+    }
+    return true;
+  }
   /** One coin, through to its launch wallet; 'unfinished' when the pass ran out of time first, 'set_aside' when it cannot be read yet. */
   private async onboard(candidate: Candidate, deadline: number): Promise<'onboarded' | 'set_aside' | 'unfinished'> {
-    const coin = candidate.coin, address = hex(coin), batch = this.options.batch ?? ATTRIBUTE_BATCH;
+    const coin = candidate.coin, address = hex(coin);
     const token = (await this.db.sql.query<{ decimals: number | null; name: string | null; symbol: string | null; total_supply: string | null; deployer: Uint8Array | null; launchpad: string | null }>(
       'SELECT decimals,name,symbol,total_supply::text,deployer,launchpad FROM tokens WHERE address=$1', [coin])).rows[0];
     if (!token || token.deployer || token.launchpad) return 'set_aside';
@@ -322,23 +343,7 @@ export class CoinOnboardingWorker {
       wallet = mint && !shared ? mint.wallet : address;
       await this.mark(coin, 'working', { launchWallet: wallet, ...(mint ? { sender: mint.wallet, senderTo: mint.to, mintBlock: mint.block.toString(), mintTx: mint.tx, mintTo: mint.mintTo } : {}), ...(shared ? { shared } : {}) });
     }
-    // Stored swaps: priced, then named, a batch at a time. Liquidity events the same way. Pricing goes an hour at a
-    // time, newest first: each hour reads only that hour's ETH/USD reference swaps.
-    const epoch = new Date(0), end = new Date(this.now() + HOUR), floor = new Date(this.now() - 2 * 24 * HOUR);
-    const hours = (await this.db.sql.query<{ hour: Date }>(`SELECT DISTINCT date_trunc('hour',ts) AS hour FROM swaps WHERE coin=$1 AND usd IS NULL AND amount_coin>0 AND amount_quote>0 ORDER BY 1 DESC`, [coin])).rows;
-    for (const { hour } of hours) for (;;) {
-      if (this.now() >= deadline) return 'unfinished';
-      const from = new Date(hour);
-      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), REPRICE_BATCH, floor, [coin]) < REPRICE_BATCH) break;
-    }
-    for (;;) {
-      if (this.now() >= deadline) return 'unfinished';
-      if (await attributeSwaps(this.db, this.addresses, epoch, end, batch, [coin]) < batch) break;
-    }
-    for (;;) {
-      if (this.now() >= deadline) return 'unfinished';
-      if (await attributeLiquidity(this.db, this.addresses, batch, { coins: [coin] }) < batch) break;
-    }
+    if (!await this.settle(coin, deadline)) return 'unfinished';
     await this.db.tx(async tx => {
       await tx.sql.query('UPDATE tokens SET deployer=$2 WHERE address=$1 AND deployer IS NULL AND launchpad IS NULL', [coin, binary(wallet!)]);
       await tx.sql.query(`INSERT INTO coin_onboarding(coin,status,attempts,created_at,updated_at) VALUES($1,'done',1,to_timestamp($2::double precision),to_timestamp($2::double precision))
@@ -352,11 +357,13 @@ export class CoinOnboardingWorker {
     const newest = (await this.db.sql.query<{ ts: Date | null }>('SELECT ts FROM chain_blocks ORDER BY number DESC LIMIT 1')).rows[0]?.ts;
     const lagSec = newest ? (started - new Date(newest).getTime()) / 1000 : 0, maxLag = this.options.maxLagSec ?? 45;
     if (lagSec > maxLag) { if (started - this.pausedAt >= 300_000) { this.pausedAt = started; this.log('coin_onboarding_paused', { lagSec: Math.round(lagSec), maxLagSec: maxLag }); } return; }
-    // New swaps and liquidity events of onboarded coins first: the two hours behind the head, newest first.
-    let swaps = 0, liquidity = 0;
-    for (let n = batch; n === batch && this.now() < deadline;) { n = await attributeSwaps(this.db, this.addresses, new Date(started - 2 * HOUR), new Date(started + HOUR), batch); swaps += n; }
-    const recent = (await this.db.sql.query<{ number: string | null }>(`SELECT (SELECT number FROM chain_blocks WHERE ts<to_timestamp($1::double precision)-interval '2 hours' ORDER BY ts DESC LIMIT 1)::text AS number`, [started / 1000])).rows[0]?.number ?? '0';
-    for (let n = batch; n === batch && this.now() < deadline;) { n = await attributeLiquidity(this.db, this.addresses, batch, { fromBlock: recent }); liquidity += n; }
+    // Onboarded coins first. The indexer names and prices their new swaps as it stores them; rows it stores without a
+    // wallet arrive later, of any age (a backfill stream, or the stored raw events of a pool that has just become known).
+    let settled = 0;
+    const behind = (await this.db.sql.query<{ coin: Uint8Array }>(`SELECT k.address AS coin FROM tokens k WHERE k.deployer IS NOT NULL AND k.launchpad IS NULL
+      AND (EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.address AND s.senders_pending AND s.venue<>'pons_curve')
+        OR EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id AND e.senders_pending WHERE p.currency0=k.address OR p.currency1=k.address)) LIMIT 20`)).rows;
+    for (const { coin } of behind) { if (this.now() >= deadline || !await this.settle(coin, deadline)) break; settled++; }
     await this.candidates(started);
     let onboarded = 0, set = 0, unfinished = 0;
     for (let tried = 0; this.queue.length && tried < (this.options.perTick ?? 4) && this.now() < deadline; tried++) {
@@ -365,6 +372,6 @@ export class CoinOnboardingWorker {
       this.done(candidate.coin);
       if (outcome === 'onboarded') onboarded++; else set++;
     }
-    if (swaps || liquidity || onboarded || set || unfinished) this.log('coin_onboarding', { swaps, liquidity, onboarded, setAside: set, unfinished, queued: this.queue.length, ms: this.now() - started });
+    if (settled || onboarded || set || unfinished) this.log('coin_onboarding', { settled, behind: behind.length, onboarded, setAside: set, unfinished, queued: this.queue.length, ms: this.now() - started });
   }
 }

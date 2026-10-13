@@ -100,5 +100,8 @@ describe('money in the pools of a coin that launched on Uniswap', () => {
     expect(money.get(other)! / 1e6).toBeCloseTo(1.1716, 3);
     // The fixture's own coin has a Pons curve: its figure comes from the curve, not from here.
     expect(money.has(coin)).toBe(false);
+    // All of it taken out (a pull): the pool holds $0, and the row says so. (A later reading: positions are kept a minute.)
+    await event(3, { liquidityDelta: '-2000000', tickLower: -6932, tickUpper: 6932 });
+    expect((await readPoolMoney(db, [other], now + 120_000)).get(other)).toBe(0);
   });
 });

@@ -6,7 +6,7 @@ import { rules } from '@eko/playbooks';
 import type { Hex } from 'viem';
 import { evaluatedPlaybooks } from '../src/card.js';
 import { loadSources } from '../src/sources.js';
-import { EngineWorker, TRADED_RERATE_OTHER_SEC, TRADED_RERATE_SEC, tradedSinceCard } from '../src/worker.js';
+import { EngineWorker, TRADED_RERATE_OTHER_SEC, TRADED_RERATE_SEC, staleRatings, tradedSinceCard } from '../src/worker.js';
 
 // A coin that launched in a Uniswap pool, never on a Pons curve (about 3,500 traded in a day on 2026-10-13, none
 // rated: no name, no launch wallet, no trader on any swap). Synthetic rows only.
@@ -119,6 +119,41 @@ describe('a coin that launched on Uniswap', () => {
     const card = CoinCardSchema.parse((await m.db.sql.query<{ data: CoinCard }>('SELECT data FROM coin_card_latest WHERE coin=$1', [binary(coin)])).rows[0].data);
     expect(card.playbooks.map(p => p.id)).not.toEqual(expect.arrayContaining(['removable_liquidity', 'dev_dump', 'serial_deployer']));
     expect(card.verdict.level).not.toBe('pending');
+  });
+  it('rates Danger when the deployer has taken its liquidity out, though no position is left to find', async () => {
+    // 2026-10-13, a live launch: liquidity in, three buys (the first the deployer's own), all liquidity out ten seconds
+    // later. The card read "pending" with the liquidity check not run, because nothing removable was left.
+    const m = await market(null); await traded(m);
+    await m.liquidity(200, deployer, -5000);
+    const s = (await loadSources(m.db, coin, 300))!;
+    expect(s.liquidity).toMatchObject({ positions: [], pulled: { share: 1 } });
+    await new EngineWorker(m.db, { now: () => epoch + 300, liveBacklogSec: 900 }).poll();
+    const card = CoinCardSchema.parse((await m.db.sql.query<{ data: CoinCard }>('SELECT data FROM coin_card_latest WHERE coin=$1', [binary(coin)])).rows[0].data);
+    expect(card.verdict.level).toBe('danger');
+    expect(card.playbooks.find(p => p.id === 'removable_liquidity')?.level).toBe('danger');
+    expect(card.verdict.reasons).toContain("The deployer took all the liquidity it had added out of this coin's pool.");
+  }, 20_000);
+  it('does not call it a pull when the deployer puts the liquidity back, or when another provider leaves', async () => {
+    // Half out and half back in: the deployer's liquidity is back at its peak.
+    const again = await market(null); await traded(again);
+    await again.liquidity(200, deployer, -2500); await again.liquidity(200, deployer, 2500);
+    expect((await loadSources(again.db, coin, 300))!.liquidity?.pulled).toBeUndefined();
+    // Someone else removing their own liquidity is not the deployer's pull either.
+    const other = await market(null); await traded(other);
+    await other.liquidity(150, buyers[0], 4000); await other.liquidity(200, buyers[0], -4000);
+    expect((await loadSources(other.db, coin, 300))!.liquidity?.pulled).toBeUndefined();
+  }, 20_000);
+  it('re-rates a quiet card written before the liquidity check could see a pull, once', async () => {
+    const m = await market(null); await traded(m);
+    await new EngineWorker(m.db, { now: () => epoch + 300, liveBacklogSec: 900 }).poll();
+    await m.db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)', [[binary(coin)], epoch + 300]);
+    const card = (await m.db.sql.query<{ card_id: string }>('SELECT card_id FROM coin_card_latest WHERE coin=$1', [binary(coin)])).rows[0].card_id;
+    // Not selected without the cutoff, selected when the card was written before it, and not again once re-rated.
+    expect(await staleRatings(m.db, [coin], 10)).toEqual([]);
+    const cutoff = new Date(Date.now() + 3_600_000).toISOString();
+    expect(await staleRatings(m.db, [coin], 10, new Map(), undefined, cutoff)).toEqual([{ coin, card }]);
+    expect(await staleRatings(m.db, [coin], 10, new Map([[coin, card]]), undefined, cutoff)).toEqual([]);
+    expect(await staleRatings(m.db, [coin], 10, new Map(), undefined, new Date(Date.now() - 3_600_000).toISOString())).toEqual([]);
   });
   it('re-rates a traded coin without a curve less often than a Pons coin', async () => {
     const m = await market(); await traded(m);

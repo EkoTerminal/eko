@@ -27,6 +27,8 @@ export interface ChainClient {
   tokenMetadataBatch?(addresses: Address[], n: bigint): Promise<TokenMetadata[]>;
   ethUsdRate?(n: bigint): Promise<EthUsdRate | null>;
   v3Pool(address: Address, n: bigint): Promise<PoolMetadata | null>;
+  /** The canonical v3 factory's pool for a currency pair and fee at a block, or null when it has none. */
+  canonicalV3Pool?(token0: Address, token1: Address, fee: number, n: bigint): Promise<Address | null>;
   code(address: Address, n: bigint): Promise<Hex>;
   watch?(onHead: (n: bigint) => void, onError: (error: unknown) => void): () => void;
 }

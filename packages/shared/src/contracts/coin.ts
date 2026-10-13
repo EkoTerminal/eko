@@ -91,6 +91,11 @@ export const CoinCardSchema = z.object({
     address: AddressSchema,
     name: UntrustedSchema,
     symbol: UntrustedSchema,
+    /**
+     * The coin's launch wallet: a Pons launch's deployer, or for a coin that launched in a Uniswap pool the sender of
+     * its first mint. Equal to `address` when that sender was a relayer, a bundler or a bot: no wallet is identified as
+     * the coin's deployer, and no check reads one.
+     */
     deployer: AddressSchema,
     createdAt: z.string(),
     launchpad: z.enum(['pons', 'occupy', 'flap', 'klik', 'other']),
