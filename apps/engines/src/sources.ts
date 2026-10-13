@@ -240,9 +240,10 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   }
   const positions: (NonNullable<CardSources['liquidity']>['positions'][number] & { pool:string })[] = [];
   const weights = new Map<string, number>();
-  // Per pool: whether it has any liquidity event with a wallet, and the deployer's own liquidity over time (running
-  // total, its peak, and its removals), for a coin that did not launch on Pons.
-  const liquidityOf = new Map<string, { events: number; held: bigint; peak: bigint; removals: EvidenceRef[] }>();
+  // Per pool, for a coin that did not launch on Pons: each wallet's own liquidity over time (running total, its peak,
+  // its removals), the wallet that paid in the pool's first liquidity, and the block of the pool's newest addition.
+  const liquidityOf = new Map<string, { events: number; first?: Address; lastAdd: number;
+    wallets: Map<Address, { held: bigint; peak: bigint; removals: EvidenceRef[]; lastRemoval: number }> }>();
   for (const p of poolRows) {
     const pe = events.filter(e => eq(e.pool_id, p.id));
     const owned = new Map<string, { actor: Address; amount: bigint; refs: EvidenceRef[] }>();
@@ -257,14 +258,17 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
       const o = owned.get(key) ?? { actor: s.launchpad === 'pons' ? named : rowHex(e.actor), amount: 0n, refs: [] };
       const delta = BigInt(e.data.liquidityDelta ?? e.data.amount ?? '0'), change = e.kind === 'Burn' ? -delta : delta;
       o.amount += change; o.refs.push(evidence(e, 'Liquidity position')); owned.set(key, o);
-      const pooled = liquidityOf.get(rowHex(p.id)) ?? { events: 0, held: 0n, peak: 0n, removals: [] };
+      const pooled: NonNullable<ReturnType<typeof liquidityOf.get>> = liquidityOf.get(rowHex(p.id)) ?? { events: 0, lastAdd: -1, wallets: new Map() };
       pooled.events++;
-      // The deployer's liquidity is what it paid in less what it took out, whichever position it sits in. Only events
-      // whose own wallet is the deployer count: positions held through a position manager share one key per range, so
-      // another provider's removal from the same range is not the deployer's.
-      if (s.launchpad !== 'pons' && deployer !== coin && rowHex(e.actor) === deployer) {
-        pooled.held += change; if (pooled.held > pooled.peak) pooled.peak = pooled.held;
-        if (change < 0n) pooled.removals.push(evidence(e, 'Deployer liquidity removal'));
+      // A wallet's liquidity is what it paid in less what it took out, whichever position it sits in. Events count for
+      // their own wallet only: positions held through a position manager share one key per range, so another
+      // provider's removal from the same range is not this wallet's.
+      if (s.launchpad !== 'pons') {
+        const wallet = rowHex(e.actor), own = pooled.wallets.get(wallet) ?? { held: 0n, peak: 0n, removals: [], lastRemoval: -1 };
+        own.held += change; if (own.held > own.peak) own.peak = own.held;
+        if (change > 0n) { pooled.first ??= wallet; pooled.lastAdd = Math.max(pooled.lastAdd, Number(e.block)); }
+        if (change < 0n) { own.removals.push(evidence(e, 'Liquidity removal')); own.lastRemoval = Math.max(own.lastRemoval, Number(e.block)); }
+        pooled.wallets.set(wallet, own);
       }
       liquidityOf.set(rowHex(p.id), pooled);
     }
@@ -308,13 +312,25 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   // TODO(spec): aggregate LP shares across pools only when observed reserve USD supplies a denominator.
   // Single-pool ownership uses its actual position units; incomparable multi-pool units remain absent.
   // A coin that did not launch on Pons is read in the pool it trades in: who paid in the liquidity that is there now,
-  // and whether the deployer has taken out liquidity it paid in (a pull leaves no position behind to find). Its other
-  // pools, which anyone can open, do not hold the check back.
+  // and whether the liquidity it launched with has been taken out (a pull leaves no position behind to find). Its
+  // other pools, which anyone can open, do not hold the check back.
   const traded = s.launchpad !== 'pons' && main ? liquidityOf.get(rowHex(main.id)) : undefined;
   if (traded?.events) {
     const mine = positions.filter(p => p.pool === rowHex(main!.id));
-    const held = traded.held > 0n ? traded.held : 0n, pulledShare = traded.peak > 0n ? 1 - Number(held) / Number(traded.peak) : 0;
-    s.liquidity = { positions: mine.map(({ pool: _pool, ...p }) => p), priorRemovals: [], ...(pulledShare > 0 ? { pulled: { share: pulledShare, evidence: traded.removals.slice(-5) } } : {}) };
+    // The wallets whose removals are a pull: the deployer, where one is identified, and the wallet that paid in the
+    // pool's first liquidity (a launch sent through a relayer has no deployer wallet, but its liquidity has a
+    // provider). Never a pool or the pool manager, which stand in when an event names no wallet.
+    const suspects = [...new Set([...(deployer !== coin ? [deployer] : []), ...(traded.first ? [traded.first] : [])])].filter(wallet => !poolHolders.has(wallet));
+    let pulled: NonNullable<NonNullable<CardSources['liquidity']>['pulled']> | undefined, removedAt = -1;
+    for (const wallet of suspects) {
+      const own = traded.wallets.get(wallet);
+      if (!own || own.peak <= 0n || !own.removals.length) continue;
+      const share = 1 - Number(own.held > 0n ? own.held : 0n) / Number(own.peak);
+      if (share > (pulled?.share ?? 0)) { pulled = { share, by: wallet === deployer && deployer !== coin ? 'deployer' : 'provider', wallet, evidence: own.removals.slice(-5) }; removedAt = own.lastRemoval; }
+    }
+    // Liquidity added to another pool of the coin at or after the removal is a move to that pool, not a pull.
+    if (pulled && [...liquidityOf].some(([id, other]) => id !== rowHex(main!.id) && other.lastAdd >= removedAt)) pulled = undefined;
+    s.liquidity = { positions: mine.map(({ pool: _pool, ...p }) => p), priorRemovals: [], ...(pulled ? { pulled } : {}) };
   } else if (s.launchpad === 'pons' && positions.length && (poolRows.length===1 || [...weights.values()].every(v=>v>0))) {
     s.liquidity = { positions:positions.map(({ pool,...p })=>({...p,share:p.share*(poolRows.length===1 ? 1 : weights.get(pool)!/reserveTotal)})), priorRemovals: [] };
   }

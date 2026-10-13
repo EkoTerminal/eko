@@ -75,6 +75,9 @@ export function reasonForMatch(match: PlaybookMatch): string {
     const pulled = match.evidence.find((e) => e.kind === 'stat' && e.label === 'Deployer liquidity removed (share of its peak)')?.value;
     if (typeof pulled === 'number' && Number.isFinite(pulled) && pulled > 0)
       return pulled >= 0.995 ? 'The deployer took all the liquidity it had added out of this coin\'s pool.' : `The deployer took ${Math.round(pulled * 1000) / 10}% of the liquidity it had added out of this coin's pool.`;
+    const provider = match.evidence.find((e) => e.kind === 'stat' && e.label === 'Launch liquidity removed by its provider (share of its peak)')?.value;
+    if (typeof provider === 'number' && Number.isFinite(provider) && provider > 0)
+      return provider >= 0.995 ? 'The wallet that added this coin\'s launch liquidity took all of it out of the pool.' : `The wallet that added this coin's launch liquidity took ${Math.round(provider * 1000) / 10}% of it out of the pool.`;
     const share = match.evidence.find((e) => e.kind === 'stat' && e.label === 'Removable deployer/crew LP share')?.value;
     // A lock or burn of the position is not read, so the reason says who added the liquidity, not that it can be pulled.
     if (typeof share === 'number' && Number.isFinite(share) && share > 0)

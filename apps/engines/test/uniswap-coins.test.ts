@@ -126,12 +126,35 @@ describe('a coin that launched on Uniswap', () => {
     const m = await market(null); await traded(m);
     await m.liquidity(200, deployer, -5000);
     const s = (await loadSources(m.db, coin, 300))!;
-    expect(s.liquidity).toMatchObject({ positions: [], pulled: { share: 1 } });
+    expect(s.liquidity).toMatchObject({ positions: [], pulled: { share: 1, by: 'deployer', wallet: deployer } });
     await new EngineWorker(m.db, { now: () => epoch + 300, liveBacklogSec: 900 }).poll();
     const card = CoinCardSchema.parse((await m.db.sql.query<{ data: CoinCard }>('SELECT data FROM coin_card_latest WHERE coin=$1', [binary(coin)])).rows[0].data);
     expect(card.verdict.level).toBe('danger');
     expect(card.playbooks.find(p => p.id === 'removable_liquidity')?.level).toBe('danger');
     expect(card.verdict.reasons).toContain("The deployer took all the liquidity it had added out of this coin's pool.");
+  }, 20_000);
+  it('rates Danger when the wallet that paid in the launch liquidity takes it out, though no deployer wallet is identified', async () => {
+    // The rug factories of 2026-10-13 launch through wallets seen launching dozens of coins, recorded with no deployer wallet.
+    const m = await market(null), factory = address(0xfa);
+    await m.db.sql.query('UPDATE tokens SET deployer=$1 WHERE address=$1', [binary(coin)]);
+    await m.db.sql.query('UPDATE liquidity_events SET actor=$1', [binary(factory)]);
+    await traded(m);
+    await m.liquidity(200, factory, -5000);
+    const s = (await loadSources(m.db, coin, 300))!;
+    expect(s.liquidity).toMatchObject({ positions: [], pulled: { share: 1, by: 'provider', wallet: factory } });
+    await new EngineWorker(m.db, { now: () => epoch + 300, liveBacklogSec: 900 }).poll();
+    const card = CoinCardSchema.parse((await m.db.sql.query<{ data: CoinCard }>('SELECT data FROM coin_card_latest WHERE coin=$1', [binary(coin)])).rows[0].data);
+    expect(card.verdict.level).toBe('danger');
+    expect(card.verdict.reasons).toContain("The wallet that added this coin's launch liquidity took all of it out of the pool.");
+    // The same removal followed by liquidity in another pool of the coin is a move to that pool, not a pull.
+    const moved = await market(null), second = hash(0x43);
+    await moved.db.sql.query('UPDATE liquidity_events SET actor=$1', [binary(factory)]);
+    await traded(moved);
+    await moved.liquidity(200, factory, -5000);
+    await moved.db.insert('pools', { id: binary(second), venue: 'uniswap_v4', currency0: binary(zero), currency1: binary(coin), fee: 3000, tick_spacing: 60, hooks: null, creation_verified: true, created_block: '200', block: '200' });
+    await moved.db.insert('liquidity_events', { block: '200', ts: new Date((epoch + 200) * 1000), tx_hash: binary(hash(0x2fff)), log_index: 0, venue: 'uniswap_v4', pool_id: binary(second), kind: 'ModifyLiquidity',
+      actor: binary(factory), data: JSON.stringify({ sender: positions, liquidityDelta: '5000', tickLower: '-600', tickUpper: '600', salt: hash(2) }) });
+    expect((await loadSources(moved.db, coin, 300))!.liquidity?.pulled).toBeUndefined();
   }, 20_000);
   it('does not call it a pull when the deployer puts the liquidity back, or when another provider leaves', async () => {
     // Half out and half back in: the deployer's liquidity is back at its peak.

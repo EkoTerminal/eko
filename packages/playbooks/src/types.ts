@@ -54,10 +54,12 @@ export interface CardSources {
     depth2Usd?: number;
     priorRemovals: EvidenceRef[];
     /**
-     * The deployer has taken out liquidity it paid into the pool the coin trades in: the share of its peak liquidity
-     * there that is gone (1 when none is left). Absent when it never removed any, or no deployer wallet is identified.
+     * Liquidity the coin launched with has been taken out of the pool it trades in by the wallet that paid it in: the
+     * identified deployer, or the wallet that provided the pool's first liquidity. `share` is the part of that wallet's
+     * peak liquidity there that is gone (1 when none is left). Absent when it never removed any, or when liquidity
+     * was added to another pool of the coin afterwards (a move, not a pull).
      */
-    pulled?: { share: number; evidence: EvidenceRef[] };
+    pulled?: { share: number; by: 'deployer' | 'provider'; wallet: Address; evidence: EvidenceRef[] };
   };
   pools?: { id: string; feeBps: number; liquidityShare: number; deepest: boolean; defaultRoute: boolean; evidence: EvidenceRef[] }[];
   curve?: {
