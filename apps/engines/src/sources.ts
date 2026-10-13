@@ -244,8 +244,13 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   // its removals), the wallet that paid in the pool's first liquidity, and the block of the pool's newest addition.
   const liquidityOf = new Map<string, { events: number; first?: Address; lastAdd: number;
     wallets: Map<Address, { held: bigint; peak: bigint; removals: EvidenceRef[]; lastRemoval: number }> }>();
+  // A pool's events are found by key. Filtering every event for every pool was pools times events comparisons: a coin
+  // paired in thousands of pools kept the engine in this loop from 11:24Z on 2026-10-13 (no rating was written for
+  // any coin until it was restarted; 97% of its CPU profile was the comparison).
+  const poolEvents = new Map<string, EventRow[]>();
+  for (const e of events) { const key = rowHex(e.pool_id), list = poolEvents.get(key); if (list) list.push(e); else poolEvents.set(key, [e]); }
   for (const p of poolRows) {
-    const pe = events.filter(e => eq(e.pool_id, p.id));
+    const pe = poolEvents.get(rowHex(p.id)) ?? [];
     const owned = new Map<string, { actor: Address; amount: bigint; refs: EvidenceRef[] }>();
     for (const e of pe) {
       if (!['Mint', 'Burn', 'ModifyLiquidity'].includes(e.kind)) continue;
@@ -308,7 +313,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   const reserveTotal = [...weights.values()].reduce((n,v) => n+v,0), maxReserve = Math.max(0,...weights.values());
   s.pools = poolRows.filter(p=>p.fee<0x800000).map(p => ({ id: rowHex(p.id), feeBps: p.fee / 100, liquidityShare: reserveTotal ? weights.get(rowHex(p.id))! / reserveTotal : 0,
     deepest: [...weights.values()].every(v=>v>0) && weights.get(rowHex(p.id)) === maxReserve,
-    defaultRoute: !!token.graduated_pool && Number(token.graduated_block) <= block && eq(p.id, token.graduated_pool), evidence: events.filter(e => eq(e.pool_id,p.id)).map(e => evidence(e,'Pool liquidity')) }));
+    defaultRoute: !!token.graduated_pool && Number(token.graduated_block) <= block && eq(p.id, token.graduated_pool), evidence: (poolEvents.get(rowHex(p.id)) ?? []).map(e => evidence(e,'Pool liquidity')) }));
   // TODO(spec): aggregate LP shares across pools only when observed reserve USD supplies a denominator.
   // Single-pool ownership uses its actual position units; incomparable multi-pool units remain absent.
   // A coin that did not launch on Pons is read in the pool it trades in: who paid in the liquidity that is there now,
