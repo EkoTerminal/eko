@@ -2,9 +2,14 @@ import { gapFromTotals, type AttributionTotals } from './attribution-coverage.js
 import { hex, binary } from '@eko/db';
 import type { Address } from '@eko/shared';
 import type { SwapRow, Holding } from './sources.js';
-const encoded=new WeakMap<Uint8Array,Address>();
-/** Row byte arrays are immutable; encode them once, including uncached source loads. */
-export function rowHex(bytes:Uint8Array):Address {let value=encoded.get(bytes);if(!value){value=hex(bytes) as Address;encoded.set(bytes,value);}return value;}
+/**
+ * A row's bytes as a hex address or hash. Encoded each time it is asked for: a cache keyed by the byte array (a
+ * WeakMap) held an entry for every byte column of every loaded row, and on the engine's Node (22) each insert got
+ * slower as it filled: the columns of 336,000 swaps took 3.9 s into an empty cache, 37 s with 1.3 million entries
+ * live and 142 s with 2.7 million (1.5 s without it, every time). On 2026-10-13 a rating of a coin that large took
+ * six minutes, during which no other coin was rated.
+ */
+export function rowHex(bytes:Uint8Array):Address {return hex(bytes) as Address;}
 export const ZERO=`0x${'0'.repeat(40)}` as Address,DEAD=`0x${'0'.repeat(36)}dead` as Address;
 export const isSink=(holder:Address,coin:Address)=>holder===coin || holder===ZERO || holder===DEAD;
 export function prepareSwap(row:SwapRow) {row.traderHex=row.trader!=null && !row.senders_pending ? rowHex(row.trader) : undefined;row.quoteHex=rowHex(row.quote_asset);row.poolHex=rowHex(row.pool_id);row.txHex=rowHex(row.tx_hash);row.sec=new Date(row.ts).getTime()/1000;return row;}

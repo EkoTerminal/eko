@@ -18,10 +18,14 @@ export async function trendingAt(db: ChainDb, block: number, sinceSec: number, u
 }
 async function computeTrending(db: ChainDb, block: number, sinceSec: number, untilSec?: number): Promise<TrendingRow[]> {
   const bounded = untilSec === undefined ? '' : ' AND s.ts<=to_timestamp($3)';
-  return (await db.sql.query<{ coin: Uint8Array; name: string; symbol: string; created: Date; started: Date; volume: number }>(`SELECT s.coin,t.name,t.symbol,b.ts AS created,min(s.ts) AS started,sum(s.usd) AS volume
-    FROM swaps s JOIN tokens t ON t.address=s.coin JOIN engine_block_times b ON b.number=t.first_block
-    WHERE s.block<=$1 AND s.ts>to_timestamp($2)${bounded} AND s.usd>0 AND t.name IS NOT NULL AND t.symbol IS NOT NULL
-    GROUP BY s.coin,t.name,t.symbol,b.ts ORDER BY volume DESC,s.coin LIMIT 50`, [block, sinceSec, ...(untilSec === undefined ? [] : [untilSec])])).rows
+  // The hour's swaps are summed per coin first (an index-only read of ts, block, coin and usd) and only the coins are
+  // joined to their names and launch times. Joined swap by swap, one launch block's ranking read 115,000 buffers on a
+  // copy of 2026-10-13 (266 ms, against 6,400 and 87 ms), and every newly listed coin's rating asks for one.
+  return (await db.sql.query<{ coin: Uint8Array; name: string; symbol: string; created: Date; started: Date; volume: number }>(`SELECT a.coin,t.name,t.symbol,b.ts AS created,a.started,a.volume
+    FROM (SELECT s.coin,min(s.ts) AS started,sum(s.usd) AS volume FROM swaps s
+      WHERE s.block<=$1 AND s.ts>to_timestamp($2)${bounded} AND s.usd>0 GROUP BY s.coin) a
+    JOIN tokens t ON t.address=a.coin JOIN engine_block_times b ON b.number=t.first_block
+    WHERE t.name IS NOT NULL AND t.symbol IS NOT NULL ORDER BY a.volume DESC,a.coin LIMIT 50`, [block, sinceSec, ...(untilSec === undefined ? [] : [untilSec])])).rows
     .map(r => ({ coin: hex(r.coin), name: r.name, symbol: r.symbol, created: new Date(r.created), started: new Date(r.started), volume: r.volume }));
 }
 
