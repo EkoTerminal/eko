@@ -1,4 +1,4 @@
-import { decodeEventLog, getAddress, toEventSelector, type Abi, type Address, type Log } from 'viem';
+import { decodeEventLog, getAddress, toEventSelector, type Abi, type AbiEvent, type Address, type Log } from 'viem';
 import { v3Abi, v4Abi, verifiedV4Events, erc20Abi, wethAbi } from './abis.js';
 import { resolveActor, type ActorContext, type ActorTransaction } from './actor.js';
 import type { AddressRegistry } from './registry.js';
@@ -15,29 +15,42 @@ type ERC20 = ReturnType<typeof decodeEventLog<typeof erc20Abi>>;
 type WETH = ReturnType<typeof decodeEventLog<typeof wethAbi>>;
 export type ChainEvent = ({ source: 'uniswap_v3' } & V3 | { source: 'uniswap_v4' } & V4 | { source: 'erc20' } & ERC20 | { source: 'weth' } & WETH) & { address: Address; actor?: Address };
 export interface DecodeResult { events: ChainEvent[]; unknownTopics: number; malformedLogs: number }
-const matches = (abi: Abi, topic: string | undefined) => abi.some(a => a.type === 'event' && toEventSelector(a) === topic);
+/**
+ * An ABI event's selector, hashed once. Every log used to hash the selector of each event it was compared with (five
+ * to fifteen keccak runs per log): 20% of the indexer's CPU in a burst on 2026-10-13, when it fell 30 s behind.
+ */
+const selectors = new Map<object, string>();
+export function eventSelector(event: AbiEvent): string {
+  let selector = selectors.get(event);
+  if (!selector) { selector = toEventSelector(event); selectors.set(event, selector); }
+  return selector;
+}
+const eventOf = (abi: Abi, topic: string | undefined) => abi.find((a): a is AbiEvent => a.type === 'event' && eventSelector(a) === topic);
+const verifiedV4Abi = v4Abi.filter(a => (verifiedV4Events as readonly string[]).includes(a.name));
+const poolCreatedTopic = eventSelector(v3Abi[0]), transferTopic = eventSelector(erc20Abi[0]);
 export function decodeResult(log: DecoderLog, ctx: DecodeContext): DecodeResult {
   const address = getAddress(log.address);
   const isAddress = (key: Parameters<AddressRegistry['addressOf']>[0]) => ctx.registry.addressOf(key)?.toLowerCase() === address.toLowerCase();
-  let abi: Abi | undefined;
+  // The one event of the matching ABI that carries this log's selector.
+  let event: AbiEvent | undefined;
   let source: ChainEvent['source'] | undefined;
   if (isAddress('uniswapV3.factory') || ctx.isV3Pool?.(address)) {
-    const poolCreated = toEventSelector(v3Abi[0]);
-    const validEmitter = isAddress('uniswapV3.factory') ? log.topics[0] === poolCreated : log.topics[0] !== poolCreated;
-    if (validEmitter && matches(v3Abi, log.topics[0])) { abi = v3Abi; source = 'uniswap_v3'; }
+    const validEmitter = isAddress('uniswapV3.factory') ? log.topics[0] === poolCreatedTopic : log.topics[0] !== poolCreatedTopic;
+    const found = validEmitter ? eventOf(v3Abi, log.topics[0]) : undefined;
+    if (found) { event = found; source = 'uniswap_v3'; }
   }
   if (isAddress('uniswapV4.poolManager')) {
-    const verified = v4Abi.filter(a => (verifiedV4Events as readonly string[]).includes(a.name));
-    if (matches(verified, log.topics[0])) { abi = verified; source = 'uniswap_v4'; }
+    const found = eventOf(verifiedV4Abi, log.topics[0]);
+    if (found) { event = found; source = 'uniswap_v4'; }
   }
-  if (!abi && isAddress('tokens.WETH') && matches(wethAbi, log.topics[0])) { abi = wethAbi; source = 'weth'; }
+  if (!event && isAddress('tokens.WETH')) { const found = eventOf(wethAbi, log.topics[0]); if (found) { event = found; source = 'weth'; } }
   // ERC-721 uses the same selector, but indexes its token id instead of ERC-20 data.
-  if (log.topics[0] === toEventSelector(erc20Abi[0]) && log.topics.length === 4 && log.data === '0x') return { events: [], unknownTopics: 0, malformedLogs: 0 };
-  if (!abi && matches(erc20Abi, log.topics[0])) { abi = erc20Abi; source = 'erc20'; }
-  if (!abi || !source) return { events: [], unknownTopics: 1, malformedLogs: 0 };
+  if (log.topics[0] === transferTopic && log.topics.length === 4 && log.data === '0x') return { events: [], unknownTopics: 0, malformedLogs: 0 };
+  if (!event) { const found = eventOf(erc20Abi, log.topics[0]); if (found) { event = found; source = 'erc20'; } }
+  if (!event || !source) return { events: [], unknownTopics: 1, malformedLogs: 0 };
   try {
-    const event = decodeEventLog({ abi, topics: log.topics, data: log.data, strict: true });
-    return { events: [{ ...event, source, address, ...(ctx.tx ? { actor: resolveActor(ctx.tx, ctx) } : {}) } as unknown as ChainEvent], unknownTopics: 0, malformedLogs: 0 };
+    const decoded = decodeEventLog({ abi: [event], topics: log.topics, data: log.data, strict: true });
+    return { events: [{ ...decoded, source, address, ...(ctx.tx ? { actor: resolveActor(ctx.tx, ctx) } : {}) } as unknown as ChainEvent], unknownTopics: 0, malformedLogs: 0 };
   } catch { return { events: [], unknownTopics: 0, malformedLogs: 1 }; }
 }
 export function decode(log: DecoderLog, ctx: DecodeContext): ChainEvent[] { return decodeResult(log, ctx).events; }

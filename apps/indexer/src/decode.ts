@@ -16,7 +16,7 @@ export interface Prepared { storedTokens: Set<string>; storedPools: Set<string>;
 export interface TokenRow { address: Uint8Array; curve: Uint8Array | null; symbol: string | null; name: string | null; decimals: number | null; launchpad: string | null; total_supply?: string | null; supply_block?: string | null }
 export interface RemoteInputs { codes: Map<string, Hex>; codeBlocks?: Map<string, bigint>; metadata: Map<string, TokenMetadata>; pools: Map<string, PoolMetadata>; rate: EthUsdRate | null }
 const unindexedPonsTopics=new Set(ponsCurveAbi.filter((e):e is AbiEvent=>e.type==='event'&&['FeesSwept','Initialized'].includes(e.name)).map(toEventSelector));
-const poolCreatedTopic=toEventSelector(v3Abi[0]),initializeTopic=toEventSelector(v4Abi[0]);
+const poolCreatedTopic=toEventSelector(v3Abi[0]),initializeTopic=toEventSelector(v4Abi[0]),transferTopic=toEventSelector(erc20Abi[0]);
 const v3PoolTopics = new Set(v3Abi.slice(1).map(toEventSelector));
 const dateOf = (b: RpcBlock) => new Date(Number(BigInt(b.timestamp)) * 1000);
 const key = (l: RpcLog) => `${lower(l.transactionHash)}:${Number(BigInt(l.logIndex))}`;
@@ -150,7 +150,7 @@ export class BlockDecoder {
     for (const l of logs) if (v3PoolTopics.has(l.topics[0]) && !known.has(lower(l.address)) && lower(l.address) !== lower(this.registry.requireAddress('uniswapV4.poolManager')) && !first.has(lower(l.address))) first.set(lower(l.address),l);
     const reference=[lower(this.registry.requireAddress('tokens.WETH')),lower(this.registry.requireAddress('tokens.USDG'))];
     const counterpart=new Map<string,Set<string>>();
-    for(const l of logs)if(l.topics[0]===toEventSelector(erc20Abi[0]))for(const topic of l.topics.slice(1,3)){
+    for(const l of logs)if(l.topics[0]===transferTopic)for(const topic of l.topics.slice(1,3)){
       const address=lower(`0x${topic.slice(-40)}`),currencies=counterpart.get(address)??new Set<string>();currencies.add(lower(l.address));counterpart.set(address,currencies);
     }
     const paired=new Set([...counterpart].filter(([,currencies])=>[...currencies].some(a=>scope?.tokens.has(a)) || reference.every(a=>currencies.has(a))).map(([address])=>address));
@@ -335,7 +335,8 @@ export class BlockDecoder {
       const base = { block: n.toString(), tx_hash: binary(l.transactionHash), log_index: Number(BigInt(l.logIndex)) };
       const deferredPool=v3PoolTopics.has(l.topics[0]) && lower(l.address)!==lower(this.registry.requireAddress('uniswapV4.poolManager')) && !state.pools.has(lower(l.address));
       if(deferredPool){
-        const hints=receipts.flatMap(r=>r.logs).filter(t=>lower(t.transactionHash)===lower(l.transactionHash)&&t.topics[0]===toEventSelector(erc20Abi[0])&&t.topics.slice(1,3).some(a=>lower(`0x${a.slice(-40)}`)===lower(l.address))).map(t=>lower(t.address));
+        // The transaction's own logs: every log of the batch was filtered for each such event before.
+        const hints=(txLogs.get(lower(l.transactionHash)) ?? []).filter(t=>t.topics[0]===transferTopic&&t.topics.slice(1,3).some(a=>lower(`0x${a.slice(-40)}`)===lower(l.address))).map(t=>lower(t.address));
         const {currencyHints:storedHints,...rawLog}=l as RpcLog&{currencyHints?:string[]};
         rows.add('pending_pool_events',{...base,emitter:binary(l.address),currency_hints:json(storedHints??[...new Set(hints)]),data:json({...rawLog,blockTimestamp:toHex(BigInt(block.timestamp))})});
       }
@@ -344,7 +345,7 @@ export class BlockDecoder {
       const standard = options.ponsOnly ? { events: [], unknownTopics: 0, malformedLogs: 0 } : decodePoolEvents(l, { registry: this.registry, tx, ...ctx, isV3Pool: a => state.pools.get(lower(a))?.venue === 'uniswap_v3' });
       if (pons.malformedLogs || standard.malformedLogs) this.metrics.classify('malformed', l);
       else if (!pons.events.length && !standard.events.length) {
-        let reason=deferredPool?'deferred_pool':l.topics[0] === toEventSelector(erc20Abi[0]) && l.topics.length === 4 && l.data === '0x' ? 'not_erc20' : 'unknown_topic';
+        let reason=deferredPool?'deferred_pool':l.topics[0] === transferTopic && l.topics.length === 4 && l.data === '0x' ? 'not_erc20' : 'unknown_topic';
         if(state.curves.has(lower(l.address))&&unindexedPonsTopics.has(l.topics[0])){
           try{decodeEventLog({abi:ponsCurveAbi,topics:l.topics,data:l.data,strict:true});reason='unindexed_pons_event';}
           catch{reason='malformed';}

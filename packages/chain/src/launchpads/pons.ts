@@ -1,22 +1,25 @@
-import { decodeEventLog, getAddress, toEventSelector, type Address } from 'viem';
+import { decodeEventLog, getAddress, type AbiEvent, type Address } from 'viem';
 import { ponsCurveAbi, ponsFactoryAbi } from '../abis.js';
 import { resolveActor, type ActorContext, type ActorTransaction } from '../actor.js';
-import type { DecoderLog } from '../decoders.js';
+import { eventSelector, type DecoderLog } from '../decoders.js';
 import type { AddressRegistry } from '../registry.js';
 import type { LaunchpadAdapter, LaunchpadEvent } from './types.js';
 export interface PonsContext extends ActorContext {
   registry: AddressRegistry;
   tokenForCurve(curve: Address): Address | null;
 }
+const supportedNames = ['TokenLaunched', 'CurveBuy', 'CurveSell', 'SnipeTaxExempted'];
+const supportedOf = (abi: readonly unknown[]) => (abi as readonly { type: string; name?: string }[]).filter((a): a is AbiEvent => a.type === 'event' && supportedNames.includes(a.name ?? ''));
+const factoryEvents = supportedOf(ponsFactoryAbi), curveEvents = supportedOf(ponsCurveAbi);
 export function decodePonsResult(log: DecoderLog, tx: ActorTransaction, ctx: PonsContext): { events: LaunchpadEvent[]; unknownTopics: number; malformedLogs: number } {
   const factory = ctx.registry.addressOf('pons.factory');
   const fromFactory = factory?.toLowerCase() === log.address.toLowerCase();
   const token = ctx.tokenForCurve(getAddress(log.address));
-  const abi = fromFactory ? ponsFactoryAbi : token ? ponsCurveAbi : [];
-  const supported = abi.filter(a => a.type === 'event' && ['TokenLaunched', 'CurveBuy', 'CurveSell', 'SnipeTaxExempted'].includes(a.name));
-  if (!supported.some(a => a.type === 'event' && toEventSelector(a) === log.topics[0])) return { events: [], unknownTopics: 1, malformedLogs: 0 };
+  // Selectors are hashed once per event (decoders.ts), and the log is decoded against the one event that matches.
+  const matched = (fromFactory ? factoryEvents : token ? curveEvents : []).find(a => eventSelector(a) === log.topics[0]);
+  if (!matched) return { events: [], unknownTopics: 1, malformedLogs: 0 };
   try {
-    const event = decodeEventLog({ abi: supported, topics: log.topics, data: log.data, strict: true });
+    const event = decodeEventLog({ abi: [matched], topics: log.topics, data: log.data, strict: true });
     const a = event.args as Record<string, Address | bigint>;
     let result: LaunchpadEvent;
     if (event.eventName === 'TokenLaunched') result = { kind: 'launch', token: a.token as Address, deployer: a.deployer as Address, curve: a.curve as Address,

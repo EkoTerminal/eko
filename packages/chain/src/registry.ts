@@ -52,10 +52,16 @@ export class AddressRegistry {
     visit(this.data, '');
     return entries;
   }
+  /**
+   * The key's path is followed down the data. It used to list every entry of the registry and search the list, on each
+   * call; the indexer asks several times per log, and that listing was 6% of its CPU in a burst on 2026-10-13.
+   */
   addressOf(key: RegistryKey): Address | null {
-    const found = this.entries().find(([k]) => k === key);
-    if (!found) throw new Error(`Unknown registry key: ${key}`);
-    return found[1].address === 'TODO' ? null : found[1].address;
+    let node: unknown = this.data;
+    for (const part of key.split('.')) node = node && typeof node === 'object' ? (node as Record<string, unknown>)[part] : undefined;
+    if (!node || typeof node !== 'object' || !('address' in node)) throw new Error(`Unknown registry key: ${key}`);
+    const address = (node as RegistryEntry).address;
+    return address === 'TODO' ? null : address;
   }
   requireAddress(key: RegistryKey): Address {
     const address = this.addressOf(key);
