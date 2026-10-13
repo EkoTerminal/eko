@@ -162,6 +162,44 @@ describe('read-model refresh churn', () => {
     expect(await range()).toEqual(traded);
     expect((await rows(db)).read_buyers).toEqual(buyers);
   });
+  it('adds the buyers of new swaps without rebuilding the coin, and rebuilds when its history is rewritten', async () => {
+    // 2026-10-13: every refresh rebuilt a coin's buyers from all of its swaps (0.86 s for a 71,000-swap coin on a copy).
+    const db = await fixture(), store = new ReadStore(db, () => now);
+    const state = async () => {
+      const coin = (await db.sql.query<{ buyers: string; buyers_block: string | null }>('SELECT buyers,buyers_block FROM read_coins WHERE coin=$1', [binary(coinB)])).rows[0]!;
+      const pairs = (await db.sql.query<{ n: string }>('SELECT count(*) AS n FROM read_buyers WHERE coin=$1', [binary(coinB)])).rows[0]!.n;
+      return { buyers: Number(coin.buyers), through: Number(coin.buyers_block), pairs: Number(pairs) };
+    };
+    const rebuild = async () => (await db.sql.query<{ rebuild: boolean }>('SELECT rebuild FROM read_dirty WHERE coin=$1', [binary(coinB)])).rows[0]?.rebuild;
+    await store.refreshModels();
+    expect(await state()).toEqual({ buyers: 1, through: 7, pairs: 1 });
+    // A new buyer far above the block counted through: added on its own.
+    await swap(db, 5000, coinB, poolB1, traders[0]!, 1);
+    expect(await rebuild()).toBe(false);
+    await store.refreshModels();
+    expect(await state()).toEqual({ buyers: 2, through: 5000, pairs: 2 });
+    // Proof that only the new swaps were read: a pair removed by hand is not put back by the next new swap...
+    await db.sql.query('DELETE FROM read_buyers WHERE coin=$1 AND trader=$2', [binary(coinB), binary(traders[2]!)]);
+    await swap(db, 5001, coinB, poolB1, traders[0]!, -1);
+    expect(await rebuild()).toBe(false);
+    await store.refreshModels();
+    expect(await state()).toEqual({ buyers: 1, through: 5001, pairs: 1 });
+    // ...and is put back as soon as the coin's history is rewritten: here an old swap gets its trader (onboarding does this).
+    await db.sql.query('UPDATE swaps SET trader=$2,senders_pending=false WHERE coin=$1 AND block=6', [binary(coinB), binary(traders[1]!)]);
+    expect(await rebuild()).toBe(true);
+    await store.refreshModels();
+    expect(await state()).toEqual({ buyers: 3, through: 5001, pairs: 3 });
+    // A swap stored below the block counted through (a pool's old events turned into rows) also rebuilds.
+    await swap(db, 100, coinB, poolB1, traders[3]!, 1);
+    expect(await rebuild()).toBe(true);
+    await store.refreshModels();
+    expect(await state()).toEqual({ buyers: 4, through: 5001, pairs: 4 });
+    // A deleted swap (a reorganisation) takes its buyer with it and moves the block counted through back.
+    await db.sql.query('DELETE FROM swaps WHERE coin=$1 AND block>=5000', [binary(coinB)]);
+    expect(await rebuild()).toBe(true);
+    await store.refreshModels();
+    expect(await state()).toEqual({ buyers: 3, through: 100, pairs: 3 });
+  });
   it('leaves a coin it has just refreshed for a few seconds in the background, without losing its newer change', async () => {
     // 2026-10-13: a coin that trades in every block was refreshed on every 250 ms pass, its whole history read each time.
     let clock = now;
