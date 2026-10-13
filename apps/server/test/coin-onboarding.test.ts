@@ -123,6 +123,8 @@ describe('coin onboarding', () => {
     expect(calls).toEqual([`facts:${coin}`, `mint:${coin}:200`, `sent:${launcher}`]);
     const row = (await db.sql.query<{ usd: number; price_quote: number; trader: Uint8Array; pricing_pending: boolean }>('SELECT usd,price_quote,trader,pricing_pending FROM swaps WHERE coin=$1', [binary(coin)])).rows[0];
     expect({ ...row, trader: hex(row.trader) }).toEqual({ usd: 5, price_quote: 2.5, trader: buyer, pricing_pending: false });
+    // Its candle for that minute is built after pricing, in a transaction of its own.
+    expect((await db.sql.query<{ volume_usd: number; trades: number }>('SELECT volume_usd,trades FROM bars_1m WHERE coin=$1', [binary(coin)])).rows).toEqual([{ volume_usd: 5, trades: 1 }]);
     expect((await db.sql.query<{ status: string }>('SELECT status FROM coin_onboarding WHERE coin=$1', [binary(coin)])).rows[0].status).toBe('done');
     // The read model lists it once it has a launch wallet, before any card.
     await db.sql.query('SELECT refresh_read_models(ARRAY[$1::bytea],$2)', [binary(coin), Math.floor(now / 1000)]);

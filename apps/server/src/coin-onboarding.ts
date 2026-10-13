@@ -1,5 +1,5 @@
 import { decodeAbiParameters, hexToString, parseAbi, type Hex, type PublicClient } from 'viem';
-import { binary, hex, type ChainDb } from '@eko/db';
+import { binary, hex, refreshBars, type ChainDb } from '@eko/db';
 import { isTransientRpcUnavailable, loadRegistry, rpcStopReason } from '@eko/chain';
 import { repricePonsSwaps, pricingAssets, type PricingAssets } from './pricing-repair.js';
 
@@ -11,6 +11,14 @@ const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523
  * seconds on the loaded box (2026-10-13), three times the pass's whole allowance.
  */
 export const ATTRIBUTE_BATCH = 1000, ONBOARD_PRICE_BATCH = 1000;
+/**
+ * Minutes of candles rebuilt per transaction once a coin's swaps are priced. Rebuilding candles takes the candle
+ * table's exclusive lock, which the indexer needs to write every block: a thousand minutes in the pricing transaction
+ * held it for ten seconds at a time (2026-10-13). The candles of the last two days are rebuilt after pricing instead,
+ * a few minutes of them at a time.
+ */
+export const CANDLE_MINUTES = 30;
+const NO_CANDLES = new Date(8.64e15);
 /**
  * Blocks per mint search request (the paid endpoint refuses a log range over 100,000 blocks, about three hours), and
  * the windows searched back from a coin's first pool: a launch mints in the transaction that opens its pool or shortly
@@ -241,6 +249,8 @@ export class CoinOnboardingWorker {
   private queue: Candidate[] = [];
   private traded: Candidate[] = [];
   private tradedAt = -Infinity;
+  /** Per coin being settled: the oldest minute whose candle this process has rebuilt (older ones remain). */
+  private candles = new Map<string, Date>();
   private pausedAt = -Infinity;
   private readonly now: () => number;
   private readonly addresses: AttributionAddresses;
@@ -279,7 +289,7 @@ export class CoinOnboardingWorker {
     const seen = new Set<string>();
     this.queue = [...fresh, ...this.traded].filter(row => { const key = hex(row.coin); if (seen.has(key)) return false; seen.add(key); return true; });
   }
-  private done(coin: Uint8Array) { const key = hex(coin); this.traded = this.traded.filter(row => hex(row.coin) !== key); this.queue = this.queue.filter(row => hex(row.coin) !== key); }
+  private done(coin: Uint8Array) { const key = hex(coin); this.candles.delete(key); this.traded = this.traded.filter(row => hex(row.coin) !== key); this.queue = this.queue.filter(row => hex(row.coin) !== key); }
   private async mark(coin: Uint8Array, status: string, data: Record<string, unknown> = {}) {
     // Waits are measured on the worker's clock, so the row's time is too.
     await this.db.sql.query(`INSERT INTO coin_onboarding(coin,status,attempts,data,created_at,updated_at) VALUES($1,$2,1,$3::jsonb,to_timestamp($4::double precision),to_timestamp($4::double precision))
@@ -304,13 +314,24 @@ export class CoinOnboardingWorker {
    * each hour reads only that hour's ETH/USD reference swaps.
    */
   private async settle(coin: Uint8Array, deadline: number): Promise<boolean> {
-    const batch = this.options.batch ?? ATTRIBUTE_BATCH, epoch = new Date(0), end = new Date(this.now() + HOUR), floor = new Date(this.now() - 2 * 24 * HOUR);
+    const batch = this.options.batch ?? ATTRIBUTE_BATCH, epoch = new Date(0), end = new Date(this.now() + HOUR), floor = new Date(this.now() - 2 * 24 * HOUR), key = hex(coin);
     const hours = (await this.db.sql.query<{ hour: Date }>(`SELECT DISTINCT date_trunc('hour',ts) AS hour FROM swaps WHERE coin=$1 AND usd IS NULL AND amount_coin>0 AND amount_quote>0 ORDER BY 1 DESC`, [coin])).rows;
     for (const { hour } of hours) for (;;) {
       if (this.now() >= deadline) return false;
       const from = new Date(hour);
-      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), ONBOARD_PRICE_BATCH, floor, [coin]) < ONBOARD_PRICE_BATCH) break;
+      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), ONBOARD_PRICE_BATCH, NO_CANDLES, [coin]) < ONBOARD_PRICE_BATCH) break;
+      this.candles.delete(key);
     }
+    // Candles of the last two days, newest first, a few minutes per transaction. `candles` holds how far a pass got.
+    const minutes = (await this.db.sql.query<{ minute: Date }>(`SELECT DISTINCT date_trunc('minute',ts) AS minute FROM swaps WHERE coin=$1 AND ts>=$2 AND ts<$3::timestamptz AND usd>0 ORDER BY 1 DESC`,
+      [coin, floor, this.candles.get(key) ?? end])).rows.map(row => new Date(row.minute));
+    for (let offset = 0; offset < minutes.length; offset += CANDLE_MINUTES) {
+      if (this.now() >= deadline) return false;
+      const chunk = minutes.slice(offset, offset + CANDLE_MINUTES);
+      await this.db.tx(tx => refreshBars(tx, chunk.map(minute => ({ coin, minute }))));
+      this.candles.set(key, chunk.at(-1)!);
+    }
+    this.candles.delete(key);
     for (;;) {
       if (this.now() >= deadline) return false;
       if (await attributeSwaps(this.db, this.addresses, epoch, end, batch, [coin]) < batch) break;
