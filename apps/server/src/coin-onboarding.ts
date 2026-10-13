@@ -226,6 +226,8 @@ export function chainOnboarding(metered: () => PublicClient, registry = loadRegi
 interface Candidate { coin: Uint8Array; first_block: string; recent?: string }
 /** Swaps in the last hour from which a coin not yet onboarded goes ahead of the hour's launches. */
 export const BUSY_SWAPS = 50;
+/** How long a coin's chain reads are kept: a coin read ahead of its turn is not read again when its turn comes. */
+const READS_KEPT_MS = 3_600_000;
 export interface OnboardingOptions { now?: () => number; intervalMs?: number; budgetMs?: number; perTick?: number; batch?: number; assets?: PricingAssets; addresses?: AttributionAddresses;
   /** Seconds the newest indexed block may be behind the clock before a pass does nothing (default 45). */
   maxLagSec?: number }
@@ -265,11 +267,51 @@ export class CoinOnboardingWorker {
   private readonly now: () => number;
   private readonly addresses: AttributionAddresses;
   private assets?: PricingAssets;
-  constructor(private readonly db: ChainDb, private readonly chain: OnboardingChain, private readonly log: (event: string, fields: Record<string, unknown>) => void,
+  /**
+   * Chain reads in flight or answered (a coin's facts and first mint, a wallet's transaction count). A failed read is
+   * kept until the coin it was for has had its turn and been set to rest, so a read-ahead that failed is not sent twice.
+   */
+  private reads = new Map<string, { at: number; value: Promise<unknown> }>();
+  private rejected = new Set<string>();
+  private readonly chain: OnboardingChain;
+  constructor(private readonly db: ChainDb, chain: OnboardingChain, private readonly log: (event: string, fields: Record<string, unknown>) => void,
     private readonly options: OnboardingOptions = {}) {
     this.now = options.now ?? (() => Date.now());
     this.addresses = options.addresses ?? attributionAddresses();
     this.assets = options.assets;
+    this.chain = {
+      facts: token => this.read(`facts:${token}`, () => chain.facts(token)),
+      firstMint: (token, upTo) => this.read(`mint:${token}:${upTo}`, () => chain.firstMint(token, upTo)),
+      sent: wallet => this.read(`sent:${wallet}`, () => chain.sent(wallet)),
+    };
+  }
+  private read<T>(key: string, load: () => Promise<T>): Promise<T> {
+    const held = this.reads.get(key);
+    if (held && this.now() - held.at < READS_KEPT_MS) return held.value as Promise<T>;
+    const value = load();
+    this.reads.set(key, { at: this.now(), value });
+    // Spent reads are refused before anything is sent: every pass asks again.
+    value.catch(error => { if (this.reads.get(key)?.value !== value) return; if (error instanceof OnboardingReadsSpent) this.reads.delete(key); else this.rejected.add(key); });
+    return value;
+  }
+  /**
+   * Start the chain reads of the coins a pass is about to reach, all at once: read one coin at a time they took most
+   * of a pass (about 180 coins an hour on 2026-10-13, against 335 launches an hour). `onboard` then finds them answered.
+   */
+  private async readAhead(candidates: Candidate[]) {
+    if (!candidates.length) return;
+    const rows = (await this.db.sql.query<{ coin: Uint8Array; facts: boolean; mint: boolean }>(`SELECT t.address AS coin,
+        (t.decimals IS NULL OR t.name IS NULL OR t.symbol IS NULL OR t.total_supply IS NULL) AS facts,(o.data->>'launchWallet') IS NULL AS mint
+      FROM tokens t LEFT JOIN coin_onboarding o ON o.coin=t.address WHERE t.address=ANY($1::bytea[]) AND t.deployer IS NULL AND t.launchpad IS NULL`, [candidates.map(row => row.coin)])).rows;
+    const wanted = new Map(rows.map(row => [hex(row.coin), row]));
+    for (const candidate of candidates) {
+      const address = hex(candidate.coin), want = wanted.get(address), reads: Promise<unknown>[] = [];
+      if (want?.facts) reads.push(this.chain.facts(address));
+      if (want?.mint) reads.push(this.chain.firstMint(address, BigInt(candidate.first_block) + 100n).then(mint =>
+        mint && !(mint.to && this.addresses.entryPoints?.includes(mint.to.toLowerCase())) ? this.chain.sent(mint.wallet) : null));
+      // A read that fails here is reported when the coin's turn comes.
+      void Promise.all(reads).catch(() => undefined);
+    }
   }
   start() { if (this.timer) return; void this.tick(); this.timer = setInterval(() => void this.tick(), this.options.intervalMs ?? 30_000); this.timer.unref(); }
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
@@ -301,6 +343,7 @@ export class CoinOnboardingWorker {
       this.tradedAt = started;
     }
     for (const [key, at] of this.failed) if (started - at >= 300_000) this.failed.delete(key);
+    for (const [key, held] of this.reads) if (started - held.at >= READS_KEPT_MS) this.reads.delete(key);
     this.busy = this.traded.filter(row => Number(row.recent ?? 0) >= BUSY_SWAPS && !this.failed.has(hex(row.coin)));
     const seen = new Set([...this.busy.map(row => hex(row.coin)), ...this.failed.keys()]);
     this.queue = [...fresh, ...this.traded].filter(row => { const key = hex(row.coin); if (seen.has(key)) return false; seen.add(key); return true; });
@@ -401,26 +444,30 @@ export class CoinOnboardingWorker {
     const newest = (await this.db.sql.query<{ ts: Date | null }>('SELECT ts FROM chain_blocks ORDER BY number DESC LIMIT 1')).rows[0]?.ts;
     const lagSec = newest ? (started - new Date(newest).getTime()) / 1000 : 0, maxLag = this.options.maxLagSec ?? 45;
     if (lagSec > maxLag) { if (started - this.pausedAt >= 300_000) { this.pausedAt = started; this.log('coin_onboarding_paused', { lagSec: Math.round(lagSec), maxLagSec: maxLag }); } return; }
-    const budget = this.options.budgetMs ?? 10_000, deadline = started + budget;
+    const budget = this.options.budgetMs ?? 10_000, deadline = started + budget, perTick = this.options.perTick ?? 8;
+    // The chain reads of the coins this pass can reach start now and are answered while the database work below runs.
+    await this.candidates(started);
+    await this.readAhead([...this.busy.slice(0, 2), ...this.queue.slice(0, perTick)]);
     // Onboarded coins first. The indexer names and prices their new swaps as it stores them; rows it stores without a
     // wallet arrive later, of any age (a backfill stream, or the stored raw events of a pool that has just become known).
     let settled = 0;
     const behind = (await this.db.sql.query<{ coin: Uint8Array }>(`SELECT k.address AS coin FROM tokens k WHERE k.deployer IS NOT NULL AND k.launchpad IS NULL
       AND (EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.address AND s.senders_pending AND s.venue<>'pons_curve')
         OR EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id AND e.senders_pending WHERE p.currency0=k.address OR p.currency1=k.address)) LIMIT 20`)).rows;
-    const behindUntil = started + budget / 3;
+    const behindUntil = this.now() + (deadline - this.now()) / 3;
     for (const { coin } of behind) { if (this.now() >= behindUntil || !await this.settle(coin, behindUntil)) break; settled++; }
-    await this.candidates(started);
     let onboarded = 0, set = 0, unfinished = 0, tried = 0;
     // A coin that does not finish its group's time stays queued for the next pass: its work so far is stored.
     const work = async (list: () => Candidate[], until: number) => {
-      for (; list().length && tried < (this.options.perTick ?? 8) && this.now() < until; tried++) {
+      for (; list().length && tried < perTick && this.now() < until; tried++) {
         const candidate = list()[0];
         let outcome: 'onboarded' | 'set_aside' | 'unfinished';
         try { outcome = await this.onboard(candidate, until); }
         catch (error) {
           if (error instanceof OnboardingReadsSpent) throw error;
           this.failed.set(hex(candidate.coin), started); this.busy = this.busy.filter(row => row !== candidate); this.queue = this.queue.filter(row => row !== candidate);
+          for (const key of this.rejected) this.reads.delete(key);
+          this.rejected.clear();
           this.log('coin_onboarding_failed', { coin: hex(candidate.coin), error: String((error as Error)?.message ?? error).slice(0, 200) });
           continue;
         }

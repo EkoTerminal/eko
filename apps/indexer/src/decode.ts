@@ -266,11 +266,15 @@ export class BlockDecoder {
       if (this.referenceRate == null || !sameSource(this.referenceRate) || this.referenceRate.block > n) {
         // For v3, creation_verified records a PoolCreated from the registry's canonical factory.
         this.referenceRate = null;
-        const last = await db.sql.query<{ price_quote: number; block: string }>(`SELECT s.price_quote,s.block FROM swaps s JOIN pools p ON p.id=s.pool_id
-          WHERE s.venue=$1 AND p.venue=$1 AND p.creation_verified AND p.created_block<=s.block
-            AND s.coin=$2 AND s.quote_asset=$3 AND ((p.currency0=$2 AND p.currency1=$3) OR (p.currency0=$3 AND p.currency1=$2))
-            AND s.block <= $4 AND p.id=$5 AND p.fee=$6 AND s.price_quote>0 AND s.price_quote<'Infinity'::double precision
-          ORDER BY s.block DESC,s.log_index DESC LIMIT 1`, ['uniswap_v3', binary(weth), binary(usdg), n.toString(), binary(selected.address), selected.fee]);
+        // The pool row is checked first and its latest swap read backward through swaps(pool_id,block). As one join, a
+        // pool that fails the check (no reference pool had creation_verified on 2026-10-13) made the scan walk the pool's
+        // whole history to return nothing: 21 head ticks stalled 10 to 40 s in 30 hours, longer as the history grew.
+        const last = await db.sql.query<{ price_quote: number; block: string }>(`SELECT x.price_quote,x.block FROM pools p CROSS JOIN LATERAL (
+            SELECT s.price_quote,s.block FROM swaps s WHERE s.pool_id=p.id AND s.venue=$1 AND s.coin=$2 AND s.quote_asset=$3
+              AND s.block <= $4 AND s.block >= p.created_block AND s.price_quote>0 AND s.price_quote<'Infinity'::double precision
+            ORDER BY s.block DESC,s.log_index DESC LIMIT 1) x
+          WHERE p.id=$5 AND p.venue=$1 AND p.creation_verified AND p.fee=$6
+            AND ((p.currency0=$2 AND p.currency1=$3) OR (p.currency0=$3 AND p.currency1=$2))`, ['uniswap_v3', binary(weth), binary(usdg), n.toString(), binary(selected.address), selected.fee]);
         if (last.rows[0]) this.referenceRate = { value: last.rows[0].price_quote, block: BigInt(last.rows[0].block), source: selected };
       }
       if (this.referenceRate && sameSource(this.referenceRate) && this.referenceRate.block <= n && (!state.rate || this.referenceRate.block >= state.rate.block)) state.rate = this.referenceRate;

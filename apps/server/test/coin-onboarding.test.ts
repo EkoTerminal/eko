@@ -232,6 +232,25 @@ describe('coin onboarding', () => {
     await worker.tick(); await worker.tick();
     expect([await unnamed(db, listed), await unnamed(db, coin), await unnamed(db, launch)]).toEqual([0, 0, 0]);
   });
+  it('starts the chain reads of the coins a pass will reach together, and reads no coin twice', async () => {
+    const db = await open(), launches = [address(0xa2), address(0xa3), address(0xa4)], calls: string[] = [];
+    for (const [i, token] of launches.entries()) {
+      await other(db, token, 990 + i, i + 1);
+      await swap(db, 995, 1200 + i, 1, '10', { coin: binary(token) }); await transfer(db, 995, 1200 + i, manager, buyer, '10', token);
+    }
+    await swap(db, 900, 1210, 1, '10'); await transfer(db, 900, 1210, manager, buyer, '10');
+    // Every read answers only after all four coins' facts were asked for: one at a time, the first would never answer.
+    let asked = 0, release!: () => void;
+    const all = new Promise<void>(resolve => { release = resolve; });
+    const slow: OnboardingChain = { ...chain(facts, mint, calls), facts: async token => { calls.push(`facts:${token}`); if (++asked === 4) release(); await all; return facts; } };
+    const worker = new CoinOnboardingWorker(db, slow, () => undefined, { now: () => now, assets, addresses });
+    await worker.tick();
+    for (const token of [coin, ...launches]) expect(await deployer(db, token)).toBe(launcher);
+    // One read of each coin's facts and first mint, and one of the launch wallet's transaction count for all four.
+    expect(calls.filter(call => call.startsWith('facts:')).sort()).toEqual([coin, ...launches].map(token => `facts:${token}`).sort());
+    expect(calls.filter(call => call.startsWith('mint:'))).toHaveLength(4);
+    expect(calls.filter(call => call.startsWith('sent:'))).toEqual([`sent:${launcher}`]);
+  });
   it('goes on to the next coin when one coin\'s read fails, and leaves that coin alone for five minutes', async () => {
     const db = await open(), launch = address(0xa2), events: string[] = [];
     await other(db, launch, 990, 1);
