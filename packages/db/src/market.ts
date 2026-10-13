@@ -81,8 +81,14 @@ async function writeBars(db: ChainDb, keys: string, params: unknown[], perKey = 
   // A bar whose minute has no raw swap left is the summary history retention keeps for a pruned coin (retention.ts
   // deletes a coin's swaps in whole minutes), so it is never rebuilt from what remains. Reorgs delete their bars first
   // (deleteAbove), and every other rebuild has the minute's swaps.
-  await db.sql.query(`DELETE FROM bars_1m b USING (${keys}) k WHERE b.coin=k.coin AND b.minute=k.minute
-    AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute')`, params);
+  // As EXISTS the planner turns the check into a semi-join bounded by coin only, so deleting one minute's bar read the
+  // coin's entire swap history (6.2 million rows for 44 bars on 2026-10-13). The lateral LIMIT 1 keeps it per key.
+  const present = perKey
+    ? `SELECT k.coin,k.minute FROM (SELECT DISTINCT coin,minute FROM (${keys}) keyed) k
+      CROSS JOIN LATERAL (SELECT 1 FROM swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute' LIMIT 1) present`
+    : `SELECT k.coin,k.minute FROM (${keys}) k
+      WHERE EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute')`;
+  await db.sql.query(`DELETE FROM bars_1m b USING (${present}) k WHERE b.coin=k.coin AND b.minute=k.minute`, params);
   const priced = perKey
     ? `SELECT e.*,date_trunc('minute',e.ts) AS minute FROM (SELECT DISTINCT coin,minute FROM (${keys}) keyed) k
       CROSS JOIN LATERAL (${eligible} AND s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute' OFFSET 0) e`
