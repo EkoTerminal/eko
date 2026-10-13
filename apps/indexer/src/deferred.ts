@@ -28,7 +28,8 @@ const IDLE_SEC = 120;
  */
 export class DeferredEvents {
   private readonly decoder: BlockDecoder;
-  private after?: { emitter: Uint8Array; block: string; tx_hash: Uint8Array; log_index: number };
+  /** The pool being worked through, and the block below which its stored events have been read and left (not convertible). */
+  private at?: { emitter: Uint8Array; block: string };
   private idleUntil = 0;
   private scope?: { at: number; value: Awaited<ReturnType<typeof loadSenderScope>> };
   constructor(private readonly db: ChainDb, client: ChainClient, private readonly registry: AddressRegistry, private readonly options: { reorgDepth: number; batch?: number; logger?: Logger; now?: () => number }) {
@@ -37,22 +38,30 @@ export class DeferredEvents {
     this.decoder.storeWalletProtocol = false;
   }
   /** A pool became known: look again at once. */
-  wake() { this.idleUntil = 0; this.after = undefined; this.scope = undefined; }
+  wake() { this.idleUntil = 0; this.at = undefined; this.scope = undefined; }
   /** One bounded batch; returns the events written as rows. Errors are the caller's to log: the head must not stop for them. */
   async step(): Promise<number> {
     const now = (this.options.now ?? Date.now)();
     if (now < this.idleUntil) return 0;
     const head = await this.db.cursor('head');
     if (head == null) return 0;
-    const limit = this.options.batch ?? DEFERRED_BATCH, params: unknown[] = [(head - BigInt(this.options.reorgDepth)).toString(), limit];
-    const position = this.after ? 'AND (e.emitter,e.block,e.tx_hash,e.log_index)>($3::bytea,$4::bigint,$5::bytea,$6::integer)' : '';
-    if (this.after) params.push(this.after.emitter, this.after.block, this.after.tx_hash, this.after.log_index);
+    const limit = this.options.batch ?? DEFERRED_BATCH, settled = (head - BigInt(this.options.reorgDepth)).toString();
+    // One pool at a time, by the (emitter, block) index: the next known pool with stored events, then its oldest ones.
+    // One statement over every pool at once sorted all of them on each step (six seconds for 362,000 rows, 2026-10-13),
+    // and a step runs between two ticks of the head.
+    const pool = (await this.db.sql.query<{ id: Uint8Array }>(`SELECT p.id FROM pools p WHERE p.venue='uniswap_v3' AND ($2::bytea IS NULL OR p.id>=$2)
+        AND EXISTS(SELECT 1 FROM pending_pool_events e WHERE e.emitter=p.id AND e.block<=$1::bigint AND (p.id IS DISTINCT FROM $2 OR e.block>$3::bigint))
+      ORDER BY p.id LIMIT 1`, [settled, this.at?.emitter ?? null, this.at?.block ?? '-1'])).rows[0];
+    if (!pool) { this.at = undefined; this.idleUntil = now + IDLE_SEC * 1000; return 0; }
+    const from = this.at && hex(this.at.emitter) === hex(pool.id) ? this.at.block : '-1';
     const rows = (await this.db.sql.query<Deferred>(`SELECT e.block::text,e.tx_hash,e.log_index,e.emitter,e.data,b.hash,b.ts FROM pending_pool_events e
-      JOIN pools p ON p.id=e.emitter AND p.venue='uniswap_v3' LEFT JOIN chain_blocks b ON b.number=e.block
-      WHERE e.block<=$1::bigint ${position} ORDER BY e.emitter,e.block,e.tx_hash,e.log_index LIMIT $2`, params)).rows;
-    if (!rows.length) { this.after = undefined; this.idleUntil = now + IDLE_SEC * 1000; return 0; }
-    const last = rows.at(-1)!;
-    this.after = { emitter: last.emitter, block: last.block, tx_hash: last.tx_hash, log_index: last.log_index };
+      LEFT JOIN chain_blocks b ON b.number=e.block WHERE e.emitter=$1 AND e.block>$2::bigint AND e.block<=$3::bigint ORDER BY e.block LIMIT $4`, [pool.id, from, settled, limit])).rows;
+    if (!rows.length) { this.at = { emitter: pool.id, block: settled }; return 0; }
+    // Whole blocks only: a block cut by the limit is read again with the next batch (unless it is the only one).
+    const lastBlock = rows.at(-1)!.block;
+    if (rows.length === limit && rows[0].block !== lastBlock) while (rows.at(-1)!.block === lastBlock) rows.pop();
+    // Events converted below are deleted; any left behind (a block without a time, a hash that differs) are passed over.
+    this.at = { emitter: pool.id, block: rows.at(-1)!.block };
     if (!this.scope || now - this.scope.at >= SCOPE_SEC * 1000) this.scope = { at: now, value: await loadSenderScope(this.db) };
     const scope = this.scope.value;
     const blocks = new Map<string, { time: Hex; hash: Hex; logs: RpcLog[]; keys: Deferred[] }>();

@@ -413,7 +413,10 @@ export class BlockDecoder {
     const outside=!state.forceSenders && s.venue!=='pons_curve' && !ponsPool(state.scope,s.pool);
     const pricingPending=coinDecimals==null || quoteDecimals==null;
     if (s.amountCoin === 0n) return;
-    const found=outside && context ? swapWallet(context.logs,tx.hash,s.coin,s.pool,context.poolManager,s.side,context.knownPool) : null;
+    // Not for WETH or USDG as the coin (the reference pair's own swaps, 11,500 an hour): they are never listed, and with
+    // traders on them every wallet profile read WETH's whole history (five to nine seconds a wallet, 2026-10-13).
+    const referenceCoin=lower(s.coin)===lower(this.registry.requireAddress('tokens.WETH')) || lower(s.coin)===lower(this.registry.requireAddress('tokens.USDG'));
+    const found=outside && context && !referenceCoin ? swapWallet(context.logs,tx.hash,s.coin,s.pool,context.poolManager,s.side,context.knownPool) : null;
     // A buy that moved no coins (one hop of a route inside the v4 pool manager) was delivered to nobody: the pool manager is recorded as its recipient.
     const delivered=found?.wallet ?? (found && !found.moved && s.venue==='uniswap_v4' && s.side===1 ? context!.poolManager as Address : null);
     const trader=outside ? found?.wallet ?? null : actor;

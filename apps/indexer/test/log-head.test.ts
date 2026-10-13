@@ -568,6 +568,18 @@ describe('logs-first head', () => {
     expect(await deferred.step()).toBe(0);deferred.wake();expect(await deferred.step()).toBe(0);expect(await count(db,'swaps')).toBe(3);
   });
 
+  it('leaves swaps of WETH and USDG as the coin without a trader, while naming the trader of any other coin outside the sender scope',async()=>{
+    const db=await database();await seed(db);
+    const weth=registry.requireAddress('tokens.WETH'),usdg=registry.requireAddress('tokens.USDG'),reference=address(110),b=trade(1),tx=b.block.transactions[0].hash;
+    // The reference pool (WETH against USDG, seeded as known): the wallet receives WETH from the pool.
+    const wethFirst=lower(weth)<lower(usdg);
+    b.receipts[0].logs=[event(v3Abi[1],reference,{sender:target,recipient:actor,amount0:wethFirst?-(10n**18n):2000n*10n**6n,amount1:wethFirst?2000n*10n**6n:-(10n**18n),sqrtPriceX96:2n**96n,liquidity:1000n,tick:0},b.block,tx,0),
+      event(erc20Abi[0],weth,{from:reference,to:actor,value:10n**18n},b.block,tx,1)];
+    const client=memory(new Map([[0n,{block:empty(0),receipts:[]}],[1n,b]]));await follower(db,client).tick();
+    const row=(await db.sql.query<{trader:Uint8Array|null;senders_pending:boolean;coin:Uint8Array}>('SELECT trader,senders_pending,coin FROM swaps WHERE block=1')).rows[0];
+    expect(hex(row.coin)).toBe(lower(weth));expect(row).toMatchObject({trader:null,senders_pending:true});
+  });
+
   it('reads a window again after the database reports a deadlock, instead of halting',async()=>{
     const db=await database();await seed(db);
     const data:Data=new Map([[0n,{block:empty(0),receipts:[]}],[1n,trade(1)]]),client=memory(data),events:string[]=[];
