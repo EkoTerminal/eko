@@ -228,7 +228,7 @@ export function chainOnboarding(metered: () => PublicClient, registry = loadRegi
   };
 }
 
-interface Candidate { coin: Uint8Array; first_block: string; recent?: string }
+interface Candidate { coin: Uint8Array; first_block: string }
 /** Swaps in the last hour from which a coin not yet onboarded goes ahead of the hour's launches. */
 export const BUSY_SWAPS = 50;
 /** How long a coin's chain reads are kept: a coin read ahead of its turn is not read again when its turn comes. */
@@ -262,6 +262,8 @@ export class CoinOnboardingWorker {
   private running?: Promise<void>;
   private queue: Candidate[] = [];
   private busy: Candidate[] = [];
+  private busiest: Candidate[] = [];
+  private busiestAt = -Infinity;
   /** Coins whose onboarding threw, and when: left alone for five minutes so one coin's failing read does not end every pass. */
   private failed = new Map<string, number>();
   private traded: Candidate[] = [];
@@ -330,8 +332,9 @@ export class CoinOnboardingWorker {
     return this.running;
   }
   /**
-   * Coins to onboard: those with BUSY_SWAPS swaps in the last hour (busiest first), then the hour's launches (newest
-   * first, read every pass), then by swaps in the last day. The traded lists are read every five minutes.
+   * Coins to onboard: those with BUSY_SWAPS swaps in the last hour (busiest first, read every five minutes), then the
+   * hour's launches (newest first, read every pass), then by swaps in the last day (read every half hour: counting a
+   * day of swaps took 2.5 s and 1.1 million buffers on a copy of 2026-10-13, the last hour 0.14 s and 22,000).
    */
   private async candidates(started: number) {
     const skip = `t.deployer IS NULL AND t.launchpad IS NULL AND NOT t.address=ANY($2::bytea[]) AND NOT EXISTS(SELECT 1 FROM coin_onboarding o WHERE o.coin=t.address
@@ -340,22 +343,27 @@ export class CoinOnboardingWorker {
     const fresh = (await this.db.sql.query<Candidate>(`SELECT t.address AS coin,t.first_block::text FROM tokens t
       WHERE t.first_block>coalesce((SELECT number FROM chain_blocks WHERE ts<to_timestamp($1::double precision)-interval '1 hour' ORDER BY ts DESC LIMIT 1),0) AND ${skip}
         AND EXISTS(SELECT 1 FROM pools p WHERE p.currency0=t.address OR p.currency1=t.address) ORDER BY t.first_block DESC LIMIT 100`, params)).rows;
-    if (started - this.tradedAt >= 300_000 || !this.traded.length && started - this.tradedAt >= 60_000) {
-      this.traded = (await this.db.sql.query<Candidate>(`SELECT t.address AS coin,t.first_block::text,a.recent::text FROM (SELECT s.coin,count(*) AS n,
-            count(*) FILTER (WHERE s.ts>to_timestamp($1::double precision)-interval '1 hour') AS recent FROM swaps s
+    if (started - this.busiestAt >= 300_000) {
+      this.busiest = (await this.db.sql.query<Candidate>(`SELECT t.address AS coin,t.first_block::text FROM (SELECT s.coin,count(*) AS n FROM swaps s
+          WHERE s.ts>to_timestamp($1::double precision)-interval '1 hour' AND s.venue<>'pons_curve' GROUP BY s.coin HAVING count(*)>=${BUSY_SWAPS}) a JOIN tokens t ON t.address=a.coin
+        WHERE ${skip} ORDER BY a.n DESC,t.address LIMIT 200`, params)).rows;
+      this.busiestAt = started;
+    }
+    if (started - this.tradedAt >= 1_800_000 || !this.traded.length && started - this.tradedAt >= 300_000) {
+      this.traded = (await this.db.sql.query<Candidate>(`SELECT t.address AS coin,t.first_block::text FROM (SELECT s.coin,count(*) AS n FROM swaps s
           WHERE s.ts>to_timestamp($1::double precision)-interval '24 hours' AND s.venue<>'pons_curve' GROUP BY s.coin) a JOIN tokens t ON t.address=a.coin
-        WHERE ${skip} ORDER BY (a.recent>=${BUSY_SWAPS}) DESC,CASE WHEN a.recent>=${BUSY_SWAPS} THEN a.recent ELSE 0 END DESC,a.n DESC,t.address LIMIT 400`, params)).rows;
+        WHERE ${skip} ORDER BY a.n DESC,t.address LIMIT 400`, params)).rows;
       this.tradedAt = started;
     }
     for (const [key, at] of this.failed) if (started - at >= 300_000) this.failed.delete(key);
     for (const [key, held] of this.reads) if (started - held.at >= READS_KEPT_MS) this.reads.delete(key);
-    this.busy = this.traded.filter(row => Number(row.recent ?? 0) >= BUSY_SWAPS && !this.failed.has(hex(row.coin)));
+    this.busy = this.busiest.filter(row => !this.failed.has(hex(row.coin)));
     const seen = new Set([...this.busy.map(row => hex(row.coin)), ...this.failed.keys()]);
     this.queue = [...fresh, ...this.traded].filter(row => { const key = hex(row.coin); if (seen.has(key)) return false; seen.add(key); return true; });
   }
   private done(coin: Uint8Array) {
     const key = hex(coin), other = (row: Candidate) => hex(row.coin) !== key;
-    this.candles.delete(key); this.traded = this.traded.filter(other); this.busy = this.busy.filter(other); this.queue = this.queue.filter(other);
+    this.candles.delete(key); this.traded = this.traded.filter(other); this.busiest = this.busiest.filter(other); this.busy = this.busy.filter(other); this.queue = this.queue.filter(other);
   }
   private async mark(coin: Uint8Array, status: string, data: Record<string, unknown> = {}) {
     // Waits are measured on the worker's clock, so the row's time is too.
@@ -470,9 +478,12 @@ export class CoinOnboardingWorker {
         try { outcome = await this.onboard(candidate, until); }
         catch (error) {
           if (error instanceof OnboardingReadsSpent) throw error;
-          this.failed.set(hex(candidate.coin), started); this.busy = this.busy.filter(row => row !== candidate); this.queue = this.queue.filter(row => row !== candidate);
           for (const key of this.rejected) this.reads.delete(key);
           this.rejected.clear();
+          // Another writer held what this coin's statement needed (a deadlock or a serialization failure): nothing is
+          // wrong with the coin, so it is tried again on the next pass instead of being left for five minutes.
+          if (['40P01', '40001'].includes(String((error as { code?: unknown })?.code))) { unfinished++; this.log('coin_onboarding_retry', { coin: hex(candidate.coin), reason: 'database_lock_contention' }); return; }
+          this.failed.set(hex(candidate.coin), started); this.busy = this.busy.filter(row => row !== candidate); this.queue = this.queue.filter(row => row !== candidate);
           this.log('coin_onboarding_failed', { coin: hex(candidate.coin), error: String((error as Error)?.message ?? error).slice(0, 200) });
           continue;
         }

@@ -100,8 +100,15 @@ describe('money in the pools of a coin that launched on Uniswap', () => {
     expect(money.get(other)! / 1e6).toBeCloseTo(1.1716, 3);
     // The fixture's own coin has a Pons curve: its figure comes from the curve, not from here.
     expect(money.has(coin)).toBe(false);
-    // All of it taken out (a pull): the pool holds $0, and the row says so. (A later reading: positions are kept a minute.)
+    // All of it taken out (a pull). Positions are used as read for a minute; two minutes on, a request still gets the
+    // figure on hand at once and the pool is read again behind it, so the next one says $0.
     await event(3, { liquidityDelta: '-2000000', tickLower: -6932, tickUpper: 6932 });
-    expect((await readPoolMoney(db, [other], now + 120_000)).get(other)).toBe(0);
+    expect((await readPoolMoney(db, [other], now + 30_000)).get(other)! / 1e6).toBeCloseTo(1.1716, 3);
+    expect((await readPoolMoney(db, [other], now + 120_000)).get(other)! / 1e6).toBeCloseTo(1.1716, 3);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect((await readPoolMoney(db, [other], now + 121_000)).get(other)).toBe(0);
+    // Positions more than three minutes old are read before answering.
+    await event(4, { liquidityDelta: '1000000', tickLower: -6932, tickUpper: 6932 });
+    expect((await readPoolMoney(db, [other], now + 400_000)).get(other)! / 1e6).toBeCloseTo(1.1716 / 2, 3);
   });
 });

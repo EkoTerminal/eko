@@ -49,16 +49,21 @@ export async function repricePonsSwaps(db: ChainDb, assets: PricingAssets, from:
         UNION ALL SELECT x.block,x.log_index,x.price_quote FROM swaps x,span
           WHERE x.pool_id IN (SELECT pool_id FROM ref_pools) AND x.coin=$2 AND x.quote_asset=$3 AND x.block BETWEEN span.lo AND span.hi
             AND x.ts>=$5::timestamptz-interval '1 hour' AND x.ts<$6 AND x.price_quote>0 AND x.price_quote<'Infinity'::double precision),
-      seq AS (SELECT block,log_index,price_quote AS rate,block AS rate_block,NULL::timestamptz AS ts,NULL::bytea AS tx_hash,NULL::integer AS idx FROM ref
-        UNION ALL SELECT block,2147483647,NULL,NULL,ts,tx_hash,log_index FROM c WHERE kind='eth'),
-      carried AS (SELECT ts,tx_hash,idx,count(rate) OVER w AS grp,rate,rate_block FROM seq WINDOW w AS (ORDER BY block,log_index)),
-      filled AS (SELECT ts,tx_hash,idx,first_value(rate) OVER g AS rate,first_value(rate_block) OVER g AS rate_block FROM carried WINDOW g AS (PARTITION BY grp ORDER BY rate NULLS LAST)),
-      r AS (SELECT c.*,CASE c.kind WHEN 'dollar' THEN 1::double precision WHEN 'eth' THEN f.rate ELSE k.price END AS rate,
-          CASE c.kind WHEN 'dollar' THEN c.block WHEN 'eth' THEN f.rate_block ELSE k.block END AS rate_block,c.amount_quote::double precision/10^c.qdec AS quote
-        FROM c LEFT JOIN filled f ON f.ts=c.ts AND f.tx_hash=c.tx_hash AND f.idx=c.log_index AND f.ts IS NOT NULL
-        LEFT JOIN LATERAL (SELECT x.usd/(x.amount_coin::double precision/10^c.qdec) AS price,x.block FROM swaps x
-          WHERE c.kind='token' AND x.coin=c.quote_asset AND x.block<=c.block AND x.ts>=c.ts-interval '1 day' AND x.usd>0 AND x.amount_coin>0
-          ORDER BY x.block DESC,x.log_index DESC LIMIT 1) k ON true)
+      -- An ETH-quoted swap carries its own amounts through the rate walk, so the rated swaps are read straight from it.
+      -- Joined back to the batch by key, the update re-read the whole walk once per swap: 999,000 rows discarded and
+      -- 16.3 s for a batch of 1,000 in a busy hour on a copy of 2026-10-13 (0.9 s this way, the same 1,000 prices).
+      seq AS (SELECT block,log_index,price_quote AS rate,block AS rate_block,NULL::timestamptz AS ts,NULL::bytea AS tx_hash,NULL::integer AS idx,
+          NULL::numeric AS amount_coin,NULL::numeric AS amount_quote,NULL::integer AS decimals,NULL::integer AS qdec FROM ref
+        UNION ALL SELECT block,2147483647,NULL,NULL,ts,tx_hash,log_index,amount_coin,amount_quote,decimals,qdec FROM c WHERE kind='eth'),
+      carried AS (SELECT ts,tx_hash,idx,amount_coin,amount_quote,decimals,qdec,count(rate) OVER w AS grp,rate,rate_block FROM seq WINDOW w AS (ORDER BY block,log_index)),
+      filled AS (SELECT ts,tx_hash,idx,amount_coin,amount_quote,decimals,qdec,first_value(rate) OVER g AS rate,first_value(rate_block) OVER g AS rate_block
+        FROM carried WINDOW g AS (PARTITION BY grp ORDER BY rate NULLS LAST)),
+      r AS (SELECT f.ts,f.tx_hash,f.idx AS log_index,f.amount_coin,f.decimals,f.rate,f.rate_block,f.amount_quote::double precision/10^f.qdec AS quote FROM filled f WHERE f.ts IS NOT NULL
+        UNION ALL SELECT c.ts,c.tx_hash,c.log_index,c.amount_coin,c.decimals,1::double precision,c.block,c.amount_quote::double precision/10^c.qdec FROM c WHERE c.kind='dollar'
+        UNION ALL SELECT c.ts,c.tx_hash,c.log_index,c.amount_coin,c.decimals,k.price,k.block,c.amount_quote::double precision/10^c.qdec FROM c CROSS JOIN LATERAL (
+          SELECT x.usd/(x.amount_coin::double precision/10^c.qdec) AS price,x.block FROM swaps x
+          WHERE x.coin=c.quote_asset AND x.block<=c.block AND x.ts>=c.ts-interval '1 day' AND x.usd>0 AND x.amount_coin>0
+          ORDER BY x.block DESC,x.log_index DESC LIMIT 1) k WHERE c.kind='token')
       UPDATE swaps s SET usd=r.quote*r.rate,price_quote=coalesce(s.price_quote,r.quote/(r.amount_coin::double precision/10^r.decimals)),
         pricing_pending=false,priced_block=r.rate_block
       FROM r WHERE s.ts=r.ts AND s.tx_hash=r.tx_hash AND s.log_index=r.log_index AND r.rate IS NOT NULL

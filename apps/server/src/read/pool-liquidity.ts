@@ -83,9 +83,28 @@ export function positionQuote(liquidity: number, tickLower: number, tickUpper: n
   return quoteIsToken1 ? liquidity * (at - lower) : liquidity * (1 / at - 1 / upper);
 }
 interface Position { lower: number; upper: number; liquidity: number }
-/** Positions per pool are summed from every liquidity event of the pool; kept a minute per database handle. */
-const positionCache = new WeakMap<object, Map<string, { at: number; positions: Position[]; seen: boolean }>>();
-const POSITIONS_TTL_MS = 60_000;
+interface PoolPositions { at: number; positions: Position[]; seen: boolean }
+/**
+ * Positions per pool are summed from every liquidity event of the pool and kept per database handle. They are used as
+ * read for a minute. After that a request still gets them at once while they are read again behind it, one read at a
+ * time, until they are three minutes old; older ones, and pools not seen before, are read before answering. Read
+ * inline on every expiry, the Radar's first page paid for 119,283 events of 196 pools once a minute (0.6 s warm and
+ * 11.7 s cold on a copy of 2026-10-13).
+ */
+const positionCache = new WeakMap<object, Map<string, PoolPositions>>();
+const positionRefresh = new WeakMap<object, Promise<void>>();
+const POSITIONS_TTL_MS = 60_000, POSITIONS_STALE_MS = 180_000;
+async function loadPositions(db: ChainDb, cache: Map<string, PoolPositions>, ids: string[], now: number) {
+  const amount = "CASE WHEN e.kind='Mint' THEN (e.data->>'amount')::numeric WHEN e.kind='Burn' THEN -(e.data->>'amount')::numeric ELSE (e.data->>'liquidityDelta')::numeric END";
+  const read = new Map<string, PoolPositions>(ids.map(id => [id, { at: now, positions: [], seen: false }]));
+  for (const row of (await db.sql.query<{ pool_id: Uint8Array; lower: number; upper: number; liquidity: number }>(`
+    SELECT e.pool_id,(e.data->>'tickLower')::int AS lower,(e.data->>'tickUpper')::int AS upper,sum(${amount})::float8 AS liquidity
+    FROM liquidity_events e WHERE e.pool_id=ANY($1::bytea[]) AND e.kind IN ('Mint','Burn','ModifyLiquidity') AND e.data ? 'tickLower' AND e.data ? 'tickUpper'
+    GROUP BY 1,2,3`, [ids.map(binary)])).rows) { const entry = read.get(hex(row.pool_id))!; entry.seen = true; if (Number(row.liquidity) > 0) entry.positions.push({ lower: Number(row.lower), upper: Number(row.upper), liquidity: Number(row.liquidity) }); }
+  for (const [id, entry] of read) cache.set(id, entry);
+  // A long-lived process sees every pool on the Radar in time: old entries go first.
+  if (cache.size > 5000) for (const key of [...cache.keys()].slice(0, cache.size - 4000)) cache.delete(key);
+}
 /**
  * USD of the quote currency (ETH, WETH or USDG) held in the pools of coins that never had a Pons curve, by coin: what
  * all sellers together could take out at this moment. Every position of each pool the coin traded in recently (its
@@ -105,18 +124,14 @@ export async function readPoolMoney(db: ChainDb, coins: Address[], now = Date.no
     JOIN pools p ON p.id=r.pool_id
     WHERE t.address=ANY($1::bytea[]) AND t.curve IS NULL AND t.graduated_block IS NULL`, [coins.map(binary)])).rows;
   if (!pools.length) return found;
-  let cache = positionCache.get(db.sql as object);
-  if (!cache) { cache = new Map(); positionCache.set(db.sql as object, cache); }
-  const ids = [...new Set(pools.map(row => hex(row.pool_id)))], stale = ids.filter(id => { const hit = cache!.get(id); return !hit || now - hit.at >= POSITIONS_TTL_MS; });
-  if (stale.length) {
-    const amount = "CASE WHEN e.kind='Mint' THEN (e.data->>'amount')::numeric WHEN e.kind='Burn' THEN -(e.data->>'amount')::numeric ELSE (e.data->>'liquidityDelta')::numeric END";
-    for (const id of stale) cache.set(id, { at: now, positions: [], seen: false });
-    for (const row of (await db.sql.query<{ pool_id: Uint8Array; lower: number; upper: number; liquidity: number }>(`
-      SELECT e.pool_id,(e.data->>'tickLower')::int AS lower,(e.data->>'tickUpper')::int AS upper,sum(${amount})::float8 AS liquidity
-      FROM liquidity_events e WHERE e.pool_id=ANY($1::bytea[]) AND e.kind IN ('Mint','Burn','ModifyLiquidity') AND e.data ? 'tickLower' AND e.data ? 'tickUpper'
-      GROUP BY 1,2,3`, [stale.map(binary)])).rows) { const entry = cache.get(hex(row.pool_id))!; entry.seen = true; if (Number(row.liquidity) > 0) entry.positions.push({ lower: Number(row.lower), upper: Number(row.upper), liquidity: Number(row.liquidity) }); }
-    // A long-lived process sees every pool on the Radar in time: old entries go first.
-    if (cache.size > 5000) for (const key of [...cache.keys()].slice(0, cache.size - 4000)) cache.delete(key);
+  const handle = db.sql as object;
+  let cache = positionCache.get(handle);
+  if (!cache) { cache = new Map(); positionCache.set(handle, cache); }
+  const held = cache, ids = [...new Set(pools.map(row => hex(row.pool_id)))], age = (id: string) => { const hit = held.get(id); return hit ? now - hit.at : Infinity; };
+  const due = ids.filter(id => age(id) >= POSITIONS_STALE_MS), aging = ids.filter(id => age(id) >= POSITIONS_TTL_MS && age(id) < POSITIONS_STALE_MS);
+  if (due.length) await loadPositions(db, held, due, now);
+  if (aging.length && !positionRefresh.has(handle)) {
+    positionRefresh.set(handle, loadPositions(db, held, aging, now).catch(() => undefined).finally(() => { positionRefresh.delete(handle); }));
   }
   for (const row of pools) {
     const entry = cache.get(hex(row.pool_id)), positions = entry?.positions ?? [];

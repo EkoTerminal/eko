@@ -268,6 +268,18 @@ describe('coin onboarding', () => {
     clock += 300_000; await worker.tick();
     expect(reads).toBe(2);
   });
+  it('tries a coin again on the next pass when its statement lost a deadlock', async () => {
+    const db = await open(), events: string[] = [];
+    await swap(db, 900, 1300, 1, '10'); await transfer(db, 900, 1300, manager, buyer, '10');
+    // 2026-10-13: a busy coin's candle rebuild deadlocked with the indexer's write and the coin was left for five minutes.
+    let lost = 0;
+    const contended: OnboardingChain = { ...chain(facts, mint), sent: async () => { if (!lost++) throw Object.assign(new Error('deadlock detected'), { code: '40P01' }); return 12; } };
+    const worker = new CoinOnboardingWorker(db, contended, event => events.push(event), { now: () => now, assets, addresses });
+    await worker.tick();
+    expect([await deployer(db, coin), events]).toEqual([null, ['coin_onboarding_retry', 'coin_onboarding']]);
+    await worker.tick();
+    expect(await deployer(db, coin)).toBe(launcher);
+  });
   it('searches for the first mint in windows the endpoint accepts, and stops reading once the day\'s reads are spent', async () => {
     const { chainOnboarding, OnboardingReadsSpent } = await import('../src/coin-onboarding.js');
     const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', mintLog = (block: number) => ({ blockNumber: `0x${block.toString(16)}`, logIndex: '0x1', transactionHash: hash(block), topics: [TRANSFER, `0x${'0'.repeat(64)}`, `0x${'0'.repeat(24)}${launcher.slice(2)}`] });
