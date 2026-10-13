@@ -192,6 +192,27 @@ it('consumes new publications in batches from the background timer, not inline i
     expect((await service().list('calls', undefined, 100)).rows.length).toBe(Math.min(100, before + 520));
   } finally { await service().close(); }
 });
+it('reads every publication once, then only those above the sequence it reached less an overlap for late commits', async () => {
+  // 2026-10-13: checking every publication for a row every 15 s was 0.44 of a database backend, all day.
+  const { ScoreboardService, PUBLICATION_OVERLAP } = await import('../src/read/scoreboard.js');
+  const fresh = new ScoreboardService(db(), () => now), reads: string[] = [], chain = db(), tx = chain.tx.bind(chain);
+  (chain as { tx: unknown }).tx = (work: (inner: typeof chain) => Promise<unknown>) => tx(inner => {
+    const query = inner.sql.query.bind(inner.sql);
+    (inner.sql as { query: unknown }).query = (text: string, params?: unknown[]) => {
+      if (text.includes('FROM receipt_publications p')) reads.push(text.includes('p.publication_sequence>$1') ? `above ${String(params?.[0])}` : 'all');
+      return query(text, params);
+    };
+    return work(inner);
+  });
+  try {
+    await fresh.sync(); await fresh.sync();
+    const head = BigInt((await chain.sql.query<{ n: string }>('SELECT max(publication_sequence)::text AS n FROM receipt_publications')).rows[0]!.n);
+    expect(reads).toEqual(['all', `above ${head - PUBLICATION_OVERLAP}`]);
+    await publication('after-mark', coin, 'danger', now - 500);
+    await fresh.sync();
+    expect((await chain.sql.query("SELECT 1 FROM scoreboard_records WHERE source_key='call:after-mark'")).rows).toHaveLength(1);
+  } finally { (chain as { tx: unknown }).tx = tx; }
+});
 it('keeps an empty measured cohort explicit, withdraws orphaned fill counters, and exposes monitoring gaps', async () => {
   await service().publishCohort({ week:'2026-09-28T00:00:00.000Z',cut:cohortCut,origin:'measured',launchCoverageComplete:true,
     evidenceIds:[hash('empty-universe')],outcomeVersion:'2.0.0',identityVersion:'1.0.0' });

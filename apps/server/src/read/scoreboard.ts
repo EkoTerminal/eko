@@ -13,6 +13,11 @@ import { reportError } from '../obs/errors.js';
 const ids = z.array(Bytes32Schema).min(1).max(100);
 /** Publications consumed per pass; keeps one pass well under the api heap even on a freshly restored database. */
 export const CONSUME_BATCH = 2000;
+/**
+ * How far below the consumed mark a pass still looks for publications without a row. A publication's sequence number
+ * is taken when it is written, not when it commits, so one can appear below the mark after a later one was consumed.
+ */
+export const PUBLICATION_OVERLAP = 5000n;
 const coverageSchema = z.strictObject({ id: Bytes32Schema, origin: z.literal('measured'), evidenceIds: ids,
   from: z.iso.datetime(), through: z.iso.datetime(), refused: z.boolean(), missed: z.boolean() })
   .refine(p => Date.parse(p.through) >= Date.parse(p.from) && (p.refused || p.missed));
@@ -57,8 +62,22 @@ export class ScoreboardService {
   async close() { clearInterval(this.timer); this.timer = undefined; }
   /** True while the background consumer runs, so list() serves what has been consumed instead of consuming inline. */
   get background() { return this.timer !== undefined; }
+  /**
+   * The publication sequence through which this process has consumed every verdict publication, and the value a pass
+   * in progress will move it to once its transaction commits. A new process has none and reads every publication once.
+   */
+  private consumedThrough?: bigint;
+  private stagedThrough?: bigint;
+  /** Run a transaction that may consume; the mark moves only when it commits. */
+  private async marked<T>(run: () => Promise<T>): Promise<T> {
+    this.stagedThrough = undefined;
+    const result = await run();
+    if (this.stagedThrough != null) this.consumedThrough = this.stagedThrough;
+    this.stagedThrough = undefined;
+    return result;
+  }
   /** One consume pass under the Scoreboard lock: the timer's body, also callable by tests and tools. */
-  async sync() { await this.db.tx(async db => { await db.sql.query("SELECT pg_advisory_xact_lock(hashtext('scoreboard'))"); await this.consume(db); }); }
+  async sync() { await this.marked(() => this.db.tx(async db => { await db.sql.query("SELECT pg_advisory_xact_lock(hashtext('scoreboard'))"); await this.consume(db); })); }
   /** A reviewed monitoring interval, never inferred from process boot or the first incident.
    * TODO(spec): CA-15 does not name coverage acquisition. The host supplies accepted
    * measured intervals; gaps and a stale end remain unavailable, even with existing rows. */
@@ -142,8 +161,15 @@ export class ScoreboardService {
     // Bounded per pass: a restored database can carry tens of thousands of unconsumed publications (14,695 on the
     // 2026-10-10 cutover rehearsal), and loading every payload at once exhausted the api's heap. The timer's next
     // passes take the rest within minutes.
+    // Once a pass has found fewer than a batch, later passes look only above the sequence it had reached (less the
+    // overlap): checking every publication for a row every 15 s was 166,981 index probes and 4.75 s on a copy of
+    // 2026-10-13 to return nothing, and 0.44 of a backend in production; 0.19 s this way.
+    const head = BigInt((await db.sql.query<{ seq: string | null }>('SELECT max(publication_sequence)::text AS seq FROM receipt_publications')).rows[0]?.seq ?? '0');
+    const above = this.consumedThrough == null ? null : this.consumedThrough - PUBLICATION_OVERLAP;
     const calls = (await db.sql.query<{ id: string; data: unknown }>(`SELECT p.id,p.data FROM receipt_publications p WHERE p.kind='verdict' AND p.chain_id=4663
-      AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='call:'||p.id) ORDER BY p.publication_sequence LIMIT ${CONSUME_BATCH}`)).rows;
+      ${above == null ? '' : 'AND p.publication_sequence>$1'}
+      AND NOT EXISTS (SELECT 1 FROM scoreboard_records s WHERE s.source_key='call:'||p.id) ORDER BY p.publication_sequence LIMIT ${CONSUME_BATCH}`, above == null ? [] : [above.toString()])).rows;
+    if (calls.length < CONSUME_BATCH) this.stagedThrough = head;
     const callRows: { source: string; row: Omit<ScoreboardRow, 'id'> }[] = [];
     for (const c of calls) {
       const p = PublicReceiptPayloadSchema.safeParse(c.data);
@@ -204,7 +230,7 @@ export class ScoreboardService {
     const start = Date.parse(input.week), end = start + 7 * 86400000;
     if (new Date(start).getUTCDay() !== 1 || start % 86400000 !== 0 || end > Number(input.cut.cursor.timestampSec) * 1000)
       throw new Error('Cohort requires a closed UTC Monday week');
-    return this.db.tx(async db => {
+    return this.marked(() => this.db.tx(async db => {
       if (await db.blockHash(BigInt(input.cut.cursor.blockNumber)) !== input.cut.cursor.blockHash) throw new Error('Cohort cut is not canonical');
       await db.sql.query("SELECT pg_advisory_xact_lock(hashtext('scoreboard'))");
       await this.consume(db);
@@ -261,7 +287,7 @@ export class ScoreboardService {
           membershipHash, outcomeRevisions:JSON.stringify(set.flatMap(m=>m.outcome?[m.outcome.revisionId]:[])), outcomeVersion: input.outcomeVersion, identityVersion: input.identityVersion, horizonSec: 86400,
           cutBlock: input.cut.cursor.blockNumber, acquisitionSequence: input.cut.acquisitionSequence } });
       }
-    });
+    }));
   }
   /**
    * Validate a first-party relative URL and evidence IDs, then append a correction for an existing
@@ -290,7 +316,7 @@ export class ScoreboardService {
     if (decoded && (decoded.length !== 3 || decoded.some(v => typeof v !== 'string' || !/^\d+$/.test(v)))) throw new InputError('Invalid scoreboard cursor');
     const asOf = decoded ? Number(decoded[2]) : this.now();
     if(!Number.isSafeInteger(asOf) || asOf>this.now())throw new InputError('Invalid scoreboard time');
-    return this.db.tx(async db => {
+    return this.marked(() => this.db.tx(async db => {
       await db.sql.query("SELECT pg_advisory_xact_lock(hashtext('scoreboard'))");
       if (!this.background) await this.consume(db);
       const max = (await db.sql.query<{ n: string }>('SELECT coalesce(max(seq),0) AS n FROM scoreboard_records')).rows[0]!.n;
@@ -322,6 +348,6 @@ export class ScoreboardService {
         availability: { refused: refused.availability, missed: missed.availability, forecasts: unavailable('forecast_dependency'),
           grades: await exists("data->'detail'->>'event'='grade'") ? observed : unavailable('outcomes_unaccepted'),
           cohort: await exists("data->>'kind'='cohort'") ? observed : unavailable('outcomes_unaccepted'), milestones: unavailable(gated ? 'd0_gated' : 'milestones_unaccepted') } });
-    });
+    }));
   }
 }

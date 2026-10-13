@@ -6,6 +6,13 @@ import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
 /** Coins per read-model refresh transaction (see refreshModels). */
 export const REFRESH_BATCH=25;
+/**
+ * With the background refresher running, a coin whose projection was refreshed is left for this long before it is
+ * refreshed again (it stays marked, so its latest change is never lost). A refresh reads the coin's whole swap history
+ * twice (2.2 s for a 71,000-swap coin on a copy of 2026-10-13), and a coin that trades in every block was marked again
+ * before each 250 ms pass: the refresh was the largest single share of database time (0.58 of a backend).
+ */
+export const REFRESH_REST_MS=3000;
 
 interface Stored {
   buyers_pending:boolean;pricing_pending:boolean;eligible:boolean;address: Uint8Array; name: string | null; symbol: string | null; launchpad: string | null;
@@ -42,6 +49,7 @@ export class ReadStore {
   sellCheckQuotes=false;
   private rankRefresh?:Promise<void>;
   private modelRefresh?:Promise<void>;
+  private refreshedAt=new Map<string,number>();
   private listeners=new Set<(coins:Address[])=>void>();
   onRefreshed(listener:(coins:Address[])=>void) {this.listeners.add(listener);return ()=>{this.listeners.delete(listener);};}
   private modelTimer?:ReturnType<typeof setInterval>;
@@ -76,7 +84,10 @@ export class ReadStore {
       for(;;) {
         // Each batch holds read_feed and read_coins for its whole transaction, and every card write's verdict trigger
         // writes read_feed. 250 coins held them 14-27 s per batch (2026-10-09) and the scanner wrote four cards a minute.
-        const pending=(await this.db.sql.query<{coin:Uint8Array;revision:string}>('SELECT coin,revision FROM read_dirty WHERE revision<=$1 ORDER BY revision LIMIT $2',[cutoff,REFRESH_BATCH])).rows;
+        const started=this.now();
+        for(const [coin,at] of this.refreshedAt)if(started-at>=REFRESH_REST_MS || started<at)this.refreshedAt.delete(coin);
+        const resting=this.modelTimer ? [...this.refreshedAt.keys()].map(coin=>binary(coin as Address)) : [];
+        const pending=(await this.db.sql.query<{coin:Uint8Array;revision:string}>('SELECT coin,revision FROM read_dirty WHERE revision<=$1 AND NOT coin=ANY($3::bytea[]) ORDER BY revision LIMIT $2',[cutoff,REFRESH_BATCH,resting])).rows;
         if(!pending.length)return;
         await this.db.tx(async tx=>{
           // Multiple API processes serialize projection refreshes, never lock ingest source rows.
@@ -89,6 +100,7 @@ export class ReadStore {
           await tx.sql.query(`DELETE FROM read_dirty d USING (SELECT x.coin FROM read_dirty x JOIN unnest($1::bytea[],$2::bigint[]) p(coin,revision)
             ON x.coin=p.coin AND x.revision=p.revision FOR UPDATE OF x SKIP LOCKED) s WHERE d.coin=s.coin`,[pending.map(r=>r.coin),pending.map(r=>r.revision)]);
         });
+        if(this.modelTimer)for(const r of pending)this.refreshedAt.set(hex(r.coin),started);
         for(const listener of this.listeners)listener(pending.map(r=>hex(r.coin)));
       }
     })().finally(()=>{this.modelRefresh=undefined;});

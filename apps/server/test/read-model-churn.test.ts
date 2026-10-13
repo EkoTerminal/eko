@@ -6,7 +6,7 @@ import { FEED_SHARED_TTL_MS, FeedService } from '../src/read/feed.js';
 import { GuardReadStore } from '../src/read/guard-store.js';
 import { PairsService } from '../src/read/pairs.js';
 import { ScanService } from '../src/read/scan.js';
-import { ReadStore, REFRESH_BATCH } from '../src/read/store.js';
+import { ReadStore, REFRESH_BATCH, REFRESH_REST_MS } from '../src/read/store.js';
 
 // Read-model refreshes must leave unchanged projection rows alone (no new row versions) and produce exactly the rows
 // the 0114 refresh produced. The 0114 function is loaded from its migration file and run side by side.
@@ -161,6 +161,26 @@ describe('read-model refresh churn', () => {
     expect(await summary()).toEqual(before);
     expect(await range()).toEqual(traded);
     expect((await rows(db)).read_buyers).toEqual(buyers);
+  });
+  it('leaves a coin it has just refreshed for a few seconds in the background, without losing its newer change', async () => {
+    // 2026-10-13: a coin that trades in every block was refreshed on every 250 ms pass, its whole history read each time.
+    let clock = now;
+    const db = await fixture(), store = new ReadStore(db, () => clock);
+    const marked = async () => (await db.sql.query('SELECT 1 FROM read_dirty WHERE coin=$1', [binary(coinB)])).rows.length;
+    const buyers = async () => Number((await db.sql.query<{ buyers: string }>('SELECT buyers FROM read_coins WHERE coin=$1', [binary(coinB)])).rows[0]!.buyers);
+    const settle = () => new Promise(resolve => setTimeout(resolve, 700));
+    store.start();
+    try {
+      await settle();
+      expect([await marked(), await buyers()]).toEqual([0, 1]);
+      // A new buyer right after the refresh: the coin stays marked and the projection waits.
+      await swap(db, 9, coinB, poolB1, traders[0]!, 1);
+      await settle();
+      expect([await marked(), await buyers()]).toEqual([1, 1]);
+      clock += REFRESH_REST_MS;
+      await settle();
+      expect([await marked(), await buyers()]).toEqual([0, 2]);
+    } finally { await store.close(); }
   });
   it('serves requests from the current projection while the background refresher works', async () => {
     const db = await fixture(), store = new ReadStore(db, () => now);
