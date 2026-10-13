@@ -66,13 +66,14 @@ export class PairsService {
       antiSnipe:entry.card?.meta?.tradeability?.missing?.includes('antiSnipeTiming') ? undefined : entry.card?.tradeability.antiSnipe,
       verdictPending:entry.row.verdictPending ?? false};
   }
-  async list(stage:PairRow['column'],cursor?:string) {
+  async list(stage:PairRow['column'],cursor?:string,blueChipOnly=false) {
     await this.store.currentModels();
     const key=decodeCursor(cursor,`pairs:${stage}`);
     if(key && (key.length!==2 || !Number.isSafeInteger(key[0]) || typeof key[1]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[1])))throw new InputError('Invalid pairs cursor');
     const params:unknown[]=[stage];if(key)params.push(key[0],binary(key[1] as Hex));
+    const category=blueChipOnly && this.store.blueChip?.config.enabled ? `AND ${this.store.blueChip.predicate('read_coins.coin',params)}` : '';
     const selected=await this.store.db.sql.query<{coin:Uint8Array;pair_block:string;buyers:string}>(`SELECT coin,pair_block,buyers FROM read_coins
-      WHERE pair_column=$1 ${key ? 'AND (pair_block,coin)<($2,$3)' : ''} ORDER BY pair_block DESC,coin DESC LIMIT 101`,params);
+      WHERE pair_column=$1 ${key ? 'AND (pair_block,coin)<($2,$3)' : ''} ${category} ORDER BY pair_block DESC,coin DESC LIMIT 101`,params);
     const page=selected.rows.slice(0,100),details=await this.store.rows(undefined,page.map(r=>hex(r.coin)));
     const indexed=new Map(details.map(e=>[e.row.address,e]));
     const last=page.at(-1);

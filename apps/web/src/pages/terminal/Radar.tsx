@@ -32,6 +32,7 @@ function SortTh({ value, sort, setSort, className, children, disabled = false }:
 }
 const HIDE_REFUSED_KEY = 'eko.radar.hideRefused';
 export default function Radar() {
+  const blueChipEnabled = !!useShell(s => s.config?.blueChip), [blueChipOnly, setBlueChipOnly] = useState(false);
   const wide = useMedia('(min-width:1480px)'), rt = useRealtime();
   const wsState = useShell((s) => s.wsState), realtimeAllowed = useShell((s) => s.me?.entitlements.limits.realtime);
   const density = useUi((s) => s.density), setUi = useUi((s) => s.set), riskMode = useUi((s) => s.riskMode);
@@ -51,11 +52,14 @@ export default function Radar() {
   const flashAt = useRef(new Map<string, number>()), selectionInitialized = useRef(false), pointed = useRef<string | null>(null), previousOrder = useRef<string[]>([]);
   const snapshot = useCallback(async (signal?: AbortSignal, append = false, nextCursor?: string) => {
     setError(null);
-    try { const data = await fetchParsed(`${MOCKS ? '' : '/v2'}/radar${nextCursor ? `?cursor=${encodeURIComponent(nextCursor)}` : ''}`, RadarResponseSchema, { signal }); if (signal?.aborted) return;
+    const query = new URLSearchParams();
+    if(nextCursor) query.set('cursor', nextCursor);
+    if(blueChipOnly) query.set('blueChip', 'true');
+    try { const data = await fetchParsed(`${MOCKS ? '' : '/v2'}/radar${query.size ? `?${query}` : ''}`, RadarResponseSchema, { signal }); if (signal?.aborted) return;
       const at = Date.now(); if (!append) received.current.clear(); for (const row of data.rows) if (!append || !received.current.has(row.address)) received.current.set(row.address, at);
       setRows((old) => append ? [...old, ...data.rows.filter((c) => !old.some((r) => r.address === c.address))] : data.rows.map(row => retainCompactGuard(old.find(r=>r.address===row.address),row))); setTotals(data.guardTotals?.status === 'unavailable' ? null : data.totals ?? null); setCursor(data.cursor); setDelayed(data.delayedSec); setLastSeen(Date.now());
     } catch (e) { if ((e as Error).name !== 'AbortError') setError((e as Error).message); } finally { if (!signal?.aborted) setLoading(false); }
-  }, []);
+  }, [blueChipOnly]);
   useEffect(() => installDither(), []);
   useEffect(() => { const ac = new AbortController(); void snapshot(ac.signal); return () => ac.abort(); }, [snapshot]);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
@@ -80,11 +84,11 @@ export default function Radar() {
   const close = useCallback(() => { setSelected(null); if (wide) { try { localStorage.setItem(rememberKey, 'none'); } catch { /* optional */ } } requestAnimationFrame(() => { const back = returnTo.current; if (back?.isConnected) back.focus(); else listEl.current?.querySelector<HTMLButtonElement>('[data-pick]')?.focus(); }); }, [wide]);
   useEffect(() => { if (!selected || tradeRow) return; const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('.info-pop')) { e.preventDefault(); close(); } }; window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key); }, [selected, close, tradeRow]);
   const list = useMemo(() => {
-    const next = sortRows(filterRows(rows, show, stage, hideRefused, riskMode), sort, received.current), pinned = pointed.current;
+    const next = sortRows(filterRows(rows.filter(r => !blueChipOnly || r.blueChip?.member), show, stage, hideRefused, riskMode), sort, received.current), pinned = pointed.current;
     const oldIndex = pinned ? previousOrder.current.indexOf(pinned) : -1, newIndex = next.findIndex((c) => c.address === pinned);
     if (oldIndex >= 0 && newIndex >= 0 && oldIndex !== newIndex) { const [row] = next.splice(newIndex, 1); next.splice(Math.min(oldIndex, next.length), 0, row); }
     return next;
-  }, [rows, show, stage, sort, hideRefused, riskMode]);
+  }, [rows, show, stage, sort, hideRefused, riskMode, blueChipOnly]);
   const positions = useRef(new Map<string, number>()), lastFlip = useRef(0);
   useLayoutEffect(() => {
     const at = performance.now(), nodes = listEl.current?.querySelectorAll<HTMLElement>('tr[data-address]');
@@ -95,7 +99,7 @@ export default function Radar() {
   }, [list, density]);
   const rowHeight = density === 'compact' ? 44 : 62;
   const windowed = useRadarWindow(listEl, list.length, rowHeight);
-  const hot = useMemo(() => hottest(rows), [rows]);
+  const hot = useMemo(() => hottest(rows.filter(r => !blueChipOnly || r.blueChip?.member)), [rows, blueChipOnly]);
   const coin = rows.find((c) => c.address === selected);
   useEffect(() => { if (selected && !loading && !coin) close(); }, [selected, loading, coin, close]);
   const onCard = useCallback((card: CoinCard) => setCards((old) => ({ ...old, [card.identity.address]: card })), []);
@@ -117,7 +121,7 @@ export default function Radar() {
     <GhostReports limit={1} />
     <HotStrip coins={hot} selected={selected} select={select} />
     <div className="sec-head"><h2>All coins</h2><span className="sub num">{list.length} of {rows.length}</span><div className="end"><span className="toolbar-live" role="status"><span className={`sb-dot${stale ? ' stale' : ''}`} />{isDelayed ? `Delayed ~${delayed || 60} s` : stale ? 'Stale' : 'Live'} · updated {seen}s ago</span><Seg options={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]} value={density} onChange={(value) => setUi({ density: value === 'compact' ? 'compact' : 'comfortable' })} label="Row density" /></div></div>
-    <div className="toolbar"><Seg options={['All', 'Hot', NO_FLAGS, 'Monitor', 'Danger']} value={show} onChange={setShow} label="Show" /><Seg options={['All', 'Curve', 'Migrated', 'Uniswap']} value={stage} onChange={setStage} label="Stage" /><Seg options={[{ value: 'Shown', label: 'Show refused' }, { value: 'Hidden', label: 'Hide refused' }]} value={hideRefused ? 'Hidden' : 'Shown'} onChange={chooseRefused} label="Refused coins" /><label className="toolbar-sort"><span className="muted">Sort</span><select className="select" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>{SORTS.filter((s) => sortAvailable(rows,s)).map((s) => <option key={s}>{s}</option>)}</select></label><div className="toolbar-end"><HeatLegend /></div></div>
+    <div className="toolbar">{blueChipEnabled && <label><input type="checkbox" checked={blueChipOnly} onChange={e=>{setRows([]);setCursor(null);setLoading(true);setBlueChipOnly(e.target.checked);}} /> Blue chip</label>}<Seg options={['All', 'Hot', NO_FLAGS, 'Monitor', 'Danger']} value={show} onChange={setShow} label="Show" /><Seg options={['All', 'Curve', 'Migrated', 'Uniswap']} value={stage} onChange={setStage} label="Stage" /><Seg options={[{ value: 'Shown', label: 'Show refused' }, { value: 'Hidden', label: 'Hide refused' }]} value={hideRefused ? 'Hidden' : 'Shown'} onChange={chooseRefused} label="Refused coins" /><label className="toolbar-sort"><span className="muted">Sort</span><select className="select" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>{SORTS.filter((s) => sortAvailable(rows,s)).map((s) => <option key={s}>{s}</option>)}</select></label><div className="toolbar-end"><HeatLegend /></div></div>
     {/* TODO(spec): RadarRow has topPlaybook but no match confidence; show confidence only after CoinCard supplies it. */}
     {error && <div className="radar-error" role="alert">{error} <button className="btn" onClick={() => void snapshot()}>Retry</button></div>}
     <details className="radar-notes"><summary>About these readings</summary><p className="availability-legend">{CHECK_LEGEND}</p><GuardLegend rows={rows} /></details>{loading ? <div className="skel" style={{ height: 280 }} aria-label="Loading Radar" /> : list.length ? <div ref={listEl} className="rt-wrap" onKeyDown={move} onPointerOver={(e) => { pointed.current = (e.target as Element).closest<HTMLElement>('tr[data-address]')?.dataset.address ?? null; }} onPointerLeave={() => { pointed.current = null; }}><table className={`rt ${density}${rows.some((c) => c.signal || c.unavailable?.includes('signal')) ? '' : ' no-signal'}${rows.some((c) => c.spark8h || c.unavailable?.includes('spark')) ? '' : ' no-spark'}${rows.some((c) => c.beta) ? '' : ' no-beta'}${emptyColumns(rows)}`}><caption className="sr">All coins on Radar, {sort === 'Rank' ? 'ranked by the guard' : `sorted by ${sort}`}. Select a coin to see its details.</caption><thead><tr><th className="c-coin">Coin</th><th className="c-guard">Guard</th><th className="c-watch">Watch for</th><th className="c-sig r">Signal <span className="tag signal-beta">Beta</span></th><th className="c-beta r">Beta Ape Score</th><SortTh disabled={!sortAvailable(rows,'1h move')} value="1h move" {...{ sort, setSort }} className="c-1h r">1h</SortTh><th className="c-spark">Last 8h</th><SortTh disabled={!sortAvailable(rows,'Agent flow')} value="Agent flow" {...{ sort, setSort }} className="c-flow">Who’s buying</SortTh><th className="c-liq r">Liquidity</th><SortTh disabled={!sortAvailable(rows,'Exit cost')} value="Exit cost" {...{ sort, setSort }} className="c-exit r">Exit at $1K</SortTh><th className="c-act"><span className="sr">Trade</span></th></tr></thead><tbody>{windowed.start > 0 && <tr aria-hidden="true" className="rt-spacer"><td colSpan={1} style={{ height: windowed.start * rowHeight }} /></tr>}{list.slice(windowed.start, windowed.end).map((c) => <RadarRowView key={c.address} c={c} selected={selected === c.address} select={select} trade={trade} pulse={pulses[c.address] ?? 0} confidence={cards[c.address]?.playbooks.find((p) => p.id === c.topPlaybook)?.confidence} scanDelayed={scanDelayed(c, currentAgeSec(c, received.current, now))} />)}{windowed.end < list.length && <tr aria-hidden="true" className="rt-spacer"><td colSpan={1} style={{ height: (list.length - windowed.end) * rowHeight }} /></tr>}</tbody></table></div> : !error && <div className="empty panel">Nothing matches this filter right now.</div>}

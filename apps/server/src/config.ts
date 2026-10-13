@@ -43,6 +43,10 @@ const optionalValue = <T extends z.ZodType>(schema: T) => z.preprocess((v) => v 
 const address = z.preprocess((v) => v === '' ? undefined : v, AddressSchema.default('0x0000000000000000000000000000000000000000'));
 
 const EnvSchema = z.object({
+  BLUE_CHIP_ENABLED: bool,
+  BLUE_CHIP_MIN_AGE_DAYS: z.coerce.number().nonnegative().default(3),
+  BLUE_CHIP_MIN_LIQUIDITY_USD: z.coerce.number().nonnegative().default(25_000),
+  BLUE_CHIP_MIN_HOLDERS: z.coerce.number().int().nonnegative().default(250),
   APP_ROLE: z.enum(['api', 'worker', 'dev']).default('api'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().default('0.0.0.0'),
@@ -199,6 +203,10 @@ export const identityConfigKeys = {
 } as const;
 // Identity also covers the headless image roles the dispatcher starts (indexer, engines, ...), not only the server's own roles.
 const IdentityEnvSchema = EnvSchema.pick(identityConfigKeys).extend({
+  BLUE_CHIP_ENABLED: bool,
+  BLUE_CHIP_MIN_AGE_DAYS: z.coerce.number().nonnegative().default(3),
+  BLUE_CHIP_MIN_LIQUIDITY_USD: z.coerce.number().nonnegative().default(25_000),
+  BLUE_CHIP_MIN_HOLDERS: z.coerce.number().int().nonnegative().default(250),
   APP_ROLE: z.enum(['api', 'worker', 'dev', 'indexer', 'engines', 'mcp', 'receipts', 'bots', 'og']).default('api'),
 });
 
@@ -210,6 +218,7 @@ export function parseIdentityConfiguration(env: NodeJS.ProcessEnv, tradeCapsText
 function normalizeIdentityConfiguration(c: z.infer<typeof IdentityEnvSchema>, tradeCaps: TradeCaps) {
   const rpc = rpcConfig(c);
   const values: Record<string, unknown> = Object.fromEntries(Object.keys(identityConfigKeys).map(key => [key, c[key as keyof typeof c] ?? null]));
+  if(c.BLUE_CHIP_ENABLED) { values.BLUE_CHIP_ENABLED=true;values.BLUE_CHIP_MIN_AGE_DAYS=c.BLUE_CHIP_MIN_AGE_DAYS;values.BLUE_CHIP_MIN_LIQUIDITY_USD=c.BLUE_CHIP_MIN_LIQUIDITY_USD;values.BLUE_CHIP_MIN_HOLDERS=c.BLUE_CHIP_MIN_HOLDERS; }
   values.MARKET_DATA_SOURCE = c.MARKET_DATA_SOURCE ?? (c.NODE_ENV === 'production' ? 'onchain' : 'demo');
   values.FLAGS = [...parseFlagOverride(c.FLAGS)].sort();
   values.BURN_WALLET_ADDRESS = c.BURN_WALLET_ADDRESS.toLowerCase();
@@ -224,7 +233,7 @@ function normalizeIdentityConfiguration(c: z.infer<typeof IdentityEnvSchema>, tr
 export function effectiveIdentityConfiguration(cfg: Config) {
   // Project parsed values, never re-read process.env or spread the Config (which has secrets).
   const selected = Object.fromEntries(Object.keys(identityConfigKeys).map(key => [key, cfg[key as keyof typeof identityConfigKeys]]));
-  return normalizeIdentityConfiguration(selected as z.infer<typeof IdentityEnvSchema>, cfg.tradeCaps);
+  return normalizeIdentityConfiguration({...selected,BLUE_CHIP_ENABLED:cfg.BLUE_CHIP_ENABLED,BLUE_CHIP_MIN_AGE_DAYS:cfg.BLUE_CHIP_MIN_AGE_DAYS,BLUE_CHIP_MIN_LIQUIDITY_USD:cfg.BLUE_CHIP_MIN_LIQUIDITY_USD,BLUE_CHIP_MIN_HOLDERS:cfg.BLUE_CHIP_MIN_HOLDERS} as z.infer<typeof IdentityEnvSchema>, cfg.tradeCaps);
 }
 
 export type Config = Omit<z.infer<typeof EnvSchema>, 'MARKET_DATA_SOURCE'> & {

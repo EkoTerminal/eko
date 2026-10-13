@@ -10,6 +10,8 @@ export type Evaluation = Pick<PreflightResult, 'decision' | 'reasons' | 'senses'
 export interface Deps extends Prices, ActualOrderDeps {
   /** TODO(spec): deployment flag name is unspecified. Use this same trusted switch for settings and evaluation; defaults off. */
   guardPolicyV2?: boolean;
+  blueChipEnabled?: boolean;
+  blueChipFor?(asset: string): boolean;
   now(): number;
   verdictFor(asset: string): Verdict | 'unavailable' | undefined;
   cardFor(asset: string): CoinCard | undefined;
@@ -48,6 +50,10 @@ function evaluatePolicy(req: PreflightRequest, policy: Policy, agent: Agent, d: 
   if (buying && age > 300_000) (p.mode === 'safe' ? deny : warn).push('stale_context: positions and cash are older than 5 minutes');
   if (p.blockAssets?.includes(asset)) deny.push(`blocked_asset: ${asset} is on your block list`);
   if (buying && p.allowAssets?.length && !p.allowAssets.includes(asset)) deny.push(`not_allowed: ${asset} is not on your allow list`);
+
+  if (buying && p.blueChipsOnly && d.blueChipEnabled && (o.venue === 'rhc' || o.venue === 'base') &&
+      (o.venue !== 'rhc' || d.blueChipFor?.(asset) !== true))
+    deny.push('blue_chips_only: this coin is not a Blue chip member');
 
   let verdict: Verdict | undefined;
   if (buying && (o.venue === 'rhc' || o.venue === 'base')) {

@@ -21,15 +21,16 @@ export function rankRadar(rows: ReadRow[]): RadarRow[] {
 export class RadarService {
   constructor(readonly store: ReadStore) {}
   async order() {await this.store.currentRanks();return (await this.store.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>$1 ORDER BY -volume,coin',[new Date(this.store.now()-7*86400000)])).rows.map(r=>hex(r.coin));}
-  async list(cursor?:string) {
+  async list(cursor?:string,blueChipOnly=false) {
     await this.store.currentRanks();
     const key=decodeCursor(cursor,'radar');
     if(key && (key.length!==4 || !Number.isInteger(key[0]) || typeof key[1]!=='number' || typeof key[2]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[2]) || !Number.isInteger(key[3])))throw new InputError('Invalid radar cursor');
     const cutoff=new Date(this.store.now()-7*86400000),params:unknown[]=[cutoff];
     // The cursor keeps its four fields (tier, volume, coin, rank); the tier no longer orders the page.
     if(key)params.push(-Number(key[1]),Buffer.from(String(key[2]).slice(2),'hex'));
+    const category=blueChipOnly && this.store.blueChip?.config.enabled ? `AND ${this.store.blueChip.predicate('read_coins.coin',params)}` : '';
     const selected=await this.store.db.sql.query<{coin:Uint8Array;tier:number;volume:number}>(`SELECT coin,tier,volume FROM read_coins
-      WHERE activity>$1 ${key ? 'AND (-volume,coin)>($2,$3)' : ''} ORDER BY -volume,coin LIMIT 101`,params);
+      WHERE activity>$1 ${key ? 'AND (-volume,coin)>($2,$3)' : ''} ${category} ORDER BY -volume,coin LIMIT 101`,params);
     const page=selected.rows.slice(0,100),details=await this.store.rows(undefined,page.map(r=>hex(r.coin)));
     const indexed=new Map(details.map(e=>[e.row.address,e.row]));
     const rows=page.map((r,i)=>({...indexed.get(hex(r.coin))!,rank:i+1+(key ? Number(key[3]) : 0)}));

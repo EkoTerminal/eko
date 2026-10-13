@@ -1,3 +1,4 @@
+import { BlueChipSchema, BlueChipCriteriaSchema } from './blue-chip.js';
 import { z } from 'zod';
 import { PlaybookIdSchema, LevelSchema, EvidenceRefSchema, AddressSchema, UntrustedSchema, PoolRefSchema, WalletLabelSchema } from './common.js';
 import { ReceiptRefSchema } from './receipts.js';
@@ -87,6 +88,8 @@ export const CoinCardMetaSchema = z.partialRecord(z.enum(['identity', 'tradeabil
 }));
 export type CoinCardMeta = z.infer<typeof CoinCardMetaSchema>;
 export const CoinCardSchema = z.object({
+  blueChip: BlueChipSchema.optional(),
+  blueChipCriteria: BlueChipCriteriaSchema.optional(),
   identity: z.object({
     address: AddressSchema,
     name: UntrustedSchema,

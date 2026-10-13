@@ -1,3 +1,4 @@
+import { BlueChipReader, type BlueChipConfig } from '../read/blue-chip.js';
 import { binary, type ChainDb } from '@eko/db';
 import { normalizeInstrument } from '@eko/policy';
 import { AddressSchema } from '@eko/shared';
@@ -33,17 +34,25 @@ export async function recentCoinPrice(db: ChainDb, coin: string, now: number) {
  * Other venues and sells read nothing. Guard V2 policies keep their existing unavailable
  * actual-order evidence (052) and therefore deny.
  */
-export const storedPreflightInputs: CachedPreflightInputs = async (request, policy, _agent, now, tx) => {
+export const storedPreflightInputs: CachedPreflightInputs = (...args) => blueChipPreflightInputs()(...args);
+/** Build cached membership inputs from trusted host configuration. Reads only the order coin on buys
+ * inside the caller's transaction, and never acquires external data. Missing membership denies
+ * the optional category policy, while disabled configuration preserves original evaluations.
+ * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
+ * @see {@link ../../../docs/security/INVARIANTS.md | Policy invariants}
+ */
+export const blueChipPreflightInputs = (config?: BlueChipConfig): CachedPreflightInputs => async (request, policy, _agent, now, tx) => {
   const guardPolicyV2 = policy.guardPolicyVersion === 2;
   const order = request.order;
   const coin = order.venue === 'rhc' && order.side === 'buy' ? AddressSchema.safeParse(order.instrument.trim()) : undefined;
-  if (!coin?.success) return none(guardPolicyV2);
+  if (!coin?.success) return {...none(guardPolicyV2),blueChipEnabled:config?.enabled};
   const asset = normalizeInstrument(order.venue, coin.data);
   const store = new ReadStore(tx, () => now);
   const verdict = await store.verdict(coin.data) ?? undefined;
   const card = await store.card(coin.data) ?? undefined;
   const price = await recentCoinPrice(tx, coin.data, now);
-  return { guardPolicyV2,
+  const member=config?.enabled ? (await new BlueChipReader(tx,config,()=>now).members([coin.data])).get(coin.data.toLowerCase() as `0x${string}`)?.member : undefined;
+  return { guardPolicyV2,blueChipEnabled:config?.enabled,blueChipFor:instrument=>instrument===asset && member===true,
     verdictFor: instrument => instrument === asset ? verdict : undefined,
     cardFor: instrument => instrument === asset ? card : undefined,
     priceFor: (venue, instrument) => venue === 'rhc' && instrument === asset ? price : undefined };

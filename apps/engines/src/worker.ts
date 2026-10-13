@@ -1,3 +1,4 @@
+import { backfillBlueChip, publishBlueChipMeasurements } from './blue-chip.js';
 import { refreshFlows, refreshCoinFlow, type FlowOptions } from './watcher/flow-store.js';
 import { refreshFingerprints, replayFingerprints, type FingerprintOptions } from './watcher/store.js';
 import { writeRegistryLabels } from './registry-labels.js';
@@ -80,6 +81,7 @@ export interface WorkerOptions {
    * Skipped history can be filled later with ENGINE_MODE=replay, which skips runs that already exist.
    */
   liveBacklogSec?: number;
+  blueChipEnabled?: boolean;
   /** Live only. After this long, a poll yields to a newer launch so its first scan is not queued behind backlog. */
   liveSliceMs?: number;
   /** Overdue outcome horizons per live card write; defaults to OUTCOME_LOADS_PER_WRITE. */
@@ -184,8 +186,9 @@ export class EngineWorker {
    * @see {@link ../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
    */
-  stop() { this.stopped=true; this.wake?.(); this.rerateWake?.(); }
+  stop() { this.stopped=true; this.wake?.(); this.rerateWake?.(); this.blueChipWake?.(); }
   private rerateWake?:()=>void;
+  private blueChipWake?:()=>void;
   /**
    * Validate interval and replay retained activity with ordered rule/history writes, clearing replay
    * cache in finally. Engines operator only; invalid interval/source/provider/SQL failures reject.
@@ -536,6 +539,7 @@ export class EngineWorker {
     try { unsubscribe=await (this.options.bus ?? this.db.bus).subscribe(message => { if (!['card_updated','verdict_created'].includes(message.topic)) this.wake?.(); }); }
     catch { /* A disconnected bus does not disable the durable cursor poll. */ }
     const rerating=this.options.rerate ? this.rerateLoop() : undefined;
+    const blueChipBackfill=this.blueChipBackfillLoop();
     try {
       while (!this.stopped) {
         let completed:number;
@@ -557,7 +561,7 @@ export class EngineWorker {
           if (this.stopped) this.wake();
         });
       }
-    } finally { this.stop(); await rerating; await unsubscribe?.(); }
+    } finally { this.stop(); await rerating; await blueChipBackfill; await unsubscribe?.(); }
   }
   /**
    * Live: first-scan radar coins without a card (unscannedCoins), else re-rate stale pending cards (staleRatings), at the
@@ -780,9 +784,22 @@ export class EngineWorker {
     const inserted=(await tx.sql.query('INSERT INTO coin_cards VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING id',[id,binary(s.coin),s.asOfBlock,hash,JSON.stringify(card),RULES_VERSION])).rows.length;
     await tx.sql.query(`INSERT INTO coin_card_latest VALUES($1,$2,$3,$4) ON CONFLICT(coin) DO UPDATE SET card_id=excluded.card_id,as_of_block=excluded.as_of_block,data=excluded.data
       WHERE coin_card_latest.as_of_block<=excluded.as_of_block`,[binary(s.coin),id,s.asOfBlock,JSON.stringify(card)]);
+    await publishBlueChipMeasurements(tx,s);
     if(state){state.prior={id:verdict.receipt.id,signature,data:verdict};state.previous={id,hash};state.signal=card.signal;}
     if (inserted) await tx.notify('card_updated',{ id,coin:s.coin });
     return card;
+  }
+  /** Runs beside busy rating queues, including with the category disabled. New listed coins are swept too. */
+  private async blueChipBackfillLoop() {
+    while(!this.stopped) {
+      let filled=0;
+      try { filled=await backfillBlueChip(this.db); }
+      catch(error) { this.options.onRerateError?.(error); }
+      await new Promise<void>(resolve=>{
+        const timer=setTimeout(resolve,filled ? 1000 : 30_000);
+        this.blueChipWake=()=>{clearTimeout(timer);resolve();};if(this.stopped)this.blueChipWake();
+      });
+    }
   }
   private async reconcile() {
     const cursor=(await this.db.sql.query<{ block:string; hash:Uint8Array }>("SELECT block,hash FROM engine_cursors WHERE stream='engines'")).rows[0];

@@ -1,3 +1,4 @@
+import { BlueChipSchema } from './blue-chip.js';
 import { GuardTotalsSchema } from './guard-card-api.js';
 import { GuardAssessmentV2Schema, GuardReasonV2Schema, CoinCardV2Schema } from './guard-v2.js';
 import { GuardFactorIdSchema, GuardReasonCodeSchema } from './guard-consumers.js';
@@ -6,6 +7,7 @@ import { AddressSchema, UntrustedSchema, PlaybookIdSchema, LevelSchema, WalletLa
 import { CoinCardSchema, VerdictSchema, CoinCardFlowExtraSchema, CoinSignalSchema } from './coin.js';
 // FACTS §7 and BACKEND §23 (v1.2).
 export const CoinSummarySchema = z.object({
+  blueChip: BlueChipSchema.optional(),
   guardV2: GuardAssessmentV2Schema.nullable().optional(),
   guardRefreshFailed: z.boolean().optional(),
   address: AddressSchema,

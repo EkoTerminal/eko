@@ -15,6 +15,7 @@ import { GradeOutcomesService } from '../../read/grade-outcomes.js';
 import { ScanService } from '../../read/scan.js';
 import { metrics } from '../../obs/metrics.js';
 import { parse, sendError } from './helpers.js';
+const blueChip=z.enum(['true','false']).optional().transform(v=>v==='true');
 const cursor=z.string().max(1024).optional();
 const range=z.object({from:z.coerce.number().int().nonnegative(),to:z.coerce.number().int().nonnegative()}).refine(r=>r.to>r.from && r.to-r.from<=366*86400,{message:'Invalid time range'});
 export function readServices(store:ReadStore,points?:PointsService,phase:()=>string=()=> 'launch_week') {
@@ -35,8 +36,8 @@ export async function readRoutes(app:FastifyInstance,services:ReadServices,auth?
   app.get('/scoreboard/grades',async()=>services.grades.read());
   app.get('/scoreboard',async req=>{const q=parse(z.strictObject({kind:ScoreboardKindSchema.default('calls'),cursor,limit:z.coerce.number().int().min(1).max(100).default(50)}),req.query);return services.scoreboard.list(q.kind,q.cursor,q.limit);});
   app.get('/census',async()=>readCensus(services.store.db,services.store.now()));
-  app.get('/radar',async req=>radar.list(parse(z.object({cursor,mode:z.enum(['safe','degen']).optional(),lens:z.string().max(64).optional()}),req.query).cursor));
-  app.get('/pairs',async req=>{const q=parse(z.object({stage:z.enum(['new','near_grad','migrated']).default('new'),cursor}),req.query);return pairs.list(q.stage,q.cursor);});
+  app.get('/radar',async req=>{const q=parse(z.object({cursor,blueChip,mode:z.enum(['safe','degen']).optional(),lens:z.string().max(64).optional()}),req.query);return radar.list(q.cursor,q.blueChip);});
+  app.get('/pairs',async req=>{const q=parse(z.object({stage:z.enum(['new','near_grad','migrated']).default('new'),cursor,blueChip}),req.query);return pairs.list(q.stage,q.cursor,q.blueChip);});
   app.get('/feed',async req=>{const q=parse(z.object({cursor,kinds:z.string().max(200).optional()}),req.query);const kinds=q.kinds ? parse(z.array(FeedItemSchema.shape.kind),q.kinds.split(',')) : undefined;return feed.list(kinds,q.cursor);});
   const address=(params:unknown)=>parse(z.object({address:AddressSchema}),params).address;
   const missing=(reply:Parameters<typeof sendError>[0])=>sendError(reply,'not_found','No coin card is available for this address. Token identity may be indexed; search can show its current status.');

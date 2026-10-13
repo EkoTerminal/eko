@@ -1,3 +1,5 @@
+import { BlueChipListingWorker } from './blue-chip-listings.js';
+import { BlueChipReader, blueChipConfig } from './read/blue-chip.js';
 import { phaseAt } from './harness/entitlements.js';
 import { FileJournalDestructionLedger, migrate, migrateEngines, PostgresBus, ReceiptApiStore } from '@eko/db';
 import { ReadStore } from './read/store.js';
@@ -79,6 +81,7 @@ export interface Ctx {
   retentionWorker: RetentionWorker;
   pricingRepair: PricingRepairWorker;
   coinOnboarding: CoinOnboardingWorker;
+  blueChipListings: BlueChipListingWorker;
   dbh: DbHandle;
   reads: ReturnType<typeof readServices>;
   hub: Hub;
@@ -122,6 +125,8 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   await migrateEngines(dbh.chain);
   const points = new PointsService(dbh.chain,cfg.POINTS_RATES,cfg.POINTS_ACTIVE_FROM);
   const reads = readServices(new ReadStore(dbh.chain),points,()=>phaseAt(cfg,Date.now()));
+  reads.store.blueChip = new BlueChipReader(dbh.chain,blueChipConfig(cfg));
+  const blueChipListings = new BlueChipListingWorker(dbh.chain,cfg.BLUE_CHIP_ENABLED,undefined,Date.now,success=>logger[success ? 'info' : 'warn']({success},'Blue chip listing refresh'));
   reads.store.sellCheckQuotes = cfg.SELL_CHECK_ENABLED;
   // Not refreshed here: the API's background refresher catches the projection up while requests read it as it stands,
   // and processes without one refresh on their first read. A startup refresh held every deploy (and the worker, which
@@ -252,7 +257,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     },
   );
   const quant = new QuantService(market);
-  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, pricingRepair, coinOnboarding, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
+  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, pricingRepair, coinOnboarding, blueChipListings, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
 
   // Market data → WebSocket, throttled to ~4 Hz per stream (closed bars always go out immediately).
   const pendingCandles = new Map<string, Extract<ServerMessage, { type: 'candle' }>>();
@@ -372,7 +377,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     if (cfg.RUN_WORKER) {
       exec.start();
       if (cfg.APP_ROLE === 'worker' || cfg.APP_ROLE === 'dev') { sanctionsWorker.start(); retentionWorker.start(); pricingRepair.start(); }
-      if (cfg.APP_ROLE === 'worker') coinOnboarding.start();
+      if (cfg.APP_ROLE === 'worker') { coinOnboarding.start(); blueChipListings.start(); }
     } else logger.info('RUN_WORKER=false — API-only process (no order reconciler)');
     if (cfg.LEGACY_API && (cfg.RUN_WORKER || cfg.LIVE_TRADING_ENABLED)) void chains.checkHealth().then(pushHealth);
   }
@@ -402,6 +407,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       await retentionWorker.stop();
       await pricingRepair.stop();
       await coinOnboarding.stop();
+      await blueChipListings.stop();
       market.stop();
       hub.closeAll();
       await app.close();

@@ -3113,5 +3113,14 @@
   },
   "OAuthConsentResult": {
     "redirect": "https://example.invalid/callback?code=fixture&state=fixture"
+  },
+  "BlueChip": {
+    "member": true,
+    "via": ["coingecko", "earned"]
+  },
+  "BlueChipCriteria": {
+    "minAgeDays": 3,
+    "minLiquidityUsd": 25000,
+    "minHolders": 250
   }
 }

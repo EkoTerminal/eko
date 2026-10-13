@@ -29,6 +29,7 @@ export async function configRoutes(app: FastifyInstance, cfg: Config, service: F
     reply.header('Vary', [reply.getHeader('Vary'), 'Cookie'].filter(Boolean).join(', '));
     return PublicConfigSchema.parse({
       ...CONFIG_DEFAULTS,
+      ...(cfg.BLUE_CHIP_ENABLED ? {blueChip:{minAgeDays:cfg.BLUE_CHIP_MIN_AGE_DAYS,minLiquidityUsd:cfg.BLUE_CHIP_MIN_LIQUIDITY_USD,minHolders:cfg.BLUE_CHIP_MIN_HOLDERS}} : {}),
       drops,
       phase: phaseAt(cfg, Date.now()),
       flags,

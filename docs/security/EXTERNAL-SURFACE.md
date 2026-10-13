@@ -105,7 +105,7 @@ are refreshed, without changing release settings or record semantics.
 
 <!-- generated census: node scripts/check-doc-surface.mjs --write -->
 
-Measured: **596/596 (100.00%)** documented. Minimum: **90%**.
+Measured: **597/597 (100.00%)** documented. Minimum: **90%**.
 
 | Entry | Kind | Source (file:line) | Doc comment |
 | --- | --- | --- | --- |
@@ -186,19 +186,19 @@ Measured: **596/596 (100.00%)** documented. Minimum: **90%**.
 | `refreshCoinFlow` | function | [apps/engines/src/watcher/flow-store.ts:41](../../apps/engines/src/watcher/flow-store.ts#L41) | Yes |
 | `refreshFlows` | function | [apps/engines/src/watcher/flow-store.ts:77](../../apps/engines/src/watcher/flow-store.ts#L77) | Yes |
 | `refreshCensus` | function | [apps/engines/src/watcher/flow-store.ts:95](../../apps/engines/src/watcher/flow-store.ts#L95) | Yes |
-| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:53](../../apps/engines/src/worker.ts#L53) | Yes |
-| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:144](../../apps/engines/src/worker.ts#L144) | Yes |
-| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:153](../../apps/engines/src/worker.ts#L153) | Yes |
-| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:172](../../apps/engines/src/worker.ts#L172) | Yes |
-| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:187](../../apps/engines/src/worker.ts#L187) | Yes |
-| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:196](../../apps/engines/src/worker.ts#L196) | Yes |
-| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:231](../../apps/engines/src/worker.ts#L231) | Yes |
-| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:268](../../apps/engines/src/worker.ts#L268) | Yes |
-| `EngineWorker.run` | method | [apps/engines/src/worker.ts:534](../../apps/engines/src/worker.ts#L534) | Yes |
-| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:651](../../apps/engines/src/worker.ts#L651) | Yes |
-| `tradedSinceCard` | function | [apps/engines/src/worker.ts:803](../../apps/engines/src/worker.ts#L803) | Yes |
-| `unscannedCoins` | function | [apps/engines/src/worker.ts:816](../../apps/engines/src/worker.ts#L816) | Yes |
-| `staleRatings` | function | [apps/engines/src/worker.ts:835](../../apps/engines/src/worker.ts#L835) | Yes |
+| `retryAfterBlocks` | function | [apps/engines/src/worker.ts:54](../../apps/engines/src/worker.ts#L54) | Yes |
+| `EngineWorker.telemetry` | method | [apps/engines/src/worker.ts:146](../../apps/engines/src/worker.ts#L146) | Yes |
+| `EngineWorker.summary` | method | [apps/engines/src/worker.ts:155](../../apps/engines/src/worker.ts#L155) | Yes |
+| `EngineWorker.constructor` | constructor | [apps/engines/src/worker.ts:174](../../apps/engines/src/worker.ts#L174) | Yes |
+| `EngineWorker.stop` | method | [apps/engines/src/worker.ts:189](../../apps/engines/src/worker.ts#L189) | Yes |
+| `EngineWorker.replay` | method | [apps/engines/src/worker.ts:199](../../apps/engines/src/worker.ts#L199) | Yes |
+| `EngineWorker.poll` | method | [apps/engines/src/worker.ts:234](../../apps/engines/src/worker.ts#L234) | Yes |
+| `EngineWorker.processScanJobs` | method | [apps/engines/src/worker.ts:271](../../apps/engines/src/worker.ts#L271) | Yes |
+| `EngineWorker.run` | method | [apps/engines/src/worker.ts:537](../../apps/engines/src/worker.ts#L537) | Yes |
+| `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:655](../../apps/engines/src/worker.ts#L655) | Yes |
+| `tradedSinceCard` | function | [apps/engines/src/worker.ts:820](../../apps/engines/src/worker.ts#L820) | Yes |
+| `unscannedCoins` | function | [apps/engines/src/worker.ts:833](../../apps/engines/src/worker.ts#L833) | Yes |
+| `staleRatings` | function | [apps/engines/src/worker.ts:852](../../apps/engines/src/worker.ts#L852) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |
@@ -267,10 +267,10 @@ Measured: **596/596 (100.00%)** documented. Minimum: **90%**.
 | `OAuthDiscovery.prune` | method | [apps/mcp/src/oauth.ts:233](../../apps/mcp/src/oauth.ts#L233) | Yes |
 | `pruneOAuthDiscovery` | function | [apps/mcp/src/oauth.ts:246](../../apps/mcp/src/oauth.ts#L246) | Yes |
 | `registerReadTools` | function | [apps/mcp/src/read-tools.ts:10](../../apps/mcp/src/read-tools.ts#L10) | Yes |
-| `mcpConfig` | function | [apps/mcp/src/runtime.ts:32](../../apps/mcp/src/runtime.ts#L32) | Yes |
-| `mcpLogger` | function | [apps/mcp/src/runtime.ts:69](../../apps/mcp/src/runtime.ts#L69) | Yes |
-| `createMcpRuntime` | function | [apps/mcp/src/runtime.ts:84](../../apps/mcp/src/runtime.ts#L84) | Yes |
-| `runMcpProcess` | function | [apps/mcp/src/runtime.ts:140](../../apps/mcp/src/runtime.ts#L140) | Yes |
+| `mcpConfig` | function | [apps/mcp/src/runtime.ts:33](../../apps/mcp/src/runtime.ts#L33) | Yes |
+| `mcpLogger` | function | [apps/mcp/src/runtime.ts:74](../../apps/mcp/src/runtime.ts#L74) | Yes |
+| `createMcpRuntime` | function | [apps/mcp/src/runtime.ts:89](../../apps/mcp/src/runtime.ts#L89) | Yes |
+| `runMcpProcess` | function | [apps/mcp/src/runtime.ts:147](../../apps/mcp/src/runtime.ts#L147) | Yes |
 | `portableSchema` | function | [apps/mcp/src/tools.ts:66](../../apps/mcp/src/tools.ts#L66) | Yes |
 | `toolSchemas` | function | [apps/mcp/src/tools.ts:84](../../apps/mcp/src/tools.ts#L84) | Yes |
 | `modelText` | function | [apps/mcp/src/tools.ts:102](../../apps/mcp/src/tools.ts#L102) | Yes |
@@ -284,8 +284,8 @@ Measured: **596/596 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.drain` | method | [apps/server/src/ai/swarm-worker.ts:109](../../apps/server/src/ai/swarm-worker.ts#L109) | Yes |
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
-| `buildApp` | function | [apps/server/src/app.ts:117](../../apps/server/src/app.ts#L117) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:391](../../apps/server/src/app.ts#L391) | Yes |
+| `buildApp` | function | [apps/server/src/app.ts:120](../../apps/server/src/app.ts#L120) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:396](../../apps/server/src/app.ts#L396) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |
@@ -453,8 +453,9 @@ Measured: **596/596 (100.00%)** documented. Minimum: **90%**.
 | `OAuthTokenService.exchange` | method | [apps/server/src/harness/oauth-tokens.ts:87](../../apps/server/src/harness/oauth-tokens.ts#L87) | Yes |
 | `OAuthTokenService.revoke` | method | [apps/server/src/harness/oauth-tokens.ts:130](../../apps/server/src/harness/oauth-tokens.ts#L130) | Yes |
 | `OAuthTokenService.authenticate` | method | [apps/server/src/harness/oauth-tokens.ts:149](../../apps/server/src/harness/oauth-tokens.ts#L149) | Yes |
-| `recentCoinPrice` | function | [apps/server/src/harness/preflight-inputs.ts:17](../../apps/server/src/harness/preflight-inputs.ts#L17) | Yes |
-| `storedPreflightInputs` | function | [apps/server/src/harness/preflight-inputs.ts:36](../../apps/server/src/harness/preflight-inputs.ts#L36) | Yes |
+| `recentCoinPrice` | function | [apps/server/src/harness/preflight-inputs.ts:18](../../apps/server/src/harness/preflight-inputs.ts#L18) | Yes |
+| `storedPreflightInputs` | function | [apps/server/src/harness/preflight-inputs.ts:37](../../apps/server/src/harness/preflight-inputs.ts#L37) | Yes |
+| `blueChipPreflightInputs` | function | [apps/server/src/harness/preflight-inputs.ts:44](../../apps/server/src/harness/preflight-inputs.ts#L44) | Yes |
 | `unavailablePreflightInputs` | function | [apps/server/src/harness/preflight.ts:22](../../apps/server/src/harness/preflight.ts#L22) | Yes |
 | `PreflightService.constructor` | constructor | [apps/server/src/harness/preflight.ts:39](../../apps/server/src/harness/preflight.ts#L39) | Yes |
 | `PreflightService.run` | method | [apps/server/src/harness/preflight.ts:50](../../apps/server/src/harness/preflight.ts#L50) | Yes |
@@ -509,7 +510,7 @@ Measured: **596/596 (100.00%)** documented. Minimum: **90%**.
 | `journalRoutes` | function | [apps/server/src/http/v1/journal.ts:20](../../apps/server/src/http/v1/journal.ts#L20) | Yes |
 | `oauthConsentRoutes` | function | [apps/server/src/http/v1/oauth.ts:19](../../apps/server/src/http/v1/oauth.ts#L19) | Yes |
 | `packRoutes` | function | [apps/server/src/http/v1/packs.ts:13](../../apps/server/src/http/v1/packs.ts#L13) | Yes |
-| `readRoutes` | function | [apps/server/src/http/v1/reads.ts:33](../../apps/server/src/http/v1/reads.ts#L33) | Yes |
+| `readRoutes` | function | [apps/server/src/http/v1/reads.ts:34](../../apps/server/src/http/v1/reads.ts#L34) | Yes |
 | `receiptRoutes` | function | [apps/server/src/http/v1/receipts.ts:14](../../apps/server/src/http/v1/receipts.ts#L14) | Yes |
 | `rpcRoutes` | function | [apps/server/src/http/v1/rpc.ts:59](../../apps/server/src/http/v1/rpc.ts#L59) | Yes |
 | `telegramRoutes` | function | [apps/server/src/http/v1/telegram.ts:13](../../apps/server/src/http/v1/telegram.ts#L13) | Yes |
@@ -682,7 +683,7 @@ Measured: **596/596 (100.00%)** documented. Minimum: **90%**.
 | `actualNotionalOf` | function | [packages/policy/src/actual-order.ts:140](../../packages/policy/src/actual-order.ts#L140) | Yes |
 | `orderHash` | function | [packages/policy/src/canonical.ts:15](../../packages/policy/src/canonical.ts#L15) | Yes |
 | `guardBuyGate` | function | [packages/policy/src/guard.ts:14](../../packages/policy/src/guard.ts#L14) | Yes |
-| `evaluate` | function | [packages/policy/src/preflight.ts:34](../../packages/policy/src/preflight.ts#L34) | Yes |
+| `evaluate` | function | [packages/policy/src/preflight.ts:36](../../packages/policy/src/preflight.ts#L36) | Yes |
 | `applyPreset` | function | [packages/policy/src/presets.ts:23](../../packages/policy/src/presets.ts#L23) | Yes |
 | `resolveRepeat` | function | [packages/policy/src/repeat.ts:17](../../packages/policy/src/repeat.ts#L17) | Yes |
 | `guardReceiptRevisionKey` | function | [packages/shared/src/contracts/guard-receipts.ts:29](../../packages/shared/src/contracts/guard-receipts.ts#L29) | Yes |

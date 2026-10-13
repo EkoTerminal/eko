@@ -14,6 +14,7 @@ export const PolicySchema = z.object({
   blockPlaybookLevel: z.union([z.literal('danger'), z.literal('monitor'), z.null()]),
   earningsBlackoutDays: z.number().optional(),
   minLiquidityUsd: z.number().optional(),
+  blueChipsOnly: z.boolean().optional(),
   maxRoundTripCostPct: z.number().optional(),
   maxLeverage: z.number().optional(),
   approvalAboveUsd: z.number().optional(),

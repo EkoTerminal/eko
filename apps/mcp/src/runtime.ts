@@ -1,3 +1,4 @@
+import { BlueChipReader, blueChipConfig } from '../../server/src/read/blue-chip.js';
 import pino from 'pino';
 import { z } from 'zod';
 import { AddressSchema } from '@eko/shared';
@@ -17,7 +18,7 @@ import { ReceiptApiStore, type ReceiptRegistryReader } from '../../../packages/d
 import { registerHarnessTools } from './harness.js';
 import { JournalService } from '../../server/src/harness/journal.js';
 import { PreflightService, type CachedPreflightInputs } from '../../server/src/harness/preflight.js';
-import { storedPreflightInputs } from '../../server/src/harness/preflight-inputs.js';
+import { blueChipPreflightInputs } from '../../server/src/harness/preflight-inputs.js';
 import { pruneOAuthDiscovery } from './oauth.js';
 import { TrustProxyHopsSchema } from '../../server/src/proxy-trust.js';
 
@@ -31,6 +32,10 @@ const optional = <T extends z.ZodType>(schema: T) => z.preprocess(v => v === '' 
  */
 export function mcpConfig(env: NodeJS.ProcessEnv) {
   const parsed = z.object({
+    BLUE_CHIP_ENABLED: z.enum(['true','false','1','0']).default('false').transform(v=>v==='true'||v==='1'),
+    BLUE_CHIP_MIN_AGE_DAYS: z.coerce.number().nonnegative().default(3),
+    BLUE_CHIP_MIN_LIQUIDITY_USD: z.coerce.number().nonnegative().default(25_000),
+    BLUE_CHIP_MIN_HOLDERS: z.coerce.number().int().nonnegative().default(250),
     NODE_ENV: z.enum(['test', 'development', 'production']).default('development'),
     HOST: z.string().default('0.0.0.0'), PORT: z.coerce.number().int().min(1).max(65535).default(8710),
     TRUST_PROXY_HOPS: TrustProxyHopsSchema,
@@ -105,14 +110,16 @@ export async function createMcpRuntime(env: NodeJS.ProcessEnv, tools: ToolRegist
       receiptReader ?? receiptVerification?.reader ?? {
         getChainId: unavailableReader, getBlock: unavailableReader, getTransactionReceipt: unavailableReader,
       });
-    const readTools = tools ?? registerReadTools(new SensesReadService(new GuardReadStore(new ReadStore(handle.chain)), receipts));
+    const legacyReads=new ReadStore(handle.chain);
+    legacyReads.blueChip=new BlueChipReader(handle.chain,blueChipConfig(cfg));
+    const readTools = tools ?? registerReadTools(new SensesReadService(new GuardReadStore(legacyReads), receipts));
     // Missing encryption/destruction configuration keeps both write tools absent.
     if (destruction && cfg.JOURNAL_KEK && cfg.JOURNAL_KEK_ID) {
       await handle.chain.sql.query('SELECT id FROM preflights LIMIT 0');
       const journal = new JournalService(handle.chain, destruction,
         { kek: Buffer.from(cfg.JOURNAL_KEK, 'hex'), id: cfg.JOURNAL_KEK_ID });
       // Default Senses for preflight: the stored engine verdict/card/price, never acquisition.
-      registerHarnessTools(readTools, new PreflightService(handle.chain, journal, cachedInputs ?? storedPreflightInputs), journal);
+      registerHarnessTools(readTools, new PreflightService(handle.chain, journal, cachedInputs ?? blueChipPreflightInputs(blueChipConfig(cfg))), journal);
     }
     const app = buildMcpApp({ authenticate: key => auth.authenticate(key), entitlements: () => entitlements.get(),
       limits, tools: readTools, publicUrl: cfg.MCP_PUBLIC_URL, trustProxyHops: cfg.TRUST_PROXY_HOPS,

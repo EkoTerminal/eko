@@ -9,13 +9,13 @@ export class GuardConsumerReads {
     // Only a released assessment may replace the active transport grade.
     return { ...row, guardV2, ...(guardV2?.mode === 'active' ? { verdict: projectGuardLevelToV1(guardV2.level), verdictPending: false } : {}) };
   }
-  async radar(cursor?: string) {
-    const page = await this.services.radar.list(cursor);
+  async radar(cursor?: string,blueChipOnly=false) {
+    const page = await this.services.radar.list(cursor,blueChipOnly);
     const rows = await Promise.all(page.rows.map(row => this.row(row)));
     return RadarResponseSchema.parse({ ...page, rows, guardTotals: await this.services.guard.totals() });
   }
-  async pairs(stage: 'new' | 'near_grad' | 'migrated', cursor?: string) {
-    const page = await this.services.pairs.list(stage, cursor);
+  async pairs(stage: 'new' | 'near_grad' | 'migrated', cursor?: string,blueChipOnly=false) {
+    const page = await this.services.pairs.list(stage, cursor,blueChipOnly);
     const rows = await Promise.all(page.rows.map(row => this.row(row)));
     return { ...page, rows: rows.map(row => PairRowSchema.parse(row)) };
   }

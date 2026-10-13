@@ -1,3 +1,4 @@
+import { BlueChipReader } from './blue-chip.js';
 import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
 import { readCurveStates, readPoolLiquidity, readPoolMoney } from './pool-liquidity.js';
@@ -47,6 +48,7 @@ export class ReadStore {
   constructor(readonly db: ChainDb, public now: () => number = Date.now) {}
   /** True when buy quotes run the live sell check, so refusals are being counted (Radar's "Honeypots refused"). */
   sellCheckQuotes=false;
+  blueChip?: BlueChipReader;
   private rankRefresh?:Promise<void>;
   private modelRefresh?:Promise<void>;
   private refreshedAt=new Map<string,number>();
@@ -178,6 +180,7 @@ export class ReadStore {
         FROM swaps s JOIN tokens t ON t.address=s.coin
         WHERE s.coin=ANY($1::bytea[]) AND s.ts>to_timestamp($2::double precision-28800) AND s.ts<=to_timestamp($2::double precision) AND s.usd>0 AND s.amount_coin>0) latest
       WHERE n<=96 GROUP BY coin`,[thin,now])).rows)trades.set(hex(row.coin),row.points.map(Number));
+    const memberships = await this.blueChip?.members(result.rows.map(t=>hex(t.address)));
     return result.rows.map(t => {
       const sell=sells.get(hex(t.address)),pool=pools.get(hex(t.address)),traded=trades.get(hex(t.address));
       const spark=traded && traded.length>(t.spark?.length ?? 0) ? traded : t.spark;
@@ -221,6 +224,8 @@ export class ReadStore {
         rank:0, signal:card?.signal, spark8h:t.pricing_pending ? undefined : spark ?? [], beta:verdict?.beta, unavailable,
         ...(t.pricing_pending ? {} : activity(t, now)),
       };
+      const member = memberships?.get(row.address);
+      if(member) { row.blueChip=member; if(card) { card.blueChip=member;card.blueChipCriteria=this.blueChip!.criteria; } }
       return { eligible:t.eligible,row,card,volume:t.pricing_pending ? 0 : t.volume,firstBlock:Number(t.first_block),graduationBlock:Number(t.graduated_block ?? 0),activity:t.activity ? new Date(t.activity).getTime() : this.now(),exit100:sell?.exit100 ?? null };
     });
   }
@@ -237,6 +242,8 @@ export class ReadStore {
     const flow=(await readFlows(this.db,[address])).get(address)??unavailableFlow('1h',card.freshness.block);
     const {meta:flowMeta,...flowValues}=flow;
     card.flow=flowValues;card.meta={...card.meta,flow:flowMeta};
+    const member=(await this.blueChip?.members([address]))?.get(address.toLowerCase() as Address);
+    if(member) { card.blueChip=member;card.blueChipCriteria=this.blueChip!.criteria; }
     return card;
   }
   async verdict(address: Address): Promise<Verdict | null> {

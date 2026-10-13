@@ -31,6 +31,7 @@ export interface PoolRow { id: Uint8Array; currency0: Uint8Array; currency1: Uin
 export interface EventRow { block: string; ts: Date; tx_hash: Uint8Array; log_index: number; kind: string; actor: Uint8Array | null; senders_pending?:boolean; pool_id: Uint8Array; data: Record<string, string> }
 export interface Holding { holder: Uint8Array; amount: string; block: string; holderHex?:Address }
 export interface LoadedSources extends CardSources {
+  blueChipHolderCount?: number;
   attributionCoverage?: Record<string,import('@eko/shared').AttributionCoverageGap>;
   referenceResults?: import('@eko/chain').ReferenceResult[];
   curvePct?:number;trade:TradeView;holderSummary:{count:number;previousCount:number;top10:number;dev:number;burned:bigint;inventory:bigint};
@@ -118,7 +119,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   for(let i=0;i<swapEnd && early(swaps[i]);i++){const r=swaps[i];if(Number(r.block)<launchBlock)continue;
     if(r.side===1){if(!undelivered(r))earlyRows.push(r);}else if(r.trader){const w=rowHex(r.trader);earlySold.set(w,(earlySold.get(w) ?? 0)+Number(r.amount_coin));}}
   const earlyWallets=[...new Set(earlyRows.map(buyerOf).filter((w):w is Uint8Array=>w!=null).map(rowHex))];
-  const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...poolRows.map(p=>rowHex(p.id)),...earlyWallets];
+  const wallets=[...(token.curve ? [rowHex(token.curve)] : []),deployer,...exSet,...[...poolHolders].map(w=>w as Address),...earlyWallets];
   if(!cache){holdings=await holdingsAt(db,coin,block);previousHoldings=priorBlock ? await holdingsAt(db,coin,Number(priorBlock.number)) : [];}
   const holderView=cache ? await cache.holderViewAt(coin,block,wallets,'now',poolHolders) : (()=>{const a=makeHolders(holdings);return {count:a.count,top10:a.top10(),burned:a.burned,inventory:a.inventory,amounts:new Map(wallets.map(wallet=>[wallet,a.amount(wallet)])),top:a.top(12,wallet=>poolHolders.has(wallet))};})();
   const previousCount=priorBlock ? cache ? (await cache.holderViewAt(coin,Number(priorBlock.number),[],'previous')).count : makeHolders(previousHoldings).count : 0;
@@ -129,6 +130,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     launchpad:token.launchpad ?? 'other',name:toUntrusted(token.name,120).text,symbol:toUntrusted(token.symbol,32).text,
     tokenText:[{ref:`${coin}:name`,raw:token.name},{ref:`${coin}:symbol`,raw:token.symbol}],token,swaps,holdings,previousHoldings,events,history,trade,
     holderSummary:{count:holderView.count,previousCount,top10:holderView.top10,dev:!isSink(deployer,coin) && (!token.curve || deployer!==rowHex(token.curve)) ? Number(holderView.amounts.get(deployer) ?? 0n) : 0,burned:holderView.burned,inventory:holderView.inventory},
+    blueChipHolderCount:holderView.count-[...poolHolders].filter(w=>!isSink(w as Address,coin) && (!token.curve || w!==rowHex(token.curve)) && (holderView.amounts.get(w as Address) ?? 0n)>0n).length,
     poolRefs:[],exemptionWallets:[...exSet],usdComplete:trade.usdComplete,sectionBlocks:{identity:Number(token.first_block)},...(priorBlock ? {previousHolderBlock:Number(priorBlock.number)} : {})};
   if(token.curve && s.launchpad==='pons') {
     if(token.graduated_block != null && Number(token.graduated_block)<=block) s.curvePct=100;

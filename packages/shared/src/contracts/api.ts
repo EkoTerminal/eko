@@ -1,3 +1,4 @@
+import { BlueChipCriteriaSchema } from './blue-chip.js';
 import { GuardAssessmentV2Schema } from './guard-v2.js';
 import { z } from 'zod';
 import { EntitlementsSchema } from './entitlements.js';
@@ -18,6 +19,7 @@ export const ApiErrorSchema = z.object({
 });
 export type ApiError = z.infer<typeof ApiErrorSchema>;
 export const PublicConfigSchema = z.object({
+  blueChip: BlueChipCriteriaSchema.optional(),
   phase: z.enum(['launch_week', 'token_live', 'tiers']),
   flags: FlagsSchema,
   tiers: z.array(z.object({

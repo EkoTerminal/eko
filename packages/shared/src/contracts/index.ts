@@ -38,3 +38,5 @@ export * from './swarm.js';
 export * from './share.js';
 export * from './guard-review.js';
 export * from './scoreboard.js';
+
+export * from './blue-chip.js';
