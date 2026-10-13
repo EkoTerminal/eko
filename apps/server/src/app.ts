@@ -1,3 +1,4 @@
+import { installRateLimitObservations, pluginRejectionObserver } from './obs/rate-limits.js';
 import { BlueChipListingWorker } from './blue-chip-listings.js';
 import { BlueChipReader, blueChipConfig } from './read/blue-chip.js';
 import { phaseAt } from './harness/entitlements.js';
@@ -299,13 +300,15 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     }
   });
   await app.register(cookie, { secret: cfg.sessionSecret });
-  await app.register(cors, { origin: cfg.origins, credentials: true });
+  await app.register(cors, { origin: cfg.origins, credentials: true, exposedHeaders: ['retry-after'] });
+  const limitObservations = installRateLimitObservations(app);
   await app.register(rateLimit, {
     global: true,
     max: 600,
     timeWindow: '1 minute',
     keyGenerator: (req) => auth.readCookie(req) ?? addressKey(req.ip),
     allowList: (req) => req.url.startsWith('/assets/'),
+    onExceeded: pluginRejectionObserver(limitObservations, req => !!auth.readCookie(req)),
   });
   // Sessions are free to mint, so one address also gets a ceiling across all of its sessions.
   app.addHook('onRequest', addressLimit(app, ADDRESS_REQUESTS_PER_MINUTE, req => req.url.startsWith('/assets/')));

@@ -73,6 +73,6 @@ describe('owner watches and alerts', () => {
     rt.subscribeBatch('alerts',e=>store.getState().receive(e),()=>store.getState().resyncAlerts()); rt.connect();
     const start=Date.now(); message({t:'ev',ch:'alerts',kind:'alert',seq:1,ts:start,data:createAlert()}); vi.advanceTimersByTime(16);
     expect(notify).toHaveBeenCalledOnce(); expect(Date.now()-start).toBeLessThan(1000);
-    transport.reconnect(); await tick(); expect(fetch).toHaveBeenCalledTimes(2); rt.close();
+    transport.reconnect(); await vi.advanceTimersByTimeAsync(1000); await tick(); expect(fetch).toHaveBeenCalledTimes(2); rt.close();
   });
 });

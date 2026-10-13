@@ -33,7 +33,7 @@ describe('typed API boundary', () => {
     }
   });
   it('maps unrecognized errors by status and preserves cancellation', async () => {
-    for (const [status, code] of [[401, 'wallet_auth_required'], [403, 'forbidden'], [404, 'not_found'], [409, 'conflict'], [429, 'rate_limited'], [500, 'internal_error']] as const) {
+    for (const [status, code] of [[401, 'wallet_auth_required'], [403, 'forbidden'], [404, 'not_found'], [409, 'conflict'], [500, 'internal_error']] as const) {
       await expect(createApi('/v1', async () => json({ error: 'unknown', message: 'Failure' }, status)).request('/me')).rejects.toMatchObject({ status, code });
     }
     await expect(createApi('/v1', async () => { throw new Error('Network down'); }).request('/me')).rejects.toMatchObject({ status: 0, code: 'internal_error' });

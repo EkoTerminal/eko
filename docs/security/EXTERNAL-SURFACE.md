@@ -284,8 +284,8 @@ Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.drain` | method | [apps/server/src/ai/swarm-worker.ts:109](../../apps/server/src/ai/swarm-worker.ts#L109) | Yes |
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
-| `buildApp` | function | [apps/server/src/app.ts:120](../../apps/server/src/app.ts#L120) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:401](../../apps/server/src/app.ts#L401) | Yes |
+| `buildApp` | function | [apps/server/src/app.ts:121](../../apps/server/src/app.ts#L121) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:404](../../apps/server/src/app.ts#L404) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |
@@ -487,7 +487,7 @@ Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 | `AuthService.verifySiwe` | method | [apps/server/src/http/auth.ts:223](../../apps/server/src/http/auth.ts#L223) | Yes |
 | `publicGhostReport` | function | [apps/server/src/http/ghost-reports.ts:19](../../apps/server/src/http/ghost-reports.ts#L19) | Yes |
 | `ghostReportRoutes` | function | [apps/server/src/http/ghost-reports.ts:43](../../apps/server/src/http/ghost-reports.ts#L43) | Yes |
-| `launchMonitoringRoutes` | function | [apps/server/src/http/launch-monitoring.ts:19](../../apps/server/src/http/launch-monitoring.ts#L19) | Yes |
+| `launchMonitoringRoutes` | function | [apps/server/src/http/launch-monitoring.ts:20](../../apps/server/src/http/launch-monitoring.ts#L20) | Yes |
 | `registerRoutes` | function | [apps/server/src/http/routes.ts:68](../../apps/server/src/http/routes.ts#L68) | Yes |
 | `securityTxtRoutes` | function | [apps/server/src/http/security-txt.ts:32](../../apps/server/src/http/security-txt.ts#L32) | Yes |
 | `ShareService.constructor` | constructor | [apps/server/src/http/share.ts:59](../../apps/server/src/http/share.ts#L59) | Yes |
@@ -510,7 +510,7 @@ Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 | `journalRoutes` | function | [apps/server/src/http/v1/journal.ts:20](../../apps/server/src/http/v1/journal.ts#L20) | Yes |
 | `oauthConsentRoutes` | function | [apps/server/src/http/v1/oauth.ts:19](../../apps/server/src/http/v1/oauth.ts#L19) | Yes |
 | `packRoutes` | function | [apps/server/src/http/v1/packs.ts:13](../../apps/server/src/http/v1/packs.ts#L13) | Yes |
-| `readRoutes` | function | [apps/server/src/http/v1/reads.ts:34](../../apps/server/src/http/v1/reads.ts#L34) | Yes |
+| `readRoutes` | function | [apps/server/src/http/v1/reads.ts:35](../../apps/server/src/http/v1/reads.ts#L35) | Yes |
 | `receiptRoutes` | function | [apps/server/src/http/v1/receipts.ts:14](../../apps/server/src/http/v1/receipts.ts#L14) | Yes |
 | `rpcRoutes` | function | [apps/server/src/http/v1/rpc.ts:59](../../apps/server/src/http/v1/rpc.ts#L59) | Yes |
 | `telegramRoutes` | function | [apps/server/src/http/v1/telegram.ts:13](../../apps/server/src/http/v1/telegram.ts#L13) | Yes |

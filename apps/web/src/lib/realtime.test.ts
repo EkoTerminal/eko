@@ -134,13 +134,43 @@ describe('retained reconnect transport', () => {
     vi.spyOn(Math, 'random').mockReturnValue(.5);
     const socket = new ChannelSocket(() => 'ws://localhost/v1/ws'); const reconnect = vi.fn(); socket.onReconnect = reconnect;
     socket.connect(); socket.connect(); expect(FakeWebSocket.instances).toHaveLength(1);
-    FakeWebSocket.instances[0].onclose?.(); vi.advanceTimersByTime(499); expect(FakeWebSocket.instances).toHaveLength(1);
+    FakeWebSocket.instances[0].onclose?.(); vi.advanceTimersByTime(4999); expect(FakeWebSocket.instances).toHaveLength(1);
     vi.advanceTimersByTime(1); expect(FakeWebSocket.instances).toHaveLength(2);
-    FakeWebSocket.instances[1].onclose?.(); vi.advanceTimersByTime(999); expect(FakeWebSocket.instances).toHaveLength(2);
+    FakeWebSocket.instances[1].onclose?.(); vi.advanceTimersByTime(4999); expect(FakeWebSocket.instances).toHaveLength(2);
     vi.advanceTimersByTime(1); expect(FakeWebSocket.instances).toHaveLength(3);
     const ws = FakeWebSocket.instances[2]; ws.onopen?.(); expect(ws.sent).toContain('{"op":"ping"}');
     vi.advanceTimersByTime(10000); expect(ws.sent.filter((s) => s === '{"op":"ping"}')).toHaveLength(2);
-    ws.onclose?.(); vi.advanceTimersByTime(500); FakeWebSocket.instances[3].onopen?.(); expect(reconnect).toHaveBeenCalledOnce();
+    ws.onclose?.(); vi.advanceTimersByTime(5000); FakeWebSocket.instances[3].onopen?.(); expect(reconnect).toHaveBeenCalledOnce();
     socket.close(); vi.advanceTimersByTime(30000); expect(FakeWebSocket.instances).toHaveLength(4); expect(socket.state).toBe('closed');
+  });
+});
+
+describe('socket storm bounds', () => {
+  it('increases backoff when upgrades fail before opening', () => {
+    vi.useFakeTimers(); vi.stubGlobal('WebSocket', FakeWebSocket); vi.spyOn(Math,'random').mockReturnValue(.5); FakeWebSocket.instances=[];
+    const socket=new ChannelSocket(()=> 'ws://localhost/v1/ws'); socket.connect();
+    for(const delay of [5000,5000,5000,5000,8000]) {FakeWebSocket.instances.at(-1)!.onclose?.();vi.advanceTimersByTime(delay);}
+    expect(FakeWebSocket.instances).toHaveLength(6); FakeWebSocket.instances.at(-1)!.onclose?.();
+    vi.advanceTimersByTime(14999); expect(FakeWebSocket.instances).toHaveLength(6);
+    vi.advanceTimersByTime(1); expect(FakeWebSocket.instances).toHaveLength(7); socket.close();
+  });
+  it('bounds explicit reconnects and successful immediate disconnects across a minute', () => {
+    vi.useFakeTimers(); vi.stubGlobal('WebSocket', FakeWebSocket); FakeWebSocket.instances = [];
+    const socket = new ChannelSocket(() => 'ws://localhost/v1/ws'); socket.connect();
+    const opened = new Set<FakeWebSocket>();
+    for (let i=0;i<600;i++) { const ws = FakeWebSocket.instances.at(-1)!; if (!opened.has(ws)) { ws.onopen?.(); opened.add(ws); } socket.reconnect(); vi.advanceTimersByTime(100); }
+    // Half-open minute [0, 60000) plus the connection exactly at the next boundary.
+    expect(FakeWebSocket.instances.length).toBeLessThanOrEqual(13); socket.close();
+  });
+  it('does not upgrade while hidden and stops its retry timer on disposal', () => {
+    vi.useFakeTimers(); vi.stubGlobal('WebSocket', FakeWebSocket); FakeWebSocket.instances = [];
+    const doc = new EventTarget() as EventTarget & { visibilityState: string }; doc.visibilityState='hidden'; vi.stubGlobal('document',doc);
+    const socket = new ChannelSocket(() => 'ws://localhost/v1/ws'); socket.connect(); vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    doc.visibilityState='visible'; doc.dispatchEvent(new Event('visibilitychange')); expect(FakeWebSocket.instances).toHaveLength(1);
+    doc.visibilityState='hidden'; doc.dispatchEvent(new Event('visibilitychange')); vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances).toHaveLength(1); socket.close();
+    doc.visibilityState='visible'; doc.dispatchEvent(new Event('visibilitychange')); vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances).toHaveLength(1); vi.unstubAllGlobals();
   });
 });

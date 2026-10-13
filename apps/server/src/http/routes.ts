@@ -104,7 +104,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
     return { ok, service: 'eko', version: VERSION, ...h, uptimeSec: Math.round(process.uptime()), db: ctx.dbh.driver };
   });
 
-  app.get('/api/metrics', async () => ({ metrics: (await import('../obs/metrics.js')).metrics.summary(), at: Date.now() }));
+  app.get('/api/metrics', async () => ({ metrics: (await import('../obs/metrics.js')).metrics.summary(), counters: (await import('../obs/metrics.js')).metrics.counters(), at: Date.now() }));
 
   // Retained operational ingress uses the same privacy boundary as CA-24.
   await app.register(async area => telemetryIngress(area, '/api/telemetry'));

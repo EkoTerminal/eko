@@ -52,8 +52,8 @@ export function PlanChip({ compact = false }: { compact?: boolean }) {
     {trial && <span className="trial-bar"><i style={{ width: `${Math.min(100, left! / 1800 * 100)}%` }} /></span>}
   </Link>;
 }
-export function LegalLine() {
-  return <div className="side-legal"><p><Link to="/drops">Drops</Link> · <Link to="/settings">Settings</Link> · <Link to="/legal/terms">Legal</Link> · <Link to="/official">Official project links</Link> · <Link to="/transparency">Transparency</Link> · <Link to="/security">Security</Link></p><PolicyLinks /><p>{BUILT_ON}</p><p>{NON_AFFILIATION}</p><p>{DYOR}</p></div>;
+export function LegalLine({ pageHasAnalysis = false }: { pageHasAnalysis?: boolean }) {
+  return <div className="side-legal"><p><Link to="/drops">Drops</Link> · <Link to="/settings">Settings</Link> · <Link to="/legal/terms">Legal</Link> · <Link to="/official">Official project links</Link> · <Link to="/transparency">Transparency</Link> · <Link to="/security">Security</Link></p><PolicyLinks />{!pageHasAnalysis && <><p>{BUILT_ON}</p><p>{NON_AFFILIATION}</p><p>{DYOR}</p></>}</div>;
 }
 function Navigation({ onDone }: { onDone?: () => void }) {
   const path = usePath(), flags = useShell((s) => s.config?.flags), approvals = useShell((s) => s.approvalIds.length);
@@ -70,8 +70,8 @@ function Navigation({ onDone }: { onDone?: () => void }) {
   </div>)}</nav>;
 }
 export function Sidebar() {
-  const risk = useUi((s) => s.riskMode), setUi = useUi((s) => s.set);
-  return <aside className="side"><ScanBox /><Navigation /><div className="side-foot"><PlanChip /><div data-tour="mode" className="side-risk"><span className="side-label">{C.risk}</span><Seg options={RISK_OPTIONS} value={risk} onChange={(value) => setUi({ riskMode: value as typeof risk })} label={C.risk} /></div><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-alerts'))}>Alerts</button><WalletButton /><LegalLine /></div></aside>;
+  const risk = useUi((s) => s.riskMode), setUi = useUi((s) => s.set), path = usePath();
+  return <aside className="side"><ScanBox /><Navigation /><div className="side-foot"><PlanChip /><div data-tour="mode" className="side-risk"><span className="side-label">{C.risk}</span><Seg options={RISK_OPTIONS} value={risk} onChange={(value) => setUi({ riskMode: value as typeof risk })} label={C.risk} /></div><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-alerts'))}>Alerts</button><WalletButton /><LegalLine pageHasAnalysis={path.startsWith('/coin/')} /></div></aside>;
 }
 export function Header() {
   const path = usePath(), config = useShell((s) => s.config), state = useShell((s) => s.wsState), block = useShell((s) => s.headBlock), delay = useShell((s) => s.delayedSec), now = useNow();
@@ -94,6 +94,6 @@ export function MobileTabs() {
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   }, []);
   return <><nav className="mtab" aria-label="Mobile navigation"><Link to="/radar" aria-current={isCurrent('/radar', path) ? 'page' : undefined}><IconRadar size={18} /><span>Radar</span></Link><Link to="/pairs" aria-current={isCurrent('/pairs', path) ? 'page' : undefined}><IconPairs size={18} /><span>Pairs</span></Link><button onClick={() => setSheet('scan')} aria-expanded={sheet === 'scan'}><IconSearch size={18} /><span>{C.scan}</span></button><Link to="/mission" aria-current={isCurrent('/mission', path) ? 'page' : undefined}><span className="mtab-icon"><IconAgent size={18} />{approvals > 0 && <b className="side-badge" aria-label={`${approvals} waiting`}>{approvals}</b>}</span><span>Mission</span></Link><button onClick={() => setSheet('more')} aria-expanded={sheet === 'more'}><IconMenu size={18} /><span>{C.more}</span></button></nav>
-    {sheet && <Sheet title={sheet === 'scan' ? C.scan : C.more} close={close}>{sheet === 'scan' ? <ScanBox focus onDone={close} /> : <><Navigation onDone={close} /><button className="btn" onClick={() => { close(); requestAnimationFrame(() => window.dispatchEvent(new Event('eko:open-alerts'))); }}>Alerts</button><LegalLine /></>}</Sheet>}
+    {sheet && <Sheet title={sheet === 'scan' ? C.scan : C.more} close={close}>{sheet === 'scan' ? <ScanBox focus onDone={close} /> : <><Navigation onDone={close} /><button className="btn" onClick={() => { close(); requestAnimationFrame(() => window.dispatchEvent(new Event('eko:open-alerts'))); }}>Alerts</button><LegalLine pageHasAnalysis={path.startsWith('/coin/')} /></>}</Sheet>}
   </>;
 }

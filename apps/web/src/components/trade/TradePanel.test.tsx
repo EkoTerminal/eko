@@ -201,6 +201,12 @@ describe('visible quote lifecycle with fixture backend', () => {
     const short = setup(undefined, vi.fn(async () => quote({ expiresAt: new Date(now + 1200).toISOString() })));
     short.session.setVisible(true); await vi.advanceTimersByTimeAsync(1200); expect(short.backend).toHaveBeenCalledTimes(2); short.session.dispose();
   });
+  it('updates a moving tax deadline without restarting the quote session on every event', async () => {
+    const {session,backend}=setup(now+4000); session.setVisible(true); await vi.advanceTimersByTimeAsync(0);
+    for(let i=0;i<100;i++)session.setAntiSnipeEndsAt(now+4000+i);
+    await vi.advanceTimersByTimeAsync(4098); expect(backend).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1); expect(backend).toHaveBeenCalledTimes(2); session.dispose();
+  });
   it('does not spin on expired responses and cannot acknowledge them', async () => {
     const { session, backend } = setup(undefined, vi.fn(async () => warning()));
     vi.setSystemTime(now + 16000); session.setVisible(true); await vi.advanceTimersByTimeAsync(0);
@@ -212,15 +218,20 @@ describe('visible quote lifecycle with fixture backend', () => {
     const backend = vi.fn((_input: TradeQuoteRequest, signal: AbortSignal) => { signals.push(signal); return new Promise<TradeQuote>(resolve => pending.push(resolve)); });
     vi.useFakeTimers(); vi.setSystemTime(now);
     const session = new TradeQuoteSession(gate().input, backend, vi.fn(), Date.now);
-    session.setVisible(true); const second = session.refresh(); expect(signals[0].aborted).toBe(true);
-    pending[1](quote({ id: 'current' })); await second; pending[0](quote({ id: 'old' })); await Promise.resolve();
+    session.setVisible(true); await session.refresh(); expect(backend).toHaveBeenCalledTimes(1);
+    expect(signals[0].aborted).toBe(false);
+    session.setVisible(false); expect(signals[0].aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000); session.setVisible(true);
+    pending[1](quote({ id: 'current' })); await vi.advanceTimersByTimeAsync(0);
+    pending[0](quote({ id: 'old' })); await Promise.resolve();
     expect(session.snapshot.quote?.id).toBe('current');
-    const late = session.refresh(); session.dispose(); pending[2](quote({ id: 'late' })); await late; expect(session.snapshot.quote?.id).toBe('current');
+    await vi.advanceTimersByTimeAsync(1000); const late = session.refresh(); session.dispose();
+    pending[2](quote({ id: 'late' })); await late; expect(session.snapshot.quote?.id).toBe('current');
   });
   it('retains fee lines on refresh failure but disables ordering and drops ack', async () => {
     const { session, backend, g } = setup(); session.setVisible(true); await vi.advanceTimersByTimeAsync(0); session.acknowledge();
     backend.mockRejectedValueOnce({ code: 'not_allowlisted', message: '<untrusted provider detail>' });
-    await session.refresh(); expect(session.snapshot.quote).not.toBeNull(); expect(session.snapshot.acknowledged).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1000); await session.refresh(); expect(session.snapshot.quote).not.toBeNull(); expect(session.snapshot.acknowledged).toEqual([]);
     const view = html({ ...g, snapshot: session.snapshot }); expect(view).toContain('Terminal fee'); expect(view).toContain(C.not_allowlisted); expect(view).not.toContain('provider detail'); session.dispose();
   });
   it('rejects a backend quote for a different input and avoids invalid requests', async () => {

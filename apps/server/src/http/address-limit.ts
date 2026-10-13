@@ -1,3 +1,4 @@
+import { recordAddressRejection } from '../obs/rate-limits.js';
 import { isIPv6 } from 'node:net';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
@@ -36,6 +37,7 @@ export function addressLimit(app: FastifyInstance, max: number, skip: (req: Fast
   return async (req, reply) => {
     const result = await limit(req);
     if (result.isAllowed || !result.isExceeded) return;
+    recordAddressRejection(app, req);
     return reply.code(429).header('retry-after', String(result.ttlInSeconds)).send({ error: 'rate_limited', message: 'Rate limit exceeded' });
   };
 }
@@ -50,3 +52,5 @@ export function sharedAddressLimit(app: FastifyInstance, name: string, max: numb
   byName.set(name, created);
   return created;
 }
+
+declare module 'fastify' { interface FastifyContextConfig { rateLimitKeyKind?: 'session' | 'address' } }

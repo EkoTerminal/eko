@@ -1,3 +1,4 @@
+import { RateNotice } from './components/RateNotice';
 import { Suspense, lazy, useEffect, useRef } from 'react';
 import { useWalletState } from './lib/walletState';
 import { z } from 'zod';
@@ -9,7 +10,7 @@ import { WatchRuntime } from './components/WatchButton';
 import { AlertsDrawer } from './components/shell/AlertsDrawer';
 import { Toasts } from './components/Shell';
 import { CommandPalette, ShortcutsHelp, useShortcuts } from './components/Command';
-import { fetchParsed, MOCKS } from './lib/api';
+import { fetchParsed, isRateLimited, MOCKS } from './lib/api';
 import { Link } from './lib/Link';
 import { usePath } from './lib/router';
 import { createRealtime, type Realtime } from './lib/realtime';
@@ -31,7 +32,7 @@ function GatedHead({ title, intro }: { title: string; intro: string }) { return 
 export function NotFound() { return <div className="shell-page"><div className="page-head"><h1>{C.notFound}</h1></div><Link to="/radar" className="btn">{C.back}</Link></div>; }
 async function loadConfig(signal?: AbortSignal) {
   try { const config = await fetchParsed('/config', PublicConfigSchema, { signal }); useShell.setState({ config, configError: null }); }
-  catch (err) { if ((err as Error).name !== 'AbortError') useShell.setState({ configError: (err as Error).message }); }
+  catch (err) { if ((err as Error).name !== 'AbortError' && !isRateLimited(err)) useShell.setState({ configError: (err as Error).message }); }
 }
 const WalletRuntime = lazy(() => import('./WalletRuntime'));
 export function App({ walletEnabled = false }: { walletEnabled?: boolean }) {
@@ -99,7 +100,7 @@ export function App({ walletEnabled = false }: { walletEnabled?: boolean }) {
   const page = Page && resolved ? <>{gatedMission ? <GatedHead title={pageTitle} intro={C.missionGate} /> : <Page params={resolved.params} />}{resolved.route.auth === 'siwe' && path !== '/bags' && path !== '/watch' && !signedIn && !(MOCKS && resolved.route.workspace === 'mission') ? <div className="connect-card"><p>{C.connect}</p><button className="btn" onClick={() => window.dispatchEvent(new Event('eko:open-wallet'))}>{C.wallet}</button></div> : null}
     {['/scan/', '/bags/r/', '/receipt/'].some(prefix => path.startsWith(prefix)) && <div className="shell-note"><p>{DYOR}</p><p>{NON_AFFILIATION}</p></div>}
   </> : <NotFound />;
-  return <RealtimeContext.Provider value={sharedRealtime}><WatchRuntime owner={MOCKS ? 'demo-account' : signedIn ? account!.walletAddress : null} /><AlertsDrawer /><div className="eko-shell" data-style="desk" data-density={density}><SkipLink /><Header /><div className="shell-frame"><Sidebar /><MobileBar /><main className="shell-main" id="main" tabIndex={-1}>
+  return <RealtimeContext.Provider value={sharedRealtime}><WatchRuntime owner={MOCKS ? 'demo-account' : signedIn ? account!.walletAddress : null} /><AlertsDrawer /><div className="eko-shell" data-style="desk" data-density={density}><SkipLink /><Header /><div className="shell-frame"><Sidebar /><MobileBar /><main className="shell-main" id="main" tabIndex={-1}><RateNotice />
     {error && <div className="shell-error" role="status">{C.configError} <button className="btn" onClick={() => void loadConfig()}>{C.retry}</button></div>}
     <Suspense fallback={<div className="shell-page"><div className="skel" style={{ height: 200 }} /></div>}>
       {walletEnabled ? <WalletRuntime>{page}</WalletRuntime> : page}

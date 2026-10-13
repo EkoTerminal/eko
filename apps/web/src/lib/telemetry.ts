@@ -17,7 +17,7 @@ const MAX_QUEUE = 200;
 /** Collect for this long before sending. The WebSocket RTT sample arrives every 10 s, so a shorter window
  * turned nearly every sample (and every page view) into its own POST. */
 export const TELEMETRY_FLUSH_MS = 30_000;
-/** No two sends closer than this, whatever fills the queue. Only page hide bypasses it. */
+/** No two sends closer than this, whatever fills the queue. Page hide uses the same spacing. */
 export const TELEMETRY_MIN_GAP_MS = 10_000;
 const BATCH = 40;
 function schedule(delay = TELEMETRY_FLUSH_MS) {
@@ -80,6 +80,7 @@ export function trackEvent(input: EventInput) {
 export async function flushTelemetry(final = false) {
   if (timer !== null) { clearTimeout(timer); timer = null; due = Infinity; }
   if (sending || (!samples.length && !events.length && !error)) return;
+  if (nextAllowed() > 0) { schedule(nextAllowed()); return; }
   const body: Telemetry = { samples: samples.splice(0, 50), events: events.splice(0, 50), ...(error ? { error } : {}) };
   error = undefined;
   sending = true; lastSent = Date.now();

@@ -1,3 +1,4 @@
+import { metrics } from '../obs/metrics.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Ctx } from '../app.js';
@@ -39,7 +40,7 @@ export async function launchMonitoringRoutes(app: FastifyInstance, ctx: Ctx) {
     reply.header('Cache-Control', 'no-store');
     await collect();
     const active = await stage();
-    return reply.type('text/plain; version=0.0.4').send(await monitoring.prometheus(active.burn, active.summons));
+    return reply.type('text/plain; version=0.0.4').send((await monitoring.prometheus(active.burn, active.summons)) + metrics.counterPrometheus());
   });
   app.get('/v1/health/checks/:check', async (req, reply) => {
     reply.header('Cache-Control', 'no-store');

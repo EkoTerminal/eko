@@ -1,3 +1,4 @@
+import { requestPauseUntil } from './rateNotice';
 import { WsServerSchema, type ClientMessage, type ServerMessage, type Timeframe } from '@eko/shared';
 import { observeServerTime, setRoughServerTime } from './clock';
 import { track } from './telemetry';
@@ -15,22 +16,36 @@ export class SignalSocket {
   private listeners = new Set<Listener>();
   private stateListeners = new Set<(s: WsState) => void>();
   private backoff = 500;
+  private retry: ReturnType<typeof setTimeout> | null = null;
+  private stopped = true;
+  private watching = false;
+  private visibility = () => { if (document.visibilityState !== 'hidden' && !this.stopped) this.connect(); };
   private sub: { markets: string[]; timeframes: Timeframe[] } = { markets: [], timeframes: [] };
   private pingTimer: number | null = null;
   private pending = new Map<number, number>();
   private everOpened = false;
+  private nextConnect = 0;
+  private openedAt = 0;
   state: WsState = 'connecting';
   onReconnect: (() => void) | null = null;
 
   connect() {
+    if (this.ws || this.retry) return;
+    this.stopped = false;
+    if (!this.watching && typeof document !== 'undefined') { document.addEventListener('visibilitychange', this.visibility); this.watching = true; }
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    this.nextConnect = Math.max(this.nextConnect, requestPauseUntil());
+    if (Date.now() < this.nextConnect) { this.retry = setTimeout(() => { this.retry = null; this.connect(); }, this.nextConnect - Date.now()); return; }
+    this.nextConnect = Date.now() + 5000;
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
     this.setState(this.everOpened ? 'reconnecting' : 'connecting');
+    this.openedAt = 0;
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
       const wasReconnect = this.everOpened;
       this.everOpened = true;
-      this.backoff = 500;
+      this.openedAt = Date.now();
       this.setState('open');
       this.send({ type: 'subscribe', ...this.sub });
       this.ping();
@@ -62,13 +77,22 @@ export class SignalSocket {
       if (this.ws !== ws) return;
       this.ws = null;
       if (this.pingTimer) clearInterval(this.pingTimer);
+      if (this.stopped) return;
+      if (this.openedAt > 0 && Date.now() - this.openedAt >= 30000) this.backoff = 500;
       this.setState('reconnecting');
-      const delay = Math.min(15_000, this.backoff) * (0.75 + Math.random() * 0.5);
+      const delay = Math.max(5000, Math.min(15_000, this.backoff) * (0.75 + Math.random() * 0.5));
       this.backoff = Math.min(15_000, this.backoff * 2);
-      window.setTimeout(() => this.connect(), delay);
+      this.retry = setTimeout(() => { this.retry = null; this.connect(); }, delay);
     };
   }
 
+  close() {
+    this.stopped = true; if (this.retry) clearTimeout(this.retry); this.retry = null;
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    const ws = this.ws; this.ws = null; ws?.close();
+    if (this.watching) document.removeEventListener('visibilitychange', this.visibility); this.watching = false;
+    this.setState('closed');
+  }
   private ping() {
     const t = Math.round(performance.now() * 1000);
     this.pending.set(t, performance.now());
@@ -109,7 +133,16 @@ export class ChannelSocket {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private backoff = 500;
   private everOpened = false;
+  private nextConnect = 0;
+  private openedAt = 0;
   private stopped = true;
+  private watching = false;
+  private visibility = () => {
+    if (document.visibilityState === 'hidden') {
+      if (this.retry) clearTimeout(this.retry); this.retry = null; this.clearPing();
+      const ws = this.ws; this.ws = null; ws?.close(); this.setState('closed');
+    } else if (!this.stopped) this.connect();
+  };
   private sentAt = 0;
   private messages = new Set<(m: import('@eko/shared').WsServer) => void>();
   private states = new Set<(s: WsState) => void>();
@@ -120,13 +153,19 @@ export class ChannelSocket {
   connect() {
     if (this.ws || this.retry) return;
     this.stopped = false;
+    if (!this.watching && typeof document !== 'undefined') { document.addEventListener('visibilitychange', this.visibility); this.watching = true; }
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    this.nextConnect = Math.max(this.nextConnect, requestPauseUntil());
+    if (Date.now() < this.nextConnect) { this.retry = setTimeout(() => { this.retry = null; this.connect(); }, this.nextConnect - Date.now()); return; }
+    this.nextConnect = Date.now() + 5000;
     this.setState(this.everOpened ? 'reconnecting' : 'connecting');
+    this.openedAt = 0;
     const ws = new WebSocket(this.url());
     this.ws = ws;
     ws.onopen = () => {
       if (this.ws !== ws) return;
       const reconnect = this.everOpened;
-      this.everOpened = true; this.backoff = 500;
+      this.everOpened = true; this.openedAt = Date.now();
       this.setState('open');
       this.ping();
       this.pingTimer = setInterval(() => this.ping(), 10_000);
@@ -154,7 +193,8 @@ export class ChannelSocket {
       this.clearPing();
       if (this.stopped) return;
       this.setState('reconnecting');
-      const delay = Math.min(15_000, Math.min(15_000, this.backoff) * (0.75 + Math.random() * 0.5));
+      if (this.openedAt > 0 && Date.now() - this.openedAt >= 30000) this.backoff = 500;
+      const delay = Math.max(5000, Math.min(15_000, this.backoff * (0.75 + Math.random() * 0.5)));
       this.backoff = Math.min(15_000, this.backoff * 2);
       this.retry = setTimeout(() => { this.retry = null; this.connect(); }, delay);
     };
@@ -167,6 +207,7 @@ export class ChannelSocket {
   reconnect() { this.close(); this.connect(); }
   close() {
     this.stopped = true;
+    if (this.watching) document.removeEventListener('visibilitychange', this.visibility); this.watching = false;
     if (this.retry) clearTimeout(this.retry);
     this.retry = null; this.clearPing();
     const ws = this.ws; this.ws = null; ws?.close(); this.setState('closed');

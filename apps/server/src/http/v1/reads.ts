@@ -1,3 +1,4 @@
+import { recordRouteRejection } from '../../obs/rate-limits.js';
 import { readCensus } from '@eko/db';
 import { z } from 'zod';
 import { AddressSchema, FeedItemSchema, TfSchema, ScoreboardKindSchema } from '@eko/shared';
@@ -54,7 +55,7 @@ export async function readRoutes(app:FastifyInstance,services:ReadServices,auth?
     const key=req.account?.id ?? req.ip;
     for(const [id,bucket] of buckets)if(bucket.until<=now)buckets.delete(id);
     const bucket=buckets.get(key) ?? {count:0,until:now+60000};buckets.set(key,bucket);
-    if(++bucket.count>30)return sendError(reply,'rate_limited','Scan limit reached.',{retryAfterSec:Math.ceil((bucket.until-now)/1000)});
+    if(++bucket.count>30){recordRouteRejection(app,req,req.account?.id?'session':'address');reply.header('retry-after',String(Math.ceil((bucket.until-now)/1000)));return sendError(reply,'rate_limited','Scan limit reached.',{retryAfterSec:Math.ceil((bucket.until-now)/1000)});}
   });
   app.addHook('onResponse',async(req,reply)=>{
     if(['/v1/scan','/v1/scan/:id'].includes(req.routeOptions.url ?? ''))metrics.observe('scan.response_ms',reply.elapsedTime);

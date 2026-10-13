@@ -1,3 +1,5 @@
+import { rememberCoinIdentity } from '../../lib/coinIdentity';
+import { RateNoticeView } from '../../components/RateNotice';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CoinOverview, CoinVerdict } from './CoinCard';
@@ -17,6 +19,15 @@ const row=createRadarRows()[0],card=createRadarCard(row.address)!;
 vi.mock('../../lib/useMedia',()=>({useMedia:()=>false}));
 afterEach(()=>vi.restoreAllMocks());
 describe('coin card and signal copy',()=>{
+ it('retains the list identity while all coin reads are waiting and shows one quiet request notice',()=>{
+   const cached = { ...row, address: `0x${'d'.repeat(40)}` as typeof row.address, name: { ...row.name, text: 'Demo coin' } };
+   rememberCoinIdentity(cached);
+   vi.spyOn(coinData,'useCoin').mockReturnValue({candlesUnavailable:false,candlesLoading:true,lastTradeTs:null,labelsUnavailable:true,card:null,verdict:null,bars:[],markers:[],flows:[],error:'',unknown:false,ageSec:0,retry:()=>{}});
+   const html=renderToStaticMarkup(<><RateNoticeView seconds={24}/><Coin params={{address:cached.address}}/></>);
+   expect(html).toContain('Demo coin'); expect(html).not.toContain('<h1>Coin</h1>');
+   expect(html.match(/Too many requests from this browser/g)).toHaveLength(1);
+   expect(html).toContain('Retrying in 24 s.'); expect(html).not.toContain('Retry Guard'); expect(html).not.toContain('Retry quote');
+ });
  it('offers Scan for an unindexed coin and retains an existing card after a partial 404',()=>{
    const data={candlesUnavailable:false,candlesLoading:false,lastTradeTs:null,labelsUnavailable:true,card:null,verdict:null,bars:[],markers:[],flows:[],error:'Coin not found.',unknown:true,ageSec:0,retry:()=>{}};
    const hook=vi.spyOn(coinData,'useCoin').mockReturnValue(data);

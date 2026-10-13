@@ -100,8 +100,10 @@ export class TradeQuoteSession {
   private poll: ReturnType<typeof setTimeout> | null = null;
   private expiry: ReturnType<typeof setTimeout> | null = null;
   private anti: ReturnType<typeof setTimeout> | null = null;
+  private nextRequest = 0;
+  private failures = 0;
   constructor(private readonly input: TradeQuoteRequest, private readonly quote: (input: TradeQuoteRequest, signal: AbortSignal) => Promise<TradeQuote>,
-    private readonly changed: (snapshot: QuoteSnapshot) => void, private readonly now: () => number, private readonly antiSnipeEndsAt?: number) {}
+    private readonly changed: (snapshot: QuoteSnapshot) => void, private readonly now: () => number, private antiSnipeEndsAt?: number) {}
   private publish(patch: Partial<QuoteSnapshot>) { this.snapshot = { ...this.snapshot, ...patch }; this.changed(this.snapshot); }
   setVisible(visible: boolean) {
     if (this.disposed || this.visible === visible) return;
@@ -115,27 +117,43 @@ export class TradeQuoteSession {
       this.anti = setTimeout(() => void this.refresh(), this.antiSnipeEndsAt - this.now());
     }
   }
+  setAntiSnipeEndsAt(deadline?: number) {
+    if (deadline === this.antiSnipeEndsAt) return;
+    this.antiSnipeEndsAt = deadline;
+    if (this.anti) clearTimeout(this.anti);
+    if (this.visible && !this.disposed && deadline !== undefined && deadline > this.now()) {
+      this.anti = setTimeout(() => void this.refresh(), deadline - this.now());
+    }
+  }
   async refresh() {
     if (!this.visible || this.disposed || !validTradeInput(this.input)) return;
+    if (this.snapshot.loading) return;
     if (this.poll) clearTimeout(this.poll);
+    if (this.now() < this.nextRequest) { this.poll = setTimeout(() => void this.refresh(), this.nextRequest - this.now()); return; }
     if (this.expiry) clearTimeout(this.expiry);
-    this.poll = setTimeout(() => void this.refresh(), 5000);
     const gen = ++this.generation;
     this.controller?.abort();
     const ac = this.controller = new AbortController(), requestedAt = this.now();
+    this.nextRequest = requestedAt + 1000;
     this.publish({ loading: true, error: null, acknowledged: [] });
     try {
       const q = await this.quote(this.input, ac.signal);
       if (this.disposed || ac.signal.aborted || gen !== this.generation) return;
       if (!quoteMatches(q, this.input)) throw { code: 'quote_changed' };
       this.publish({ quote: q, requestKey: tradeRequestKey(this.input), requestedAt, loading: false, error: null, acknowledged: [] });
+      this.failures = 0;
+      this.poll = setTimeout(() => void this.refresh(), 5000);
       if (this.expiry) clearTimeout(this.expiry);
       const remaining = Math.min(Date.parse(q.expiresAt), requestedAt + 15_000) - this.now();
       // An already-expired backend response must not create a zero-delay retry loop.
       if (remaining > 0) this.expiry = setTimeout(() => void this.refresh(), remaining);
     } catch (error) {
       if (this.disposed || ac.signal.aborted || gen !== this.generation) return;
-      this.publish({ loading: false, error: (error as { code?: string }).code ?? 'internal_error', acknowledged: [] });
+      const code = (error as { code?: string }).code ?? 'internal_error';
+      this.nextRequest = Math.max(this.now() + Math.min(60000, 5000 * 2 ** Math.min(this.failures++, 4)), (error as { retryAt?: number }).retryAt ?? 0);
+      this.publish({ loading: false, error: code === 'rate_limited' ? null : code, acknowledged: [] });
+      // The API already retries a 429 once. A second refusal waits for a new visible session or user action.
+      if (code !== 'rate_limited') this.poll = setTimeout(() => void this.refresh(), this.nextRequest - this.now());
     }
   }
   acknowledge() {

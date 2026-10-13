@@ -1,3 +1,4 @@
+import { rememberCoinIdentity } from '../../lib/coinIdentity';
 import { GhostReports } from '../../components/GhostReports';
 import { AnalysisPolicyNotice } from '../../components/PolicyLinks';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
@@ -6,7 +7,7 @@ import { CHECK_LEGEND, NO_FLAGS } from '../../copy/availability';
 import { GuardLegend } from '../../components/GuardCompact';
 import { Seg, UntrustedText } from '../../components/ui';
 import { MiniBars } from '../../components/ui/charts';
-import { fetchParsed, MOCKS } from '../../lib/api';
+import { fetchParsed, isRateLimited, MOCKS } from '../../lib/api';
 import { useRealtime } from '../../lib/RealtimeContext';
 import { useMedia } from '../../lib/useMedia';
 import { installDither } from '../../lib/dither';
@@ -56,9 +57,10 @@ export default function Radar() {
     if(nextCursor) query.set('cursor', nextCursor);
     if(blueChipOnly) query.set('blueChip', 'true');
     try { const data = await fetchParsed(`${MOCKS ? '' : '/v2'}/radar${query.size ? `?${query}` : ''}`, RadarResponseSchema, { signal }); if (signal?.aborted) return;
+      data.rows.forEach(rememberCoinIdentity);
       const at = Date.now(); if (!append) received.current.clear(); for (const row of data.rows) if (!append || !received.current.has(row.address)) received.current.set(row.address, at);
       setRows((old) => append ? [...old, ...data.rows.filter((c) => !old.some((r) => r.address === c.address))] : data.rows.map(row => retainCompactGuard(old.find(r=>r.address===row.address),row))); setTotals(data.guardTotals?.status === 'unavailable' ? null : data.totals ?? null); setCursor(data.cursor); setDelayed(data.delayedSec); setLastSeen(Date.now());
-    } catch (e) { if ((e as Error).name !== 'AbortError') setError((e as Error).message); } finally { if (!signal?.aborted) setLoading(false); }
+    } catch (e) { if ((e as Error).name !== 'AbortError' && !isRateLimited(e)) setError((e as Error).message); } finally { if (!signal?.aborted) setLoading(false); }
   }, [blueChipOnly]);
   useEffect(() => installDither(), []);
   useEffect(() => { const ac = new AbortController(); void snapshot(ac.signal); return () => ac.abort(); }, [snapshot]);
@@ -67,6 +69,7 @@ export default function Radar() {
     const at = Date.now(), offset = serverNow() - at;
     // Rows carry their age when sent; "Newest" compares launches on the client clock (see launchedAt).
     for (const event of events) if (event.kind === 'row_upsert') received.current.set(event.data.address, receivedAt(event.ts, at, offset)); else if (event.kind === 'row_remove') received.current.delete(event.data.address);
+    events.forEach(e => { if (e.kind === 'row_upsert') rememberCoinIdentity(e.data); });
     setRows((old) => applyRadarEvents(old, events)); setLastSeen(at);
     // Record throttle times once in the event handler; React may replay state updaters.
     const changed: Record<string, number> = {};
@@ -121,7 +124,7 @@ export default function Radar() {
     <GhostReports limit={1} />
     <HotStrip coins={hot} selected={selected} select={select} />
     <div className="sec-head"><h2>All coins</h2><span className="sub num">{list.length} of {rows.length}</span><div className="end"><span className="toolbar-live" role="status"><span className={`sb-dot${stale ? ' stale' : ''}`} />{isDelayed ? `Delayed ~${delayed || 60} s` : stale ? 'Stale' : 'Live'} · updated {seen}s ago</span><Seg options={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]} value={density} onChange={(value) => setUi({ density: value === 'compact' ? 'compact' : 'comfortable' })} label="Row density" /></div></div>
-    <div className="toolbar">{blueChipEnabled && <label><input type="checkbox" checked={blueChipOnly} onChange={e=>{setRows([]);setCursor(null);setLoading(true);setBlueChipOnly(e.target.checked);}} /> Blue chip</label>}<Seg options={['All', 'Hot', NO_FLAGS, 'Monitor', 'Danger']} value={show} onChange={setShow} label="Show" /><Seg options={['All', 'Curve', 'Migrated', 'Uniswap']} value={stage} onChange={setStage} label="Stage" /><Seg options={[{ value: 'Shown', label: 'Show refused' }, { value: 'Hidden', label: 'Hide refused' }]} value={hideRefused ? 'Hidden' : 'Shown'} onChange={chooseRefused} label="Refused coins" /><label className="toolbar-sort"><span className="muted">Sort</span><select className="select" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>{SORTS.filter((s) => sortAvailable(rows,s)).map((s) => <option key={s}>{s}</option>)}</select></label><div className="toolbar-end"><HeatLegend /></div></div>
+    <div className="toolbar">{blueChipEnabled && <label><input type="checkbox" checked={blueChipOnly} onChange={e=>{setCursor(null);setBlueChipOnly(e.target.checked);}} /> Blue chip</label>}<Seg options={['All', 'Hot', NO_FLAGS, 'Monitor', 'Danger']} value={show} onChange={setShow} label="Show" /><Seg options={['All', 'Curve', 'Migrated', 'Uniswap']} value={stage} onChange={setStage} label="Stage" /><Seg options={[{ value: 'Shown', label: 'Show refused' }, { value: 'Hidden', label: 'Hide refused' }]} value={hideRefused ? 'Hidden' : 'Shown'} onChange={chooseRefused} label="Refused coins" /><label className="toolbar-sort"><span className="muted">Sort</span><select className="select" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>{SORTS.filter((s) => sortAvailable(rows,s)).map((s) => <option key={s}>{s}</option>)}</select></label><div className="toolbar-end"><HeatLegend /></div></div>
     {/* TODO(spec): RadarRow has topPlaybook but no match confidence; show confidence only after CoinCard supplies it. */}
     {error && <div className="radar-error" role="alert">{error} <button className="btn" onClick={() => void snapshot()}>Retry</button></div>}
     <details className="radar-notes"><summary>About these readings</summary><p className="availability-legend">{CHECK_LEGEND}</p><GuardLegend rows={rows} /></details>{loading ? <div className="skel" style={{ height: 280 }} aria-label="Loading Radar" /> : list.length ? <div ref={listEl} className="rt-wrap" onKeyDown={move} onPointerOver={(e) => { pointed.current = (e.target as Element).closest<HTMLElement>('tr[data-address]')?.dataset.address ?? null; }} onPointerLeave={() => { pointed.current = null; }}><table className={`rt ${density}${rows.some((c) => c.signal || c.unavailable?.includes('signal')) ? '' : ' no-signal'}${rows.some((c) => c.spark8h || c.unavailable?.includes('spark')) ? '' : ' no-spark'}${rows.some((c) => c.beta) ? '' : ' no-beta'}${emptyColumns(rows)}`}><caption className="sr">All coins on Radar, {sort === 'Rank' ? 'ranked by the guard' : `sorted by ${sort}`}. Select a coin to see its details.</caption><thead><tr><th className="c-coin">Coin</th><th className="c-guard">Guard</th><th className="c-watch">Watch for</th><th className="c-sig r">Signal <span className="tag signal-beta">Beta</span></th><th className="c-beta r">Beta Ape Score</th><SortTh disabled={!sortAvailable(rows,'1h move')} value="1h move" {...{ sort, setSort }} className="c-1h r">1h</SortTh><th className="c-spark">Last 8h</th><SortTh disabled={!sortAvailable(rows,'Agent flow')} value="Agent flow" {...{ sort, setSort }} className="c-flow">Who’s buying</SortTh><th className="c-liq r">Liquidity</th><SortTh disabled={!sortAvailable(rows,'Exit cost')} value="Exit cost" {...{ sort, setSort }} className="c-exit r">Exit at $1K</SortTh><th className="c-act"><span className="sr">Trade</span></th></tr></thead><tbody>{windowed.start > 0 && <tr aria-hidden="true" className="rt-spacer"><td colSpan={1} style={{ height: windowed.start * rowHeight }} /></tr>}{list.slice(windowed.start, windowed.end).map((c) => <RadarRowView key={c.address} c={c} selected={selected === c.address} select={select} trade={trade} pulse={pulses[c.address] ?? 0} confidence={cards[c.address]?.playbooks.find((p) => p.id === c.topPlaybook)?.confidence} scanDelayed={scanDelayed(c, currentAgeSec(c, received.current, now))} />)}{windowed.end < list.length && <tr aria-hidden="true" className="rt-spacer"><td colSpan={1} style={{ height: (list.length - windowed.end) * rowHeight }} /></tr>}</tbody></table></div> : !error && <div className="empty panel">Nothing matches this filter right now.</div>}

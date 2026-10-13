@@ -111,3 +111,20 @@
 @media(max-width:700px){.guard-card .guard-fields>div{grid-template-columns:1fr;gap:4px}.guard-assessment .kv>div{grid-template-columns:1fr;gap:4px}.guard-assessment .kv dd{text-align:left}.coin-page .guard-chip{gap:4px}.coin-page .chart-read:has(.guard-chip){overflow:visible}.coin-page .chart-top:has(.guard-chip){align-items:flex-start}.guard-gap{max-width:100%}}
 
 .coin-page .chart-read:has(.guard-chip){flex:1;min-width:0;align-items:flex-start}.coin-page .coin-verdict-button:has(.guard-chip){flex:0 1 auto;max-width:100%;text-align:left}.coin-page .chart-top:has(.guard-chip){align-items:flex-start}
+
+.guard-findings,.guard-detail-list{list-style:none;margin:0;padding:0}
+.guard-detail-row{padding:8px 0;border-top:1px solid var(--rule);overflow-wrap:anywhere;min-width:0}
+.guard-detail-row:first-child{border-top:0}.guard-detail-row>.ev{margin:0}
+.guard-detail-row summary{min-height:32px;line-height:1.6}
+.guard-result-label{font-weight:500;color:var(--ink2)}
+.guard-detail-row[data-result=flagged] .guard-result-label{color:var(--v-danger)}
+.guard-detail-row[data-result=fine] .guard-result-label{color:var(--v-clear)}
+.guard-detail-row[data-result=not_applicable]{border-left:2px solid var(--rule2);padding-left:12px}
+.guard-evidence-hint,.guard-section-counts,.guard-technical-title{font-size:12px;color:var(--muted)}
+.guard-question-title{font-weight:500}.guard-section-counts{display:block}
+.guard-technical-title{display:block;font-weight:400;line-height:1.5;overflow-wrap:anywhere}
+.guard-section>.panel-head:focus-visible,.guard-detail-row summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+.guard-not-run h4{margin:16px 0 8px;font-weight:500}.guard-not-run section:first-child h4{margin-top:0}
+.guard-policy{font-size:13px}.guard-technical .panel-body{min-width:0;overflow-wrap:anywhere}
+@media(max-width:700px){.guard-evidence-hint{display:block}.guard-section>.panel-head{padding-left:4px;padding-right:4px}}
+@media(pointer:coarse){.guard-detail-row summary{min-height:44px}}

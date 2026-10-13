@@ -15,14 +15,14 @@ const VERDICTS = {
   pending: { label: NOT_FULLY_CHECKED, Icon: IconEye },
 } as const satisfies Record<Level | 'pending', { label: string; Icon: typeof IconCheck }>;
 export type VerdictLevel = Verdict['level'] | Extract<Level, 'info'> | 'pending';
-export function VerdictChip({ level, size, detail, detailTitle, verdictPending = false, scanDelayed = false, evaluatedPlaybooks, meta, missing, guard }: { level: VerdictLevel; size?: 'lg'; detail?: string; detailTitle?: string; verdictPending?: boolean; scanDelayed?: boolean; evaluatedPlaybooks?: PlaybookId[]; meta?: CoinCardMeta; missing?: string[]; guard?: GuardAssessmentV2 }) {
+export function VerdictChip({ level, size, detail, detailTitle, verdictPending = false, scanDelayed = false, evaluatedPlaybooks, meta, missing, guard, showGaps = true }: { level: VerdictLevel; size?: 'lg'; detail?: string; detailTitle?: string; verdictPending?: boolean; scanDelayed?: boolean; evaluatedPlaybooks?: PlaybookId[]; meta?: CoinCardMeta; missing?: string[]; guard?: GuardAssessmentV2; showGaps?: boolean }) {
   if (guard) {
     const projected = projectGuardLevelToV1(guard.level), Icon = VERDICTS[projected].Icon;
     const gap = guardGapText(guard), shadow = guard.mode !== 'active';
     return <span className={`guard-chip${size === 'lg' ? ' lg' : ''}`} aria-busy={false}>
       {shadow && <span className="tag">{guard.mode === 'candidate' ? GUARD_CANDIDATE : GUARD_SHADOW}</span>}
       <span className={`verdict ${shadow ? 'pending' : projected}${size === 'lg' ? ' lg' : ''}`}><Icon />{GUARD_LABELS[guard.level]}</span>
-      {gap && <strong className="guard-gap">{gap}</strong>}
+      {showGaps && gap && <strong className="guard-gap">{gap}</strong>}
     </span>;
   }
   const { label, Icon } = VERDICTS[level];

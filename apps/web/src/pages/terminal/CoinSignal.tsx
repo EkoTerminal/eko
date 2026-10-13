@@ -12,7 +12,7 @@ export function CoinSignalPanel({ signal, series = [], guard }: {
  const high = v2 && guard?.level === 'high';
  return <section aria-label="Signal · five readings">
   <h2>Signal · five readings <span className="tag">Beta</span>{v2 && <span className="tag">Shadow adapter</span>}</h2>
-  {high && <p role="status" className="note">High risk · {guard?.mode === 'active' ? 'buys refused' : 'shadow assessment'}. Buyer risk at this snapshot. Not a buy recommendation.</p>}
+  {high && <p role="status" className="note">High risk · {guard?.mode === 'active' ? 'buys refused' : 'shadow assessment'}.</p>}
   <div className="sig-grid"><div>
    {series.length > 1 && <Spark series={series} height={250} label="Price over the selected interval"/>}
    <table className="readings"><thead><tr><th>Reading</th><th>Activity</th><th>Weight</th><th>Score</th></tr></thead><tbody>

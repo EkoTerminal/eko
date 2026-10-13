@@ -25,3 +25,5 @@ export const SHELL_COPY = {
 /** Display name for a risk mode or preset; the API keeps its `safe` / `Safe` values. */
 export const riskModeLabel = (name: string) => ({ safe: 'Careful', Safe: 'Careful', balanced: 'Balanced', degen: 'Degen' } as Record<string, string>)[name] ?? name;
 export const RISK_OPTIONS = [{ value: 'safe', label: 'Careful' }, { value: 'balanced', label: 'Balanced' }, { value: 'degen', label: 'Degen' }] as const;
+
+export const REQUEST_PAUSE = (seconds: number) => `Too many requests from this browser. Retrying in ${seconds} s.`;

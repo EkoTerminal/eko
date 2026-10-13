@@ -66,7 +66,7 @@ export async function rpcRoutes(app: FastifyInstance, client: PublicClient) {
   });
   app.post('/rpc', {
     bodyLimit: RPC_BODY_LIMIT,
-    config: { rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: req => addressKey(req.ip) } },
+    config: { rateLimitKeyKind: 'address', rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: req => addressKey(req.ip) } },
   }, async (req, reply) => {
     // TODO(spec): CA-25 does not specify batching or notifications. Reject both;
     // a request always admits at most one metered call and receives one response.

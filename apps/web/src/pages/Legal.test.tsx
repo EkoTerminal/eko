@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AnalysisPolicyNotice, PolicyLinks } from '../components/PolicyLinks';
+import { AnalysisPolicyNotice, AnalysisPolicyScope, PolicyLinks } from '../components/PolicyLinks';
 import { LegalLine } from '../components/shell/Shell';
 import { BUILT_ON, DYOR, NON_AFFILIATION } from '../copy';
 import { findPolicy, isApprovedPolicy, LEGAL_COPY, POLICY_APPROVAL, POLICY_DRAFTS, POLICY_REVIEW } from '../copy/legal';
@@ -98,8 +98,16 @@ describe('versioned launch policy drafts', () => {
     }
     for (const page of ['Radar', 'Feed', 'Pairs', 'Coin']) {
       const source = readFileSync(new URL(`./terminal/${page}.tsx`, import.meta.url), 'utf8');
-      expect(source).toContain('<AnalysisPolicyNotice />');
+      expect(source).toContain(page === 'Coin' ? '<AnalysisPolicyNotice page />' : '<AnalysisPolicyNotice />');
+      if (page === 'Coin') expect(source).toContain('<AnalysisPolicyScope>');
     }
+  });
+
+  it('keeps each page disclaimer and legal link once when nested cards also have notices', () => {
+    const html = renderToStaticMarkup(<><LegalLine pageHasAnalysis /><AnalysisPolicyScope><AnalysisPolicyNotice /><div><AnalysisPolicyNotice /></div><AnalysisPolicyNotice page /></AnalysisPolicyScope></>);
+    for (const line of [DYOR, BUILT_ON, NON_AFFILIATION]) expect(html.split(line)).toHaveLength(2);
+    const notices = html.slice(html.indexOf('class="foot-meta analysis-policy-notice"'));
+    for (const slug of ['risk', 'ai', 'terms']) expect(notices.split(`href="/legal/${slug}"`)).toHaveLength(2);
   });
 
   it('states launch limits and staged economics without claiming unconfirmed decisions', () => {

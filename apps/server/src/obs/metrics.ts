@@ -4,6 +4,7 @@
  * table so measurements survive restarts and can be analysed later.
  */
 export const METRIC_DESCRIPTIONS: Record<string, string> = {
+  'http.rate_limit_rejections': 'HTTP requests refused by a rate limiter',
   'market.lag_ms': 'Exchange event time → server receipt (market-data freshness)',
   'market.candle_close_to_eval_ms': 'Bar close → strategy evaluation started',
   'signal.publish_ms': 'Bar close → signal persisted and broadcast',
@@ -56,6 +57,19 @@ type Sink = (metric: string, value: number, labels: Record<string, string>, at: 
 class Metrics {
   private series = new Map<string, Series>();
   private sink: Sink | null = null;
+  private totals = new Map<string, { metric: string; labels: Record<string, string>; count: number }>();
+  increment(metric: string, labels: Record<string, string>) {
+    const id = JSON.stringify([metric, labels]), previous = this.totals.get(id);
+    if (previous) previous.count++;
+    else this.totals.set(id, { metric, labels: { ...labels }, count: 1 });
+    this.observe(metric, 1, labels);
+  }
+  counters() { return [...this.totals.values()].map(row => ({ ...row, labels: { ...row.labels } })); }
+  counterPrometheus() {
+    const escape = (value: string) => value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    return '# TYPE eko_http_rate_limit_rejections_total counter\n' + this.counters().filter(row => row.metric === 'http.rate_limit_rejections').map(row =>
+      `eko_http_rate_limit_rejections_total{${Object.entries(row.labels).map(([key, value]) => `${key}="${escape(value)}"`).join(',')}} ${row.count}\n`).join('');
+  }
 
   setSink(s: Sink) {
     this.sink = s;
@@ -103,7 +117,7 @@ class Metrics {
   }
 
   reset() {
-    this.series.clear();
+    this.series.clear(); this.totals.clear();
   }
 }
 

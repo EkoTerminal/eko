@@ -22,7 +22,7 @@ export function forgetPending(orderId: string) {
 }
 
 /** After a reload/reconnect: report any tx hash the wallet returned but the server never received. */
-export async function flushPendingReports() {
+async function flush() {
   let all: Record<string, { txHash: string; at: number }> = {};
   try {
     all = JSON.parse(localStorage.getItem(PENDING_KEY) ?? '{}');
@@ -31,7 +31,7 @@ export async function flushPendingReports() {
   }
   for (const [orderId, v] of Object.entries(all)) {
     try {
-      await api(`/api/orders/${orderId}/submitted`, { body: { txHash: v.txHash } });
+      await api(`/api/orders/${orderId}/submitted`, { body: { txHash: v.txHash }, background: true });
       forgetPending(orderId);
     } catch (err) {
       if (Date.now() - v.at > 24 * 3600_000) forgetPending(orderId);
@@ -40,3 +40,8 @@ export async function flushPendingReports() {
   }
 }
 
+
+let flight: Promise<void> | undefined;
+export function flushPendingReports() {
+  return flight ?? (flight = flush().finally(() => { flight = undefined; }));
+}

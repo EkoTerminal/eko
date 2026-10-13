@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { CoinCardSchema, NegotiatedGuardVerdictSchema, WatchBodySchema, type GuardAssessmentV2, type CoinCard, type FeedItem, type WalletLabel } from '@eko/shared';
 import { UntrustedText, UnavailableValue, WALLET_LABEL_WORD } from '../../components/ui';
 import { IconAgent, IconAlert, IconArrow, IconBell, IconChevron, IconShield, IconWallet } from '../../components/icons';
-import { fetchParsed, MOCKS } from '../../lib/api';
+import { fetchParsed, isRateLimited, MOCKS } from '../../lib/api';
 import { Link } from '../../lib/Link';
 import { useRealtime } from '../../lib/RealtimeContext';
 import { useMedia } from '../../lib/useMedia';
@@ -73,6 +73,7 @@ export default function Feed() {
       if (!selected.length) { snapshotEvents.current = null; return; }
       let cursor: string | null = null, rows: FeedItem[] = [], delay = 0;
       const visited = new Set<string>();
+      let pages = 0;
       do {
         const data: z.infer<typeof FeedResponseSchema> = await fetchParsed(`${MOCKS ? '' : '/v2'}/feed?kinds=${selected.join(',')}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, FeedResponseSchema, { signal });
         if(!signal?.aborted && request===generation.current && data.unavailable)setUnavailable(data.unavailable);
@@ -81,13 +82,13 @@ export default function Feed() {
         delay = data.delayedSec; cursor = data.cursor;
         if (cursor && visited.has(cursor)) break;
         if (cursor) visited.add(cursor);
-      } while (cursor && rows.length < FEED_RING);
+      } while (cursor && rows.length < FEED_RING && ++pages < 10);
       if (signal?.aborted || request !== generation.current) return;
       const next = feedRing([...(snapshotEvents.current ?? []), ...rows]); snapshotEvents.current = null;
       const hold = initialized.current && pausedRef.current;
       setBuffer((old) => hold ? receiveFeed(old, next, true) : { items: next, waiting: [] });
       initialized.current = true; setDelayed(delay); setSeen(Date.now());
-    } catch (e) { if ((e as Error).name !== 'AbortError') { if (request === generation.current) setError((e as Error).message); throw e; } }
+    } catch (e) { if ((e as Error).name !== 'AbortError' && !isRateLimited(e)) { if (request === generation.current) setError((e as Error).message); throw e; } }
     finally { if (request === generation.current) { snapshotEvents.current = null; if (!signal?.aborted) setLoading(false); } }
   }, []);
   useEffect(() => { const ac = new AbortController(); void snapshot(ac.signal).catch(() => {}); return () => ac.abort(); }, [snapshot, kinds]);
@@ -101,7 +102,7 @@ export default function Feed() {
   useEffect(() => {
     if (!watchOnly) return;
     const ac = new AbortController(); setWatchError(false);
-    void fetchParsed('/watch', z.object({ items: z.array(WatchBodySchema) }), { signal: ac.signal }).then((data) => setWatched(data.items.filter((w) => w.kind === 'coin').map((w) => w.target))).catch((e) => { if (e.name !== 'AbortError') setWatchError(true); });
+    void fetchParsed('/watch', z.object({ items: z.array(WatchBodySchema) }), { signal: ac.signal }).then((data) => setWatched(data.items.filter((w) => w.kind === 'coin').map((w) => w.target))).catch((e) => { if (e.name !== 'AbortError' && !isRateLimited(e)) setWatchError(true); });
     return () => ac.abort();
   }, [watchOnly]);
   const tracked=(k:FeedGroup)=>FeedItemKinds([k]).some(kind=>!unavailable.includes(kind));
@@ -110,10 +111,10 @@ export default function Feed() {
   const counts = useMemo(() => countsOf(buffer.items), [buffer.items]);
   const recent = useMemo(() => countsOf(buffer.items.filter((e) => now - e.ts < 300000)), [buffer.items, now]);
   const busiest = useMemo(() => { const byCoin = new Map<string, { item: FeedItem; n: number }>(); buffer.items.forEach((item) => { const old = byCoin.get(item.coin); byCoin.set(item.coin, { item, n: (old?.n ?? 0) + 1 }); }); return [...byCoin.values()].sort((a, b) => b.n - a.n).slice(0, 6); }, [buffer.items]);
-  const busyKey = busiest.map((b) => b.item.coin).join(',');
+  const busyKey = busiest.map((b) => b.item.coin).sort().join(',');
   useEffect(() => {
     const ac = new AbortController();
-    void Promise.allSettled(busyKey.split(',').filter(Boolean).map(async (address) => { const card = await fetchParsed(`/coins/${address}`, CoinCardSchema, { signal: ac.signal }); return [address, card] as const; })).then((results) => { if (!ac.signal.aborted) setCards(Object.fromEntries(results.flatMap((r) => r.status === 'fulfilled' ? [r.value] : []))); });
+    void Promise.allSettled(busyKey.split(',').filter(Boolean).map(async (address) => { const card = await fetchParsed(`/coins/${address}`, CoinCardSchema, { signal: ac.signal }); return [address, card] as const; })).then((results) => { if (!ac.signal.aborted) setCards(old => ({ ...old, ...Object.fromEntries(results.flatMap((r) => r.status === 'fulfilled' ? [r.value] : [])) })); });
     if (!MOCKS) void Promise.allSettled(busyKey.split(',').filter(Boolean).map(async address => {
       const result = await fetchParsed(`/v2/coins/${address}/verdict`, NegotiatedGuardVerdictSchema, {signal:ac.signal});
       if (result.version !== 2) throw new Error('Guard schema negotiation failed');

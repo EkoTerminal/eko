@@ -22,7 +22,7 @@ export function telemetryIngress(app: FastifyInstance, path = '/telemetry') {
   });
   app.post(path, {
     bodyLimit: TELEMETRY_BODY_LIMIT,
-    config: { rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: req => addressKey(req.ip) } },
+    config: { rateLimitKeyKind: 'address', rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: req => addressKey(req.ip) } },
   }, async (req, reply) => {
     const parsed = TelemetrySchema.safeParse(req.body);
     // Zod errors can echo unknown field names; never return private input.

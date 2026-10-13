@@ -15,6 +15,7 @@ import { createRadarCard, createRadarRows } from '../../mocks/demo/radar';
 import Coin from './Coin';
 import * as legacyData from './useCoin';
 import * as guardData from './useGuardCoin';
+import { guardDetailModel } from './guardDetailModel';
 
 vi.mock('../../lib/useMedia', () => ({ useMedia: () => false }));
 afterEach(() => { vi.restoreAllMocks(); useUi.setState({ riskMode: 'balanced' }); });
@@ -25,7 +26,8 @@ function fixture(level: GuardLevelV2, gaps: CheckId[] = [], mode: GuardAssessmen
   const score = level === 'high' ? 60 : level === 'elevated' && !gaps.length ? 30 : 0;
   const observedLevel = score >= 60 ? 'high' : score >= 30 ? 'elevated' : 'lower';
   return GuardAssessmentV2Schema.parse({ ...assessment, mode, level, observedLevel, score, baseScore: score,
-    historyPoints: 0, familyPoints: { E: score, O: 0, Ff: 0, C: 0, I: 0 }, factors: [],
+    historyPoints: 0, familyPoints: { E: score, O: 0, Ff: 0, C: 0, I: 0 },
+    factors: [{ ...assessment.factors[0], eligiblePoints: Math.max(10, score), assignedPoints: score, calibration: 'released' }],
     levelFloorReason: critical && !lower && observedLevel === 'lower' ? 'lower_tier_gap' : null,
     completeness: { buyCriticalComplete: critical, lowerTierComplete: lower, missing: gaps },
     checks: GUARD_CHECK_IDS.map(id => ({ id, tier: GUARD_CHECK_TIERS[id], status: gaps.includes(id) ? 'missing' : 'complete', coverage: gaps.includes(id) ? missingCoverage : coverage, evidenceIds: [], failureCode: gaps.includes(id) ? 'missing' : null })),
@@ -35,23 +37,68 @@ const views = {
   lower: fixture('lower'), elevated: fixture('elevated', ['recent_funding']), high: fixture('high', ['reference_exit']),
   incomplete: fixture('incomplete', ['reference_exit']), shadow: fixture('elevated', ['recent_funding'], 'shadow'), candidate: fixture('lower', [], 'candidate'),
 };
+const newCard = () => CoinCardV2Schema.parse({ ...rawCard, verdict: { ...assessment, factors: [], reasons: [], baseScore: 0, score: 0, familyPoints: { E: 0, O: 0, Ff: 0, C: 0, I: 0 } } });
 describe('packet 036 Guard card fixtures', () => {
-  it.each(Object.entries(views))('keeps every disclosure closed by default for %s', (_name, guard) => {
-    const html = render(<GuardCard card={CoinCardV2Schema.parse({ ...rawCard, verdict: guard })} />);
+  it('keeps a fully checked clear rating closed and shows genuine fine results first', () => {
+    const clear = GuardAssessmentV2Schema.parse({ ...views.lower, reasons: [], factors: [{ ...views.lower.factors[0], state: 'not_matched', eligiblePoints: 0 }] });
+    const html = render(<GuardAssessment guard={clear} />);
+    expect(html).toContain('Fine'); expect(html).toContain('Buy-then-sell cost: no flag found.');
+    expect(html).not.toContain('data-result="flagged"'); expect(html).not.toContain('class="panel guard-section guard-not-run"');
     expect(html.match(/<details\b[^>]*\bopen(?:=|\s|>)/g) ?? []).toHaveLength(0);
+    expect(html).toContain('1 fine · 0 flagged · 0 not checked');
+  });
+  it('puts danger findings before fine results and opens only the flagged question', () => {
+    const guard = GuardAssessmentV2Schema.parse({ ...views.high, decisiveIds: ['sell_block'],
+      factors: [...views.high.factors, { ...views.high.factors[0], id: 'thin_depth', state: 'not_matched', eligiblePoints: 0, assignedPoints: 0 }] });
+    const html = render(<GuardAssessment guard={guard} />);
+    const findings = html.slice(html.indexOf('<ul class="guard-findings"'), html.indexOf('</section>'));
+    expect(findings.indexOf('sell block.')).toBeLessThan(findings.indexOf('A $100 buy-then-sell'));
+    expect(findings.indexOf('A $100 buy-then-sell')).toBeLessThan(findings.indexOf('Fine'));
+    expect(html.match(/guard-question" open=""/g)).toHaveLength(1);
+    expect(html).toContain('0 fine · 2 flagged · 1 not checked');
+  });
+  it('shows a brand-new coin as one counted line without empty buyer sections', () => {
+    const card = newCard(), model = guardDetailModel(card), html = render(<GuardCard card={card} />);
+    expect(html).toContain('No findings recorded yet.');
+    expect(html.slice(0, html.indexOf('</section>'))).not.toContain('Not fully checked:');
+    const checks = model.pending.filter(r => /^(factor|check)\./.test(r.id)).length;
+    expect(html).toContain(`${checks} checks not run yet · ${model.pending.length - checks} measurements missing`);
+    expect(html.match(/class="panel guard-section guard-not-run"/g)).toHaveLength(1);
+    expect(html).not.toContain('guard-question'); expect(html).not.toContain('data-result="fine"');
+    for (const reason of ['Results not available yet', 'Trade simulation results not available yet', 'Wallet and history results not available yet']) expect(html).toContain(reason);
+    expect(html.match(/<details\b[^>]*\bopen(?:=|\s|>)/g) ?? []).toHaveLength(0);
+  });
+  it('distinguishes non-applicability from pending work and does not count it as fine', () => {
+    const card = newCard(); card.control.currentController = { ...card.control.currentController, status: 'not_applicable', value: null, failureCode: null };
+    const html = render(<GuardCard card={card} />);
+    expect(html).toContain('1 does not apply'); expect(html).toContain('data-reason="not_applicable"');
+    expect(html).toContain('Does not apply to this kind of coin'); expect(html).not.toContain('data-result="fine"');
+  });
+  it('keeps a no-rating coin factual with no findings or empty question sections', () => {
+    const html = render(<GuardCard card={{ ...newCard(), verdict: null }} />);
+    expect(html).toContain('has not been released'); expect(html).not.toContain('No findings recorded yet.'); expect(html).not.toContain('not run yet'); expect(html).not.toContain('measurements missing');
+    expect(html).not.toContain('guard-question'); expect(html).not.toContain('data-result="fine"');
+    expect(html).toContain('Technical record');
+  });
+  it.each(Object.entries(views))('opens flagged questions and keeps the technical record closed for %s', (_name, guard) => {
+    const html = render(<GuardCard card={CoinCardV2Schema.parse({ ...rawCard, verdict: guard })} />);
+    expect(html.match(/<details\b[^>]*\bopen(?:=|\s|>)/g) ?? []).toHaveLength(1);
+    expect(html).toContain('class="panel guard-section guard-question" open=""');
+    expect(html).toContain('<details class="panel guard-section guard-technical"><summary class="panel-head">Technical record</summary>');
     expect(html).toContain('class="panel guard-section"');
     expect(html).toContain(guardBuyText(guard, 'balanced')); expect(html).toContain('Sells use a separate'); expect(html).toContain('Receipt');
   });
-  it('keeps only the top three reasons outside the collapsed evidence disclosure', () => {
+  it('keeps every flagged finding in the first list with evidence one disclosure away', () => {
     const guard = { ...views.high, reasons: [100, 1000, 10000, 100].map(sizeUsd => ({ ...views.high.reasons[0], parameters: { ...views.high.reasons[0].parameters, sizeUsd } })) } as GuardAssessmentV2;
     const html = render(<GuardAssessment guard={GuardAssessmentV2Schema.parse(guard)} />);
-    const top = html.match(/<ul class="guard-reasons">(.*?)<\/ul>/)![1];
-    expect(top.match(/<li>/g)).toHaveLength(3);
-    expect(html.match(/<details\b[^>]*\bopen(?:=|\s|>)/g) ?? []).toHaveLength(0);
+    const top = html.slice(html.indexOf('<ul class="guard-findings"'), html.indexOf('</section>'));
+    expect(top.match(/data-result="flagged"/g)).toHaveLength(4);
+    expect(top).toContain('Evidence and details'); expect(top).toContain('/v2/coins/');
+    expect(html.match(/<details\b[^>]*\bopen(?:=|\s|>)/g) ?? []).toHaveLength(1);
   });
   it('shows plain check summaries and puts technical coverage inside their details', () => {
     const html = render(<GuardAssessment guard={views.high} evidenceOpen />);
-    expect(html.match(/<details\b[^>]*\bopen(?:=|\s|>)/g)).toHaveLength(1);
+    expect(html.match(/<details\b[^>]*\bopen(?:=|\s|>)/g)).toHaveLength(2);
     for (const id of GUARD_CHECK_IDS) {
       const status = id === 'reference_exit' ? 'Missing' : 'Complete';
       expect(html).toContain(`<summary>${GUARD_CHECK_LABELS[id]} · ${status}</summary><span class="guard-coverage">Coverage`);
@@ -120,6 +167,9 @@ describe('packet 036 Guard card fixtures', () => {
     const html = render(<GuardCard card={CoinCardV2Schema.parse(card)} />);
     for (const text of [raw.raw, '987654321098765432109876543210', 'lower bound', 'holder float (F)', 'Raw units', 'Liquid units', 'Locked units', 'Outstanding supply (S)', 'Circulating supply (C)', 'No records · coverage unavailable', 'No applicable records · coverage complete']) expect(html).toContain(text);
     expect(html).not.toContain('1.23456789e');
+    const maker = html.split('<span class="guard-question-title">Who made it?</span>')[1].split('</div></details>')[0];
+    expect(maker).toContain('No applicable records · coverage complete');
+    expect(maker).not.toContain('No records · coverage unavailable');
   });
   it('renders nested untrusted text inertly, strips hidden controls and offers only explicit Copy text', () => {
     const card = CoinCardV2Schema.parse(rawCard);
@@ -146,6 +196,7 @@ describe('packet 036 Guard card fixtures', () => {
     const html = render(<GuardCard card={card} />);
     for (const text of ['Signal · five readings', 'Composite 50 / 100', 'How we got this', 'Last 8h', '24h change', 'risk · 10%</dt><dd>not checked yet']) expect(html).toContain(text);
     expect(render(<GuardCard card={{ ...card, verdict: views.high }} />)).toContain('Composite High risk / 100');
+    expect(render(<GuardCard card={card} assessment={views.high} />)).toContain('Descriptive activity · shadow inputs');
   });
   it('integrates a V2 partial card even when the V1 issuer card is unavailable', () => {
     vi.spyOn(legacyData, 'useCoin').mockReturnValue({ card: null, verdict: null, bars: [], markers: [], flows: [], error: 'Issuer unavailable', unknown: true, ageSec: 0, retry: () => {}, candlesUnavailable: false, candlesLoading: false, lastTradeTs: null, labelsUnavailable: true });
@@ -182,6 +233,7 @@ describe('packet 036 Guard card fixtures', () => {
     const html = render(<Coin params={{ address: card.identity.address }} />);
     expect(html.match(/id="coin-evidence"/g)).toHaveLength(1); expect(html.match(/id="guard-shadow-evidence"/g)).toHaveLength(1);
     expect(html.indexOf('id="coin-evidence"')).toBeLessThan(html.indexOf('id="guard-shadow-evidence"'));
+    for (const line of [BUYER_RISK, DYOR, NON_AFFILIATION]) expect(html.split(line)).toHaveLength(2);
   });
   it('can prepare isolated static desktop/mobile visual fixtures without a server', () => {
     const dir = process.env.GUARD_VISUAL_DIR;
@@ -193,6 +245,9 @@ describe('packet 036 Guard card fixtures', () => {
       const card = CoinCardV2Schema.parse({ ...rawCard, verdict: guard });
       const html = render(<div className="coin-page"><GuardCard card={card} /><p>{BUILT_ON}</p><p>{NON_AFFILIATION}</p></div>);
       writeFileSync(`${dir}/${name}.html`, `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}\nhtml,body{height:auto;overflow:auto}body{padding:20px}.icon{width:16px;height:16px}</style></head><body>${html}</body></html>`);
+    }
+    for (const [name, card] of Object.entries({ new: newCard(), noRating: { ...newCard(), verdict: null } })) {
+      writeFileSync(`${dir}/${name}.html`, `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}\nhtml,body{height:auto;overflow:auto}body{padding:20px}.icon{width:16px;height:16px}</style></head><body class="coin-page">${render(<GuardCard card={card} />)}</body></html>`);
     }
     const legacy = createRadarCard(createRadarRows()[0].address)!;
     writeFileSync(`${dir}/legacy.html`, `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}\nhtml,body{height:auto;overflow:auto}body{padding:20px}</style></head><body class="coin-page">${render(<CoinVerdict verdict={legacy.verdict} />)}</body></html>`);

@@ -23,7 +23,8 @@ export function useTradeQuote(input: TradeQuoteRequest, panel: RefObject<HTMLDiv
     visibility();
     const clock = setInterval(() => setNow(serverNow()), 250);
     return () => { current.dispose(); session.current = null; observer?.disconnect(); document.removeEventListener('visibilitychange', visibility); clearInterval(clock); };
-  }, [input.coin, input.side, input.amountUsd, input.slippageBps, input.riskMode, input.account, antiSnipeEndsAt, panel]);
+  }, [input.coin, input.side, input.amountUsd, input.slippageBps, input.riskMode, input.account, panel]);
+  useEffect(() => { session.current?.setAntiSnipeEndsAt(antiSnipeEndsAt); }, [antiSnipeEndsAt]);
   useEffect(() => { session.current?.setVisible(enabled && inView.current && document.visibilityState !== 'hidden'); }, [enabled]);
   return { snapshot, now, acknowledge: () => session.current?.acknowledge(), refresh: () => void session.current?.refresh() };
 }

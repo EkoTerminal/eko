@@ -17,7 +17,7 @@ import type { CoinCard, CoinSignal, RadarRow, Flow } from '@eko/shared';
 import { HeatTag, Info, UnavailableValue, UntrustedText, VerdictChip } from '../../components/ui';
 import { MiniBars, Spark } from '../../components/ui/charts';
 import { activityRatio, displayHeat, heatOf, marking, markClass, type HeatRow } from '../../lib/heat';
-import { fetchParsed } from '../../lib/api';
+import { fetchParsed, isRateLimited } from '../../lib/api';
 import { CoinCardSchema } from '@eko/shared';
 import { useState } from 'react';
 import { useMedia } from '../../lib/useMedia';
@@ -71,7 +71,7 @@ export function CoinInspector({ row, close, onCard, formatRowAge = age, stale = 
   const wide = useMedia('(min-width:1480px)'), panel = useRef<HTMLElement>(null);
   const [card, setCard] = useState<CoinCard | null>(null), [error, setError] = useState(false), [retry, setRetry] = useState(0);
   const antiSnipeEndsAt = useMemo(() => antiSnipeDeadline(card, guard.card, serverNow()), [card, guard.card]);
-  useEffect(() => { const ac = new AbortController(); setCard(null); setError(false); void fetchParsed(`/coins/${row.address}`, CoinCardSchema, { signal: ac.signal }).then((data) => { if (!ac.signal.aborted) { setCard(data); onCard(data); } }).catch((e) => { if (e.name !== 'AbortError') setError(true); }); return () => ac.abort(); }, [row.address, retry]);
+  useEffect(() => { const ac = new AbortController(); setError(false); void fetchParsed(`/coins/${row.address}`, CoinCardSchema, { signal: ac.signal }).then((data) => { if (!ac.signal.aborted) { setCard(data); onCard(data); } }).catch((e) => { if (e.name !== 'AbortError' && !isRateLimited(e)) setError(true); }); return () => ac.abort(); }, [row.address, retry]);
   useEffect(() => { if (!wide) panel.current?.focus(); }, [wide]);
   const signal = card?.signal, flow = card?.flow;
   const redFlag = card?.tradeability.honeypot || card?.playbooks.some((m) => m.level === 'danger' && m.confidence >= .97);

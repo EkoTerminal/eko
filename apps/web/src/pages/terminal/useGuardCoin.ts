@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { NegotiatedCoinCardSchema, NegotiatedGuardVerdictSchema, type CoinCardV2, type GuardAssessmentV2, type Address } from '@eko/shared';
-import { fetchParsed, MOCKS } from '../../lib/api';
+import { fetchParsed, isRateLimited, MOCKS } from '../../lib/api';
 import { useRealtime } from '../../lib/RealtimeContext';
 
 /** A missing refresh result cannot erase a persisted snapshot. */
@@ -22,7 +22,8 @@ export function useGuardCoin(address: string) {
     const ac = new AbortController();
     const base = `/v2/coins/${encodeURIComponent(address)}`;
     let generation = 0;
-    const refresh = async () => {
+    let flight: Promise<void> | undefined;
+    const load = async () => {
       const gen = ++generation;
       let missingRefresh = false;
       const current = () => !ac.signal.aborted && gen === generation;
@@ -40,9 +41,10 @@ export function useGuardCoin(address: string) {
       });
       const results = await Promise.allSettled([verdict, card]);
       if (!current()) return;
-      setFailed(missingRefresh || results.some(r => r.status === 'rejected'));
-      if (results[0].status === 'rejected') setStatus('unavailable');
+      setFailed(missingRefresh || results.some(r => r.status === 'rejected' && !isRateLimited(r.reason)));
+      if (results[0].status === 'rejected' && !isRateLimited(results[0].reason)) setStatus('unavailable');
     };
+    const refresh = () => flight ?? (flight = load().finally(() => { flight = undefined; }));
     void refresh();
     // V2 is explicitly negotiated over REST. Legacy WS notifications only trigger
     // a captured-source refresh; they never reinterpret a V1 payload as V2.

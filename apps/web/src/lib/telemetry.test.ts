@@ -15,6 +15,13 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe('client telemetry privacy and v1 transport (offline fixtures)', () => {
+  it('does not bypass spacing on repeated page-hide sends', async () => {
+    const t = await import('./telemetry');
+    t.track('ws.rtt_ms',1); await t.flushTelemetry(true);
+    for(let i=0;i<10;i++){t.track('ws.rtt_ms',i);await t.flushTelemetry(true);}
+    expect(send).toHaveBeenCalledOnce(); await vi.advanceTimersByTimeAsync(t.TELEMETRY_MIN_GAP_MS-1);
+    expect(send).toHaveBeenCalledOnce(); await vi.advanceTimersByTimeAsync(1); expect(send).toHaveBeenCalledTimes(2);
+  });
   it('batches known durations and events through /v1 without private error text or route resources', async () => {
     const t = await import('./telemetry');
     t.track('ui.quote_roundtrip_ms', 123.45);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { GhostReportListSchema, ghostReportFindings, ghostReportShare, formatGuardReason,
   GUARD_CHECK_LABELS, DYOR, NON_AFFILIATION, type GhostReportRecord } from '@eko/shared';
-import { fetchParsed, MOCKS } from '../lib/api';
+import { fetchParsed, isRateLimited, MOCKS } from '../lib/api';
 import { Link } from '../lib/Link';
 
 export function GhostReportView({ record }: { record: GhostReportRecord }) {
@@ -32,7 +32,7 @@ export function GhostReports({ limit = 50, coins }: { limit?: number; coins?: st
     try {
       const data = await fetchParsed('/v2/ghost-reports', GhostReportListSchema, { signal });
       if (!signal?.aborted) { setRecords(data.records); setFailed(false); }
-    } catch (error) { if ((error as Error).name !== 'AbortError') { setFailed(true); setRecords([]); } }
+    } catch (error) { if ((error as Error).name !== 'AbortError' && !isRateLimited(error)) setFailed(true); }
   }, []);
   useEffect(() => { const ac = new AbortController(); void load(ac.signal); return () => ac.abort(); }, [load]);
   const shown = records.filter(r => !coins || coins.includes(r.draft.assessment.coin)).slice(0, limit);

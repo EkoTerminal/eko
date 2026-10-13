@@ -85,7 +85,8 @@ describe('bags report port', () => {
     let updates = 0;
     await pollBags(wallet, undefined, false, ac.signal, () => { updates++; ac.abort(); }, client([pending], []), async () => {});
     expect(updates).toBe(1);
-  });
+  // Fifteen reads of one resource are spaced a second apart by the shared request control.
+  }, 30_000);
   it('reports failed refreshes and returns the actual stored snapshot after explicit share', async () => {
     await expect(pollBags(wallet, undefined, false, new AbortController().signal, () => {}, createApi('/v1', async () => new Response('{}', { status: 503 })).parse)).rejects.toMatchObject({ status: 503 });
     const calls: { url: string; body?: unknown }[] = [], snapshot = { ...publicReport, asOfBlock: 43 };
