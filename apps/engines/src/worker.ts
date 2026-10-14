@@ -4,11 +4,12 @@ import { refreshFingerprints, replayFingerprints, type FingerprintOptions } from
 import { writeRegistryLabels } from './registry-labels.js';
 import { expireSimulationTraces } from './reference-simulation.js';
 import { expireV4ReferenceTraces } from './v4-reference.js';
-import { binary, hex, publishReceipt, ScanJobs, scanTarget, recordScanStart, recordScanVerdict, type ChainDb, type EngineBus } from '@eko/db';
+import { binary, hex, publishReceipt, priceMovedCoins, ScanJobs, scanTarget, recordScanStart, recordScanVerdict, type ChainDb, type EngineBus } from '@eko/db';
 import { assembleVerdict, evaluatePlaybooks, rules, RULES_VERSION } from '@eko/playbooks';
 import { shouldRecomputeSignal } from '@eko/signal';
 import { rpcStopReason, type PonsProfileClient } from '@eko/chain';
-import type { Address, CoinCard, PlaybookId, Verdict } from '@eko/shared';
+import { ratingPriceMove, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
+import { ratingOutcome } from './rating-outcome.js';
 import { assembleCard, cardHash, digest, evaluatedPlaybooks, UNSOURCED_PLAYBOOKS } from './card.js';
 import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } from './sources.js';
 import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
@@ -398,7 +399,9 @@ export class EngineWorker {
     const rerateRank=new Map<Address,number>();
     if(live && head && now-head.sec<7*86400) {
       const byCoin=new Map(inputs.map(input=>[input.coin,input]));
-      for(const {coin,card} of await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL,this.rerated,this.rulesAt,this.otherRulesAt)) {
+      const moved=(await priceMovedCoins(this.db,RERATE_PER_POLL)).filter(entry=>byCoin.has(entry.coin));
+      const routine=await staleRatings(this.db,[...byCoin.keys()],RERATE_PER_POLL-moved.length,this.rerated,this.rulesAt,this.otherRulesAt);
+      for(const {coin,card} of [...moved,...routine.filter(entry=>!moved.some(m=>m.coin===entry.coin))]) {
         // A coin still pending after its re-rating is not selected again until its card changes.
         this.rerated.set(coin,card);rerateRank.set(coin,rerateRank.size);revised.add(coin);
         if(!tasks.some(task=>task.coin===coin && task.block===head.number))tasks.push({coin,block:head.number,sec:head.sec});
@@ -587,11 +590,13 @@ export class EngineWorker {
         // Then coins that traded after their card was written: polls reach a trade only after refreshing activity and
         // planning, and yield to every new launch (on 2026-10-12 the median coin traded in the last hour was rated as of
         // nine hours before). Beside them, pending cards that would rate differently now.
+        const moved=head==null ? [] : await priceMovedCoins(this.db,RERATE_WIDTH*2);
         const traded=first.length || head==null ? [] : await tradedSinceCard(this.db,since,(this.options.now?.() ?? Date.now()/1000)-TRADED_RERATE_SEC,RERATE_WIDTH*2);
         // Coins the radar lists (active in the last seven days), by this worker's clock.
         const stale=first.length || head==null ? [] : (await staleRatings(this.db,(await this.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>to_timestamp($1)',[since])).rows.map(row=>hex(row.coin) as Address),RERATE_WIDTH*2,this.rerated,this.rulesAt,this.otherRulesAt))
           .filter(entry=>!traded.some(t=>t.coin===entry.coin));
-        const work:{coin:Address;card?:string}[]=first.length ? first.map(coin=>({coin})) : [...traded,...stale];
+        const routine:{coin:Address;card?:string}[]=first.length ? first.map(coin=>({coin})) : [...traded,...stale];
+        const work:{coin:Address;card?:string}[]=[...moved,...routine.filter(entry=>!moved.some(m=>m.coin===entry.coin))];
         const tradedCoins=new Set(traded.map(t=>t.coin));let tradedCards=0;
         for(let offset=0;offset<work.length && !this.stopped;offset+=RERATE_WIDTH) {
           const batch=work.slice(offset,offset+RERATE_WIDTH);
@@ -659,6 +664,7 @@ export class EngineWorker {
     const candidates=(await this.db.sql.query<Schedule>(`SELECT t.address AS coin,t.first_block,e.last_block,e.last_sec,e.price,
       (SELECT max(ts) FROM swaps s WHERE s.coin=t.address AND s.block<=$1) AS last_trade
       FROM tokens t LEFT JOIN engine_schedule e ON e.coin=t.address WHERE t.first_block<=$1 ORDER BY t.first_block,t.address`, [block])).rows;
+    const moved=new Set((await priceMovedCoins(this.db,candidates.length)).map(r=>r.coin));
     const selected: Address[]=[];
     for (const row of candidates) {
       const coin=hex(row.coin);
@@ -678,7 +684,7 @@ export class EngineWorker {
         UNION ALL SELECT 1 FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block=$2
         UNION ALL SELECT 1 FROM pools WHERE (currency0=$1 OR currency1=$1) AND created_block=$2 LIMIT 1`,[row.coin,block])).rows.length>0;
       const interval=now-latestTrade<3600 ? 600 : 3600;
-      if (lastBlock<0 || Number(row.first_block)===block || change || event || now-lastSec>=interval) selected.push(coin);
+      if (lastBlock<0 || Number(row.first_block)===block || change || event || moved.has(coin) || now-lastSec>=interval) selected.push(coin);
     }
     // PGlite transactions are serialized. Preparation only performs archive RPC reads outside the write transaction.
     const prepared=new Map<Address,LoadedSources | null>();
@@ -727,7 +733,7 @@ export class EngineWorker {
     if(!this.cache)return;
     const found=this.cache.writes.get(s.coin);if(found)return found;
     const [prior,previous,run]=await Promise.all([
-      tx.sql.query<{id:string;signature:string;data:Verdict}>('SELECT v.id,v.signature,v.data FROM verdicts v LEFT JOIN receipt_publications p ON p.id=v.id WHERE v.coin=$1 AND valid_from_block<=$2 ORDER BY (v.rules_version=$3) DESC,valid_from_block DESC,v.rules_version DESC,p.publication_sequence DESC NULLS LAST,v.id DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION]),
+      tx.sql.query<{id:string;signature:string;data:Verdict}>('SELECT v.id,v.signature,v.data FROM verdicts v LEFT JOIN receipt_publications p ON p.id=v.id WHERE v.coin=$1 AND valid_from_block<=$2 ORDER BY valid_from_block DESC,p.publication_sequence DESC NULLS LAST,(v.rules_version=$3) DESC,v.rules_version DESC,v.id DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION]),
       tx.sql.query<{id:string;hash:string}>('SELECT id,hash FROM coin_cards WHERE coin=$1 AND valid_from_block<$2 AND rules_version=$3 ORDER BY valid_from_block DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION]),
       tx.sql.query<{signal:CoinCard['signal']}>('SELECT signal FROM engine_runs WHERE coin=$1 AND block<$2 AND rules_version=$3 ORDER BY block DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION]),
     ]);
@@ -753,12 +759,52 @@ export class EngineWorker {
     }
     assembled.evaluatedPlaybooks=evaluated;
     const signature=digest({ level:assembled.level,playbooks:matches,reasons:assembled.reasons,rulesVersion:RULES_VERSION,evaluated,attributionCoverage:s.attributionCoverage });
-    const prior=state ? state.prior : (await tx.sql.query<{ id:string; signature:string; data:Verdict }>('SELECT v.id,v.signature,v.data FROM verdicts v LEFT JOIN receipt_publications p ON p.id=v.id WHERE v.coin=$1 AND valid_from_block<=$2 ORDER BY (v.rules_version=$3) DESC,valid_from_block DESC,v.rules_version DESC,p.publication_sequence DESC NULLS LAST,v.id DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION])).rows[0];
+    const prior=state ? state.prior : (await tx.sql.query<{ id:string; signature:string; data:Verdict }>('SELECT v.id,v.signature,v.data FROM verdicts v LEFT JOIN receipt_publications p ON p.id=v.id WHERE v.coin=$1 AND valid_from_block<=$2 ORDER BY valid_from_block DESC,p.publication_sequence DESC NULLS LAST,(v.rules_version=$3) DESC,v.rules_version DESC,v.id DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION])).rows[0];
+    const latest=(await tx.sql.query<{card_id:string;as_of_block:string;data:CoinCard;rules_version:string}>(`SELECT l.*,c.rules_version FROM coin_card_latest l JOIN coin_cards c ON c.id=l.card_id WHERE l.coin=$1`,[binary(s.coin)])).rows[0];
+    const check=(await tx.sql.query<{full_block:string;full_price:number|null;peak_recorded:boolean;outcome_signature:string|null;checked_block:string}>(
+      'SELECT * FROM coin_rating_checks WHERE coin=$1 FOR UPDATE',[binary(s.coin)])).rows[0];
+    // Replay never borrows a future price. The retained peak is used only at/after its latest indexed trade.
+    const price=(await tx.sql.query<{price:number|null;peak:number|null}>(`SELECT
+      CASE WHEN p.block<=$2 THEN p.price ELSE (SELECT usd/amount_coin::double precision FROM swaps WHERE coin=$1 AND block<=$2 AND usd>0 AND amount_coin>0 ORDER BY ts DESC,block DESC,log_index DESC,tx_hash DESC LIMIT 1) END AS price,
+      CASE WHEN p.block<=$2 THEN p.peak ELSE (SELECT max(usd/amount_coin::double precision) FROM swaps WHERE coin=$1 AND block<=$2 AND usd>0 AND amount_coin>0) END AS peak
+      FROM (SELECT 1) seed LEFT JOIN coin_rating_prices p ON p.coin=$1`,[binary(s.coin),s.asOfBlock])).rows[0];
+    const baseline=check?.full_price ?? (prior ? (await tx.sql.query<{price:number|null}>(`SELECT usd/amount_coin::double precision AS price FROM retention_read_swaps WHERE coin=$1 AND block<=$2 AND usd>0 AND amount_coin>0 ORDER BY ts DESC,block DESC,log_index DESC,tx_hash DESC LIMIT 1`,[binary(s.coin),prior.data.asOfBlock])).rows[0]?.price ?? null : null);
+    const move=ratingPriceMove(price.price,baseline,price.peak,check?.peak_recorded ?? false);
+    if(Object.keys(move.fact).length)assembled.priceMove=move.fact;
+    const card=assembleCard(s,assembled);
+    const previous=state ? state.previous : (await tx.sql.query<{ id:string; hash:string; data:CoinCard; ts:Date }>('SELECT c.*,b.ts FROM coin_cards c JOIN engine_block_times b ON b.number=c.valid_from_block WHERE c.coin=$1 AND c.valid_from_block<$2 AND c.rules_version=$3 ORDER BY c.valid_from_block DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION])).rows[0];
+    const priorRun=state ? {signal:state.signal} : (await tx.sql.query<{ signal:CoinCard['signal'] }>('SELECT signal FROM engine_runs WHERE coin=$1 AND block<$2 AND rules_version=$3 ORDER BY block DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION])).rows[0];
+    if (priorRun?.signal) {
+      const signalTime=this.clock.get(priorRun.signal.asOfBlock) ?? (await tx.sql.query<{ ts:Date }>('SELECT ts FROM engine_block_times WHERE number=$1',[priorRun.signal.asOfBlock])).rows[0];
+      if (signalTime && !shouldRecomputeSignal(seconds(signalTime.ts)*1000,s.asOfSec*1000)) card.signal=priorRun.signal;
+    }
+    const outcome=ratingOutcome(card,RULES_VERSION);
+    const checkedAt=new Date((this.options.now?.() ?? Date.now()/1000)*1000).toISOString();
+    const saveCheck=async(full:boolean)=>{
+      await tx.sql.query(`INSERT INTO coin_rating_checks(coin,checked_block,checked_at,full_block,full_price,peak_recorded,outcome_signature)
+        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(coin) DO UPDATE SET checked_block=excluded.checked_block,checked_at=excluded.checked_at,
+        full_block=excluded.full_block,full_price=excluded.full_price,peak_recorded=excluded.peak_recorded,outcome_signature=excluded.outcome_signature
+        WHERE coin_rating_checks.checked_block<=excluded.checked_block`,[binary(s.coin),s.asOfBlock,checkedAt,full ? s.asOfBlock : Number(check?.full_block ?? prior!.data.asOfBlock),
+          full ? price.price : baseline,(check?.peak_recorded ?? false) || (full && move.belowPeak),outcome]);
+    };
+    const sameOutcome=latest && Number(latest.as_of_block)<=s.asOfBlock && latest.rules_version===RULES_VERSION
+      && (check?.outcome_signature ?? ratingOutcome(latest.data,latest.rules_version))===outcome;
+    // Unchanged checks, including same-block enrichment, refresh only mutable measurements.
+    if(prior && latest && prior.id===latest.data.verdict.receipt.id && sameOutcome && !move.force) {
+      card.verdict={...assembled,asOfBlock:prior.data.asOfBlock,receipt:prior.data.receipt,
+        priceMove:{...(latest.data.verdict.priceMove?.downSinceRatedPct==null ? {} : {downSinceRatedPct:latest.data.verdict.priceMove.downSinceRatedPct}),...move.fact}};
+      await saveCheck(false);
+      card.verdict.lastChecked={block:s.asOfBlock,at:checkedAt};
+      await tx.sql.query(`UPDATE coin_card_latest SET as_of_block=$2,data=$3 WHERE coin=$1 AND as_of_block<=$2`,[binary(s.coin),s.asOfBlock,JSON.stringify(card)]);
+      await publishBlueChipMeasurements(tx,s);
+      await tx.notify('card_updated',{id:latest.card_id,coin:s.coin});
+      if(state)state.signal=card.signal;
+      return card;
+    }
     let verdict=assembled;
-    if (prior?.signature===signature) verdict={ ...prior.data,asOfBlock:s.asOfBlock,playbooks:matches };
-    else {
+    {
       const blockHash=await tx.blockHash(BigInt(s.asOfBlock));
-      const payload=verdictReceipt(s,assembled,blockHash,prior?.id ?? null,new Date((this.options.now?.() ?? Date.now()/1000)*1000).toISOString());
+      const payload=verdictReceipt(s,assembled,blockHash,prior?.id ?? null,checkedAt,move.force ? {price:price.price,peak:price.peak,previousFullPrice:baseline} : undefined);
       const id=payload.receiptId;
       verdict.receipt={id,hash:digest(payload),status:'pending'};
       const inserted=(await tx.sql.query('INSERT INTO verdicts VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING id',[id,binary(s.coin),s.asOfBlock,RULES_VERSION,signature,JSON.stringify(verdict)])).rows.length;
@@ -771,17 +817,14 @@ export class EngineWorker {
     }
     for (const m of matches) await tx.sql.query('INSERT INTO playbook_matches VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',[binary(s.coin),s.asOfBlock,RULES_VERSION,m.id,JSON.stringify(m)]);
     for(const match of matches)this.cache?.recordMatch(s.coin,String(s.asOfBlock),match);
-    const card=assembleCard(s,verdict);
-    const previous=state ? state.previous : (await tx.sql.query<{ id:string; hash:string; data:CoinCard; ts:Date }>('SELECT c.*,b.ts FROM coin_cards c JOIN engine_block_times b ON b.number=c.valid_from_block WHERE c.coin=$1 AND c.valid_from_block<$2 AND c.rules_version=$3 ORDER BY c.valid_from_block DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION])).rows[0];
-    const priorRun=state ? {signal:state.signal} : (await tx.sql.query<{ signal:CoinCard['signal'] }>('SELECT signal FROM engine_runs WHERE coin=$1 AND block<$2 AND rules_version=$3 ORDER BY block DESC LIMIT 1',[binary(s.coin),s.asOfBlock,RULES_VERSION])).rows[0];
-    if (priorRun?.signal) {
-      const signalTime=this.clock.get(priorRun.signal.asOfBlock) ?? (await tx.sql.query<{ ts:Date }>('SELECT ts FROM engine_block_times WHERE number=$1',[priorRun.signal.asOfBlock])).rows[0];
-      if (signalTime && !shouldRecomputeSignal(seconds(signalTime.ts)*1000,s.asOfSec*1000)) card.signal=priorRun.signal;
-    }
-    const hash=cardHash(card);
+    card.verdict=verdict;
+    await saveCheck(true);
+    // Successive halvings can have identical presentation. A forced record is still a distinct public event.
+    const hash=move.force ? digest({content:cardHash(card),priceRecord:verdict.receipt.id}) : cardHash(card);
     const sameBlock=(await tx.sql.query<{id:string;hash:string}>('SELECT id,hash FROM coin_cards WHERE coin=$1 AND valid_from_block=$2 AND rules_version=$3 ORDER BY id',[binary(s.coin),s.asOfBlock,RULES_VERSION])).rows;
-    const id=sameBlock.find(c=>c.hash===hash)?.id ?? (previous?.hash===hash ? previous.id : `card:${s.coin}:${s.asOfBlock}:${RULES_VERSION}${sameBlock.length ? `:${hash}` : ''}`);
+    const id=sameBlock.find(c=>c.hash===hash)?.id ?? (previous?.hash===hash && !move.force ? previous.id : `card:${s.coin}:${s.asOfBlock}:${RULES_VERSION}${sameBlock.length ? `:${hash}` : ''}`);
     const inserted=(await tx.sql.query('INSERT INTO coin_cards VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING id',[id,binary(s.coin),s.asOfBlock,hash,JSON.stringify(card),RULES_VERSION])).rows.length;
+    card.verdict={...verdict,lastChecked:{block:s.asOfBlock,at:checkedAt}};
     await tx.sql.query(`INSERT INTO coin_card_latest VALUES($1,$2,$3,$4) ON CONFLICT(coin) DO UPDATE SET card_id=excluded.card_id,as_of_block=excluded.as_of_block,data=excluded.data
       WHERE coin_card_latest.as_of_block<=excluded.as_of_block`,[binary(s.coin),id,s.asOfBlock,JSON.stringify(card)]);
     await publishBlueChipMeasurements(tx,s);
@@ -820,8 +863,9 @@ export class EngineWorker {
 export async function tradedSinceCard(db:ChainDb,since:number,settledBefore:number,limit:number,otherSettledBefore=settledBefore-(TRADED_RERATE_OTHER_SEC-TRADED_RERATE_SEC)):Promise<{coin:Address;card:string}[]> {
   if(limit<=0)return [];
   return (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT r.coin,l.card_id AS card FROM read_coins r JOIN coin_card_latest l ON l.coin=r.coin
-    JOIN engine_block_times b ON b.number=l.as_of_block WHERE r.activity>to_timestamp($1) AND r.activity>b.ts
-      AND b.ts<to_timestamp(CASE WHEN r.launchpad='pons' THEN $2::double precision ELSE $4::double precision END)
+    JOIN engine_block_times b ON b.number=l.as_of_block LEFT JOIN coin_rating_checks checked ON checked.coin=l.coin
+    WHERE r.activity>to_timestamp($1) AND r.activity>b.ts
+      AND coalesce(checked.checked_at,b.ts)<to_timestamp(CASE WHEN r.launchpad='pons' THEN $2::double precision ELSE $4::double precision END)
     ORDER BY r.activity DESC,r.coin LIMIT $3`,[since,settledBefore,limit,otherSettledBefore])).rows.map(row=>({coin:hex(row.coin) as Address,card:row.card}));
 }
 

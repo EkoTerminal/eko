@@ -1,3 +1,4 @@
+import { RatingPriceMoveSchema } from '../rating-price.js';
 import { BlueChipSchema, BlueChipCriteriaSchema } from './blue-chip.js';
 import { z } from 'zod';
 import { PlaybookIdSchema, LevelSchema, EvidenceRefSchema, AddressSchema, UntrustedSchema, PoolRefSchema, WalletLabelSchema } from './common.js';
@@ -25,6 +26,9 @@ export function findingsFirst<T extends { level: 'info' | 'monitor' | 'danger' |
   return [...matches.filter(m => m.level === 'danger'), ...matches.filter(m => m.level === 'monitor')];
 }
 export const VerdictSchema = z.object({
+  // TODO(spec): additive live check metadata and factual price movement, independent of the risk level.
+  lastChecked: z.object({ block: z.number().int().nonnegative(), at: z.iso.datetime() }).optional(),
+  priceMove: RatingPriceMoveSchema.optional(),
   coin: AddressSchema,
   // CA-34 (lead): pending means required checks have not run; it is never Clear.
   level: z.enum(['clear', 'monitor', 'danger', 'pending']),

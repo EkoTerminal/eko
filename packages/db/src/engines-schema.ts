@@ -1,4 +1,4 @@
-import { pgTable, bigint, text, jsonb, integer, doublePrecision, timestamp, primaryKey, unique, index } from 'drizzle-orm/pg-core';
+import { pgTable, bigint, text, jsonb, integer, doublePrecision, boolean, timestamp, primaryKey, unique, index } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { bytes } from './types.js';
 const validBlock=()=>bigint('valid_from_block',{mode:'bigint'}).notNull();
@@ -37,3 +37,14 @@ export const campaignReplayJobs=pgTable('campaign_replay_jobs',{id:text('id').pr
 export const outcomeLabelJobs=pgTable('outcome_label_jobs',{id:text('id').primaryKey(),streamId:text('stream_id').notNull(),coin:bytes('coin').notNull(),sourceRevision:text('source_revision').notNull(),input:jsonb('input').notNull(),nextDueSec:bigint('next_due_sec',{mode:'bigint'}).notNull(),status:text('status').notNull(),queuedAt:timestamp('queued_at',{withTimezone:true}).notNull().defaultNow()},t=>[index('outcome_label_jobs_due').on(t.nextDueSec,t.id).where(sql`${t.status}='queued'`)]);
 export const outcomeLabelRevisions=pgTable('outcome_label_revisions',{id:text('id').primaryKey(),jobId:text('job_id').notNull().references(()=>outcomeLabelJobs.id),streamId:text('stream_id').notNull(),revision:integer('revision').notNull(),supersedes:text('supersedes'),data:jsonb('data').notNull(),dependencyIds:jsonb('dependency_ids').notNull(),pins:jsonb('pins').notNull(),recordedAt:timestamp('recorded_at',{withTimezone:true}).notNull().defaultNow()},t=>[unique().on(t.streamId,t.revision),index('outcome_label_revisions_stream').on(t.streamId,t.revision)]);
 export const outcomeLabelEvents=pgTable('outcome_label_events',{id:text('id').primaryKey(),targetId:text('target_id').notNull().references(()=>outcomeLabelRevisions.id),kind:text('kind').notNull(),replacementId:text('replacement_id').references(()=>outcomeLabelRevisions.id),causeId:text('cause_id').notNull(),knownAt:jsonb('known_at').notNull(),recordedAt:timestamp('recorded_at',{withTimezone:true}).notNull().defaultNow()},t=>[index('outcome_label_events_target').on(t.targetId)]);
+
+export const coinRatingChecks=pgTable('coin_rating_checks',{
+  coin:bytes('coin').primaryKey(),checkedBlock:bigint('checked_block',{mode:'bigint'}).notNull(),
+  checkedAt:timestamp('checked_at',{withTimezone:true,mode:'date'}).notNull(),fullBlock:bigint('full_block',{mode:'bigint'}).notNull(),
+  fullPrice:doublePrecision('full_price'),peakRecorded:boolean('peak_recorded').notNull().default(false),outcomeSignature:text('outcome_signature'),
+});
+export const coinRatingPrices=pgTable('coin_rating_prices',{
+  coin:bytes('coin').primaryKey(),price:doublePrecision('price').notNull(),peak:doublePrecision('peak').notNull(),
+  ts:timestamp('ts',{withTimezone:true,mode:'date'}).notNull(),block:bigint('block',{mode:'bigint'}).notNull(),
+  logIndex:integer('log_index').notNull(),txHash:bytes('tx_hash').notNull(),
+});

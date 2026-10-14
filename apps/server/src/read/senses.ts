@@ -50,7 +50,7 @@ export class SensesReadService {
     const result = await this.guard.negotiatedVerdict(coin, version);
     if (!result) return unavailable('coin_unavailable');
     if (!result.verdict) return result.version === 2 ? result : unavailable('coin_unavailable');
-    const block = result.version === 1 ? result.verdict.asOfBlock : result.verdict.cursor.blockNumber;
+    const block = result.version === 1 ? (result.verdict.lastChecked?.block ?? result.verdict.asOfBlock) : result.verdict.cursor.blockNumber;
     if (await this.delayed(block, delay)) return unavailable('delayed_snapshot_unavailable');
     return sanitize(result.version === 1 ? result.verdict : result);
   }
@@ -64,7 +64,7 @@ export class SensesReadService {
   async card(coin: Address, version: 1 | 2, window: '5m' | '1h' | '24h', delay: number) {
     const result = await this.guard.negotiatedCard(coin, version);
     if (!result || !result.card) return unavailable('coin_unavailable');
-    const block = result.version === 1 ? result.card.freshness.block : result.card.freshness.cursor.blockNumber;
+    const block = result.version === 1 ? (result.card.verdict.lastChecked?.block ?? result.card.freshness.block) : result.card.freshness.cursor.blockNumber;
     if (await this.delayed(block, delay)) return unavailable('delayed_snapshot_unavailable');
     if (result.version === 1) {
       const flow = (await readFlows(this.guard.db, [coin], window)).get(coin) ?? unavailableFlow(window, result.card.freshness.block);

@@ -227,3 +227,21 @@ it('keeps an empty measured cohort explicit, withdraws orphaned fill counters, a
   const gap=await service().list();
   expect(gap.counters).toMatchObject({refused:null,missed:null});expect(gap.availability.missed).toEqual({status:'unavailable',reason:'coverage_gap'});
 });
+
+it('check freshness updates do not append or alter scoreboard calls',async()=>{
+  const before=await service().list('calls');
+  await db().sql.query(`INSERT INTO coin_rating_checks(coin,checked_block,checked_at,full_block,full_price) VALUES($1,100,$2,100,1)
+    ON CONFLICT(coin) DO UPDATE SET checked_at=excluded.checked_at`,[binary(coin),new Date(now)]);
+  const after=await service().list('calls');
+  expect(after.rows).toEqual(before.rows);expect(after.snapshot).toBe(before.snapshot);
+});
+
+it('keeps a price-move fact on a published call without changing its level or grade',async()=>{
+  const published=await publication('price-move-call',coin,'clear',now);
+  published.decision={...published.decision as Record<string,unknown>,priceMove:{downFromPeakPct:85}};
+  // The test's first call above is already immutable, so publish the new fact under its own revision identity.
+  published.receiptId='price-move-fact-call';published.revisionId=published.receiptId;
+  await publishReceipt(db(),'engines',published);
+  const row=(await service().list('calls')).rows.find(r=>r.receiptId===published.receiptId)!;
+  expect(row).toMatchObject({level:'clear',detail:{downFromPeakPct:85}});expect(row.grade).toBeUndefined();
+});

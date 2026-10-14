@@ -1,5 +1,6 @@
+import { retentionDb, retentionRules, retentionCursors } from './retention-control.js';
 import { determinationPass, compactUnratedTransfers, compactLifetimeSwaps, reportRows, addReport, retentionBatch, type RetentionTableReport } from './determination-retention.js';
-import { ratingRetention } from './rating-retention.js';
+import { ratingRetention, ratingWindow } from './rating-retention.js';
 import type { ChainDb } from './client.js';
 import { snapshotTrending } from './trending.js';
 import { binary } from './types.js';
@@ -41,9 +42,10 @@ export interface RetentionOptions {
   quietCoinDays?: number;
   /** Rows per transaction (Feed batches are capped lower, see `FEED_BATCH_ROWS`). */
   batchRows?: number;
-  /** Each enabled rule stops starting new batches after this long, in milliseconds, so one rule's backlog never
-   * starves the rules after it. A pass therefore takes at most about one budget per enabled rule. */
+  /** Each rule stops starting batches after this many milliseconds (default 6 seconds). */
   budgetMs?: number;
+  /** Total pass deadline, capped at 115 seconds and checked before each statement. */
+  passBudgetMs?: number;
   now?: () => number;
 }
 export interface RetentionResult {
@@ -53,6 +55,8 @@ export interface RetentionResult {
   /** Trending lists saved before swaps they read could be deleted. */
   trendingSnapshots: number;
   finished: boolean;
+  skippedRules: string[];
+  ratingRows?: Record<string, number>;
   dryRun?: boolean;
   tables?: RetentionTableReport[];
 }
@@ -120,13 +124,19 @@ export async function idleTokens(db: ChainDb, through: bigint, exclude: Uint8Arr
     ORDER BY t.address LIMIT $3`, [through.toString(), exclude, limit])).rows.map(row => row.address);
 }
 
-/** Delete up to `limit` raw events, at or below `through`, of pools that are still unknown. */
+/** Bound the unknown-pool candidate walk even when every old row belongs to a known pool. */
+async function pendingPoolBatch(db: ChainDb, through: bigint, limit: number, after?: unknown[]) {
+  const window = await ratingWindow(db, 'pending_pool_events', ['tx_hash','log_index'], ['bytea','integer'], after, limit);
+  if (!window.length) return { rows: 0, after: undefined };
+  const rows = Number((await db.sql.query<{ n: string }>(`WITH gone AS (DELETE FROM pending_pool_events e USING
+      unnest($2::bytea[],$3::integer[]) candidate(hash,idx)
+      WHERE e.tx_hash=candidate.hash AND e.log_index=candidate.idx AND e.block<=$1
+        AND NOT EXISTS(SELECT 1 FROM pools o WHERE o.id=e.emitter) RETURNING 1)
+    SELECT count(*)::text AS n FROM gone`, [through.toString(),window.map(r=>r.tx_hash),window.map(r=>r.log_index)])).rows[0]?.n ?? 0);
+  return { rows, after: [window.at(-1)!.tx_hash,window.at(-1)!.log_index] };
+}
 export async function prunePendingPoolEvents(db: ChainDb, through: bigint, limit: number): Promise<number> {
-  return Number((await db.sql.query<{ n: string }>(`WITH gone AS (DELETE FROM pending_pool_events e USING (
-      SELECT tx_hash, log_index FROM pending_pool_events p
-      WHERE p.block <= $1 AND NOT EXISTS (SELECT 1 FROM pools o WHERE o.id = p.emitter) LIMIT $2
-    ) d WHERE e.tx_hash = d.tx_hash AND e.log_index = d.log_index RETURNING 1) SELECT count(*)::text AS n FROM gone`,
-    [through.toString(), limit])).rows[0]?.n ?? 0);
+  return (await pendingPoolBatch(db,through,limit)).rows;
 }
 
 /**
@@ -139,7 +149,7 @@ export async function pruneFeed(db: ChainDb, through: bigint, limit: number): Pr
   return Number((await db.sql.query<{ n: string }>(`WITH gone AS (DELETE FROM read_feed f USING (
       SELECT x.id FROM read_feed x WHERE x.kind = ANY($2::text[]) AND x.block <= $1
         AND (x.kind <> 'verdict' OR EXISTS (SELECT 1 FROM read_first_verdict r WHERE r.coin = x.coin AND r.block < x.block))
-      LIMIT $3
+      ORDER BY x.block, x.id LIMIT $3 FOR UPDATE OF x SKIP LOCKED
     ) d WHERE f.id = d.id RETURNING 1) SELECT count(*)::text AS n FROM gone`,
     [through.toString(), FEED_KINDS, limit])).rows[0]?.n ?? 0);
 }
@@ -262,10 +272,11 @@ interface HistoryPass { pauseMs?:number; limit: number; timeLeft: () => boolean;
 export async function pruneCoinHistory(db: ChainDb, coin: QuietCoin, rule: HistoryRule, through: bigint, swapsThrough: bigint | null,
   pairQuotes: Uint8Array[], pass: HistoryPass): Promise<boolean> {
   const { limit, timeLeft, result } = pass, address = coin.address;
-  const drain = async (step: (tx: ChainDb) => Promise<number>) => {
+  const drain = async (step: (tx: ChainDb) => Promise<number>, count: keyof typeof totals) => {
     for (;;) {
       if (!timeLeft()) return false;
       const moved = await retentionBatch(db,step,pass.pauseMs);
+      result[totals[count]] += moved;
       if (moved < limit) return true;
     }
   };
@@ -278,9 +289,9 @@ export async function pruneCoinHistory(db: ChainDb, coin: QuietCoin, rule: Histo
   for (const [kind, step] of steps) {
     const done = await drain(async tx => {
       const moved = await step(tx);
-      if (moved) { await recordPrune(tx, address, rule, through, { [kind]: moved }); result[totals[kind]] += moved; }
+      if (moved) await recordPrune(tx, address, rule, through, { [kind]: moved });
       return moved;
-    });
+    }, kind);
     if (!done) return false;
   }
   if (!coin.swaps || swapsThrough === null) return true;
@@ -291,9 +302,9 @@ export async function pruneCoinHistory(db: ChainDb, coin: QuietCoin, rule: Histo
   if (!started) await recordSwapSummary(db, address, rule, target);
   return drain(async tx => {
     const moved = await pruneSwaps(tx, address, target, limit);
-    if (moved) { await recordPrune(tx, address, rule, target, { swaps: moved }); result.historySwaps += moved; }
+    if (moved) await recordPrune(tx, address, rule, target, { swaps: moved });
     return moved;
-  });
+  }, 'swaps');
 }
 /**
  * One rule's pass over quiet coins: events and transfers go at the rule's horizon, swaps once the coin has also had
@@ -306,7 +317,7 @@ async function pruneQuietCoins(db: ChainDb, rule: HistoryRule, days: number, now
   if (swapsThrough !== null) {
     let complete = false;
     while (!complete && pass.timeLeft()) {
-      const saved = await snapshotTrending(db, swapsThrough, 100);
+      const saved = await snapshotTrending(db, swapsThrough, 1);
       pass.result.trendingSnapshots += saved.saved; complete = saved.complete;
     }
     if (!complete) swapsThrough = null;
@@ -325,161 +336,127 @@ async function pruneQuietCoins(db: ChainDb, rule: HistoryRule, days: number, now
   }
 }
 
-/** One bounded retention pass: quote tokens, idle tokens, unknown-pool events, Feed rows, then Danger and quiet coins,
- * each on its own budget. */
-export async function runRetention(db: ChainDb, options: RetentionOptions): Promise<RetentionResult> {
+/** Walk only token identities, then probe each token's indexed event ranges. */
+export async function rawCandidates(db: ChainDb, through: bigint, quote: Uint8Array[], after: Uint8Array | null, swaps = false) {
+  const event = swaps ? 'swaps' : 'token_transfers', key = swaps ? 'coin' : 'token';
+  return (await db.sql.query<{ address: Uint8Array; eligible: boolean }>(`WITH identities AS MATERIALIZED (
+      SELECT address FROM tokens WHERE deployer IS NULL AND launchpad IS NULL
+        AND ($3::bytea IS NULL OR address>$3) AND NOT address=ANY($2::bytea[]) ORDER BY address LIMIT 200
+    ) SELECT t.address, (EXISTS(SELECT 1 FROM ${event} x WHERE x.${key}=t.address AND x.block<=$1 LIMIT 1)
+      AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.senders_pending LIMIT 1)
+      AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.pricing_pending LIMIT 1)
+      ${swaps ? '' : `AND NOT EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id
+        WHERE (p.currency0=t.address OR p.currency1=t.address) AND e.senders_pending LIMIT 1)
+      AND NOT EXISTS(SELECT 1 FROM coin_card_latest c WHERE c.coin=t.address LIMIT 1)`}) AS eligible
+    FROM identities t ORDER BY t.address`, [through.toString(), quote, after])).rows;
+}
+
+/** Each rule owns a short budget. A timed-out transaction rolls back before the next rule starts. */
+export async function runRetention(source: ChainDb, options: RetentionOptions): Promise<RetentionResult> {
   options = { ...options, dryRun: options.dryRun ?? true };
-  const now = options.now ?? Date.now, started = now(), limit = Math.min(options.batchRows ?? 1000, 5000), budget = options.budgetMs ?? 60_000;
+  const passDeadline = Date.now() + Math.min(options.passBudgetMs ?? 115_000, 115_000);
+  let queryDeadline = passDeadline;
+  const db = retentionDb(source, () => queryDeadline), cursors = retentionCursors(source);
+  const now = options.now ?? Date.now, started = now(), limit = Math.min(options.batchRows ?? 1000, 5000);
   if (options.quietCoinDays !== undefined && options.quietCoinDays <= ENGINE_IDLE_DAYS) throw new Error('Quiet-coin retention must exceed the engines idle window');
+  if (options.idleTokenDays !== undefined && options.idleTokenDays <= ENGINE_IDLE_DAYS) throw new Error('Idle-token retention must exceed the engines idle window');
   if (options.dangerQuietDays !== undefined && !(options.dangerQuietDays >= 1)) throw new Error('Danger-coin retention needs at least one quiet day');
   const result: RetentionResult = { quoteRows: 0, idleTokens: 0, idleRows: 0, pendingRows: 0, feedRows: 0, dangerCoins: 0, quietCoins: 0,
-    historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true };
+    historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, skippedRules: [] };
   if (options.dryRun) { result.dryRun = true; result.tables = []; }
-  let ruleStarted = started;
-  const startRule = () => { ruleStarted = now(); };
-  const timeLeft = () => now() - ruleStarted < budget;
+  const runRule = retentionRules(options, result, budget => { queryDeadline = Math.min(passDeadline, Date.now() + budget); });
   const quote = options.quoteTokens.map(token => binary(token as `0x${string}`));
-  if(options.rawDays!==undefined)quote.push(ZERO_ADDRESS);
-  if (options.settleHours !== undefined || options.rawDays !== undefined) {
-    const reported = new Map<string, RetentionTableReport>();
-    for (const rule of ['settled','raw_cap'] as const) {
-      if (rule === 'settled' ? options.settleHours === undefined : options.rawDays === undefined) continue;
-      startRule(); await determinationPass(db, options, result, quote, started, rule, timeLeft, reported);
-      if (!timeLeft()) result.finished = false;
-    }
-    if (options.rawDays !== undefined) {
-      startRule(); const through = await retentionHorizon(db, options.rawDays, started);
-      if (through != null) {
-        const tokens = (await db.sql.query<{address:Uint8Array}>(`SELECT DISTINCT t.token AS address FROM token_transfers t JOIN tokens identity ON identity.address=t.token WHERE t.block<=$1 AND identity.deployer IS NULL AND identity.launchpad IS NULL
-          AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.token AND (s.senders_pending OR s.pricing_pending))
-          AND NOT EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id WHERE (p.currency0=t.token OR p.currency1=t.token) AND e.senders_pending)
-          AND NOT EXISTS(SELECT 1 FROM coin_card_latest c WHERE c.coin=t.token) AND NOT t.token=ANY($2::bytea[]) ORDER BY t.token LIMIT 200`, [through.toString(),quote])).rows.map(r=>r.address);
-        if (options.dryRun) addReport(result, await reportRows(db,'token_transfers','SELECT * FROM token_transfers WHERE token=ANY($1::bytea[]) AND block<=$2',[tokens,through.toString()]));
-        else for (const token of tokens) while(timeLeft()) {
-          const n=await retentionBatch(db,tx=>compactUnratedTransfers(tx,token,through,limit),options.pauseMs); result.idleRows+=n;
-          if(n<limit)break;
-        }
-      }
-    }
-  }
-  if(options.rawDays!==undefined && quote.length) {
-    startRule();const through=await retentionHorizon(db,Math.min(options.rawDays,options.quoteDays ?? options.rawDays),started);
-    if(through!==null) {
-      if(options.dryRun)addReport(result,await reportRows(db,'token_transfers','SELECT * FROM token_transfers WHERE token=ANY($1::bytea[]) AND block<=$2',[quote,through.toString()]));
-      else while(timeLeft()) {const n=await retentionBatch(db,tx=>compactTransfers(tx,quote,through,limit),options.pauseMs);result.quoteRows+=n;if(n<limit)break;}
-    }
-    if(!timeLeft())result.finished=false;
-  }
-  if(options.rawDays!==undefined) {
-    startRule();const through=await retentionHorizon(db,Math.max(options.rawDays,SWAP_EVIDENCE_DAYS),started);
-    if(through!==null) {
-      let snapshotsDone=Boolean(options.dryRun);
-      while(!snapshotsDone && timeLeft()) {const saved=await snapshotTrending(db,through,100);result.trendingSnapshots+=saved.saved;snapshotsDone=saved.complete;}
-      if(snapshotsDone) {
-        const tokens=(await db.sql.query<{address:Uint8Array}>(`SELECT DISTINCT s.coin AS address FROM swaps s LEFT JOIN tokens t ON t.address=s.coin WHERE t.deployer IS NULL AND t.launchpad IS NULL
-          AND s.block<=$1
-          AND NOT EXISTS(SELECT 1 FROM swaps p WHERE p.coin=s.coin AND (p.senders_pending OR p.pricing_pending)) ORDER BY s.coin LIMIT 200`,[through.toString()])).rows;
-        for(const token of tokens) {
-          if(!timeLeft()) {result.finished=false;break;}
-          if(options.dryRun)addReport(result,await reportRows(db,'swaps','SELECT * FROM swaps WHERE coin=$1 AND block<=$2',[token.address,through.toString()]));
-          else while(timeLeft()) {const n=await retentionBatch(db,tx=>compactLifetimeSwaps(tx,token.address,through,limit,options.firstBlocks,options.cohortSec,options.poolManager,
-            quote.some(q=>Buffer.from(q).equals(Buffer.from(token.address)))),options.pauseMs);result.historySwaps+=n;if(n<limit)break;}
-        }
-      }
-    }
-  }
-  if (options.ratingDays !== undefined) {
-    startRule(); await ratingRetention(db, options, result, started, timeLeft);
-  }
-  // Modern settlement/cap supersedes the old quiet rules. Keep their API for existing operators and tests.
-  if (options.settleHours !== undefined || options.rawDays !== undefined) {
-    for(const [table,days,selection,step] of [
-      ['pending_pool_events',options.pendingPoolDays,`SELECT * FROM pending_pool_events p WHERE block<=$1 AND NOT EXISTS(SELECT 1 FROM pools o WHERE o.id=p.emitter)`,prunePendingPoolEvents],
-      ['read_feed',options.feedDays ?? options.ratingDays,`SELECT * FROM read_feed x WHERE block<=$1 AND kind IN ('verdict','playbook','wash')
-        AND (kind<>'verdict' OR EXISTS(SELECT 1 FROM read_first_verdict r WHERE r.coin=x.coin AND r.block<x.block))`,pruneFeed]
-    ] as const) {
-      if(days===undefined)continue; startRule();const through=await retentionHorizon(db,days,started);if(through===null)continue;
-      if(options.dryRun)addReport(result,await reportRows(db,table,selection,[through.toString()]));
-      else while(timeLeft()) {const n=await retentionBatch(db,tx=>step(tx,through,limit),options.pauseMs);result[table==='read_feed' ? 'feedRows':'pendingRows']+=n;if(n<limit)break;}
-      if(!timeLeft())result.finished=false;
-    }
-    return result;
-  }
-  if (options.dryRun) {
-    const report = async (table:string,selection:string,params:unknown[]) => addReport(result,await reportRows(db,table,selection,params));
-    if (options.quoteDays !== undefined && quote.length) {
-      const through=await retentionHorizon(db,options.quoteDays,started);
-      if(through!==null)await report('token_transfers','SELECT * FROM token_transfers WHERE token=ANY($1::bytea[]) AND block<=$2',[quote,through.toString()]);
-    }
-    if(options.idleTokenDays!==undefined) {
-      if(options.idleTokenDays<=7)throw new Error('Idle-token retention must exceed the engines idle window');
-      const through=await retentionHorizon(db,options.idleTokenDays,started);
-      if(through!==null)await report('token_transfers',`SELECT * FROM token_transfers x WHERE block<=$1 AND NOT token=ANY($2::bytea[])
-        AND NOT EXISTS(SELECT 1 FROM token_transfers y WHERE y.token=x.token AND y.block>$1)`,[through.toString(),quote]);
-    }
-    if(options.pendingPoolDays!==undefined) {
-      const through=await retentionHorizon(db,options.pendingPoolDays,started);
-      if(through!==null)await report('pending_pool_events',`SELECT * FROM pending_pool_events p WHERE block<=$1 AND NOT EXISTS(SELECT 1 FROM pools o WHERE o.id=p.emitter)`,[through.toString()]);
-    }
-    if(options.feedDays!==undefined) {
-      const through=await retentionHorizon(db,options.feedDays,started);
-      if(through!==null)await report('read_feed',`SELECT * FROM read_feed x WHERE kind=ANY($2::text[]) AND block<=$1
-        AND (kind<>'verdict' OR EXISTS(SELECT 1 FROM read_first_verdict r WHERE r.coin=x.coin AND r.block<x.block))`,[through.toString(),FEED_KINDS]);
-    }
-    for(const [rule,days] of [['danger_quiet',options.dangerQuietDays],['quiet_coin',options.quietCoinDays]] as const) {
-      if(days===undefined)continue; const through=await retentionHorizon(db,days,started),swapsThrough=await retentionHorizon(db,Math.max(days,SWAP_EVIDENCE_DAYS),started);
-      if(through===null)continue;
-      const coins=await quietCoins(db,rule,through,swapsThrough,quote,[...quote,ZERO_ADDRESS],null,100);
-      for(const coin of coins) {
-        await report('token_transfers','SELECT * FROM token_transfers WHERE token=$1 AND block<=$2',[coin.address,through.toString()]);
-        await report('liquidity_events',`SELECT e.* ${prunableLiquidity}`,[coin.address,through.toString(),[...quote,ZERO_ADDRESS]]);
-        await report('pons_events','SELECT * FROM pons_events WHERE token=$1 AND block<=$2',[coin.address,through.toString()]);
-        if(coin.swaps && swapsThrough!==null)await report('swaps','SELECT * FROM swaps WHERE coin=$1 AND block<=$2',[coin.address,swapsThrough.toString()]);
-      }
-    }
-    return result;
-  }
-  const drain = async (step: (tx:ChainDb) => Promise<number>, size = limit) => {
-    let total = 0;
-    for (;;) {
-      if (!timeLeft()) { result.finished = false; return total; }
-      const moved = await retentionBatch(db, step, options.pauseMs); total += moved;
-      if (moved < size) return total;
-    }
+  if (options.rawDays !== undefined) quote.push(ZERO_ADDRESS);
+  const modern = options.settleHours !== undefined || options.rawDays !== undefined;
+  const report = async (table: string) => {
+    if (!result.tables?.some(r => r.table === table)) addReport(result, await reportRows(db, table, '', []));
   };
-  if (options.quoteDays !== undefined && quote.length) {
-    startRule();
-    const before = await retentionHorizon(db, options.quoteDays, started);
-    if (before !== null) result.quoteRows = await drain(tx => compactTransfers(tx, quote, before, limit));
-  }
-  if (options.idleTokenDays !== undefined) {
-    if (options.idleTokenDays <= 7) throw new Error('Idle-token retention must exceed the engines idle window');
-    startRule();
-    const before = await retentionHorizon(db, options.idleTokenDays, started);
-    while (before !== null && timeLeft()) {
-      const tokens = await idleTokens(db, before, quote, 200);
-      if (!tokens.length) break;
-      result.idleTokens += tokens.length;
-      result.idleRows += await drain(tx => compactTransfers(tx, tokens, before, limit));
-      if (!timeLeft()) break;
+  if (modern) {
+    for (const rule of ['settled', 'raw_cap'] as const) {
+      if (rule === 'settled' ? options.settleHours === undefined : options.rawDays === undefined) continue;
+      await runRule(rule, async timeLeft => {
+        if (options.dryRun) { for (const table of ['token_transfers','liquidity_events','pons_events','swaps']) await report(table); return; }
+        await determinationPass(db, options, result, quote, started, rule, timeLeft);
+      });
     }
-    if (!timeLeft()) result.finished = false;
   }
-  if (options.pendingPoolDays !== undefined) {
-    startRule();
-    const before = await retentionHorizon(db, options.pendingPoolDays, started);
-    if (before !== null) result.pendingRows = await drain(tx => prunePendingPoolEvents(tx, before, limit));
+  const drain = async (timeLeft: () => boolean, step: (tx: ChainDb) => Promise<number>, count: 'quoteRows' | 'idleRows' | 'pendingRows' | 'feedRows' | 'historySwaps', size = limit) => {
+    while (timeLeft()) {
+      const moved = await retentionBatch(db, step, options.pauseMs); result[count] += moved;
+      if (moved < size) return true;
+    }
+    result.finished = false; return false;
+  };
+  if (options.rawDays !== undefined) {
+    for (const swaps of [false, true]) await runRule(swaps ? 'raw_swaps' : 'unrated_transfers', async timeLeft => {
+      if (options.dryRun) { await report(swaps ? 'swaps' : 'token_transfers'); return; }
+      const through = await retentionHorizon(db, swaps ? Math.max(options.rawDays!, SWAP_EVIDENCE_DAYS) : options.rawDays!, started);
+      if (through == null) return;
+      if (swaps) {
+        let complete = false;
+        while (timeLeft() && !complete) { const saved = await snapshotTrending(db, through, 1); result.trendingSnapshots += saved.saved; complete = saved.complete; }
+        if (!complete) { result.finished = false; return; }
+      }
+      const name = swaps ? 'raw_swaps' : 'unrated_transfers';
+      let after = (cursors.get(name)?.[0] as Uint8Array | undefined) ?? null;
+      while (timeLeft()) {
+        const page = await rawCandidates(db, through, swaps ? [] : quote, after, swaps);
+        if (!page.length) { cursors.delete(name); return; }
+        for (const token of page) {
+          if (!timeLeft()) { result.finished = false; return; }
+          if (token.eligible) {
+            const complete = await drain(timeLeft, tx => swaps ? compactLifetimeSwaps(tx, token.address, through, limit, options.firstBlocks, options.cohortSec,
+              options.poolManager, quote.some(q => Buffer.from(q).equals(Buffer.from(token.address)))) : compactUnratedTransfers(tx, token.address, through, limit), swaps ? 'historySwaps' : 'idleRows');
+            if (!complete) return;
+          }
+          after = token.address; cursors.set(name, [after]);
+        }
+      }
+      result.finished = false;
+    });
   }
-  if (options.feedDays !== undefined) {
-    startRule();
-    const before = await retentionHorizon(db, options.feedDays, started), size = Math.min(limit, FEED_BATCH_ROWS);
-    if (before !== null) result.feedRows = await drain(tx => pruneFeed(tx, before, size), size);
-  }
-  for (const [rule, days] of [['danger_quiet', options.dangerQuietDays], ['quiet_coin', options.quietCoinDays]] as const) {
+  const quoteDays = modern ? (options.rawDays === undefined ? undefined : Math.min(options.rawDays, options.quoteDays ?? options.rawDays)) : options.quoteDays;
+  if (quoteDays !== undefined && quote.length) await runRule('quote_transfers', async timeLeft => {
+    const through = await retentionHorizon(db, quoteDays, started); if (through == null) return;
+    if (options.dryRun) await report('token_transfers');
+    else await drain(timeLeft, tx => compactTransfers(tx, quote, through, limit), 'quoteRows');
+  });
+  if (options.ratingDays !== undefined) await ratingRetention(db, options, result, started, runRule, cursors);
+  if (!modern && options.idleTokenDays !== undefined) await runRule('idle_transfers', async timeLeft => {
+    const through = await retentionHorizon(db, options.idleTokenDays!, started); if (through == null) return;
+    if (options.dryRun) { await report('token_transfers'); return; }
+    while (timeLeft()) {
+      const tokens = await idleTokens(db, through, quote, 200); if (!tokens.length) return;
+      result.idleTokens += tokens.length;
+      if (!await drain(timeLeft, tx => compactTransfers(tx, tokens, through, limit), 'idleRows')) return;
+    }
+    result.finished = false;
+  });
+  for (const [name, days, step, count] of [
+    ['pending_pool_events', options.pendingPoolDays, prunePendingPoolEvents, 'pendingRows'],
+    ['read_feed', options.feedDays ?? (modern ? options.ratingDays : undefined), pruneFeed, 'feedRows']
+  ] as const) {
     if (days === undefined) continue;
-    startRule();
-    await pruneQuietCoins(db, rule, days, started, quote, { limit, timeLeft, result, pauseMs:options.pauseMs });
-    if (!timeLeft()) result.finished = false;
+    await runRule(name, async timeLeft => {
+      const through = await retentionHorizon(db, days, started); if (through == null) return;
+      if (options.dryRun) await report(name);
+      else if (name === 'pending_pool_events') {
+        while (timeLeft()) {
+          const batch = await retentionBatch(db, tx => pendingPoolBatch(tx, through, limit, cursors.get(name)), options.pauseMs);
+          result.pendingRows += batch.rows;
+          if (!batch.after) { cursors.delete(name); return; }
+          cursors.set(name, batch.after);
+        }
+        result.finished = false;
+      } else await drain(timeLeft, tx => step(tx, through, Math.min(limit, FEED_BATCH_ROWS)), count);
+    });
+  }
+  if (!modern) for (const [rule, days] of [['danger_quiet', options.dangerQuietDays], ['quiet_coin', options.quietCoinDays]] as const) {
+    if (days === undefined) continue;
+    await runRule(rule, async timeLeft => {
+      if (options.dryRun) { for (const table of ['token_transfers','liquidity_events','pons_events','swaps']) await report(table); return; }
+      await pruneQuietCoins(db, rule, days, started, quote, { limit, timeLeft, result, pauseMs: options.pauseMs });
+    });
   }
   return result;
 }

@@ -21,6 +21,9 @@ export const CoinSummarySchema = z.object({
   change1hPct: z.number(),
   liquidityUsd: z.number(),
   verdict: VerdictSchema.shape.level,
+  lastChecked: VerdictSchema.shape.lastChecked,
+  ratingAgeSec: z.number().nonnegative().optional(),
+  priceMove: VerdictSchema.shape.priceMove,
   topPlaybook: PlaybookIdSchema.optional(),
   ageSec: z.number(),
   // CA-35: numeric placeholders are never measurements.
@@ -89,6 +92,7 @@ export const PairRowSchema = CoinSummarySchema.extend({
 });
 export type PairRow = z.infer<typeof PairRowSchema>;
 export const FeedItemSchema = z.object({
+  priceMove: VerdictSchema.shape.priceMove,
   guardV2: GuardAssessmentV2Schema.nullable().optional(),
   guardFactorId: GuardFactorIdSchema.optional(),
   guardReasonCode: GuardReasonCodeSchema.optional(),

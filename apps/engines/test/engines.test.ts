@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, hex, openDb, migrate, migrateEngines, rebuildBalances, InProcessBus, ChainDb, ReceiptOutbox } from '@eko/db';
+import { priceMovedCoins, binary, hex, openDb, migrate, migrateEngines, rebuildBalances, InProcessBus, ChainDb, ReceiptOutbox } from '@eko/db';
 import { loadRegistry, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';
@@ -8,6 +8,7 @@ import { decodeEventLog, type Hex } from 'viem';
 import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, staleRatings, tradedSinceCard, unscannedCoins, type LivePlan } from '../src/worker.js';
 import { ReplayCache } from '../src/replay-cache.js';
 import { assembleCard, cardHash, evaluatedPlaybooks } from '../src/card.js';
+import { ratingOutcome } from '../src/rating-outcome.js';
 import { curveProgress,curveProgressAt,type PonsEventRow } from '../src/curve-progress.js';
 import { loadSources } from '../src/sources.js';
 import { coinActivity, refreshClock, type BlockReader, type ClockCache } from '../src/activity.js';
@@ -96,7 +97,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   const db=await setup(false);await swap(db,1,1,100,10);await db.sql.query('UPDATE swaps SET trader=NULL,senders_pending=true');
   await block(db,2);await swap(db,2,1,100,30,actor,coin,2,'uniswap_v3',3);
   const worker=new EngineWorker(db,{now:()=>epoch+10});expect(await worker.poll()).toBeGreaterThan(0);
-  const before=await latest(db);expect(before.verdict.asOfBlock).toBe(2);expect(before.verdict.reasons.join(' ')).toContain('Not fully checked');
+  const before=await latest(db);expect(before.verdict.lastChecked?.block).toBe(2);expect(before.verdict.reasons.join(' ')).toContain('Not fully checked');
   expect((await db.sql.query<{price:number}>('SELECT price FROM engine_runs WHERE coin=$1 AND block=2',[binary(coin)])).rows[0].price).toBe(3);
   expect(await worker.poll()).toBe(0);
   await db.sql.query('UPDATE swaps SET trader=$1,senders_pending=false WHERE block=1',[binary(actor)]);
@@ -349,7 +350,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    await block(db,2,60);await checked(db,2,'sellable',[probe(100,'sellable','960400'),probe(1000,'sellable','960400')],'pons_curve',60);
    const planned:LivePlan[]=[];const next=new EngineWorker(db,{client:client(),now:()=>epoch+120,onLivePlanned:plan=>planned.push(plan)});
    expect(await next.poll()).toBeGreaterThan(0);
-   const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.level).toBe('clear');
+   const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.lastChecked?.block).toBe(2);expect(card.verdict.level).toBe('clear');
    expect(planned.at(-1)).toMatchObject({rerates:1});
    const runs=await count(db,'engine_runs');expect(await next.poll()).toBe(0);expect(await count(db,'engine_runs')).toBe(runs);
   });
@@ -361,7 +362,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    await block(db,2,60);await db.sql.query('UPDATE swaps SET usd=10');
    expect((await staleRatings(db,[coin],10)).map(r=>r.coin)).toEqual([coin]);
    expect(await worker.poll()).toBeGreaterThan(0);
-   const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.evaluatedPlaybooks).toContain('wash_to_trend');
+   const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.lastChecked?.block).toBe(2);expect(card.verdict.evaluatedPlaybooks).toContain('wash_to_trend');
    // Still pending (no sell check yet): the next poll does not select it for re-rating again. (A young coin's own
    // cadence may still plan a checkpoint at the new block.)
    expect(card.verdict.level).toBe('pending');
@@ -400,7 +401,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    // Polls do nothing here: only the loop can write the card.
    worker.poll=async()=>{if(rerates.length)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
    await worker.run();
-   expect(rerates[0]).toBe(1);const card=await latest(db);expect(card.verdict.asOfBlock).toBe(2);expect(card.verdict.level).toBe('clear');
+   expect(rerates[0]).toBe(1);const card=await latest(db);expect(card.verdict.lastChecked?.block).toBe(2);expect(card.verdict.level).toBe('clear');
   });
   it('first-scans radar coins without a card from the loop, a deployer\'s older launch before its sibling',async()=>{
    const db=await traded();await block(db,2,60);
@@ -413,7 +414,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    worker.poll=async()=>{if(scans.length>=2)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
    await worker.run();
    expect(scans.slice(0,2)).toEqual([[1,1],[1,1]]);
-   for(const c of [coin,sibling])expect((await latest(db,c)).verdict.asOfBlock).toBe(2);
+   for(const c of [coin,sibling]){expect((await latest(db,c)).verdict.asOfBlock).toBe(2);expect((await latest(db,c)).verdict.lastChecked?.block).toBe(2);}
    expect(await unscannedCoins(db,epoch-86400,2,10)).toEqual([]);
   });
   it('rates a coin that traded after its card from the loop once the card has settled, newest trade first',async()=>{
@@ -431,7 +432,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    const worker=new EngineWorker(db,{client:client(),now:()=>epoch+600,rerate:true,rerateIdleMs:10,onRerate:(n,first,tradedCards)=>reports.push([n,first,tradedCards])});
    worker.poll=async()=>{if(reports.length)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
    await worker.run();
-   expect(reports[0]).toEqual([1,0,1]);expect((await latest(db)).verdict.asOfBlock).toBe(2);
+   expect(reports[0]).toEqual([1,0,1]);expect((await latest(db)).verdict.lastChecked?.block).toBe(2);
    expect(await tradedSinceCard(db,epoch-86400,epoch+600,10)).toEqual([]);
   });
   it('re-rates pending cards that earlier code wrote, from the loop, in one transaction per group',async()=>{
@@ -451,7 +452,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
     t.sql.query=((text:string,...rest:unknown[])=>{if(String(text).startsWith('LOCK TABLE engine_schedule'))txs.push('tx');return (query as (...a:unknown[])=>unknown)(text,...rest);}) as typeof t.sql.query;return fn(t);})) as typeof db.tx;
    await worker.run();db.tx=tx;
    expect(rerates[0]).toBe(2);expect(txs.length).toBe(1);
-   for(const c of [coin,other])expect((await latest(db,c)).verdict.asOfBlock).toBe(2);
+   for(const c of [coin,other])expect((await latest(db,c)).verdict.lastChecked?.block).toBe(2);
    expect(()=>new EngineWorker(db,{rerateBefore:'not a time'})).toThrow('Invalid engine re-rate time');
   });
   it('re-rates pending cards written before the Clear rules, and never a current one',async()=>{
@@ -482,11 +483,73 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    expect((await loadSources(db,coin,2,client()))!.sellCheckReference).toBeUndefined();
   });
  });
+ it('refreshes unchanged measurements and check time without any appended rating rows, then publishes a changed outcome',async()=>{
+  const db=await setup(false);await pair(db,5000);let now=epoch+100;
+  const worker=new EngineWorker(db,{now:()=>now});await worker.processBlock(1);
+  const before=await latest(db);
+  const measured=structuredClone(before);measured.identity.pools[0].liquidityUsd+=100;measured.supply.top10Pct+=1;measured.verdict.reasons.push('Latest measurement');
+  expect(ratingOutcome(measured,RULES_VERSION)).toBe(ratingOutcome(before,RULES_VERSION));
+  expect(ratingOutcome(before,'changed-rules')).not.toBe(ratingOutcome(before,RULES_VERSION));
+  const coverage=structuredClone(before);coverage.verdict.evaluatedPlaybooks=[];
+  expect(ratingOutcome(coverage,RULES_VERSION)).not.toBe(ratingOutcome(before,RULES_VERSION));
+  const tables=['verdicts','coin_cards','receipt_publications','playbook_matches','verdict_events'];
+  const counts=await Promise.all(tables.map(t=>count(db,t)));
+  await block(db,2,601);await transfer(db,2,actor,1000);now+=60;await worker.processBlock(2);
+  expect(await Promise.all(tables.map(t=>count(db,t)))).toEqual(counts);
+  expect((await latest(db)).verdict.lastChecked).toEqual({block:2,at:new Date(now*1000).toISOString()});
+  expect((await latest(db)).verdict.receipt.id).toBe(before.verdict.receipt.id);
+  expect((await latest(db)).supply.top10Pct).toBeGreaterThan(before.supply.top10Pct);
+  expect((await db.sql.query('SELECT checked_block,full_block FROM coin_rating_checks')).rows[0]).toMatchObject({checked_block:2,full_block:1});
+  await block(db,3,1202);await db.sql.query('UPDATE pools SET fee=150001');now+=60;await worker.processBlock(3);
+  const after=await Promise.all(tables.map(t=>count(db,t)));
+  for(let i=0;i<tables.length;i++)expect(after[i],tables[i]).toBeGreaterThan(counts[i]);
+ });
+ it('prioritizes a halving before the routine interval, publishes a full unchanged-level record, and acknowledges the peak event',async()=>{
+  const db=await setup(false);await pair(db,150001);await swap(db,1,1,100,100);let now=epoch+10;
+  const worker=new EngineWorker(db,{now:()=>now});await worker.processBlock(1);const first=await latest(db);
+  const tables=['verdicts','coin_cards','receipt_publications','playbook_matches','verdict_events'];
+  const counts=await Promise.all(tables.map(t=>count(db,t)));
+  await block(db,2);await swap(db,2,1,100,50,actor,coin,2,'pons_curve',0.5);now++;
+  expect(await tradedSinceCard(db,epoch-1,now-300,16)).toEqual([]);
+  expect(await priceMovedCoins(db,16)).toEqual([{coin,card:(await db.sql.query('SELECT card_id FROM coin_card_latest')).rows[0].card_id}]);
+  await worker.processBlock(2);expect((await latest(db)).verdict.level).toBe(first.verdict.level);
+  for(const [i,t] of tables.entries())expect(await count(db,t),t).toBeGreaterThan(counts[i]);
+  expect((await latest(db)).verdict.priceMove).toMatchObject({downSinceRatedPct:50});
+  const halved=await Promise.all(tables.map(t=>count(db,t)));
+  await block(db,3);await swap(db,3,1,100,25,actor,coin,3,'pons_curve',0.25);now++;await worker.processBlock(3);
+  expect((await latest(db)).verdict.priceMove).toEqual({downSinceRatedPct:50});
+  for(const [i,t] of tables.entries())expect(await count(db,t),t).toBeGreaterThan(halved[i]);
+  const receipt=(await db.sql.query<{data:{deterministicInput:{priceObservation:unknown}}}>('SELECT data FROM receipt_publications ORDER BY publication_sequence DESC LIMIT 1')).rows[0].data;
+  expect(receipt.deterministicInput.priceObservation).toEqual({price:0.25,peak:1,previousFullPrice:0.5});
+  await block(db,4);await swap(db,4,1,100,15,actor,coin,4,'pons_curve',0.15);now++;await worker.processBlock(4);
+  expect((await latest(db)).verdict.priceMove?.downFromPeakPct).toBe(85);
+  const recorded=await Promise.all(tables.map(t=>count(db,t)));
+  await block(db,5);await swap(db,5,1,100,14,actor,coin,5,'pons_curve',0.14);now++;
+  expect(await priceMovedCoins(db,16)).toEqual([]);await worker.processBlock(5);
+  expect(await Promise.all(tables.map(t=>count(db,t)))).toEqual(recorded);
+  await block(db,6);await swap(db,6,1,100,7.5,actor,coin,6,'pons_curve',0.075);now++;
+  expect(await priceMovedCoins(db,16)).toHaveLength(1);await worker.processBlock(6);
+  expect(await count(db,'verdicts')).toBe(recorded[0]+1);
+ });
+ it('runs a price-move re-check ahead of a routine traded re-check in the live queue',async()=>{
+  const db=await setup(false),other=address(6),otherPool=address(7);await token(db,other,1,false);
+  await pair(db,150001);await pair(db,150001,other,1,otherPool);
+  await swap(db,1,1,100,100);await swap(db,1,1,100,100,actor,other,1,'uniswap_v3',1,otherPool);
+  await new EngineWorker(db,{now:()=>epoch+10}).processBlock(1);
+  await block(db,2,601);await swap(db,2,1,100,100,actor,other,601,'uniswap_v3',1,otherPool);
+  await swap(db,2,1,100,50,actor,coin,601);
+  await db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[[binary(coin),binary(other)],epoch+2000]);
+  const order:string[]=[],off=await db.bus.subscribe(m=>{if(m.topic==='card_updated')order.push(String(m.ids.coin));});
+  const worker=new EngineWorker(db,{now:()=>epoch+2000,rerate:true,rerateIdleMs:10,onRerate:()=>worker.stop()});
+  worker.poll=async()=>{await new Promise(resolve=>setTimeout(resolve,10));return 0;};
+  await worker.run();await off();expect(order.slice(0,2)).toEqual([coin,other]);
+  expect((await latest(db)).verdict.priceMove?.downSinceRatedPct).toBe(50);
+ });
  it('versioning is idempotent, emits superseded events, and hashes ignore only stamps',async()=>{
   const db=await setup(false);const worker=new EngineWorker(db);const messages:unknown[]=[];const off=await db.bus.subscribe(m=>messages.push(m));await worker.processBlock(1);const before=await latest(db);await worker.processBlock(1,true);
   expect(await count(db,'coin_cards')).toBe(1);expect(await count(db,'verdicts')).toBe(1);await block(db,2,3601);await worker.processBlock(2);expect(await count(db,'verdicts')).toBe(1);expect(await count(db,'coin_cards')).toBe(1);
   await block(db,3,3602);await pair(db,150000,coin,3);await worker.processBlock(3);expect(await count(db,'verdicts')).toBe(2);expect((await db.sql.query("SELECT * FROM verdict_events WHERE kind='superseded'")).rows).toHaveLength(1);
-  expect(messages.filter((m:any)=>m.topic==='card_updated')).toHaveLength(2);await off();
+  expect(messages.filter((m:any)=>m.topic==='card_updated')).toHaveLength(4);await off();
   expect(cardHash({...before,freshness:{block:999,ageSec:5},verdict:{...before.verdict,asOfBlock:999}})).toBe(cardHash(before));
   expect(cardHash({...before,flow:{...before.flow,washEstPct:70}})).not.toBe(cardHash(before));
  });
@@ -609,7 +672,7 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   const worker=new EngineWorker(db,{readBlock,now:()=>epoch+3});expect(await worker.poll()).toBe(1);
   await db.insert('pons_events',{block:'3',tx_hash:binary(hash(eventId++)),log_index:0,token:binary(coin),emitter:binary(curve),kind:'exempt',data:'{}'});
   expect(await worker.poll()).toBe(1);expect(readBlock).toHaveBeenCalledWith(3);
-  expect((await latest(db)).verdict.asOfBlock).toBe(3);expect(await worker.poll()).toBe(0);expect(await count(db,'chain_blocks')).toBe(0);
+  expect((await latest(db)).verdict.lastChecked?.block).toBe(3);expect(await worker.poll()).toBe(0);expect(await count(db,'chain_blocks')).toBe(0);
  });
  it('reports missing Pons activity timestamps instead of silently dropping their checkpoints',async()=>{
   const db=await database();await token(db);await transfer(db,1,curve,100000);
@@ -760,11 +823,11 @@ describe('engines: live catch-up when the worker lags behind head',()=>{
   // Only checkpoints within 15 minutes of head (swaps 34-39) run; the rest are coalesced, not queued.
   expect(caughtUp).toBe(6);expect(planned[0]).toMatchObject({tasks:6,coins:1,firstScans:1,to:40});expect(planned[0].coalescedCheckpoints).toBeGreaterThanOrEqual(34);
   const [a,b]=[await latest(full),await latest(lagging)];
-  expect(b.verdict.asOfBlock).toBe(40);expect(b.verdict.asOfBlock).toBe(a.verdict.asOfBlock);expect(b.verdict.level).toBe(a.verdict.level);
+  expect(b.verdict.lastChecked?.block).toBe(40);expect(b.verdict.lastChecked?.block).toBe(a.verdict.lastChecked?.block);expect(b.verdict.level).toBe(a.verdict.level);
   // A coin that only has stale checkpoints is still brought current with one evaluation at head.
   await traded(lagging,address(30),41,7300,1,60);await swap(lagging,42,1,100,10,actor,coin,9000,'pons_curve',2);
   const quiet=new EngineWorker(lagging,{now:()=>epoch+9000,liveBacklogSec:900,onLivePlanned:p=>planned.push(p)});
-  expect(await quiet.poll()).toBe(2);expect((await latest(lagging)).verdict.asOfBlock).toBe(42);expect((await latest(lagging,address(30))).verdict.asOfBlock).toBe(42);
+  expect(await quiet.poll()).toBe(2);expect((await latest(lagging)).verdict.lastChecked?.block).toBe(42);expect((await latest(lagging,address(30))).verdict.asOfBlock).toBe(42);
  },60000);
  it('runs first scans before refreshes of scanned coins, newest launch first across deployers',async()=>{
   const db=await database();await traded(db,coin,1,1,10,60);

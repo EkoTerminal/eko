@@ -1,5 +1,5 @@
 import { BlueChipReader } from './blue-chip.js';
-import { binary, hex, readFlows, unavailableFlow, type ChainDb } from '@eko/db';
+import { binary, hex, readFlows, readRatingPrices, liveRating, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
 import { readCurveStates, readPoolLiquidity, readPoolMoney } from './pool-liquidity.js';
 import { CoinCardSchema, VerdictSchema, findingsFirst, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
@@ -161,6 +161,7 @@ export class ReadStore {
       b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,coalesce(b.trades,0) AS trades,coalesce(b.prior_volume,0) AS prior_volume,b.first_minute,s.points AS spark
     FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
     LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
+    const prices=await readRatingPrices(this.db,result.rows.map(t=>hex(t.address)));
     const flows=await readFlows(this.db,result.rows.map(t=>hex(t.address)));
     const sells=await readSellChecks(this.db,result.rows.map(t=>hex(t.address)),this.now());
     const pools=await readPoolLiquidity(this.db,result.rows.filter(t=>t.graduated_block!=null).map(t=>hex(t.address)));
@@ -185,7 +186,8 @@ export class ReadStore {
       const sell=sells.get(hex(t.address)),pool=pools.get(hex(t.address)),traded=trades.get(hex(t.address));
       const spark=traded && traded.length>(t.spark?.length ?? 0) ? traded : t.spark;
       const card = t.data ? withSellCheck(CoinCardSchema.parse(t.data),sell) : null;
-      const verdict = t.verdict ? VerdictSchema.parse(t.verdict) : null;
+      const verdict = t.verdict ? liveRating(VerdictSchema.parse(t.verdict),prices.get(hex(t.address))) : null;
+      if(card && verdict) {card.verdict=verdict;if(verdict.lastChecked)card.freshness.ageSec=Math.max(0,Math.floor(now-Date.parse(verdict.lastChecked.at)/1000));}
       const flow=flows.get(hex(t.address))??unavailableFlow('1h');
       const {meta:flowMeta,...flowValues}=flow;
       if(card){card.flow=flowValues;card.meta={...card.meta,flow:flowMeta};}
@@ -215,6 +217,8 @@ export class ReadStore {
         liquidityUsd: pool ?? (unavailable.includes('liquidity') ? 0 : card!.liquidity.depthUsd.pct2),
         marketCapUsd: !t.pricing_pending && supply != null && t.price != null ? t.price*supply : undefined,
         verdict: verdict?.level ?? 'pending', verdictPending: !verdict,
+        lastChecked:verdict?.lastChecked, priceMove:verdict?.priceMove,
+        ratingAgeSec:verdict?.lastChecked ? Math.max(0,Math.floor(now-Date.parse(verdict.lastChecked.at)/1000)) : undefined,
         ...(verdict?.playbooks.some(m => m.level === 'danger' && isHardDanger(m.id)) ? { hardDanger: true } : {}),
         evaluatedPlaybooks: verdict?.evaluatedPlaybooks,
         missingChecks: [...new Set(Object.values(card?.meta ?? {}).flatMap(m => m.missing ?? []))],
@@ -234,11 +238,13 @@ export class ReadStore {
     const result = await this.db.sql.query<{ data: unknown }>('SELECT data FROM coin_card_latest WHERE coin=$1',[binary(address)]);
     if (!result.rows.length) return null;
     const card = withSellCheck(CoinCardSchema.parse(result.rows[0].data),(await readSellChecks(this.db,[address.toLowerCase() as Address],this.now())).get(address.toLowerCase() as Address));
-    // The card's age is the age of its rating. `freshness.block` is the oldest block among its sections, and the
+    const prices=(await readRatingPrices(this.db,[address])).get(address.toLowerCase() as Address);
+    card.verdict=liveRating(card.verdict,prices);
+    // The card's age is the age of its latest check. `freshness.block` is the oldest block among its sections, and the
     // identity section dates from the launch, so reading that block made every card as old as its coin: a coin page
     // said "as of 275647 s ago" and held the trade panel as stale.
     const times = await this.db.sql.query<{ ts: Date }>(`SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1`,[card.verdict.asOfBlock ?? card.freshness.block]);
-    card.freshness.ageSec = times.rows[0] ? Math.max(0,Math.floor((this.now()-new Date(times.rows[0].ts).getTime())/1000)) : card.freshness.ageSec;
+    card.freshness.ageSec = card.verdict.lastChecked ? Math.max(0,Math.floor((this.now()-Date.parse(card.verdict.lastChecked.at))/1000)) : times.rows[0] ? Math.max(0,Math.floor((this.now()-new Date(times.rows[0].ts).getTime())/1000)) : card.freshness.ageSec;
     const flow=(await readFlows(this.db,[address])).get(address)??unavailableFlow('1h',card.freshness.block);
     const {meta:flowMeta,...flowValues}=flow;
     card.flow=flowValues;card.meta={...card.meta,flow:flowMeta};
@@ -247,8 +253,12 @@ export class ReadStore {
     return card;
   }
   async verdict(address: Address): Promise<Verdict | null> {
-    const result = await this.db.sql.query<{ data:unknown }>(`SELECT data FROM verdicts v WHERE coin=$1 AND NOT EXISTS
-      (SELECT 1 FROM verdict_events e WHERE e.verdict_id=v.id AND e.kind='orphaned') ORDER BY valid_from_block DESC,id DESC LIMIT 1`,[binary(address)]);
-    return result.rows[0] ? VerdictSchema.parse(result.rows[0].data) : null;
+    const result = await this.db.sql.query<{ data:unknown }>(`SELECT v.data FROM verdicts v LEFT JOIN receipt_publications p ON p.id=v.id WHERE v.coin=$1 AND NOT EXISTS
+      (SELECT 1 FROM verdict_events e WHERE e.verdict_id=v.id AND e.kind='orphaned') ORDER BY valid_from_block DESC,p.publication_sequence DESC NULLS LAST,v.id DESC LIMIT 1`,[binary(address)]);
+    if(!result.rows[0])return null;
+    const verdict=VerdictSchema.parse(result.rows[0].data);
+    const latest=(await this.db.sql.query<{data:CoinCard}>('SELECT data FROM coin_card_latest WHERE coin=$1',[binary(address)])).rows[0];
+    const measured=latest?.data.verdict.receipt.id===verdict.receipt.id ? latest.data.verdict : verdict;
+    return liveRating(measured,(await readRatingPrices(this.db,[address])).get(address.toLowerCase() as Address));
   }
 }

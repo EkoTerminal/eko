@@ -44,6 +44,22 @@ describe('v1 indexed read routes',()=>{
     for(const tf of ['1m','15m','1h','4h','1d','1s','15s'])expect((await built.app.inject(`/v1/coins/${card.identity.address}/candles?tf=${tf}&from=1&to=2`)).statusCode).toBe(200);
     const feed=(await built.app.inject('/v1/feed')).json().rows;expect(feed.some((r:{kind:string})=>r.kind==='verdict')).toBe(true);expect(feed.find((r:{kind:string})=>r.kind==='verdict').firstVerdictMs).toBe(0);
   });
+  it('uses last checked time for API freshness, preserves the original receipt block, and exposes live price facts',async()=>{
+    const db=built.ctx.dbh.chain,coin=card.identity.address;
+    await db.sql.query('UPDATE coin_rating_checks SET checked_at=$2,checked_block=$3 WHERE coin=$1',[binary(coin),new Date(now-60_000),card.verdict.asOfBlock]);
+    const response=(await built.app.inject(`/v1/coins/${coin}`)).json();
+    expect(response.freshness.ageSec).toBe(60);expect(response.verdict.asOfBlock).toBe(card.verdict.asOfBlock);
+    expect(response.verdict.lastChecked.at).toBe(new Date(now-60_000).toISOString());
+    const prices=(await db.sql.query('SELECT * FROM coin_rating_prices WHERE coin=$1',[binary(coin)])).rows[0];
+    if(!prices)throw new Error('Fixture must include a priced trade');
+    await db.sql.query('UPDATE coin_rating_prices SET price=peak*0.15 WHERE coin=$1',[binary(coin)]);
+    const verdict=(await built.app.inject(`/v1/coins/${coin}/verdict`)).json();
+    expect(verdict.priceMove.downFromPeakPct).toBe(85);
+    expect((await built.ctx.reads.store.rows(coin))[0].row.priceMove?.downFromPeakPct).toBe(85);
+    expect((await built.ctx.reads.store.rows(coin))[0].row.ratingAgeSec).toBe(60);
+    expect(verdict.level).toBe(card.verdict.level);
+    await db.sql.query('UPDATE coin_rating_prices SET price=$2 WHERE coin=$1',[binary(coin),prices.price]);
+  });
   it('keeps identity-only tokens pending in search and never fabricates a card',async()=>{
     const db=built.ctx.dbh.chain;
     await db.insert('tokens',{address:binary(sampleAddress(801)),first_block:'1',block:'1',name:'Pool sample',symbol:'POOL',launchpad:'other'});
@@ -124,9 +140,15 @@ describe('v1 indexed read routes',()=>{
       const db=built.ctx.dbh.chain;
       const tx=`0x${'1'.repeat(64)}`;
       await db.insert('swaps',{ts:new Date(now),block:card.verdict.asOfBlock,tx_hash:binary(tx),log_index:0,venue:'pons_curve',pool_id:binary(card.identity.address),coin:binary(card.identity.address),quote_asset:binary(sampleAddress(0)),trader:binary(sampleAddress(2)),tx_from:binary(sampleAddress(2)),tx_to:binary(card.identity.address),side:1,amount_coin:'1000000000000000000',amount_quote:'1',price_quote:1,usd:10,priced_block:card.verdict.asOfBlock});
+      const prices=(await db.sql.query<{price:number}>('SELECT price FROM coin_rating_prices WHERE coin=$1',[binary(card.identity.address)])).rows[0];
+      const publications=(await db.sql.query('SELECT count(*) AS n FROM receipt_publications')).rows;
+      await db.sql.query('UPDATE coin_rating_prices SET price=peak*0.15 WHERE coin=$1',[binary(card.identity.address)]);
       bus.publish({topic:'swap',ids:{txHash:tx,logIndex:0}});bus.publish({topic:'swap',ids:{txHash:tx,logIndex:0}});await live.drain();
       await new Promise(resolve=>setTimeout(resolve,1100));await live.drain();
       const events=socket.messages.flatMap(m=>{const parsed=WsServerSchema.parse(m);return parsed.t==='ev' ? [parsed] : [];});
+      expect(events.filter(e=>e.kind==='verdict').at(-1)?.data).toMatchObject({level:card.verdict.level,priceMove:{downFromPeakPct:85},lastChecked:{at:new Date(now-60_000).toISOString()}});
+      expect((await db.sql.query('SELECT count(*) AS n FROM receipt_publications')).rows).toEqual(publications);
+      await db.sql.query('UPDATE coin_rating_prices SET price=$2 WHERE coin=$1',[binary(card.identity.address),prices.price]);
       expect(events.filter(e=>e.kind==='card')).toHaveLength(2);expect(events.filter(e=>e.kind==='tick')).toHaveLength(1);expect(events.filter(e=>e.kind==='rerank')).toHaveLength(1);
       const seq=events.filter(e=>e.ch==='radar').map(e=>e.seq);expect(seq).toEqual(seq.map((_,i)=>i+1));
       const sent=socket.messages.length;

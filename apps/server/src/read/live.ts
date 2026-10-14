@@ -1,5 +1,5 @@
 import { binary, hex, type BusMessage, type EngineBus } from '@eko/db';
-import { VerdictSchema, type Address, type Tick } from '@eko/shared';
+import { type Address, type Tick, type Verdict } from '@eko/shared';
 import type { ReadServices } from '../http/v1/reads.js';
 import type { Hub } from '../ws/hub.js';
 import { reportError } from '../obs/errors.js';
@@ -13,6 +13,8 @@ export class ReadLive {
   private flows=new Map<Address,import('@eko/shared').Flow>();
   private markers=new Map<string,string>();
   private ticks=new Map<Address,Tick>();
+  private priceVerdicts=new Map<Address,Verdict>();
+  private priceFacts=new Map<Address,string>();
   private seen=new Set<string>();
   private swaps=new Set<string>();
   constructor(readonly services:ReadServices,readonly hub:Hub) {}
@@ -26,7 +28,7 @@ export class ReadLive {
       if(!['flow_updated','card_updated','verdict_created','pair_created','swap','guard_verdict_created','guard_revision_invalidated'].includes(message.topic))return;
       this.queue=this.queue.then(()=>this.handle(message)).catch(error=>reportError(error,{where:'read live'}));
     });
-    this.timer=setInterval(()=>{for(const [coin,tick] of this.ticks)this.hub.publish<'coin','tick'>(`coin:${coin}`,'tick',tick);this.ticks.clear();for(const [coin,flow] of this.flows)this.hub.publish<'flow','flow'>(`flow:${coin}`,'flow',flow);this.flows.clear();},1000);
+    this.timer=setInterval(()=>{for(const [coin,tick] of this.ticks)this.hub.publish<'coin','tick'>(`coin:${coin}`,'tick',tick);this.ticks.clear();for(const [coin,verdict] of this.priceVerdicts)this.hub.publish<'coin','verdict'>(`coin:${coin}`,'verdict',verdict);this.priceVerdicts.clear();for(const [coin,flow] of this.flows)this.hub.publish<'flow','flow'>(`flow:${coin}`,'flow',flow);this.flows.clear();},1000);
     this.timer.unref();
   }
   async drain(){for(;;){const queue=this.queue;await queue;if(queue===this.queue)return;}}
@@ -51,8 +53,8 @@ export class ReadLive {
       const result=await db.sql.query<{coin:Uint8Array;data:unknown;valid_from_block:string}>(`SELECT coin,data,valid_from_block FROM ${card ? 'coin_cards' : 'verdicts'} WHERE id=$1`,[message.ids.id]);
       const source=result.rows[0];if(!source)return;
       coin=hex(source.coin);block=Number(source.valid_from_block);
-      if(card){const projected=await this.services.coins.card(coin);if(projected)this.hub.publish<'coin','card'>(`coin:${coin}`,'card',projected);}
-      else this.hub.publish<'coin','verdict'>(`coin:${coin}`,'verdict',VerdictSchema.parse(source.data));
+      if(card){const projected=await this.services.coins.card(coin);if(projected){this.hub.publish<'coin','card'>(`coin:${coin}`,'card',projected);this.hub.publish<'coin','verdict'>(`coin:${coin}`,'verdict',projected.verdict);block=projected.verdict.lastChecked?.block ?? block;}}
+      else {const projected=await this.services.coins.verdict(coin);if(projected)this.hub.publish<'coin','verdict'>(`coin:${coin}`,'verdict',projected);}
     } else if(message.topic==='swap') {
       const result=await db.sql.query<{coin:Uint8Array;ts:Date;block:string;usd:number | null;amount_coin:string;decimals:number | null}>(`SELECT s.*,t.decimals FROM swaps s JOIN tokens t ON t.address=s.coin WHERE tx_hash=$1 AND log_index=$2 AND s.ts>to_timestamp($3::double precision)-interval '1 hour' ORDER BY ts DESC LIMIT 1`,
         // A swap notice is for a trade that just happened. Without the time bound the lookup walks the swaps' time index
@@ -75,6 +77,13 @@ export class ReadLive {
   }
   private async upsert(coin:Address,block?:number) {
     const entry=(await this.services.store.rows(coin))[0];
+    // Price facts are live measurements, independent of the rating queue. Coalesce them with ticks so coin pages
+    // see a crash within the next second, while lastChecked still identifies the last completed engine check.
+    if(entry?.card) {
+      const fact=JSON.stringify(entry.card.verdict.priceMove ?? null);
+      if(this.priceFacts.get(coin)!==fact) {this.priceFacts.set(coin,fact);this.priceVerdicts.set(coin,entry.card.verdict);}
+      if(this.priceFacts.size>5000)this.priceFacts.delete(this.priceFacts.keys().next().value!);
+    }
     const row=entry?.eligible && this.services.store.now()-entry.activity<7*86400000 ? entry.row : null;
     if(row)this.hub.publish<'radar','row_upsert'>('radar','row_upsert',row);
     else this.hub.publish<'radar','row_remove'>('radar','row_remove',{address:coin});

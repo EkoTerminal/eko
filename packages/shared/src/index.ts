@@ -17,3 +17,5 @@ export * from './canonical.js';
 export * from './telemetry.js';
 export * from './telegram.js';
 export * from './census-gate.js';
+
+export * from './rating-price.js';

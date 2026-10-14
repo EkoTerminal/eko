@@ -1,3 +1,4 @@
+import { repairRatingPricesAfterReorg } from './rating-checks.js';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
@@ -77,6 +78,7 @@ export class ChainDb {
     await rebuildBalances(this);
     await this.sql.query('DELETE FROM bars_1m WHERE last_block > $1', [n.toString()]);
     await rebuildBars(this, 0n, n);
+    await repairRatingPricesAfterReorg(this,n);
     const ancestorHash = await this.blockHash(n);
     await this.sql.query('UPDATE ingest_cursors SET block=$1,hash=$2 WHERE block > $1', [n.toString(), ancestorHash ? binary(ancestorHash) : null]);
     await this.sql.query("UPDATE ingest_ranges SET status='todo',lease_owner=NULL,lease_until=NULL,attempts=0,last_error=NULL,error_repeats=0 WHERE to_block > $1", [n.toString()]);

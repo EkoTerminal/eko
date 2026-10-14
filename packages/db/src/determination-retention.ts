@@ -1,3 +1,4 @@
+import { retentionLimits } from './retention-control.js';
 import type { ChainDb } from './client.js';
 import { addLifetimePons, addLifetimeSwaps, addLifetimeLiquidity, type LifetimeLiquidityRow, emptyLifetime, packSwap, readLifetime, saveLifetime, recordBuyerStatistics } from './lifetime.js';
 import { hex } from './types.js';
@@ -6,26 +7,24 @@ import { compactTransfers, quietCoins, retentionHorizon, SWAP_EVIDENCE_DAYS } fr
 import { preserveGradePrices } from './rating-retention.js';
 import { snapshotTrending } from './trending.js';
 
-export interface RetentionTableReport { table: string; rows: number; estimatedBytes: number }
-/** Count selected tuples without running delete triggers, writing summaries or taking row locks. */
-export async function reportRows(db: ChainDb, table: string, selection: string, params: unknown[]): Promise<RetentionTableReport> {
-  const row = (await db.sql.query<{ n: string; bytes: string }>(`SELECT count(*)::text AS n,coalesce(sum(pg_column_size(x)),0)::text AS bytes FROM (${selection}) x`, params)).rows[0];
-  return { table, rows: Number(row?.n ?? 0), estimatedBytes: Number(row?.bytes ?? 0) };
+export interface RetentionTableReport { table: string; rows: number; estimatedBytes: number; estimateSkipped?: boolean }
+/** Eligibility estimates are deliberately skipped: counting payloads scans the very backlog being pruned. */
+export async function reportRows(_db: ChainDb, table: string, _selection: string, _params: unknown[]): Promise<RetentionTableReport> {
+  return { table, rows: 0, estimatedBytes: 0, estimateSkipped: true };
 }
-export const retentionLog = (dryRun: boolean, r: RetentionTableReport) => `retention dry_run=${dryRun} table=${r.table} rows=${r.rows} estimated_bytes=${r.estimatedBytes}`;
+export const retentionLog = (dryRun: boolean, r: RetentionTableReport) => `retention dry_run=${dryRun} table=${r.table} rows=${r.rows} estimated_bytes=${r.estimatedBytes}${r.estimateSkipped ? ' estimate_skipped=true' : ''}`;
 
 /** Budget, transaction timeouts and pauses apply to old rules too. No session-wide trigger disabling. */
 export async function retentionBatch<T>(db: ChainDb, work: (tx: ChainDb) => Promise<T>, pauseMs = 100): Promise<T> {
-  const value = await db.tx(async tx => {
-    await tx.sql.query("SET LOCAL lock_timeout='1s'");
-    await tx.sql.query("SET LOCAL statement_timeout='5s'");
+  try { return await db.tx(async tx => {
+    await retentionLimits(tx);
     await tx.sql.query("SELECT set_config('eko.retention','on',true)");
     const result = await work(tx);
     await tx.sql.query("SELECT set_config('eko.retention','off',true)");
     return result;
-  });
-  if (pauseMs) await new Promise(resolve => setTimeout(resolve, pauseMs));
-  return value;
+  }); } finally {
+    if (pauseMs) await new Promise(resolve => setTimeout(resolve, pauseMs));
+  }
 }
 async function preserveGraduation(db: ChainDb, coin: Uint8Array, through: bigint) {
   await db.sql.query(`UPDATE coin_lifetime l SET opening_holdings=x.data FROM tokens t CROSS JOIN LATERAL (
@@ -59,7 +58,8 @@ export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, throug
   const rows = (await db.sql.query<Record<string, unknown>>(`WITH edge AS (SELECT date_trunc('minute',ts)+interval '1 minute' AS ts
     FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY ts LIMIT 1 OFFSET $3)
     SELECT * FROM swaps WHERE coin=$1 AND block<=$2 AND ts<coalesce((SELECT ts FROM edge),'infinity'::timestamptz)
-    ORDER BY block,log_index,tx_hash LIMIT $4 FOR UPDATE`, [coin, through.toString(), Math.max(0, limit-1),Math.max(1000,limit*2)+1])).rows;
+    ORDER BY ts LIMIT $4 FOR UPDATE`, [coin, through.toString(), Math.max(0, limit-1),Math.max(1000,limit*2)+1])).rows;
+  rows.sort((a,b)=>BigInt(String(a.block))<BigInt(String(b.block)) ? -1 : BigInt(String(a.block))>BigInt(String(b.block)) ? 1 : Number(a.log_index)-Number(b.log_index) || hex(a.tx_hash as Uint8Array).localeCompare(hex(b.tx_hash as Uint8Array)));
   // A pathological minute is retained rather than creating an unbounded transaction.
   if (!rows.length || rows.length > Math.max(1000,limit*2)) return 0;
   await recordBuyerStatistics(db,coin,rows);
@@ -87,7 +87,7 @@ export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, throug
     buyers=(SELECT count(*) FROM read_buyers WHERE coin=$1),swaps=history_prunes.swaps+excluded.swaps,updated_at=now()`,
     [coin, String(last.block), rows[0]!.ts, last.ts, data.buyers.length, rows.length]);
   await db.sql.query(`UPDATE history_prunes SET buyer_stats_complete=true,buyers=(SELECT count(*) FROM coin_buyer_firsts WHERE coin=$1)+(SELECT coalesce(sum(n),0) FROM coin_unknown_buys WHERE coin=$1) WHERE coin=$1`,[coin]);
-  await db.sql.query(`DELETE FROM swaps s USING unnest($2::bytea[],$3::integer[]) p(hash,idx) WHERE s.coin=$1 AND s.tx_hash=p.hash AND s.log_index=p.idx`,[coin,rows.map(r=>r.tx_hash),rows.map(r=>r.log_index)]);
+  await db.sql.query(`DELETE FROM swaps s USING unnest($2::timestamptz[],$3::bytea[],$4::integer[]) p(ts,hash,idx) WHERE s.coin=$1 AND s.ts=p.ts AND s.tx_hash=p.hash AND s.log_index=p.idx`,[coin,rows.map(r=>new Date(r.ts as string).toISOString()),rows.map(r=>r.tx_hash),rows.map(r=>r.log_index)]);
   return rows.length;
 }
 async function compactPons(db: ChainDb, coin: Uint8Array, through: bigint, limit: number): Promise<number> {
@@ -101,9 +101,10 @@ async function compactPons(db: ChainDb, coin: Uint8Array, through: bigint, limit
   return rows.length;
 }
 async function compactLiquidity(db:ChainDb,coin:Uint8Array,through:bigint,quotes:Uint8Array[],limit:number) {
-  const rows=(await db.sql.query<LifetimeLiquidityRow>(`SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id
-    WHERE ((p.currency0=$1 AND p.currency1=ANY($3::bytea[])) OR (p.currency1=$1 AND p.currency0=ANY($3::bytea[]))) AND e.block<=$2
-    ORDER BY e.block,e.log_index,e.tx_hash LIMIT $4 FOR UPDATE OF e`,[coin,through.toString(),quotes,limit])).rows;
+  const rows=(await db.sql.query<LifetimeLiquidityRow>(`SELECT e.* FROM pools p CROSS JOIN LATERAL (
+      SELECT x.* FROM liquidity_events x WHERE x.pool_id=p.id AND x.block<=$2 ORDER BY x.block,x.log_index,x.tx_hash LIMIT $4 FOR UPDATE OF x
+    ) e WHERE ((p.currency0=$1 AND p.currency1=ANY($3::bytea[])) OR (p.currency1=$1 AND p.currency0=ANY($3::bytea[])))
+    ORDER BY e.block,e.log_index,e.tx_hash LIMIT $4`,[coin,through.toString(),quotes,limit])).rows;
   if(!rows.length)return 0;
   const token=(await db.sql.query<{launchpad:string;deployer:Uint8Array}>('SELECT launchpad,deployer FROM tokens WHERE address=$1',[coin])).rows[0]!;
   const data=await readLifetime(db,coin) ?? emptyLifetime();
@@ -162,7 +163,7 @@ export async function determinationPass(db: ChainDb, options: RetentionOptions, 
   let swapsThrough = await retentionHorizon(db, Math.max(days, SWAP_EVIDENCE_DAYS), nowMs);
   if (swapsThrough != null && !options.dryRun) {
     let done = false;
-    while (timeLeft() && !done) { const saved = await snapshotTrending(db, swapsThrough, 100); result.trendingSnapshots += saved.saved; done = saved.complete; }
+    while (timeLeft() && !done) { const saved = await snapshotTrending(db, swapsThrough, 1); result.trendingSnapshots += saved.saved; done = saved.complete; }
     if (!done) swapsThrough = null;
   }
   let after: Uint8Array | null = null;
@@ -189,7 +190,7 @@ export async function determinationPass(db: ChainDb, options: RetentionOptions, 
 export function addReport(result: RetentionResult, r: RetentionTableReport) {
   const rows = result.tables ??= [];
   const prior = rows.find(x => x.table === r.table);
-  if (prior) { prior.rows += r.rows; prior.estimatedBytes += r.estimatedBytes; } else rows.push(r);
+  if (prior) { prior.rows += r.rows; prior.estimatedBytes += r.estimatedBytes; if (r.estimateSkipped) prior.estimateSkipped = true; } else rows.push(r);
 }
 
 export async function compactUnratedTransfers(db:ChainDb,coin:Uint8Array,through:bigint,limit:number) {

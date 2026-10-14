@@ -138,7 +138,7 @@ function transform(value: unknown, hash: boolean, key = ''): unknown {
       else if (/usd/i.test(stat.label ?? '') && rounded!==0) rounded=Number(rounded.toPrecision(2));
       value={...value,value:rounded};
     }
-    return Object.fromEntries(Object.entries(value as object).filter(([k]) => !hash || !['freshness','asOfBlock','block','receipt'].includes(k)).map(([k,v]) => [k,transform(v,hash,k)]));
+    return Object.fromEntries(Object.entries(value as object).filter(([k]) => !hash || !['freshness','asOfBlock','block','receipt','lastChecked'].includes(k)).map(([k,v]) => [k,transform(v,hash,k)]));
   }
   if (typeof value==='number') {
     if (key==='curvePct') return Math.round(value*100)/100;

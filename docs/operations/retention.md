@@ -8,12 +8,13 @@ onboarding and scan jobs. It does not add another scheduler or an automatic chai
 
 | Variable | Default | Meaning |
 |---|---:|---|
-| `RETENTION_DRY_RUN` | `true` | Report eligible rows and estimated tuple/payload bytes, without deleting, updating payloads, creating baselines or saving snapshots. Applies to the older retention rules too. |
+| `RETENTION_ENABLED` | `true` | Set false to stop scheduled passes and explicit worker ticks. |
+| `RETENTION_DRY_RUN` | `true` | Report configured tables with `estimateSkipped=true`, without scanning payloads or mutating data. Zero counts in this mode are placeholders, not eligibility measurements. |
 | `RETENTION_SETTLE_HOURS` | `24` | A current card plus no swap or transfer for this long settles a coin, regardless of launchpad or verdict. |
 | `RETENTION_RAW_DAYS` | `7` | Compact older rated-coin history even when the coin remains active. Also compact unrated/quote transfers. Reader exceptions below remain. |
 | `RETENTION_RATING_DAYS` | `7` | Keep recent rating records and the latest versions, plus the reader/FK boundaries below. |
 
-All four are part of the build identity. Deployment with defaults changes no existing row data. Migration
+All five are part of the build identity. Deployment with defaults changes no existing row data. Migration
 `0201_determination_retention` belongs to `eko_engine_migrations` and adds summaries, nullable receipt payloads,
 retention-specific trigger guards and lookup indexes. The worker still ticks every ten minutes. Existing optional
 quote-transfer, idle-token, Feed, unknown-pool, Danger and quiet settings remain recognized. Modern settlement/raw
@@ -115,20 +116,30 @@ valid, and the receipts worker can recover an unconsumed tombstone and commit it
 
 ## Reports, batches and storage estimates
 
-A worker report contains one line per eligible table, for example:
+The JSON pass line retains its existing counters, `finished`, and optional `dryRun`/`tables`. It adds:
 
-```text
-retention dry_run=true table=swaps rows=1200 estimated_bytes=640000
-```
+- `skippedRules`: rule names only for lock/statement timeouts, with `finished=false`. No SQL or row data is logged.
+- `ratingRows`: committed row counts (including zero) for receipt publications/items, fingerprint dependencies,
+  shadows, cards, matches and verdicts. Receipt counts measure payload archival, not header deletion.
+- `tables[].estimateSkipped`: dry-run eligibility/byte estimates were skipped. The accompanying zeros are placeholders.
 
-Rows are policy candidates, including later deletion of unreferenced parents after their eligible children/payloads.
-Bytes estimate stored tuple or payload-column widths, not index space, total WAL or instant filesystem reclamation.
-Settlement and cap reports deduplicate the same coin/table prefix. Real passes report deleted rows; a zero byte
-estimate in a real pass means bytes were not measured.
+Dry runs do not count eligible tuples, detoast payloads, or simulate cascading eligibility. The earlier exact-report
+assertions were replaced with skipped-estimate and read-only checks. Real mode's table counts still describe committed
+work, with `estimatedBytes=0` when bytes were not measured.
 
-Transactions normally process 1,000 rows, capped at 5,000. Swaps retain complete minutes, bounded to at most 10,000
-rows. Transactions use a one-second lock timeout, five-second statement timeout and 100 ms pause between batches.
-Each rule stops starting batches after roughly a minute. Transaction-local `eko.retention` suppresses only retention
+Transactions normally process 1,000 candidates, capped at 5,000. Swaps retain complete minutes, bounded to at most
+10,000 rows. Every query, including direct reads, has a five-second statement timeout and one-second lock timeout.
+Retention transactions disable parallel gather workers and discourage sequential scans/hash/merge joins so bounded
+candidate windows use indexed probes. `read_feed` locks selected rows with `SKIP LOCKED` in block/id order. A table-level
+lock can still cause a timeout, which skips that rule. Pauses remain 100 ms after batches, including failed batches.
+
+Each rule, including each rating selector and receipt archival, gets six seconds to start batches. The pass has a
+115-second deadline, rechecked before each SQL statement with its timeout shortened to the remaining rule/pass duration.
+Custom scheduling budgets shorter than five seconds still allow one normally bounded statement.
+Primary-key and token cursors persist across passes in the worker process and wrap on exhaustion. A restart resets
+those cursors, without changing deletion eligibility. No cleanup progress is stored in a new persistent table.
+
+Transaction-local `eko.retention` suppresses only retention
 DELETE invalidations in read-model and flow/census triggers, leaving insert/update and normal reorg behavior
 unchanged. The existing engine-activity trigger keeps its single marker per SQL statement so incremental checksums
 still match full-history planning, without per-row invalidation work. Append-only exceptions permit only the intended record deletion or engines-verdict payload nulling with
@@ -143,7 +154,7 @@ leaves about 20 GB in other relations, whose age distribution and removable shar
 Under that age/rate assumption, a reasonable initial envelope is **50–65 GB**, potentially lower with settlement and unlabelled-dependency
 cleanup. It is not an honest fixed plateau guarantee: bars, clocks, labels, coin/wallet aggregates, proof headers,
 required forecast/Guard evidence and stalled enrichment still grow. An initial database with only nine days of swaps
-can grow until day 28 even while cleanup works. Dry-run counts and actual relation/TOAST/index sizes are needed to
+can grow until day 28 even while cleanup works. Relation statistics and actual relation/TOAST/index sizes are needed to
 refine the estimate. Deletions make space reusable through autovacuum; physical bytes need not shrink immediately.
 
 ## Verification
@@ -152,3 +163,42 @@ Tests cover default dry-run immutability, settled card/read-model/API equality, 
 full-history verdict/playbook levels and coverage, future seven-day outcomes, rating/FK/provenance boundaries,
 receipt supersession/proof/recovery after payload removal, and retained bars/balances/trending history. Required gates
 are typecheck, DB, indexer, engines (two workers), server (two workers), and the documentation surface census.
+
+## Selection access paths
+
+Candidate windows come before eligibility filtering. The dependency selector no longer asks the planner to find
+old runs without a run-block index. Receipt archival no longer computes a global `DISTINCT ON` over live payloads.
+Raw transfer and swap discovery starts with at most 200 token identities ordered by the token primary key, followed
+by indexed existence probes. Windows containing only retained rows still advance their cursor.
+
+| Selection | Access path | Five-second risk after this change |
+|---|---|---|
+| Fingerprint dependencies | `(run_id,block)` primary-key window, run ID PK, clock number PK, label `run_id` index | Bounded candidates, cold I/O can still time out |
+| Shadows | ID PK window, new `(coin,block,recorded_at,id)` successor index | Bounded candidates, cold I/O can still time out |
+| Cards | ID PK window, new `(coin,rules_version,valid_from_block,id)`, latest `card_id` index | Bounded candidates, cold I/O can still time out |
+| Matches | `(coin,valid_from_block,rules_version,playbook_id)` PK window and per-coin newer-block seek | Bounded candidates, cold I/O can still time out |
+| Verdicts | ID PK window, new coin/rules/block/ID successor index, coin/block index, event verdict/kind and shadow FK indexes, receipt ID PK | Many orphan versions or cold I/O can still time out |
+| Receipt archival | Existing partial `(recorded_at,id)` live-payload index, ID PK, new partial payload-coin/sequence index | Bounded candidates, payload validation and cold I/O can still time out |
+| Receipt items and verdict events | ID PK and `(verdict_id,kind)` | Bounded publication/verdict IDs, cold I/O can still time out |
+| Quiet/settled/capped coins | Token address PK, coin/token block indexes, pending partial indexes, pool currency indexes, outcome/card PKs | Many token probes or cold I/O can still time out |
+| Transfer compaction | `(token,block)` range, bounded selected tuple IDs | Bounded rows, triggers/holder contention can still time out |
+| Lifetime swaps and minute edge | `(coin,ts)` range/limit, then in-memory block/log ordering of the bounded whole-minute prefix | Hot-coin ranges and cold I/O can still time out |
+| First post-graduation / pre-graduation swap | `(coin,block)` with ordered limit | Dense blocks can require incremental sorting and time out |
+| Pons compaction | `(token,block,log_index,tx_hash)` ordered limit | Bounded rows, cold I/O can still time out |
+| Liquidity compaction | Pool currency indexes, lateral per-pool `(pool_id,block)` ordered limits, sort only bounded pool windows | Dense blocks / many pools / cold I/O can still time out |
+| Opening and graduation holdings | Token/lifetime PKs, `(token,block)` prefix, baseline `(token,holder)` PK | Wide per-coin prefixes can still time out, transaction rolls back |
+| Grade entry/close/high | `(coin,ts)` ranges, coin/block verdict index and clock `(ts,number)` cut seek | Wide per-coin price windows can still time out |
+| Trending snapshot discovery / ranking | Small tokens side, snapshot/clock PKs, priced swaps `(ts,block,coin)` covering hourly range | High-volume hours can still time out, swaps stay until snapshots exist |
+| Identity, legacy-prune, clock, lifetime, pool, provenance totals | Token/prune/lifetime/clock PKs, pool currency indexes, buyer/unknown-buy coin-leading PKs | Large per-coin provenance totals can still time out |
+| Unknown-pool events | `(tx_hash,log_index)` PK window, pool ID PK | Bounded candidates, cold I/O can still time out |
+| Feed | `(block,id)` cursor index, first-verdict coin PK, ID PK delete and `SKIP LOCKED` | Retained first rows or table locks can still time out |
+| Dry-run reports | Skip estimates entirely | No large-table eligibility queries |
+
+Migration `0202_retention_probe_indexes.sql` is in the engines ledger and its pinned merge-migration test list.
+The indexer test pins only the chain ledger, which did not change. The runner applies all engines migrations in one
+transaction, so `CREATE INDEX CONCURRENTLY` is not supported. Index construction reads each affected relation,
+sorts index entries, writes indexes/WAL, and blocks writes to those tables until the transaction commits. Receipt
+expression extraction can read/detoast much of the 11 GB publication table, and card indexing scans the 2.5 GB table.
+Allow a maintenance window and temporary disk headroom, with duration measured on the target hardware. No new
+index is built over the 11.6M dependency rows: its primary key already supplies the access path, so dependency-index
+build cost is zero. There is no production EXPLAIN or timing evidence from this offline change.

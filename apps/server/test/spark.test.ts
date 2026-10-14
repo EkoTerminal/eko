@@ -39,6 +39,10 @@ describe('what happened after a grade', () => {
     try {
       const hour = (await built.ctx.reads.grades.read()).rows.find(r => r.level === 'danger' && r.horizonSec === 3600)!;
       expect(hour).toMatchObject({ ratings: 1, down50: 1, down50NeverUp20: 1 });
+      // Freshness and an additional same-level price-move record cannot move the first-grade horizon.
+      await db.sql.query('UPDATE coin_rating_checks SET checked_at=$2,checked_block=20020 WHERE coin=$1',[binary(coin),new Date(later)]);
+      await db.sql.query('INSERT INTO verdicts(id,coin,valid_from_block,rules_version,signature,data) VALUES($1,$2,$3,$4,$1,$5)', ['grade-test-price-move',binary(coin),20020,'1.0.2',JSON.stringify({level:'danger'})]);
+      expect((await built.ctx.reads.grades.read()).rows.find(r=>r.level==='danger' && r.horizonSec===3600)).toEqual(hour);
       // A day has not passed since the grade, so the 24-hour horizon has no coin yet.
       expect((await built.ctx.reads.grades.read()).rows.find(r => r.level === 'danger' && r.horizonSec === 86400)!.ratings).toBe(0);
       expect((await built.app.inject('/v1/scoreboard/grades')).json()).toMatchObject({ since: GRADE_RULES_SINCE });

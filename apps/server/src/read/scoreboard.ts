@@ -183,7 +183,7 @@ export class ScoreboardService {
       const verdict = VerdictSchema.omit({receipt:true}).safeParse(p.data.decision);
       if (!verdict.success) continue;
       callRows.push({ source: `call:${c.id}`, row: { kind: 'calls', ts: p.data.recordedAt, coin: p.data.coin, level: verdict.data.level,
-        receiptId: p.data.receiptId, detail: { event: 'call', gradeStatus: 'unavailable', rulesVersion: p.data.rulesVersion, revisionId: p.data.revisionId, decisionBlock: p.data.window.kind === 'snapshot' ? p.data.window.blockNumber : 'unavailable' } } });
+        receiptId: p.data.receiptId, detail: { ...verdict.data.priceMove, event: 'call', gradeStatus: 'unavailable', rulesVersion: p.data.rulesVersion, revisionId: p.data.revisionId, decisionBlock: p.data.window.kind === 'snapshot' ? p.data.window.blockNumber : 'unavailable' } } });
     }
     await this.rows(db, callRows);
     const corrections = (await db.sql.query<{ id: string; kind: string; verdict_id: string; coin: Uint8Array; data: unknown; ts: Date }>(`SELECT e.id,e.kind,e.verdict_id,v.coin,v.data,b.ts

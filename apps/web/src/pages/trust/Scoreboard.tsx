@@ -1,3 +1,4 @@
+import { RatingPriceFact } from '../../components/GuardCompact';
 import { useEffect, useRef, useState } from 'react';
 import { ScoreboardResponseSchema, type ScoreboardKind, type ScoreboardResponse, type ScoreboardRow } from '@eko/shared';
 import { fetchParsed } from '../../lib/api';
@@ -58,7 +59,7 @@ export function RecordRows({ rows }: { rows: ScoreboardRow[] }) {
     const original = rows.find(prior => prior.id === row.detail.correctionOf || prior.detail.revisionId === row.detail.correctionOf);
     const corrections = rows.filter(next => next.detail.correctionOf === row.id || (row.detail.revisionId !== undefined && next.detail.correctionOf === row.detail.revisionId));
     return <li key={row.id} id={rowAnchor(row.id)}><div className="scoreboard-record-head"><time dateTime={row.ts}>{recordTime(row.ts)}</time>{row.coin && <Link to={`/coin/${row.coin}`} title={row.coin}>{shortCoin(row.coin)}</Link>}
-      {row.level && <b>{row.level === 'clear' ? 'no flags' : row.level}</b>}{row.kind === 'calls' && <span>Grade: {gradeText(row)}</span>}{row.coin && collapsed.earlier.get(row.coin) ? <span className="muted">+{collapsed.earlier.get(row.coin)} earlier ungraded {collapsed.earlier.get(row.coin) === 1 ? 'call' : 'calls'}</span> : null}</div>
+      {row.level && <><b>{row.level === 'clear' ? 'no flags' : row.level}</b><RatingPriceFact move={{downFromPeakPct:typeof row.detail.downFromPeakPct==='number' ? row.detail.downFromPeakPct : undefined,downSinceRatedPct:typeof row.detail.downSinceRatedPct==='number' ? row.detail.downSinceRatedPct : undefined}}/></>}{row.kind === 'calls' && <span>Grade: {gradeText(row)}</span>}{row.coin && collapsed.earlier.get(row.coin) ? <span className="muted">+{collapsed.earlier.get(row.coin)} earlier ungraded {collapsed.earlier.get(row.coin) === 1 ? 'call' : 'calls'}</span> : null}</div>
       {typeof row.detail.event === 'string' && <p>{row.detail.event.replaceAll('_', ' ')}</p>}
       {row.detail.counterEffect === 'retracted' && <p>Retracted from the counter: source block changed.</p>}
       <div className="scoreboard-links">{row.receiptId && <Link to={receiptPath(row.receiptId)}>{row.detail.correctionOf ? 'Correction receipt' : 'Original receipt'}</Link>}

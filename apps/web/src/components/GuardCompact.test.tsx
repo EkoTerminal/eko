@@ -79,3 +79,11 @@ describe('037 compact rendering (synthetic fixtures)', () => {
     expect(chip).toContain('Monitor');expect(chip).not.toContain('Legacy');expect(chip).not.toContain('guard-disclosure');
   });
 });
+
+it('renders a price fact beside the rating on Radar and New pairs without changing its level',()=>{
+  const radar={...createRadarRows()[0],verdict:'clear' as const,verdictPending:false,priceMove:{downFromPeakPct:85}};
+  const pair={...createPairRows()[0],verdict:'clear' as const,verdictPending:false,priceMove:{downFromPeakPct:85}};
+  expect(render(<CompactVerdictChip level="clear" priceMove={radar.priceMove}/>)).toContain('Down 85% from peak');
+  expect(render(<RadarRowView c={radar} selected={false} select={()=>{}} trade={()=>{}} pulse={0}/>)).toContain('Down 85% from peak');
+  expect(render(<PairView row={pair} now={1000} at={1000} select={()=>{}} trade={()=>{}} stale={false}/>)).toContain('Down 85% from peak');
+});

@@ -233,8 +233,8 @@ describe('determination retention',()=>{
     const snapshot=()=>Promise.all(tables.map(t=>table(db,`SELECT * FROM ${t} ORDER BY 1,2`)));
     const before=await snapshot();
     const report=await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,ratingDays:7,now});
-    expect(report.dryRun).toBe(true);expect(report.tables?.find(t=>t.table==='token_transfers')?.rows).toBeGreaterThan(0);
-    expect(report.tables?.find(t=>t.table==='swaps')?.estimatedBytes).toBeGreaterThan(0);
+    expect(report.dryRun).toBe(true);expect(report.tables?.find(t=>t.table==='token_transfers')).toMatchObject({rows:0,estimateSkipped:true});
+    expect(report.tables?.find(t=>t.table==='swaps')).toMatchObject({estimatedBytes:0,estimateSkipped:true});
     expect(await snapshot()).toEqual(before);
   });
   it('keeps ordered swap evidence for 28 days and leaves undecided past horizons and pending attribution alone',async()=>{
@@ -275,11 +275,14 @@ describe('rating record boundaries',()=>{
     await db.sql.query("INSERT INTO wallet_label_fingerprint_dependencies VALUES('retention-label','retention-labelled')");
     const before=(await db.sql.query('SELECT * FROM verdicts WHERE coin=$1 ORDER BY id',[binary(coin)])).rows;
     const dry=await runRetention(db,{quoteTokens:[],ratingDays:7,now});
-    expect(dry.tables?.find(t=>t.table==='coin_cards')?.rows).toBeGreaterThan(0);
-    expect(dry.tables?.find(t=>t.table==='verdicts')?.rows).toBe(1);
-    expect(dry.tables?.find(t=>t.table==='verdict_events')?.rows).toBe(1);
+    expect(dry.tables?.find(t=>t.table==='coin_cards')).toMatchObject({rows:0,estimateSkipped:true});
+    expect(dry.tables?.find(t=>t.table==='verdicts')).toMatchObject({rows:0,estimateSkipped:true});
+    expect(dry.tables?.find(t=>t.table==='verdict_events')).toMatchObject({rows:0,estimateSkipped:true});
     expect((await db.sql.query('SELECT * FROM verdicts WHERE coin=$1 ORDER BY id',[binary(coin)])).rows).toEqual(before);
-    await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,batchRows:1,now});
+    const real=await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,batchRows:1,now});
+    expect(real.ratingRows).toMatchObject({wallet_fingerprint_dependencies:1,guard_shadow_runs:1,verdicts:1});
+    expect(real.ratingRows?.coin_cards).toBeGreaterThan(0);expect(real.ratingRows?.playbook_matches).toBeGreaterThan(0);
+    expect(real.skippedRules).toEqual([]);
     const ids=(await db.sql.query<{id:string}>('SELECT id FROM verdicts WHERE coin=$1 ORDER BY id',[binary(coin)])).rows.map(r=>r.id);
     expect(ids).toEqual(['retention-correction','retention-first','retention-latest','retention-target']);
     expect((await db.sql.query('SELECT coin FROM read_blue_chip_danger WHERE coin=$1',[binary(coin)])).rows).toHaveLength(1);

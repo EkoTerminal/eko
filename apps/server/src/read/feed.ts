@@ -72,7 +72,7 @@ export class FeedService {
     for(const clock of clocks)if(!timestamps.has(Number(clock.number)))timestamps.set(Number(clock.number),clock.ts);
     const enriched=result.rows.map(r=>({...r,ts:timestamps.get(Number(r.block)),first_ts:r.first_block==null ? undefined : timestamps.get(Number(r.first_block)),first_verdict_ts:timestamps.get(verdictBlocks.get(Buffer.from(r.coin).toString('hex')) ?? -1)}));
     const rows:FeedItem[]=enriched.slice(0,100).filter(r=>r.ts).map(r=>FeedItemSchema.parse({id:r.id,coin:`0x${Buffer.from(r.coin).toString('hex')}`,symbol:toUntrusted(r.symbol ?? '',32),
-      guardV2:r.data.guardV2,guardFactorId:r.data.guardFactorId,guardReasonCode:r.data.guardReasonCode,guardReason:r.data.guardReason,
+      priceMove:r.data.priceMove,guardV2:r.data.guardV2,guardFactorId:r.data.guardFactorId,guardReasonCode:r.data.guardReasonCode,guardReason:r.data.guardReason,
       label:r.data.label,sizeUsd:r.data.sizeUsd,wallet:r.data.wallet,crewId:r.data.crewId,side:r.data.side,modelVersion:r.data.modelVersion,
       beta:r.data.modelVersion ? gate.value==null||gate.value<gate.threshold : undefined,confidence:r.data.confidence,
       block:Number(r.block),ts:new Date(r.ts!).getTime(),kind:r.kind,level:r.data.level==='pending' ? undefined : r.data.level,
