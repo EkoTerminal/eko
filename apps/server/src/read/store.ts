@@ -7,12 +7,7 @@ import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
 /** Coins per read-model refresh transaction (see refreshModels). */
 export const REFRESH_BATCH=25;
-/**
- * With the background refresher running, a coin whose projection was refreshed is left for this long before it is
- * refreshed again (it stays marked, so its latest change is never lost). A refresh reads the coin's whole swap history
- * twice (2.2 s for a 71,000-swap coin on a copy of 2026-10-13), and a coin that trades in every block was marked again
- * before each 250 ms pass: the refresh was the largest single share of database time (0.58 of a backend).
- */
+/** Coalesce active coins at the existing three-second refresh interval. */
 export const REFRESH_REST_MS=3000;
 
 interface Stored {
@@ -70,9 +65,8 @@ export class ReadStore {
    */
   async currentModels() { if (!this.modelTimer) await this.refreshModels(); }
   /**
-   * Requests read the ranks as they stand. The per-minute volume re-rank updates read_coins under the same lock the
-   * refresher takes every 250 ms, so the first request of each minute used to run it and wait behind refresh batches
-   * (10–20 s radar loads on 2026-10-09). The background timer runs it instead; without it a request refreshes first.
+   * Requests read current ranks. The background timer owns minute rolls, so requests do not wait on projection
+   * writers. Without the timer a request refreshes first.
    */
   async currentRanks() { if (!this.rankTimer) await this.refreshRanks(); }
   /** True once start() runs the background refresher (production); tests and tools refresh inline instead. */
@@ -84,23 +78,21 @@ export class ReadStore {
       const cutoff=(await this.db.sql.query<{revision:string|null}>('SELECT max(revision) AS revision FROM read_dirty')).rows[0].revision;
       if(cutoff==null)return;
       for(;;) {
-        // Each batch holds read_feed and read_coins for its whole transaction, and every card write's verdict trigger
-        // writes read_feed. 250 coins held them 14-27 s per batch (2026-10-09) and the scanner wrote four cards a minute.
         const started=this.now();
         for(const [coin,at] of this.refreshedAt)if(started-at>=REFRESH_REST_MS || started<at)this.refreshedAt.delete(coin);
         const resting=this.modelTimer ? [...this.refreshedAt.keys()].map(coin=>binary(coin as Address)) : [];
         const pending=(await this.db.sql.query<{coin:Uint8Array;revision:string}>('SELECT coin,revision FROM read_dirty WHERE revision<=$1 AND NOT coin=ANY($3::bytea[]) ORDER BY revision LIMIT $2',[cutoff,REFRESH_BATCH,resting])).rows;
         if(!pending.length)return;
         await this.db.tx(async tx=>{
-          // Multiple API processes serialize projection refreshes, never lock ingest source rows.
-          await tx.sql.query('LOCK TABLE read_feed IN SHARE ROW EXCLUSIVE MODE');
-          await tx.sql.query('LOCK TABLE read_coins IN SHARE ROW EXCLUSIVE MODE');
+          // The SQL function serializes only coins in this batch.
           await tx.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[pending.map(r=>r.coin),Math.floor(this.now()/60000)*60]);
           // The indexer marks coins dirty from its swap trigger in its own row order; waiting on one of those rows here
           // deadlocked its block writes (5-9 an hour on 2026-10-11). A row it is changing gets a new revision anyway, so
           // it is skipped and refreshed next time.
           await tx.sql.query(`DELETE FROM read_dirty d USING (SELECT x.coin FROM read_dirty x JOIN unnest($1::bytea[],$2::bigint[]) p(coin,revision)
-            ON x.coin=p.coin AND x.revision=p.revision FOR UPDATE OF x SKIP LOCKED) s WHERE d.coin=s.coin`,[pending.map(r=>r.coin),pending.map(r=>r.revision)]);
+            ON x.coin=p.coin AND x.revision=p.revision
+            WHERE NOT EXISTS(SELECT 1 FROM read_buyer_dirty b JOIN tokens t ON t.address=b.coin AND t.deployer IS NOT NULL WHERE b.coin=x.coin)
+            FOR UPDATE OF x SKIP LOCKED) s WHERE d.coin=s.coin`,[pending.map(r=>r.coin),pending.map(r=>r.revision)]);
         });
         if(this.modelTimer)for(const r of pending)this.refreshedAt.set(hex(r.coin),started);
         for(const listener of this.listeners)listener(pending.map(r=>hex(r.coin)));
@@ -116,11 +108,16 @@ export class ReadStore {
     this.rankRefresh=this.db.tx(async tx=>{
       const clock=await tx.sql.query<{window_sec:string}>('SELECT window_sec FROM read_rank_clock WHERE singleton=true FOR UPDATE');
       if(Number(clock.rows[0].window_sec)===window)return;
-      // One write per coin whose volume changed: zeroing every ranked coin and setting it again rewrote each row twice a minute.
-      await tx.sql.query(`UPDATE read_coins r SET volume=n.volume FROM (SELECT c.coin,CASE WHEN c.pricing_pending THEN 0 ELSE coalesce(b.volume,0) END AS volume
-        FROM read_coins c LEFT JOIN (SELECT coin,sum(volume_usd) AS volume FROM bars_1m
-        WHERE minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision) GROUP BY coin) b ON b.coin=c.coin
-        WHERE c.volume<>0 OR b.coin IS NOT NULL) n WHERE r.coin=n.coin AND r.volume IS DISTINCT FROM n.volume`,[window]);
+      const previous=Number(clock.rows[0].window_sec);
+      const forward=window>previous && window-previous<3600;
+      await tx.sql.query(`WITH affected AS MATERIALIZED (
+        ${forward ? `SELECT DISTINCT coin FROM bars_1m WHERE (minute>=to_timestamp($2::double precision-3540) AND minute<to_timestamp($1::double precision-3540))
+          OR (minute>to_timestamp($2::double precision) AND minute<=to_timestamp($1::double precision))` : `SELECT coin FROM read_coins WHERE volume<>0 UNION SELECT coin FROM bars_1m
+          WHERE minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision)`}
+        ), fresh AS (SELECT r.coin,CASE WHEN r.pricing_pending THEN 0 ELSE coalesce(b.volume,0) END AS volume
+          FROM affected a JOIN read_coins r ON r.coin=a.coin LEFT JOIN LATERAL (SELECT sum(volume_usd) AS volume FROM bars_1m
+            WHERE coin=a.coin AND minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision)) b ON true)
+        UPDATE read_coins r SET volume=f.volume FROM fresh f WHERE r.coin=f.coin AND r.volume IS DISTINCT FROM f.volume`,forward ? [window,previous] : [window]);
       await tx.sql.query('UPDATE read_rank_clock SET window_sec=$1 WHERE singleton=true',[window]);
     }).finally(()=>{this.rankRefresh=undefined;});
     return this.rankRefresh;
@@ -135,18 +132,22 @@ export class ReadStore {
     const result = await this.db.sql.query<Stored>(`WITH selected AS (
       SELECT t.*,c.data,r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address ${bounded ? 'AND c.coin=ANY($2::bytea[])' : ''}
       LEFT JOIN read_coins r ON r.coin=t.address ${bounded ? 'AND r.coin=ANY($2::bytea[])' : ''} WHERE ${filter}
+    ), recent AS MATERIALIZED (
+      SELECT b.* FROM selected t JOIN bars_1m b ON b.coin=t.address WHERE b.minute>=to_timestamp($1::double precision-86400)
     ), market AS (
-      SELECT b.coin,(array_agg(close ORDER BY minute DESC))[1] AS price,
-        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-3600)))[1] AS previous1h,
-        (array_agg(close ORDER BY minute DESC) FILTER(WHERE minute<=to_timestamp($1::double precision-86400)))[1] AS previous24h,
-        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS volume,
-        coalesce(sum(trades) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)),0) AS trades,
-        coalesce(sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-86400) AND minute<to_timestamp($1::double precision-3600)),0) AS prior_volume,
-        min(minute) AS first_minute
-      FROM bars_1m b ${bounded ? 'WHERE b.coin=ANY($2::bytea[])' : 'JOIN selected t ON t.address=b.coin'} GROUP BY b.coin
+      SELECT t.address AS coin,last.close AS price,hour.close AS previous1h,day.close AS previous24h,first.minute AS first_minute,
+        coalesce(v.volume,0) AS volume,coalesce(v.trades,0) AS trades,coalesce(v.prior_volume,0) AS prior_volume
+      FROM selected t
+      LEFT JOIN LATERAL (SELECT close FROM bars_1m WHERE coin=t.address ORDER BY minute DESC LIMIT 1) last ON true
+      LEFT JOIN LATERAL (SELECT close FROM bars_1m WHERE coin=t.address AND minute<=to_timestamp($1::double precision-3600) ORDER BY minute DESC LIMIT 1) hour ON true
+      LEFT JOIN LATERAL (SELECT close FROM bars_1m WHERE coin=t.address AND minute<=to_timestamp($1::double precision-86400) ORDER BY minute DESC LIMIT 1) day ON true
+      LEFT JOIN LATERAL (SELECT minute FROM bars_1m WHERE coin=t.address ORDER BY minute LIMIT 1) first ON true
+      LEFT JOIN (SELECT coin,sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)) AS volume,
+        sum(trades) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)) AS trades,
+        sum(volume_usd) FILTER(WHERE minute<to_timestamp($1::double precision-3600)) AS prior_volume FROM recent GROUP BY coin) v ON v.coin=t.address
     ), span AS (
       -- Each coin's first bar in the last eight hours: the series starts there, not at a fixed clock bucket.
-      SELECT b.coin,min(minute) AS first FROM bars_1m b ${bounded ? '' : 'JOIN selected t ON t.address=b.coin'}
+      SELECT b.coin,min(minute) AS first FROM recent b
       WHERE ${bounded ? 'b.coin=ANY($2::bytea[]) AND' : ''} minute>=to_timestamp($1::double precision-28800) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin
     ), buckets AS (
       -- Up to about 96 points per coin at the finest whole-minute width that covers its span: one-minute closes for a
@@ -154,33 +155,32 @@ export class ReadStore {
       -- under twenty minutes old fewer than two points, which draws nothing.
       SELECT b.coin,floor(extract(epoch FROM b.minute-s.first)/(60*greatest(1,ceil(extract(epoch FROM to_timestamp($1::double precision)-s.first)/5760.0)))) AS bucket,
         (array_agg(b.close ORDER BY b.minute DESC))[1] AS close
-      FROM bars_1m b JOIN span s ON s.coin=b.coin
+      FROM recent b JOIN span s ON s.coin=b.coin
       WHERE ${bounded ? 'b.coin=ANY($2::bytea[]) AND' : ''} b.minute>=to_timestamp($1::double precision-28800) AND b.minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket
     ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)
     SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,
       b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,coalesce(b.trades,0) AS trades,coalesce(b.prior_volume,0) AS prior_volume,b.first_minute,s.points AS spark
     FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
     LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
-    const prices=await readRatingPrices(this.db,result.rows.map(t=>hex(t.address)));
-    const flows=await readFlows(this.db,result.rows.map(t=>hex(t.address)));
-    const sells=await readSellChecks(this.db,result.rows.map(t=>hex(t.address)),this.now());
-    const pools=await readPoolLiquidity(this.db,result.rows.filter(t=>t.graduated_block!=null).map(t=>hex(t.address)));
-    // A coin still on its Pons curve shows the money in the curve and its progress as of its latest trade: the card's
-    // own progress is as of its rating, minutes behind a coin that is trading.
-    const curves=await readCurveStates(this.db,result.rows.filter(t=>t.graduated_block==null && t.launchpad==='pons').map(t=>hex(t.address)));
+    const readAddresses=result.rows.map(t=>hex(t.address));
+    const [prices,flows,sells,pools,curves,money]=await Promise.all([
+      readRatingPrices(this.db,readAddresses),readFlows(this.db,readAddresses),readSellChecks(this.db,readAddresses,this.now()),
+      readPoolLiquidity(this.db,result.rows.filter(t=>t.graduated_block!=null).map(t=>hex(t.address))),
+      readCurveStates(this.db,result.rows.filter(t=>t.graduated_block==null && t.launchpad==='pons').map(t=>hex(t.address))),
+      readPoolMoney(this.db,result.rows.filter(t=>t.graduated_block==null && t.curve==null && t.launchpad!=='pons').map(t=>hex(t.address)),this.now()),
+    ]);
     for(const [coin,state] of curves)pools.set(coin,state.usd);
     // A coin that never had a curve (it launched in a Uniswap pool) shows the ETH, WETH or USDG in its pools.
-    for(const [coin,usd] of await readPoolMoney(this.db,result.rows.filter(t=>t.graduated_block==null && t.curve==null && t.launchpad!=='pons').map(t=>hex(t.address)),this.now()))pools.set(coin,usd);
+    for(const [coin,usd] of money)pools.set(coin,usd);
     // A coin with only a few minutes of bars gets its series from its trades instead (the latest 96 priced ones), so a
     // launch shows a line from its second trade on.
     const thin=result.rows.filter(t=>!t.pricing_pending && (t.spark?.length ?? 0)<6).map(t=>t.address);
     const trades=new Map<string,number[]>();
-    if(thin.length)for(const row of (await this.db.sql.query<{coin:Uint8Array;points:number[]}>(`SELECT coin,array_agg(price ORDER BY block,log_index) AS points FROM (
-        SELECT s.coin,s.block,s.log_index,s.usd/(s.amount_coin::double precision/power(10,coalesce(t.decimals,18))) AS price,
-          row_number() OVER (PARTITION BY s.coin ORDER BY s.block DESC,s.log_index DESC) AS n
-        FROM swaps s JOIN tokens t ON t.address=s.coin
-        WHERE s.coin=ANY($1::bytea[]) AND s.ts>to_timestamp($2::double precision-28800) AND s.ts<=to_timestamp($2::double precision) AND s.usd>0 AND s.amount_coin>0) latest
-      WHERE n<=96 GROUP BY coin`,[thin,now])).rows)trades.set(hex(row.coin),row.points.map(Number));
+    if(thin.length)for(const row of (await this.db.sql.query<{coin:Uint8Array;points:number[]}>(`SELECT t.address AS coin,array_agg(s.usd/(s.amount_coin::double precision/power(10,coalesce(t.decimals,18))) ORDER BY s.block,s.log_index) AS points
+      FROM tokens t CROSS JOIN LATERAL (WITH candidates AS MATERIALIZED (SELECT block,log_index,usd,amount_coin FROM swaps s
+        WHERE s.coin=t.address AND s.ts>to_timestamp($2::double precision-28800) AND s.ts<=to_timestamp($2::double precision)
+          AND s.usd>0 AND s.amount_coin>0) SELECT * FROM candidates ORDER BY block DESC,log_index DESC LIMIT 96) s
+      WHERE t.address=ANY($1::bytea[]) GROUP BY t.address,t.decimals`,[thin,now])).rows)trades.set(hex(row.coin),row.points.map(Number));
     const memberships = await this.blueChip?.members(result.rows.map(t=>hex(t.address)));
     return result.rows.map(t => {
       const sell=sells.get(hex(t.address)),pool=pools.get(hex(t.address)),traded=trades.get(hex(t.address));

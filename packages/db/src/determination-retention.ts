@@ -168,7 +168,7 @@ export async function determinationPass(db: ChainDb, options: RetentionOptions, 
   }
   let after: Uint8Array | null = null;
   while (timeLeft()) {
-    const coins = await quietCoins(db, rule, through, swapsThrough, quotes, [...quotes, Buffer.alloc(20)], after, 100);
+    const coins = await quietCoins(db, rule, through, swapsThrough, quotes, [...quotes, Buffer.alloc(20)], after, Math.min(options.batchRows ?? 1000,100));
     if (!coins.length) break;
     for (const coin of coins) {
       if (!timeLeft()) { result.finished = false; return; }

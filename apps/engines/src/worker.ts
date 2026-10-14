@@ -9,7 +9,8 @@ import { assembleVerdict, evaluatePlaybooks, rules, RULES_VERSION } from '@eko/p
 import { shouldRecomputeSignal } from '@eko/signal';
 import { rpcStopReason, type PonsProfileClient } from '@eko/chain';
 import { ratingPriceMove, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
-import { ratingOutcome } from './rating-outcome.js';
+import { lockEngineWrites } from './write-locks.js';
+import { OutcomeDifferences, ratingOutcome } from './rating-outcome.js';
 import { assembleCard, cardHash, digest, evaluatedPlaybooks, UNSOURCED_PLAYBOOKS } from './card.js';
 import { loadSources, historyAt, seconds, type LoadedSources, type SourceMemo } from './sources.js';
 import { refreshClock, resolveClock, coinActivity, checkpoints, blockIndex, type ActivityBase, type BlockReader, type BlockTime, type ClockCache, type Checkpoint, type CoinActivity } from './activity.js';
@@ -145,6 +146,7 @@ export class EngineWorker {
    * @see {@link ../../../docs/security/INVARIANTS.md | Implemented core invariants}
    */
   telemetry(){return {...this.metrics.snapshot(this.completed),cardFailures:this.cardFailures};}
+  private outcomeDifferences=new OutcomeDifferences();
   private client:PonsProfileClient | undefined;
   private readBlock:BlockReader | undefined;
   /**
@@ -292,7 +294,7 @@ export class EngineWorker {
         const card=await this.db.tx(async tx=>{
           const owner=(await tx.sql.query<{lease_id:string}>('SELECT lease_id FROM scan_jobs WHERE id=$1 FOR UPDATE',[job.id])).rows[0];
           if(owner?.lease_id!==job.lease_id)return;
-          await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
+          await lockEngineWrites(tx,[sources],true);
           const canonicalHash=await tx.blockHash(BigInt(block));
           if(header.hash && canonicalHash!=null && canonicalHash!==hex(header.hash))throw new Error('Indexed block changed during scan preparation');
           await updateOutcomes(tx,sources.asOfBlock,sources.asOfSec,this.clock,undefined,this.outcomeSkips,{loads:this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE,used:0});
@@ -483,7 +485,7 @@ export class EngineWorker {
         const sources=loaded[i];if(!sources){this.cache?.writes.delete(batch[i].coin);expire(batch[i].sec);continue;}
         progress.phase='write';
         const writeStart=performance.now();const card=await this.db.tx(async tx=>{
-          await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
+          await lockEngineWrites(tx,[sources],!(live && batchStart<priority));
           if(!this.cache && !(live && revised.has(sources.coin) && sources.asOfBlock===to) && (await tx.sql.query('SELECT 1 FROM engine_runs WHERE coin=$1 AND block=$2 AND rules_version=$3',[binary(sources.coin),sources.asOfBlock,RULES_VERSION])).rows.length)return;
           // Outcomes are keyed by horizon time, so a later block covers every earlier one. Replay runs in block
           // order (unchanged); live first scans run ahead of older backlog, which must not re-run this per write.
@@ -509,7 +511,7 @@ export class EngineWorker {
     // Outcome horizons still mature after a coin stops receiving card evaluations.
     const end=clock.at(-1);
     if(!this.stopped && end && (outcomesBlock<end.number || !outcomesDone)){const start=performance.now();await this.db.tx(async tx=>{
-      await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
+      await lockEngineWrites(tx,[],true);
       await outcomes(tx,end.number,end.sec,Math.max(this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE,OUTCOME_LOADS_PER_POLL));
     });this.metrics.writeMs+=performance.now()-start;}
     } finally {clearInterval(reporter);progress.phase='done';if(live)report();}
@@ -541,6 +543,8 @@ export class EngineWorker {
     let unsubscribe: (()=>Promise<void>) | undefined;
     try { unsubscribe=await (this.options.bus ?? this.db.bus).subscribe(message => { if (!['card_updated','verdict_created'].includes(message.topic)) this.wake?.(); }); }
     catch { /* A disconnected bus does not disable the durable cursor poll. */ }
+    const differences=setInterval(()=>this.outcomeDifferences.flush(),60_000);
+    differences.unref();
     const rerating=this.options.rerate ? this.rerateLoop() : undefined;
     const blueChipBackfill=this.blueChipBackfillLoop();
     try {
@@ -564,7 +568,7 @@ export class EngineWorker {
           if (this.stopped) this.wake();
         });
       }
-    } finally { this.stop(); await rerating; await blueChipBackfill; await unsubscribe?.(); }
+    } finally { clearInterval(differences); this.stop(); await rerating; await blueChipBackfill; await unsubscribe?.(); }
   }
   /**
    * Live: first-scan radar coins without a card (unscannedCoins), else re-rate stale pending cards (staleRatings), at the
@@ -617,7 +621,7 @@ export class EngineWorker {
             // verdict is unchanged writes only read_coins (its card trigger), so a later card's verdict trigger would
             // otherwise reach read_feed second and could deadlock with it.
             const written=await this.db.tx(async tx=>{
-              await tx.sql.query('LOCK TABLE engine_schedule IN EXCLUSIVE MODE');
+              await lockEngineWrites(tx,loaded);
               await tx.sql.query('LOCK TABLE read_feed IN ROW EXCLUSIVE MODE');
               const out:CoinCard[]=[];
               for(const sources of loaded) {
@@ -699,7 +703,7 @@ export class EngineWorker {
     }
     const cards:CoinCard[]=[];
     await this.db.tx(async tx => {
-      await tx.sql.query('LOCK TABLE engine_cursors,engine_schedule IN EXCLUSIVE MODE');
+      await lockEngineWrites(tx,[...prepared.values()].filter((s):s is LoadedSources=>s!=null),true,true);
       if (!replay) {
         const cursor=(await tx.sql.query<{ block:string }>("SELECT block FROM engine_cursors WHERE stream='engines'")).rows[0];
         if (cursor && Number(cursor.block)>=block) return;
@@ -778,6 +782,7 @@ export class EngineWorker {
       const signalTime=this.clock.get(priorRun.signal.asOfBlock) ?? (await tx.sql.query<{ ts:Date }>('SELECT ts FROM engine_block_times WHERE number=$1',[priorRun.signal.asOfBlock])).rows[0];
       if (signalTime && !shouldRecomputeSignal(seconds(signalTime.ts)*1000,s.asOfSec*1000)) card.signal=priorRun.signal;
     }
+    if(latest && Number(latest.as_of_block)<=s.asOfBlock)this.outcomeDifferences.record(latest.data,latest.rules_version,card,RULES_VERSION);
     const outcome=ratingOutcome(card,RULES_VERSION);
     const checkedAt=new Date((this.options.now?.() ?? Date.now()/1000)*1000).toISOString();
     const saveCheck=async(full:boolean)=>{
@@ -788,7 +793,7 @@ export class EngineWorker {
           full ? price.price : baseline,(check?.peak_recorded ?? false) || (full && move.belowPeak),outcome]);
     };
     const sameOutcome=latest && Number(latest.as_of_block)<=s.asOfBlock && latest.rules_version===RULES_VERSION
-      && (check?.outcome_signature ?? ratingOutcome(latest.data,latest.rules_version))===outcome;
+      && ratingOutcome(latest.data,latest.rules_version)===outcome;
     // Unchanged checks, including same-block enrichment, refresh only mutable measurements.
     if(prior && latest && prior.id===latest.data.verdict.receipt.id && sameOutcome && !move.force) {
       card.verdict={...assembled,asOfBlock:prior.data.asOfBlock,receipt:prior.data.receipt,
@@ -895,19 +900,28 @@ export async function unscannedCoins(db:ChainDb,since:number,block:number,limit:
  */
 export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:ReadonlyMap<Address,string>=new Map(),rulesAt=CLEAR_RULES_AT,otherRulesAt=NO_OTHER_RERATE):Promise<{coin:Address;card:string}[]> {
   if(!coins.length || limit<=0)return [];
-  const found:{coin:Address;card:string}[]=[];
-  for(const row of (await db.sql.query<{coin:Uint8Array;card:string}>(`SELECT l.coin,l.card_id AS card FROM coin_card_latest l JOIN read_coins r ON r.coin=l.coin
-    JOIN tokens t ON t.address=l.coin LEFT JOIN engine_runs e ON e.coin=l.coin AND e.block=l.as_of_block AND e.rules_version=$4
-    WHERE l.coin=ANY($1::bytea[]) AND NOT l.card_id=ANY($5::text[]) AND ((NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ?& ARRAY['bundle_dump','holder_concentration','dev_dump','run_up']
-        OR l.data->'meta'->'control'->>'unavailable'='true' AND t.launchpad='pons'
-        OR coalesce(l.data->'playbooks','[]'::jsonb) @> '[{"id":"bundle_dump"}]' OR coalesce(l.data->'playbooks','[]'::jsonb) @> '[{"id":"run_up"}]') AND coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
-      OR l.data->'verdict'->>'level'='pending' AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
-      OR (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'honeypot'
-        AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused')))
-      OR (t.launchpad='pons' AND (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'wash_to_trend' OR NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'stuck_at_bonding')
-        AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL)))
-      OR (t.launchpad IS DISTINCT FROM 'pons' AND coalesce(e.created_at,to_timestamp(e.sec))<$6::timestamptz))
-    ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[coins.map(binary),limit,rulesAt,RULES_VERSION,[...skip.values()],otherRulesAt])).rows)
-    found.push({coin:hex(row.coin) as Address,card:row.card});
-  return found;
+  return db.tx(async tx=>{
+    await tx.sql.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    const found:{coin:Address;card:string}[]=[];
+    const ordered=(await tx.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE coin=ANY($1::bytea[]) ORDER BY activity DESC NULLS LAST,coin',[coins.map(binary)])).rows;
+    // Examine at most 128 wide cards in a statement, stopping as soon as the ordered limit is filled.
+    for(let offset=0;offset<ordered.length && found.length<limit;offset+=128) {
+      for(const row of (await tx.sql.query<{coin:Uint8Array;card:string}>(`SELECT l.coin,l.card_id AS card FROM unnest($1::bytea[]) candidate(coin)
+      CROSS JOIN LATERAL (SELECT coin,activity FROM read_coins WHERE coin=candidate.coin OFFSET 0) r
+      CROSS JOIN LATERAL (SELECT * FROM coin_card_latest WHERE coin=candidate.coin OFFSET 0) l
+      JOIN tokens t ON t.address=l.coin LEFT JOIN LATERAL (SELECT created_at,sec FROM engine_runs WHERE coin=l.coin AND block=l.as_of_block AND rules_version=$4 OFFSET 0) e ON true
+      WHERE true AND NOT l.card_id=ANY($5::text[]) AND ((NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ?& ARRAY['bundle_dump','holder_concentration','dev_dump','run_up']
+          OR l.data->'meta'->'control'->>'unavailable'='true' AND t.launchpad='pons'
+          OR coalesce(l.data->'playbooks','[]'::jsonb) @> '[{"id":"bundle_dump"}]' OR coalesce(l.data->'playbooks','[]'::jsonb) @> '[{"id":"run_up"}]') AND coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
+        OR l.data->'verdict'->>'level'='pending' AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
+        OR (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'honeypot'
+          AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused')))
+        OR (t.launchpad='pons' AND (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'wash_to_trend' OR NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'stuck_at_bonding')
+          AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL LIMIT 1)))
+        OR (t.launchpad IS DISTINCT FROM 'pons' AND coalesce(e.created_at,to_timestamp(e.sec))<$6::timestamptz))
+      ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[ordered.slice(offset,offset+128).map(row=>row.coin),limit-found.length,rulesAt,RULES_VERSION,[...skip.values()],otherRulesAt])).rows)
+        found.push({coin:hex(row.coin) as Address,card:row.card});
+    }
+    return found;
+  });
 }

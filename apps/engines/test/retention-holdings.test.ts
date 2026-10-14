@@ -38,6 +38,8 @@ describe('engine holdings over compacted transfer history', () => {
     expect(await compactTransfers(db, [binary(coin)], 10n, 1000)).toBe(12);
     expect(amounts(await holdingsAt(db, coin, 15))).toEqual(liveBefore);
     expect(amounts(await replay())).toEqual(replayBefore);
+    // The pre-baseline view retains the old prefix-query result, not a future compacted balance.
+    expect(await holdingsAt(db,coin,1)).toEqual([]);
     // Views at the head still read the exact current balances.
     expect(amounts(await holdingsAt(db, coin, 20))).toEqual(amounts((await db.sql.query<{ holder: Uint8Array; amount: string }>(
       'SELECT holder, amount::text FROM balances WHERE token=$1 AND amount>0', [binary(coin)])).rows));

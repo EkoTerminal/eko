@@ -16,7 +16,7 @@ onboarding and scan jobs. It does not add another scheduler or an automatic chai
 
 All five are part of the build identity. Deployment with defaults changes no existing row data. Migration
 `0201_determination_retention` belongs to `eko_engine_migrations` and adds summaries, nullable receipt payloads,
-retention-specific trigger guards and lookup indexes. The worker still ticks every ten minutes. Existing optional
+retention-specific trigger guards and lookup indexes. The worker runs backlogged passes with a 100 ms pause between passes, then waits ten minutes after catching up. Existing optional
 quote-transfer, idle-token, Feed, unknown-pool, Danger and quiet settings remain recognized. Modern settlement/raw
 settings supersede the old Danger/quiet rules. A shorter configured quote-transfer window still applies. Unknown-pool
 and Feed windows default to the raw and rating windows respectively when their older setting is absent.
@@ -118,7 +118,8 @@ valid, and the receipts worker can recover an unconsumed tombstone and commit it
 
 The JSON pass line retains its existing counters, `finished`, and optional `dryRun`/`tables`. It adds:
 
-- `skippedRules`: rule names only for lock/statement timeouts, with `finished=false`. No SQL or row data is logged.
+- `skippedRules`: rule names when lock/statement failures cannot be recovered or the pass deadline prevents work, with `finished=false`. No SQL or row data is logged.
+- `ruleStats`: committed rows, skipped count, timeout attempts and the remembered batch size per rule. Recovered timeouts do not count as skipped rules.
 - `ratingRows`: committed row counts (including zero) for receipt publications/items, fingerprint dependencies,
   shadows, cards, matches and verdicts. Receipt counts measure payload archival, not header deletion.
 - `tables[].estimateSkipped`: dry-run eligibility/byte estimates were skipped. The accompanying zeros are placeholders.
@@ -128,14 +129,17 @@ assertions were replaced with skipped-estimate and read-only checks. Real mode's
 work, with `estimatedBytes=0` when bytes were not measured.
 
 Transactions normally process 1,000 candidates, capped at 5,000. Swaps retain complete minutes, bounded to at most
-10,000 rows. Every query, including direct reads, has a five-second statement timeout and one-second lock timeout.
+10,000 rows. Every query, including direct reads, has a one-second statement timeout and one-second lock timeout.
 Retention transactions disable parallel gather workers and discourage sequential scans/hash/merge joins so bounded
 candidate windows use indexed probes. `read_feed` locks selected rows with `SKIP LOCKED` in block/id order. A table-level
-lock can still cause a timeout, which skips that rule. Pauses remain 100 ms after batches, including failed batches.
+lock can still cause a timeout, which skips that rule. Statement timeouts halve that rule's batch size and retry within its original budget, down to 32 rows (or the configured ceiling if smaller).
+Sizes persist per database handle across passes and grow by 10% after four successful rule runs without timeouts.
+Changing the configured ceiling resets the size. Rating key lists use array predicates rather than expanded VALUES joins,
+verdict grade boundaries are computed once per coin/cut in each window, and pending-event deletes use locked physical tuples. Pauses remain 100 ms after batches, including failed batches.
 
 Each rule, including each rating selector and receipt archival, gets six seconds to start batches. The pass has a
 115-second deadline, rechecked before each SQL statement with its timeout shortened to the remaining rule/pass duration.
-Custom scheduling budgets shorter than five seconds still allow one normally bounded statement.
+Custom scheduling budgets shorter than one second still allow one normally bounded statement.
 Primary-key and token cursors persist across passes in the worker process and wrap on exhaustion. A restart resets
 those cursors, without changing deletion eligibility. No cleanup progress is stored in a new persistent table.
 

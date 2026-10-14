@@ -247,6 +247,34 @@ describe('determination retention',()=>{
 });
 
 describe('rating record boundaries',()=>{
+  it.each([1,64])('matches the original verdict selector across coins, versions, corrections, orphaning and grade cuts (batch %i)',async batchRows=>{
+    const db=await fixture();
+    const {ratingSelections,GRADE_CUTS}=await import('../src/rating-retention.js');
+    const cut=GRADE_CUTS.map(s=>Date.parse(s)), end=Date.parse('2026-12-01T00:00:00Z');
+    const times=[cut[0]!-1000,cut[0]!,cut[1]!-1000,cut[1]!,cut[1]!+1000,cut[1]!+2000];
+    for(let i=0;i<times.length;i++)await db.sql.query("INSERT INTO engine_block_times VALUES($1,$2,NULL,'head')",[100000+i,new Date(times[i]!)]);
+    const all:string[]=[];
+    for(const c of [address(0xf1),address(0xf2)]) {
+      const rows=[['first',0,'clear','v1'],['cut-one-z',1,'monitor','v1'],['cut-one-a',1,'danger','v1'],
+        ['old-orphan',2,'clear','v1'],['corrected',3,'unknown','v1'],['cut-two-z',3,'monitor','v1'],['cut-two-a',3,'danger','v1'],
+        ['latest',4,'clear','v1'],['latest-orphan',5,'danger','v1'],['version-old',2,'clear','v2'],['version-latest',4,'clear','v2']] as const;
+      for(const [suffix,i,level,version] of rows) {
+        const id=`sample-${c.slice(-2)}-${suffix}`;all.push(id);
+        await db.sql.query('INSERT INTO verdicts VALUES($1,$2,$3,$4,$5,$6)',[id,binary(c),100000+i,version,id,{level}]);
+        await db.sql.query("INSERT INTO receipt_publications(id,producer,kind,chain_id,revision_id,payload_hash,canonical_payload,data,recorded_at,summary) VALUES($1,'engines','verdict',4663,$1,'sample-hash',NULL,NULL,$2,'{}')",[id,new Date(times[i]!)]);
+        if(suffix.includes('orphan') || suffix==='corrected')await db.sql.query('INSERT INTO verdict_events VALUES($1,$2,$3,$4,$5)',[`${id}:event`,id,suffix==='corrected' ? 'corrected':'orphaned',100000+i,{}]);
+      }
+    }
+    const selector=ratingSelections().find(r=>r.table==='verdicts')!.select;
+    const expected=(await db.sql.query<{id:string}>(selector,[new Date(end-7*DAY),GRADE_CUTS])).rows.map(r=>r.id).sort();
+    expect(expected).toHaveLength(6);
+    const result=await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,batchRows,now:()=>end});
+    expect(result.skippedRules).toEqual([]);
+    const remaining=(await db.sql.query<{id:string}>('SELECT id FROM verdicts')).rows.map(r=>r.id);
+    expect(all.filter(id=>!remaining.includes(id)).sort()).toEqual(expected);
+    expect(remaining).toEqual(expect.arrayContaining(all.filter(id=>/cut-(one|two)-z$/.test(id))));
+    expect(result.ratingRows?.verdicts).toBe(expected.length);
+  });
   it('keeps latest versions, first/correction verdicts and FK targets, and compacts old matches and unlabelled dependencies',async()=>{
     const db=await fixture(),coin=coins.dead;
     const {publishReceipt}=await import('../src/index.js');

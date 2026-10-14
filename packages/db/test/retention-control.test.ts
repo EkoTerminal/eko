@@ -15,6 +15,51 @@ function fixture(onQuery: (sql: string, params?: unknown[]) => Record<string, un
 const options = {quoteTokens:[],dryRun:false,pauseMs:0,ratingDays:7,now:()=>0};
 
 describe('bounded retention control', () => {
+  it('halves timeouts in the pass, remembers each rule independently and grows slowly after success', async () => {
+    const {db}=fixture(), result=await runRetention(db,options);
+    const sizes=new Map<string,{rows:number;successes:number}>();
+    const run=retentionRules({...options,batchRows:1000},result,undefined,sizes);
+    const attempts:number[]=[];
+    await run('slow',async (_timeLeft,size)=>{attempts.push(size);if(size>250)throw Object.assign(new Error('timeout'),{code:'57014'});});
+    expect(attempts).toEqual([1000,500,250]);
+    expect(result.skippedRules).toEqual([]);
+    expect(result.ruleStats?.slow).toEqual({rows:0,skipped:0,timeouts:2,batchRows:250});
+    await run('other',async (_t,size)=>{expect(size).toBe(1000);});
+    const next=retentionRules({...options,batchRows:1000},result,undefined,sizes);
+    for(let i=0;i<4;i++)await next('slow',async (_t,size)=>{expect(size).toBe(250);});
+    expect(sizes.get('slow')?.rows).toBe(275);
+    await next('slow',async (_t,size)=>{expect(size).toBe(275);});
+  });
+  it('stops retrying at the floor or deadline and counts only committed rows',async()=>{
+    const {db}=fixture(), result=await runRetention(db,options);
+    let clock=0;
+    const run=retentionRules({...options,batchRows:128,budgetMs:3000,now:()=>clock},result);
+    const attempts:number[]=[];
+    await run('slow',async (_t,size)=>{attempts.push(size);clock+=1000;throw Object.assign(new Error('timeout'),{code:'57014'});});
+    expect(attempts).toEqual([128,64,32]);
+    expect(result.ruleStats?.slow).toEqual({rows:0,skipped:1,timeouts:3,batchRows:32});
+    expect(result.skippedRules).toContain('slow');
+    await run('later',async()=>{result.quoteRows+=7;});
+    expect(result.ruleStats?.later?.rows).toBe(7);
+  });
+  it('retries the failed key window with smaller limits and preserves committed counts across passes',async()=>{
+    let timeouts=0,windows=0;
+    const {db,statements}=fixture(sql=>{
+      if(sql.startsWith('SELECT id FROM guard_shadow_runs'))return windows++<3 ? [{id:'sample-shadow'}] : [];
+      if(sql.startsWith('SELECT x.id FROM guard_shadow_runs')) {
+        if(timeouts++===0)throw Object.assign(new Error('timeout'),{code:'57014'});
+        return [{id:'sample-shadow'}];
+      }
+      if(sql.includes('gone AS (DELETE FROM guard_shadow_runs'))return [{n:'1'}];
+      return [];
+    });
+    const first=await runRetention(db,options);
+    expect(first.ratingRows?.guard_shadow_runs).toBe(2);
+    expect(first.ruleStats?.guard_shadow_runs).toMatchObject({rows:2,timeouts:1,skipped:0,batchRows:500});
+    await runRetention(db,options);
+    expect(statements.filter(s=>s.sql.startsWith('SELECT id FROM guard_shadow_runs')).map(s=>s.sql.match(/LIMIT (\d+)/)?.[1])).toEqual(['1000','500','500','500','500']);
+  });
+
   for(const code of ['55P03','57014']) it(`rolls back a ${code} batch, names only its rule and runs later rules`, async () => {
     const {db,statements,transactions}=fixture(sql=>{
       if(sql.startsWith('SELECT run_id,block FROM wallet_fingerprint_dependencies'))throw Object.assign(new Error('private SQL and row data'),{code});
@@ -23,7 +68,7 @@ describe('bounded retention control', () => {
     const result=await runRetention(db,options);
     expect(result.finished).toBe(false);
     expect(result.skippedRules).toEqual(['wallet_fingerprint_dependencies']);
-    expect(transactions.filter(t=>t==='rollback')).toHaveLength(1);
+    expect(transactions.filter(t=>t==='rollback')).toHaveLength(code==='57014' ? 6 : 1);
     for(const table of ['guard_shadow_runs','coin_cards','playbook_matches','verdicts']) {
       expect(statements.some(s=>s.sql.startsWith(`SELECT id FROM ${table}`) || s.sql.startsWith(`SELECT coin,valid_from_block,rules_version,playbook_id FROM ${table}`))).toBe(true);
       expect(result.ratingRows?.[table]).toBe(0);
@@ -67,15 +112,15 @@ describe('bounded retention control', () => {
     await runRetention(db,configured);await runRetention(db,configured);
     const windows=statements.filter(s=>s.sql.startsWith('SELECT run_id,block FROM wallet_fingerprint_dependencies'));
     expect(windows[1]!.params).toEqual(['sample-retained','2']);
-    const selection=statements.find(s=>s.sql.startsWith('SELECT x.* FROM wallet_fingerprint_dependencies'))!.sql;
-    expect(selection).toContain('JOIN (VALUES');expect(selection).toContain('x.run_id=candidate.run_id AND x.block=candidate.block');
+    const selection=statements.find(s=>s.sql.startsWith('SELECT x.run_id,x.block FROM wallet_fingerprint_dependencies'))!.sql;
+    expect(selection).not.toContain('JOIN (VALUES');expect(selection).toContain('(x.run_id,x.block) IN (SELECT * FROM unnest(');
     expect(selection).toContain('r.id=x.run_id');expect(selection).toContain('FOR UPDATE OF x SKIP LOCKED');
   });
   it('reports committed rating rows and uses a per-coin receipt probe',async()=>{
     let windows=0;
     const {db,statements}=fixture(sql=>{
       if(sql.startsWith('SELECT id FROM guard_shadow_runs') && windows++===0)return [{id:'sample-shadow'}];
-      if(sql.startsWith('SELECT x.* FROM guard_shadow_runs'))return [{id:'sample-shadow'}];
+      if(sql.startsWith('SELECT x.id FROM guard_shadow_runs'))return [{id:'sample-shadow'}];
       if(sql.includes('gone AS (DELETE FROM guard_shadow_runs'))return [{n:'1'}];
       if(sql.startsWith('SELECT id,recorded_at FROM receipt_publications'))return [{id:'sample-receipt',recorded_at:new Date(0)}];
       // Let the receipt loop finish after one retained window.
@@ -104,7 +149,7 @@ describe('bounded retention control', () => {
   });
   it('limits direct queries as well as batch transactions with parallel workers disabled',async()=>{
     const {db,statements}=fixture();await retentionDb(db).sql.query('SELECT 1');
-    expect(statements.map(s=>s.sql)).toEqual(expect.arrayContaining(["SET LOCAL statement_timeout='5s'","SET LOCAL lock_timeout='1s'",'SET LOCAL max_parallel_workers_per_gather=0','SELECT 1']));
+    expect(statements.map(s=>s.sql)).toEqual(expect.arrayContaining(["SET LOCAL statement_timeout='1s'","SET LOCAL lock_timeout='1s'",'SET LOCAL max_parallel_workers_per_gather=0','SELECT 1']));
   });
   it('shortens every statement to the remaining rule deadline and rolls back on expiry',async()=>{
     const clock=vi.spyOn(Date,'now').mockReturnValue(1_000);

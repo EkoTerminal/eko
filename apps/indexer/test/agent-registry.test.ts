@@ -30,6 +30,27 @@ describe('indexer-owned declared wallet collection',()=>{
     expect(rows.map(r=>[hex(r.owner),hex(r.wallet),String(r.wallet_block)])).toEqual([[owner,wallet,'5'],[owner,wallet,'5'],[otherOwner,otherWallet,'8']]);
     expect(await new AgentRegistryCollector(client,db,registry).coverage()).toMatchObject({agents:2,nonzero_wallets:2,walletChangeEvents:'unverified'});
   });
+  it('seeks one snapshot per identity with the same results as history DISTINCT ON at pinned heads and after reorgs',async()=>{
+    await db.sql.query(`INSERT INTO agent_registry(agent_id,owner,wallet,token_uri,registered_block,wallet_block,block,block_hash,evidence)
+      SELECT id,CASE WHEN id%3=0 AND b=40 THEN $1::bytea ELSE $2::bytea END,$3,NULL,0,b,b,$4,'{}'
+      FROM generate_series(1,200) id CROSS JOIN generate_series(1,40) b`,[binary(zero),binary(owner),binary(wallet),binary(hash(1))]);
+    const query=db.sql.query.bind(db.sql);let compared=0;
+    db.sql.query=async function<T>(sql:string,params?:unknown[]) {
+      const result=await query<T>(sql,params);
+      if(sql.startsWith('SELECT a.* FROM agent_registry_ids')) {
+        const previous=await query('SELECT DISTINCT ON(agent_id) * FROM agent_registry WHERE wallet_block<=$1 ORDER BY agent_id,wallet_block DESC',params);
+        expect(result.rows).toEqual(previous.rows);compared++;
+        const plan=await query('EXPLAIN '+sql,params);
+        expect(JSON.stringify(plan.rows)).toContain('agent_registry_pkey');
+      }
+      return result;
+    };
+    const c=new AgentRegistryCollector(client,db,registry);
+    for(const n of [0n,5n,17n,50n])await c.snapshot(n);
+    await db.sql.query('DELETE FROM agent_registry WHERE wallet_block>12 OR agent_id=1');
+    await c.snapshot(12n);expect(compared).toBe(5);
+    expect((await c.coverage()).agents).toBe(199);
+  });
   it('resolves only supplied reviewed event profiles and enforces their pinned bytecode',async()=>{
     const l:RpcLog={...makeLog(9,zero,owner),topics:encodeEventTopics({abi:eventAbi,eventName:'WalletChanged',args:{agentId:1n}}) as [Hex,...Hex[]],data:encodeAbiParameters([{type:'address'}],[otherWallet])};
     const {keccak256}=await import('viem');

@@ -31,10 +31,10 @@ export class RadarService {
     const category=blueChipOnly && this.store.blueChip?.config.enabled ? `AND ${this.store.blueChip.predicate('read_coins.coin',params)}` : '';
     const selected=await this.store.db.sql.query<{coin:Uint8Array;tier:number;volume:number}>(`SELECT coin,tier,volume FROM read_coins
       WHERE activity>$1 ${key ? 'AND (-volume,coin)>($2,$3)' : ''} ${category} ORDER BY -volume,coin LIMIT 101`,params);
-    const page=selected.rows.slice(0,100),details=await this.store.rows(undefined,page.map(r=>hex(r.coin)));
+    const page=selected.rows.slice(0,100);
+    const [details,totals]=await Promise.all([this.store.rows(undefined,page.map(r=>hex(r.coin))),this.totals()]);
     const indexed=new Map(details.map(e=>[e.row.address,e.row]));
     const rows=page.map((r,i)=>({...indexed.get(hex(r.coin))!,rank:i+1+(key ? Number(key[3]) : 0)}));
-    const totals=await this.totals();
     const last=page.at(-1);
     return {rows,cursor:selected.rows.length>100 && last ? encodeCursor('radar',[last.tier,last.volume,hex(last.coin),(key ? Number(key[3]) : 0)+page.length]) : null,delayedSec:0,totals};
   }

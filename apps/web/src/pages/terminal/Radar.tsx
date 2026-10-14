@@ -79,8 +79,10 @@ export default function Radar() {
     if (Object.keys(changed).length) setPulses((old) => ({ ...old, ...changed }));
   }, () => snapshot()), [rt, snapshot]);
   // Wide displays remember a close as well as a selection. Narrow displays only open after a tap.
+  // Switching to a narrow display closes the panel once. Rows arriving later must not close a panel the visitor opened.
+  useEffect(() => { if (!wide) { setSelected(null); selectionInitialized.current = false; } }, [wide]);
   useEffect(() => {
-    if (!wide) { setSelected(null); selectionInitialized.current = false; return; }
+    if (!wide) return;
     if (rows.length && !selectionInitialized.current) { const stored = remembered(); setSelected(stored === 'none' ? null : rows.find((c) => c.address === stored)?.address ?? hotFirst(rows)); selectionInitialized.current = true; }
   }, [wide, rows.length]);
   const select = useCallback((c: RadarRow, el: HTMLElement) => { returnTo.current = el; setSelected(c.address); if (wide) { try { localStorage.setItem(rememberKey, c.address); } catch { /* optional */ } } }, [wide]);

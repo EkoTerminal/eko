@@ -1,6 +1,6 @@
-import { retentionDb, retentionRules, retentionCursors } from './retention-control.js';
+import { retentionDb, retentionRules, retentionCursors, retentionBatchSizes } from './retention-control.js';
 import { determinationPass, compactUnratedTransfers, compactLifetimeSwaps, reportRows, addReport, retentionBatch, type RetentionTableReport } from './determination-retention.js';
-import { ratingRetention, ratingWindow } from './rating-retention.js';
+import { ratingRetention } from './rating-retention.js';
 import type { ChainDb } from './client.js';
 import { snapshotTrending } from './trending.js';
 import { binary } from './types.js';
@@ -57,6 +57,7 @@ export interface RetentionResult {
   finished: boolean;
   skippedRules: string[];
   ratingRows?: Record<string, number>;
+  ruleStats?: Record<string, { rows: number; skipped: number; timeouts: number; batchRows: number }>;
   dryRun?: boolean;
   tables?: RetentionTableReport[];
 }
@@ -126,14 +127,18 @@ export async function idleTokens(db: ChainDb, through: bigint, exclude: Uint8Arr
 
 /** Bound the unknown-pool candidate walk even when every old row belongs to a known pool. */
 async function pendingPoolBatch(db: ChainDb, through: bigint, limit: number, after?: unknown[]) {
-  const window = await ratingWindow(db, 'pending_pool_events', ['tx_hash','log_index'], ['bytea','integer'], after, limit);
-  if (!window.length) return { rows: 0, after: undefined };
-  const rows = Number((await db.sql.query<{ n: string }>(`WITH gone AS (DELETE FROM pending_pool_events e USING
-      unnest($2::bytea[],$3::integer[]) candidate(hash,idx)
-      WHERE e.tx_hash=candidate.hash AND e.log_index=candidate.idx AND e.block<=$1
+  return db.tx(async tx => {
+    const window = (await tx.sql.query<{ tx_hash: Uint8Array; log_index: number; tid: string }>(`SELECT tx_hash,log_index,ctid::text AS tid FROM pending_pool_events
+      ${after ? 'WHERE (tx_hash,log_index)>($1::bytea,$2::integer)' : ''}
+      ORDER BY tx_hash,log_index LIMIT ${limit} FOR UPDATE`, after)).rows;
+    if (!window.length) return { rows: 0, after: undefined };
+    // Locked physical tuples avoid another join over a large hash/log-index list.
+    const rows = Number((await tx.sql.query<{ n: string }>(`WITH gone AS (DELETE FROM pending_pool_events e
+      WHERE e.ctid=ANY($2::tid[]) AND e.block<=$1
         AND NOT EXISTS(SELECT 1 FROM pools o WHERE o.id=e.emitter) RETURNING 1)
-    SELECT count(*)::text AS n FROM gone`, [through.toString(),window.map(r=>r.tx_hash),window.map(r=>r.log_index)])).rows[0]?.n ?? 0);
-  return { rows, after: [window.at(-1)!.tx_hash,window.at(-1)!.log_index] };
+      SELECT count(*)::text AS n FROM gone`, [through.toString(),window.map(r=>r.tid)])).rows[0]?.n ?? 0);
+    return { rows, after: [window.at(-1)!.tx_hash,window.at(-1)!.log_index] };
+  });
 }
 export async function prunePendingPoolEvents(db: ChainDb, through: bigint, limit: number): Promise<number> {
   return (await pendingPoolBatch(db,through,limit)).rows;
@@ -325,7 +330,7 @@ async function pruneQuietCoins(db: ChainDb, rule: HistoryRule, days: number, now
   const pairQuotes = [...exclude, ZERO_ADDRESS];
   let after: Uint8Array | null = null;
   while (pass.timeLeft()) {
-    const coins = await quietCoins(db, rule, through, swapsThrough, exclude, pairQuotes, after, 100);
+    const coins = await quietCoins(db, rule, through, swapsThrough, exclude, pairQuotes, after, Math.min(pass.limit,100));
     if (!coins.length) return;
     for (const coin of coins) {
       const done = await pruneCoinHistory(db, coin, rule, through, swapsThrough, pairQuotes, pass);
@@ -337,11 +342,11 @@ async function pruneQuietCoins(db: ChainDb, rule: HistoryRule, days: number, now
 }
 
 /** Walk only token identities, then probe each token's indexed event ranges. */
-export async function rawCandidates(db: ChainDb, through: bigint, quote: Uint8Array[], after: Uint8Array | null, swaps = false) {
+export async function rawCandidates(db: ChainDb, through: bigint, quote: Uint8Array[], after: Uint8Array | null, swaps = false, limit = 200) {
   const event = swaps ? 'swaps' : 'token_transfers', key = swaps ? 'coin' : 'token';
   return (await db.sql.query<{ address: Uint8Array; eligible: boolean }>(`WITH identities AS MATERIALIZED (
       SELECT address FROM tokens WHERE deployer IS NULL AND launchpad IS NULL
-        AND ($3::bytea IS NULL OR address>$3) AND NOT address=ANY($2::bytea[]) ORDER BY address LIMIT 200
+        AND ($3::bytea IS NULL OR address>$3) AND NOT address=ANY($2::bytea[]) ORDER BY address LIMIT ${Math.min(limit,200)}
     ) SELECT t.address, (EXISTS(SELECT 1 FROM ${event} x WHERE x.${key}=t.address AND x.block<=$1 LIMIT 1)
       AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.senders_pending LIMIT 1)
       AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.pricing_pending LIMIT 1)
@@ -357,14 +362,16 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
   const passDeadline = Date.now() + Math.min(options.passBudgetMs ?? 115_000, 115_000);
   let queryDeadline = passDeadline;
   const db = retentionDb(source, () => queryDeadline), cursors = retentionCursors(source);
-  const now = options.now ?? Date.now, started = now(), limit = Math.min(options.batchRows ?? 1000, 5000);
+  const now = options.now ?? Date.now, started = now();
+  let limit = Math.min(options.batchRows ?? 1000, 5000);
   if (options.quietCoinDays !== undefined && options.quietCoinDays <= ENGINE_IDLE_DAYS) throw new Error('Quiet-coin retention must exceed the engines idle window');
   if (options.idleTokenDays !== undefined && options.idleTokenDays <= ENGINE_IDLE_DAYS) throw new Error('Idle-token retention must exceed the engines idle window');
   if (options.dangerQuietDays !== undefined && !(options.dangerQuietDays >= 1)) throw new Error('Danger-coin retention needs at least one quiet day');
   const result: RetentionResult = { quoteRows: 0, idleTokens: 0, idleRows: 0, pendingRows: 0, feedRows: 0, dangerCoins: 0, quietCoins: 0,
     historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, skippedRules: [] };
   if (options.dryRun) { result.dryRun = true; result.tables = []; }
-  const runRule = retentionRules(options, result, budget => { queryDeadline = Math.min(passDeadline, Date.now() + budget); });
+  const rules = retentionRules(options, result, budget => { queryDeadline = Math.min(passDeadline, Date.now() + budget); }, retentionBatchSizes(source));
+  const runRule: typeof rules = (name, work) => rules(name, (timeLeft, rows) => { limit = rows; return work(timeLeft, rows); });
   const quote = options.quoteTokens.map(token => binary(token as `0x${string}`));
   if (options.rawDays !== undefined) quote.push(ZERO_ADDRESS);
   const modern = options.settleHours !== undefined || options.rawDays !== undefined;
@@ -376,7 +383,7 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
       if (rule === 'settled' ? options.settleHours === undefined : options.rawDays === undefined) continue;
       await runRule(rule, async timeLeft => {
         if (options.dryRun) { for (const table of ['token_transfers','liquidity_events','pons_events','swaps']) await report(table); return; }
-        await determinationPass(db, options, result, quote, started, rule, timeLeft);
+        await determinationPass(db, { ...options, batchRows: limit }, result, quote, started, rule, timeLeft);
       });
     }
   }
@@ -400,7 +407,7 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
       const name = swaps ? 'raw_swaps' : 'unrated_transfers';
       let after = (cursors.get(name)?.[0] as Uint8Array | undefined) ?? null;
       while (timeLeft()) {
-        const page = await rawCandidates(db, through, swaps ? [] : quote, after, swaps);
+        const page = await rawCandidates(db, through, swaps ? [] : quote, after, swaps, limit);
         if (!page.length) { cursors.delete(name); return; }
         for (const token of page) {
           if (!timeLeft()) { result.finished = false; return; }

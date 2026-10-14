@@ -113,8 +113,8 @@ function activitySql(scope?:ActivityScope) {
   if(scope && 'ranges' in scope) return `WITH activity AS (
     SELECT r.c AS coin,x.block,'swap' AS kind,x.ts,x.low,x.high,x.price,x.revision FROM ${ranged(`${swaps} FROM swaps WHERE coin=r.c AND block>r.lo AND block<=r.hi GROUP BY block`)}
     UNION ALL SELECT r.c,x.block,'transfer',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged('SELECT block,min(ts) AS ts,count(*)::text AS revision FROM token_transfers WHERE token=r.c AND block>r.lo AND block<=r.hi GROUP BY block')}
-    UNION ALL SELECT r.c,x.block,'liquidity',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged(`${liquidity} FROM liquidity_events e JOIN pools p ON p.id=e.pool_id
-      WHERE (p.currency0=r.c OR p.currency1=r.c) AND e.block>r.lo AND e.block<=r.hi GROUP BY e.block`)}
+    UNION ALL SELECT r.c,x.block,'liquidity',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged(`${liquidity} FROM (SELECT id FROM pools WHERE currency0=r.c UNION SELECT id FROM pools WHERE currency1=r.c) p
+      CROSS JOIN LATERAL (SELECT * FROM liquidity_events WHERE pool_id=p.id AND block>r.lo AND block<=r.hi OFFSET 0) e GROUP BY e.block`)}
     UNION ALL SELECT r.c,x.block,'pons',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged(`SELECT e.block,b.ts,count(*)::text AS revision FROM pons_events e JOIN engine_block_times b ON b.number=e.block
       WHERE e.token=r.c AND e.block>r.lo AND e.block<=r.hi GROUP BY e.block,b.ts`)}
     UNION ALL SELECT r.c,x.block,'exemption',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged(`SELECT e.block,b.ts,count(*)::text AS revision FROM pons_exemptions e JOIN engine_block_times b ON b.number=e.block
@@ -144,14 +144,39 @@ function activitySql(scope?:ActivityScope) {
 }
 const scopeParams=(to:number,scope?:ActivityScope):unknown[]=>!scope ? [to] : 'ranges' in scope ? [scope.ranges.coins.map(binary),scope.ranges.from,scope.ranges.to]
   : [to,scope.after,scope.since,scope.transfers.map(binary)];
-/** Activity rows through `to` (ranges carry their own bounds), ordered by coin, block and kind. Ranges must name launched coins. */
+/** At most 256 distinct event blocks per indexed source read, including sparse old histories. */
+async function nextActivityBlock(db:ChainDb,coin:Address,after:number,to:number) {
+  return Number((await db.sql.query<{block:string | null}>(`SELECT max(block)::text AS block FROM (SELECT DISTINCT block FROM (
+    (SELECT DISTINCT block FROM swaps WHERE coin=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
+    UNION ALL (SELECT DISTINCT block FROM token_transfers WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
+    UNION ALL (SELECT DISTINCT e.block FROM (SELECT id FROM pools WHERE currency0=$1 UNION SELECT id FROM pools WHERE currency1=$1) p
+      CROSS JOIN LATERAL (SELECT DISTINCT block FROM liquidity_events WHERE pool_id=p.id AND block>$2 AND block<=$3 ORDER BY block LIMIT 256) e ORDER BY e.block LIMIT 256)
+    UNION ALL (SELECT DISTINCT block FROM pons_events WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
+    UNION ALL (SELECT DISTINCT block FROM pons_exemptions WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
+    UNION ALL (SELECT DISTINCT created_block FROM pools WHERE (currency0=$1 OR currency1=$1) AND created_block>$2 AND created_block<=$3 ORDER BY created_block LIMIT 256)
+  ) e ORDER BY block LIMIT 256) page`,[binary(coin),after,to])).rows[0]?.block ?? to);
+}
+/** Activity rows through `to` or coin ranges, in coin/block/kind order. */
 export async function activityRows(db:ChainDb,to:number,scope?:ActivityScope) {
+  if(scope && 'ranges' in scope) {
+    const rows:ActivityRow[]=[];
+    for(let i=0;i<scope.ranges.coins.length;i++) {
+      const coin=scope.ranges.coins[i],end=scope.ranges.to[i];let after=scope.ranges.from[i];
+      while(after<end) {
+        const upper=await nextActivityBlock(db,coin,after,end);
+        const page={ranges:{coins:[coin],from:[after],to:[upper]}};
+        rows.push(...(await db.sql.query<ActivityRow>(`${activitySql(page)} SELECT * FROM activity ORDER BY coin,block,kind`,scopeParams(upper,page))).rows);
+        after=upper;
+      }
+    }
+    return rows.sort((a,b)=>hex(a.coin).localeCompare(hex(b.coin)) || Number(a.block)-Number(b.block) || a.kind.localeCompare(b.kind));
+  }
   return (await db.sql.query<ActivityRow>(`${activitySql(scope)} SELECT * FROM activity ORDER BY coin,block,kind`,scopeParams(to,scope))).rows;
 }
 /** An activity row as a checkpoint event, and its part of the coin's revision. */
 export const activityEvent=(coin:Address,row:ActivityRow):Activity=>({coin,block:Number(row.block),sec:seconds(row.ts),kind:row.kind,low:row.low,high:row.high,price:row.price});
 export const revisionPart=(row:{block:string;kind:string;revision:string})=>`${row.block}:${row.kind}:${row.revision}`;
-const MASK=(1n<<128n)-1n,TWO64=1n<<64n;
+const MASK=(1n<<128n)-1n;
 /**
  * A row's share of its coin's revision: the md5 of its part as a 128-bit number. A coin's revision sums its rows'
  * shares modulo 2^128, so it changes whenever any row is added, removed or rewritten, and a poll can update it from the
@@ -167,12 +192,13 @@ export const coinRevision=(supplyBlock:string | null,graduatedBlock:string | nul
 export interface ActivityBase { baseBlock:number;baseSum:bigint;baseSec:number | null }
 /** Per coin: the share sum and newest event time (seconds, null without rows) of its rows in each range. */
 export async function activitySums(db:ChainDb,ranges:CoinRanges) {
-  const half=(at:number)=>`(('x'||substr(h,${at},16))::bit(64)::bigint::numeric+CASE WHEN ('x'||substr(h,${at},16))::bit(64)::bigint<0 THEN 18446744073709551616 ELSE 0 END)`;
-  const rows=(await db.sql.query<{coin:Uint8Array;hi:string | null;lo:string | null;last:Date | null}>(`${activitySql({ranges})}
-    SELECT coin,sum(${half(1)})::text AS hi,sum(${half(17)})::text AS lo,max(ts) AS last
-    FROM (SELECT coin,ts,md5(block::text||':'||kind||':'||revision) AS h FROM activity) a GROUP BY coin`,scopeParams(0,{ranges}))).rows;
   const sums=new Map<Address,{sum:bigint;sec:number | null}>(ranges.coins.map(coin=>[coin,{sum:0n,sec:null}]));
-  for(const row of rows)sums.set(hex(row.coin) as Address,{sum:(BigInt(row.hi ?? 0)*TWO64+BigInt(row.lo ?? 0)) & MASK,sec:row.last ? seconds(row.last) : null});
+  // Hash the exact same ordered block revisions as the full SQL sum. No unbounded CTE on a cold/repaired coin.
+  for(const row of await activityRows(db,0,{ranges})) {
+    const sum=sums.get(hex(row.coin))!;
+    sum.sum=(sum.sum+partHash(revisionPart(row))) & MASK;
+    sum.sec=Math.max(sum.sec ?? -Infinity,seconds(row.ts));
+  }
   return sums;
 }
 /**
@@ -218,7 +244,8 @@ export async function fillClockGaps(db:ChainDb,gaps:number[],readBlock:BlockRead
  */
 export async function coinActivity(db: ChainDb, to: number, readBlock?: BlockReader, cache:ClockCache=new Map(), concurrency=4, stopped:()=>boolean=()=>false, revisions=true): Promise<CoinActivity[]> {
   if(!await fillClockGaps(db,await clockGaps(db,to),readBlock,cache,concurrency,stopped))return [];
-  const rows=await activityRows(db,to);
+  const coins=(await db.sql.query<{address:Uint8Array}>('SELECT address FROM tokens WHERE first_block<=$1',[to])).rows.map(row=>hex(row.address));
+  const rows=await activityRows(db,to,{ranges:{coins,from:coins.map(()=>-1),to:coins.map(()=>to)}});
   const baseBlock=to-ACTIVITY_LOOKBACK_BLOCKS;
   const events=new Map<Address,Activity[]>(), sums=new Map<Address,{sum:bigint;base:bigint;baseSec:number | null}>();
   for (const row of rows) {

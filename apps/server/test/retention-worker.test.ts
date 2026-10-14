@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as retention from '@eko/db';
 import { migrate, openDb, type ChainDb } from '@eko/db';
 import { loadConfig } from '../src/config.js';
 import { ChainDb as Database } from '@eko/db';
@@ -42,6 +43,35 @@ describe('chain retention settings', () => {
 });
 
 describe('retention worker', () => {
+  it('runs backlogged passes after a pause, then waits ten minutes and stops cleanly',async()=>{
+    vi.useFakeTimers();
+    const result={quoteRows:0,idleTokens:0,idleRows:0,pendingRows:0,feedRows:0,dangerCoins:0,quietCoins:0,historyTransfers:0,historyLiquidity:0,historyPons:0,historySwaps:0,trendingSnapshots:0,skippedRules:[],finished:false};
+    const run=vi.spyOn(retention,'runRetention').mockResolvedValueOnce(result).mockResolvedValue({...result,finished:true});
+    const worker=new RetentionWorker({} as ChainDb,{ratingDays:7,dryRun:false},vi.fn());
+    try {
+      worker.start();await worker.tick();expect(run).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(99);expect(run).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);expect(run).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(599999);expect(run).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);expect(run).toHaveBeenCalledTimes(3);
+      await worker.stop();await vi.advanceTimersByTimeAsync(600000);expect(run).toHaveBeenCalledTimes(3);
+    } finally {await worker.stop();run.mockRestore();vi.useRealTimers();}
+  });
+  it.each(['dry-run','failure'])('waits the normal interval for %s and never overlaps passes',async kind=>{
+    vi.useFakeTimers();
+    let complete!:(value:retention.RetentionResult)=>void;
+    const run=vi.spyOn(retention,'runRetention').mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
+    const worker=new RetentionWorker({} as ChainDb,{ratingDays:7},vi.fn());
+    try {
+      worker.start();const pending=worker.tick();
+      expect(worker.tick()).toBe(pending);
+      await vi.advanceTimersByTimeAsync(600000);expect(run).toHaveBeenCalledTimes(1);
+      if(kind==='failure')run.mockRejectedValue(new Error('fixture failure'));
+      complete({finished:false,dryRun:true} as retention.RetentionResult);await pending;
+      await vi.advanceTimersByTimeAsync(100);expect(run).toHaveBeenCalledTimes(1);
+      if(kind==='failure') {await vi.advanceTimersByTimeAsync(599900);expect(run).toHaveBeenCalledTimes(2);await vi.advanceTimersByTimeAsync(100);expect(run).toHaveBeenCalledTimes(2);}
+    } finally {await worker.stop();run.mockRestore();vi.useRealTimers();}
+  });
   it('keeps existing pass fields and emits skipped rules and real rating counts',async()=>{
     const sql={query:async <T>(query:string)=>{if(query.startsWith('SELECT run_id,block FROM wallet_fingerprint_dependencies'))throw Object.assign(new Error('fixture timeout'),{code:'57014'});return {rows:[] as T[]};}};
     const db=new Database(sql,work=>work(sql)),report=vi.fn();
@@ -59,7 +89,7 @@ describe('retention worker', () => {
     const report = vi.fn(), on = new RetentionWorker(db, { quoteDays: 2, pendingPoolDays: 3, feedDays: 3 }, report, 60_000);
     on.start(); await on.tick(); await on.stop();
     expect(report).toHaveBeenCalledWith({ quoteRows: 0, idleTokens: 0, idleRows: 0, pendingRows: 0, feedRows: 0, dangerCoins: 0, quietCoins: 0,
-      historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, skippedRules:[], dryRun:true,tables:[] });
+      historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, skippedRules:[], dryRun:true,tables:[], ruleStats:expect.any(Object) });
     expect(new RetentionWorker(db, { quietCoinDays: 8 }, vi.fn(), 60_000).enabled).toBe(true);
     expect(new RetentionWorker(db, { feedDays: 3 }, vi.fn(), 60_000).enabled).toBe(true);
     const failing = vi.fn(), broken = new RetentionWorker({ sql: { query: async () => { throw new Error('fixture failure with row data'); } } } as unknown as ChainDb,

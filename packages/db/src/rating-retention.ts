@@ -18,6 +18,11 @@ export async function preserveGradePrices(db: ChainDb, coin: Uint8Array, before:
     WHERE g.ts+h.sec*interval '1 second'<$3 ON CONFLICT DO NOTHING`, [coin,GRADE_CUTS,before]);
 }
 const old = (block: string) => `EXISTS(SELECT 1 FROM engine_block_times b WHERE b.number=${block} AND b.ts<$1)`;
+const gradeProbe = `SELECT v.id FROM verdicts v JOIN engine_block_times b ON b.number=v.valid_from_block LEFT JOIN receipt_publications p ON p.id=v.id
+  WHERE v.coin=x.coin AND v.valid_from_block>=(SELECT number FROM engine_block_times WHERE ts>=c.since ORDER BY ts,number LIMIT 1)
+    AND b.ts>=c.since AND v.data->>'level' IN ('clear','monitor','danger')
+  ORDER BY v.valid_from_block,p.publication_sequence ASC NULLS FIRST,v.id LIMIT 1`;
+const gradeException = `NOT EXISTS(SELECT 1 FROM unnest($2::timestamptz[]) c(since) WHERE x.id=(${gradeProbe}))`;
 /** Reader/FK exceptions are applied only to bounded candidate windows. Dry-run estimates are skipped. */
 export function ratingSelections() {
   const selections = [
@@ -35,8 +40,7 @@ export function ratingSelections() {
       AND EXISTS(SELECT 1 FROM receipt_publications p WHERE p.id=x.id AND p.data IS NULL)
       AND NOT EXISTS(SELECT 1 FROM guard_shadow_runs s WHERE s.legacy_verdict_id=x.id)
       AND NOT EXISTS(SELECT 1 FROM verdict_events e WHERE e.verdict_id=x.id AND e.kind IN ('orphaned','corrected'))
-      AND NOT EXISTS(SELECT 1 FROM unnest($2::timestamptz[]) c(since) WHERE x.id=(SELECT v.id FROM verdicts v JOIN engine_block_times b ON b.number=v.valid_from_block LEFT JOIN receipt_publications p ON p.id=v.id
-        WHERE v.coin=x.coin AND v.valid_from_block>=(SELECT number FROM engine_block_times WHERE ts>=c.since ORDER BY ts,number LIMIT 1) AND b.ts>=c.since AND v.data->>'level' IN ('clear','monitor','danger') ORDER BY v.valid_from_block,p.publication_sequence ASC NULLS FIRST,v.id LIMIT 1))`, remove: `DELETE FROM verdicts x USING picked p WHERE x.id=p.id` },
+      AND ${gradeException}`, remove: `DELETE FROM verdicts x USING picked p WHERE x.id=p.id` },
   ];
   return selections;
 }
@@ -53,16 +57,17 @@ export async function ratingWindow(db: ChainDb, table: string, columns: string[]
     ${after ? `WHERE (${keys})>(${types.map((t,i)=>`$${i+1}::${t}`).join(',')})` : ''}
     ORDER BY ${keys} LIMIT ${limit}`, after)).rows;
 }
-function windowJoin(rows: Record<string, unknown>[], columns: string[], types: string[], values: unknown[]) {
-  const keys = rows.map(row => '('+columns.map((c,i)=>{ values.push(row[c]); return `$${values.length}::${types[i]}`; }).join(',')+')').join(',');
-  return `JOIN (VALUES ${keys}) candidate(${columns.join(',')}) ON ${columns.map(c=>`x.${c}=candidate.${c}`).join(' AND ')}`;
+function windowPredicate(rows: Record<string, unknown>[], columns: string[], types: string[], values: unknown[]) {
+  const arrays = columns.map((c,i) => { values.push(rows.map(row=>row[c])); return `$${values.length}::${types[i]}[]`; });
+  if (columns.length === 1) return `x.${columns[0]}=ANY(${arrays[0]})`;
+  return `(${columns.map(c=>`x.${c}`).join(',')}) IN (SELECT * FROM unnest(${arrays.join(',')}))`;
 }
 export async function ratingRetention(db: ChainDb, options: RetentionOptions, result: RetentionResult, nowMs: number,
   runRule: RetentionRuleRunner, cursors: Map<string, unknown[]>) {
-  const cutoff = new Date(nowMs-(options.ratingDays ?? 7)*86400000), limit=Math.min(options.batchRows ?? 1000,5000);
+  const cutoff = new Date(nowMs-(options.ratingDays ?? 7)*86400000);
   result.ratingRows = Object.fromEntries(['receipt_publications','receipt_items',...ratingSelections().map(r=>r.table)].map(t=>[t,0]));
-  await runRule('receipt_publications', timeLeft => receiptRetention(db,options,result,cutoff,limit,timeLeft,cursors));
-  for (const rule of ratingSelections()) await runRule(rule.table, async timeLeft => {
+  await runRule('receipt_publications', (timeLeft,limit) => receiptRetention(db,options,result,cutoff,limit,timeLeft,cursors));
+  for (const rule of ratingSelections()) await runRule(rule.table, async (timeLeft,limit) => {
     if (options.dryRun) {
       addReport(result,await reportRows(db,rule.table,'',[]));
       if(rule.table==='verdicts')addReport(result,await reportRows(db,'verdict_events','',[]));
@@ -75,17 +80,27 @@ export async function ratingRetention(db: ChainDb, options: RetentionOptions, re
         const window=await ratingWindow(tx,rule.table,columns,types,cursors.get(rule.table),limit);
         if(!window.length)return {moved:0,after:undefined};
         const params:unknown[]=rule.table==='verdicts' ? [cutoff,GRADE_CUTS] : [cutoff];
-        const join=windowJoin(window,columns,types,params);
-        const bounded=rule.select.replace(`FROM ${rule.table} x`,`FROM ${rule.table} x ${join}`);
+        const predicate=windowPredicate(window,columns,types,params);
+        const selectedColumns = [...new Set([...columns, ...(rule.table==='coin_cards' || rule.table==='verdicts' || rule.table==='playbook_matches' ? ['coin','data'] : [])])];
+        let bounded=rule.select.replace('SELECT x.*',`SELECT ${selectedColumns.map(c=>`x.${c}`).join(',')}`).replace(`WHERE `,`WHERE ${predicate} AND `);
+        if (rule.table==='verdicts') {
+          // The same coin can occupy most of a window. Compute each permanent grade boundary once per coin/cut.
+          bounded=`WITH candidate_coins AS MATERIALIZED (SELECT DISTINCT coin FROM verdicts WHERE id=ANY($3::text[])),
+            grade_boundaries AS MATERIALIZED (SELECT g.id FROM candidate_coins x CROSS JOIN unnest($2::timestamptz[]) c(since)
+              CROSS JOIN LATERAL (${gradeProbe}) g)
+            ${bounded.replace(gradeException,'NOT EXISTS(SELECT 1 FROM grade_boundaries g WHERE g.id=x.id)')}`;
+        }
         const rows=(await tx.sql.query<Record<string,unknown>>(`${bounded} FOR UPDATE OF x SKIP LOCKED`,params)).rows;
         const after=columns.map(c=>window.at(-1)![c]);
         if(!rows.length)return {moved:0,after};
         const values:unknown[]=[];
-        const picked=`SELECT x.* FROM ${rule.table} x ${windowJoin(rows,columns,types,values)}`;
-        if(rule.table==='coin_cards' || rule.table==='verdicts')await tx.sql.query(`WITH picked AS (${picked})
+        const filter=windowPredicate(rows,columns,types,values);
+        const picked=`SELECT ${columns.map(c=>`x.${c}`).join(',')} FROM ${rule.table} x WHERE ${filter}`;
+        const summaryPicked=`SELECT ${selectedColumns.map(c=>`x.${c}`).join(',')} FROM ${rule.table} x WHERE ${filter}`;
+        if(rule.table==='coin_cards' || rule.table==='verdicts')await tx.sql.query(`WITH picked AS (${summaryPicked})
           INSERT INTO read_blue_chip_danger(coin) SELECT DISTINCT coin FROM picked
           WHERE ${rule.table==='coin_cards' ? "data->'verdict'->>'level'" : "data->>'level'"}='danger' ON CONFLICT DO NOTHING`,values);
-        if(rule.table==='playbook_matches')await tx.sql.query(`WITH picked AS (${picked})
+        if(rule.table==='playbook_matches')await tx.sql.query(`WITH picked AS (${summaryPicked})
           INSERT INTO coin_match_lifetime SELECT coin,rules_version,playbook_id,data->>'level',min(valid_from_block) FROM picked GROUP BY coin,rules_version,playbook_id,data->>'level'
           ON CONFLICT(coin,rules_version,playbook_id,level) DO UPDATE SET first_block=least(coin_match_lifetime.first_block,excluded.first_block)`,values);
         if(rule.table==='verdicts')await tx.sql.query(`WITH picked AS (${picked}) DELETE FROM verdict_events e USING picked p WHERE e.verdict_id=p.id`,values);

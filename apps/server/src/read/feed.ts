@@ -42,23 +42,25 @@ export class FeedService {
     const params:unknown[]=[model,FEED_TRADE_MIN_USD,new Date(this.store.now()-FEED_TRADE_WINDOW_MS)],where:string[]=[];
     // A new pool for a token with no indexed name that is not on the Radar is left out: about 3,800 a day on
     // 2026-10-12 (Uniswap pools of tokens EKO does not price or rate yet), each a bare address leading to an empty page.
-    const source=`(SELECT * FROM read_feed f WHERE NOT (f.kind='new_pair' AND coalesce(f.symbol,'')='' AND NOT EXISTS(SELECT 1 FROM read_coins r WHERE r.coin=f.coin))
-      UNION ALL SELECT 'trade:'||encode(s.tx_hash,'hex')||':'||s.log_index AS id,s.coin,s.block,'trade' AS kind,
+    const sources=[`SELECT * FROM read_feed f WHERE NOT (f.kind='new_pair' AND coalesce(f.symbol,'')='' AND NOT EXISTS(SELECT 1 FROM read_coins r WHERE r.coin=f.coin))`, `SELECT 'trade:'||encode(s.tx_hash,'hex')||':'||s.log_index AS id,s.coin,s.block,'trade' AS kind,
       jsonb_build_object('sizeUsd',s.usd,'side',CASE WHEN s.side=1 THEN 'buy' ELSE 'sell' END,'wallet','0x'||encode(coalesce(CASE WHEN s.side=1 THEN s.recipient END,s.trader),'hex')) AS data,
       NULL::text AS verdict_id,t.first_block,t.symbol
       FROM swaps s JOIN read_coins r ON r.coin=s.coin JOIN tokens t ON t.address=s.coin
-      WHERE s.usd>=$2 AND s.ts>$3 AND coalesce(CASE WHEN s.side=1 THEN s.recipient END,s.trader) IS NOT NULL
-      UNION ALL SELECT e.id,e.coin,e.block,
+      WHERE s.usd>=500 AND s.usd>=$2 AND s.ts>$3 AND coalesce(CASE WHEN s.side=1 THEN s.recipient END,s.trader) IS NOT NULL`, `SELECT e.id,e.coin,e.block,
       CASE WHEN e.data->>'label'='crew' THEN 'crew_trade' ELSE 'agent_trade' END AS kind,e.data,NULL::text AS verdict_id,t.first_block,t.symbol
       FROM flow_events e JOIN tokens t ON t.address=e.coin JOIN chain_blocks b ON b.number=e.block AND b.hash=e.block_hash
-      WHERE e.model_version=$1 AND e.data->>'label' IN ('declared_agent','likely_agent','crew') AND NOT EXISTS(SELECT 1 FROM flow_dirty d WHERE d.coin=e.coin)) AS feed_source`;
+      WHERE e.model_version=$1 AND e.data->>'label' IN ('declared_agent','likely_agent','crew') AND NOT EXISTS(SELECT 1 FROM flow_dirty d WHERE d.coin=e.coin) `];
     const bind=(v:unknown)=>{params.push(v);return `$${params.length}`;};
     if(coin)where.push(`coin=${bind(binary(coin))}`);
     if(block!=null)where.push(`block=${bind(block)}`);
     if(key)where.push(`(block,id)<(${bind(key[0])},${bind(key[1])})`);
-    const condition=where.length ? 'WHERE '+where.join(' AND ') : '';
-    const filtered=kinds?.length ? [...new Set(kinds)].map(kind=>`(SELECT * FROM ${source} WHERE kind=${bind(kind)} ${where.length ? 'AND '+where.join(' AND ') : ''} ORDER BY block DESC,id DESC LIMIT 101)`).join(' UNION ALL ') : null;
-    const page=filtered ? `SELECT * FROM (${filtered}) kinds ORDER BY block DESC,id DESC LIMIT 101` : `SELECT * FROM ${source} ${condition} ORDER BY block DESC,id DESC LIMIT 101`;
+    // Top 101 from each ordered source suffice for the exact top 101 of their union. Apply every filter before LIMIT.
+    const branches=(kind?:FeedItem['kind'])=>{
+      const conditions=[...where];if(kind)conditions.push(`kind=${bind(kind)}`);
+      return sources.map(source=>`(SELECT * FROM (${source}) feed_source ${conditions.length ? 'WHERE '+conditions.join(' AND ') : ''} ORDER BY block DESC,id DESC LIMIT 101)`);
+    };
+    const candidates=kinds?.length ? [...new Set(kinds)].flatMap(kind=>branches(kind)) : branches();
+    const page=`SELECT * FROM (${candidates.join(' UNION ALL ')}) candidates ORDER BY block DESC,id DESC LIMIT 101`;
     // Chain block and id form an immutable chronological cursor. Enrichment is bounded to 101 events.
     const result=await this.store.db.sql.query<{id:string;coin:Uint8Array;symbol:string;block:string;kind:FeedItem['kind'];data:Record<string,unknown>;first_block:string|null}>(page,params);
     const coins=result.rows.map(r=>r.coin);

@@ -1,6 +1,24 @@
 import { binary, hex, type ChainDb } from '@eko/db';
 import type { Address } from '@eko/shared';
 
+/** Top N of each source suffice for top N of their union, including retained tails and their original ties. */
+function latestSwaps(limit:number,condition='') {
+  const fields='s.coin,s.pool_id,s.block,s.log_index,s.tx_hash,s.amount_coin,s.amount_quote,s.usd,s.ts';
+  const order='ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC';
+  return `SELECT * FROM (
+    (SELECT ${fields} FROM swaps s WHERE s.coin=t.address ${condition} ${order} LIMIT ${limit})
+    UNION ALL
+    (SELECT ${fields} FROM (SELECT l.coin,decode(substring(r->>'pool_id' FROM 3),'hex') AS pool_id,(r->>'block')::bigint AS block,
+      (r->>'log_index')::int AS log_index,decode(substring(r->>'tx_hash' FROM 3),'hex') AS tx_hash,
+      (r->>'amount_coin')::numeric AS amount_coin,(r->>'amount_quote')::numeric AS amount_quote,(r->>'usd')::float8 AS usd,(r->>'ts')::timestamptz AS ts
+      FROM coin_lifetime l CROSS JOIN LATERAL jsonb_array_elements(coalesce(l.data->'tail','[]') ||
+        CASE WHEN l.data->'lastPositivePriced' IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(l.data->'tail','[]')) kept
+          WHERE kept->>'tx_hash'=l.data->'lastPositivePriced'->>'tx_hash' AND kept->>'log_index'=l.data->'lastPositivePriced'->>'log_index')
+        THEN jsonb_build_array(l.data->'lastPositivePriced') ELSE '[]'::jsonb END) r WHERE l.coin=t.address) s
+      WHERE true ${condition} ${order} LIMIT ${limit})
+    ) s ${order} LIMIT ${limit}`;
+}
+
 /**
  * USD value of both sides of a full-range Uniswap position with liquidity L, from one trade on the pool: the reserves are
  * L*sqrt(p) of the quote and L/sqrt(p) of the coin at price p (quote per coin, base units), each worth
@@ -22,12 +40,12 @@ export async function readPoolLiquidity(db: ChainDb, coins: Address[]): Promise<
   const rows = (await db.sql.query<{ coin: Uint8Array; liquidity: number | null; coin_amount: number | null; quote_amount: number | null; usd: number | null }>(`
     SELECT t.address AS coin,CASE WHEN l.liquidity IS NOT NULL OR life.data->'liquidity'->('0x'||encode(t.graduated_pool,'hex')) ? 'fullRangeDelta' THEN (coalesce(l.liquidity,0)+coalesce((life.data->'liquidity'->('0x'||encode(t.graduated_pool,'hex'))->>'fullRangeDelta')::numeric,0))::float8 END AS liquidity,s.amount_coin::float8 AS coin_amount,s.amount_quote::float8 AS quote_amount,s.usd
     FROM tokens t LEFT JOIN coin_lifetime life ON life.coin=t.address
-    LEFT JOIN LATERAL (SELECT sum((e.data->>'liquidityDelta')::numeric) AS liquidity FROM liquidity_events e
-      WHERE e.pool_id=t.graduated_pool AND e.kind='ModifyLiquidity' AND (e.data->>'tickLower')::int<=-887000 AND (e.data->>'tickUpper')::int>=887000) l ON true
+    LEFT JOIN LATERAL (SELECT sum(e.liquidity) FILTER(WHERE e.n_amount>0) AS liquidity FROM read_pool_positions e
+      WHERE e.pool_id=t.graduated_pool AND e.kind='ModifyLiquidity' AND e.n>0 AND nullif(e.lower_tick,'')::int<=-887000 AND nullif(e.upper_tick,'')::int>=887000) l ON true
     -- The coin's latest 50 swaps by its (coin, block) index, then the newest of them on its pool with a price. Filtering
     -- by pool inside the index scan made the planner sort every swap of a busy coin: 2.5 s for one Radar page.
     LEFT JOIN LATERAL (SELECT recent.amount_coin,recent.amount_quote,recent.usd FROM (
-        SELECT s.amount_coin,s.amount_quote,s.usd,s.pool_id,s.block,s.log_index,s.tx_hash FROM retention_read_swaps s WHERE s.coin=t.address AND s.block>=t.graduated_block ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC LIMIT 50) recent
+        ${latestSwaps(50,'AND s.block>=t.graduated_block')}) recent
       WHERE recent.pool_id=t.graduated_pool AND recent.usd>0 AND recent.amount_coin>0 AND recent.amount_quote>0 ORDER BY recent.block DESC,recent.log_index DESC,recent.tx_hash DESC LIMIT 1) s ON true
     WHERE t.address=ANY($1::bytea[]) AND t.graduated_pool IS NOT NULL AND t.graduated_block IS NOT NULL`, [coins.map(binary)])).rows;
   for (const row of rows) {
@@ -61,7 +79,7 @@ export async function readCurveStates(db: ChainDb, coins: Address[]): Promise<Ma
       s.amount_coin::float8 AS coin_amount,s.amount_quote::float8 AS quote_amount,s.usd
     FROM tokens t LEFT JOIN coin_lifetime life ON life.coin=t.address
     LEFT JOIN LATERAL (SELECT data FROM pons_events e WHERE e.token=t.address AND e.kind='launch' ORDER BY e.block,e.log_index LIMIT 1) e ON true
-    JOIN LATERAL (SELECT amount_coin,amount_quote,usd FROM retention_read_swaps s WHERE s.coin=t.address AND s.usd>0 AND s.amount_quote>0 AND s.amount_coin>0 ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC LIMIT 1) s ON true
+    JOIN LATERAL (${latestSwaps(1,'AND s.usd>0 AND s.amount_quote>0 AND s.amount_coin>0')}) s ON true
     WHERE t.address=ANY($1::bytea[]) AND t.launchpad='pons' AND t.graduated_block IS NULL AND t.total_supply>0`, [coins.map(binary)])).rows;
   for (const row of rows) {
     const state = curveState(Number(row.threshold), Number(row.supply), Number(row.coin_amount), Number(row.quote_amount), Number(row.usd));
@@ -85,7 +103,7 @@ export function positionQuote(liquidity: number, tickLower: number, tickUpper: n
 interface Position { lower: number; upper: number; liquidity: number }
 interface PoolPositions { at: number; positions: Position[]; seen: boolean }
 /**
- * Positions per pool are summed from every liquidity event of the pool and kept per database handle. They are used as
+ * Positions per pool come from incrementally maintained sums and are kept per database handle. They are used as
  * read for a minute. After that a request still gets them at once while they are read again behind it, one read at a
  * time, until they are three minutes old; older ones, and pools not seen before, are read before answering. Read
  * inline on every expiry, the Radar's first page paid for 119,283 events of 196 pools once a minute (0.6 s warm and
@@ -95,12 +113,11 @@ const positionCache = new WeakMap<object, Map<string, PoolPositions>>();
 const positionRefresh = new WeakMap<object, Promise<void>>();
 const POSITIONS_TTL_MS = 60_000, POSITIONS_STALE_MS = 180_000;
 async function loadPositions(db: ChainDb, cache: Map<string, PoolPositions>, ids: string[], now: number) {
-  const amount = "CASE WHEN e.kind='Mint' THEN (e.data->>'amount')::numeric WHEN e.kind='Burn' THEN -(e.data->>'amount')::numeric ELSE (e.data->>'liquidityDelta')::numeric END";
   const read = new Map<string, PoolPositions>(ids.map(id => [id, { at: now, positions: [], seen: false }]));
   for (const row of (await db.sql.query<{ pool_id: Uint8Array; lower: number; upper: number; liquidity: number }>(`
     SELECT pool_id,lower,upper,sum(liquidity)::float8 AS liquidity FROM (
-      SELECT e.pool_id,(e.data->>'tickLower')::int AS lower,(e.data->>'tickUpper')::int AS upper,${amount} AS liquidity
-      FROM liquidity_events e WHERE e.pool_id=ANY($1::bytea[]) AND e.kind IN ('Mint','Burn','ModifyLiquidity') AND e.data ? 'tickLower' AND e.data ? 'tickUpper'
+      SELECT e.pool_id,nullif(e.lower_tick,'')::int AS lower,nullif(e.upper_tick,'')::int AS upper,e.liquidity
+      FROM read_pool_positions e WHERE e.pool_id=ANY($1::bytea[]) AND e.n>0
       UNION ALL
       SELECT p.id,(v.value->>'lower')::int,(v.value->>'upper')::int,(v.value->>'liquidity')::numeric FROM pools p
       JOIN LATERAL (SELECT l.data->'liquidity'->('0x'||encode(p.id,'hex'))->'moneyPositions' AS positions FROM coin_lifetime l
@@ -125,7 +142,7 @@ export async function readPoolMoney(db: ChainDb, coins: Address[], now = Date.no
   const pools = (await db.sql.query<{ coin: Uint8Array; pool_id: Uint8Array; coin_first: boolean; coin_amount: number; quote_amount: number; usd: number }>(`
     SELECT t.address AS coin,r.pool_id,(p.currency0=t.address) AS coin_first,r.amount_coin::float8 AS coin_amount,r.amount_quote::float8 AS quote_amount,r.usd
     FROM tokens t CROSS JOIN LATERAL (SELECT DISTINCT ON (x.pool_id) x.pool_id,x.amount_coin,x.amount_quote,x.usd FROM (
-        SELECT s.pool_id,s.amount_coin,s.amount_quote,s.usd,s.block,s.log_index,s.tx_hash FROM retention_read_swaps s WHERE s.coin=t.address ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC LIMIT 60) x
+        ${latestSwaps(60)}) x
       WHERE x.usd>0 AND x.amount_coin>0 AND x.amount_quote>0 ORDER BY x.pool_id,x.block DESC,x.log_index DESC,x.tx_hash DESC) r
     JOIN pools p ON p.id=r.pool_id
     WHERE t.address=ANY($1::bytea[]) AND t.curve IS NULL AND t.graduated_block IS NULL`, [coins.map(binary)])).rows;

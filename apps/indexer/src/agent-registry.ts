@@ -176,7 +176,7 @@ export class AgentRegistryCollector {
   async snapshot(n:bigint) {
     if(!this.client.agentWallets)throw new Error('Registry pinned reads unavailable');
     const header=await this.header(n);
-    const agents=(await this.db.sql.query<{agent_id:string;registered_block:string;evidence:unknown;wallet:Uint8Array;owner:Uint8Array}>('SELECT DISTINCT ON(agent_id) * FROM agent_registry WHERE wallet_block<=$1 ORDER BY agent_id,wallet_block DESC',[n.toString()])).rows.filter(r=>hex(r.owner)!==zero);
+    const agents=(await this.db.sql.query<{agent_id:string;registered_block:string;evidence:unknown;wallet:Uint8Array;owner:Uint8Array}>('SELECT a.* FROM agent_registry_ids i CROSS JOIN LATERAL (SELECT * FROM agent_registry r WHERE r.agent_id=i.agent_id AND r.wallet_block<=$1 ORDER BY r.wallet_block DESC LIMIT 1) a ORDER BY a.agent_id',[n.toString()])).rows.filter(r=>hex(r.owner)!==zero);
     for(let offset=0;offset<agents.length;offset+=200) {
       const batch=agents.slice(offset,offset+200),reads=await this.client.agentWallets(batch.map(r=>BigInt(r.agent_id)),n);
       if(reads.length!==batch.length)throw new Error('Incomplete registry snapshot');
@@ -210,7 +210,7 @@ export class AgentRegistryCollector {
    * @see {@link ../../../docs/security/INVARIANTS.md | Canonical ingest and reorg invariants}
    */
   async coverage() {
-    const counts=(await this.db.sql.query<{agents:number;nonzero_wallets:number}>('SELECT count(*)::int AS agents,count(*) FILTER(WHERE wallet<>$1)::int AS nonzero_wallets FROM (SELECT DISTINCT ON(agent_id) wallet FROM agent_registry ORDER BY agent_id,wallet_block DESC) a',[binary(zero)])).rows[0];
+    const counts=(await this.db.sql.query<{agents:number;nonzero_wallets:number}>('SELECT count(*)::int AS agents,count(*) FILTER(WHERE wallet<>$1)::int AS nonzero_wallets FROM (SELECT a.wallet FROM agent_registry_ids i CROSS JOIN LATERAL (SELECT wallet FROM agent_registry r WHERE r.agent_id=i.agent_id ORDER BY r.wallet_block DESC LIMIT 1) a) a',[binary(zero)])).rows[0];
     const scanned=(await this.db.sql.query<{from_block:string|null;to_block:string|null;contiguous:boolean|null}>(`SELECT min(from_block) AS from_block,max(block) AS to_block,bool_and(prior_end IS NULL OR from_block<=prior_end+1) AS contiguous FROM (
       SELECT from_block,block,max(block) OVER(ORDER BY from_block,block ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prior_end FROM agent_registry_checkpoints
     ) ranges`)).rows[0];

@@ -16,17 +16,44 @@ export async function trendingAt(db: ChainDb, block: number, sinceSec: number, u
   if (saved) return saved.data.map(r => ({ coin: r.coin, name: r.name, symbol: r.symbol, created: new Date(r.created), started: new Date(r.started), volume: Number(r.volume) }));
   return computeTrending(db, block, sinceSec, untilSec);
 }
+interface VolumeRow {coin:Uint8Array;started:Date;volume:number}
+const windows=new WeakMap<ChainDb,Map<string,{version:string;rows:VolumeRow[]}>>();
+/** Cache only swap aggregates. Token identity/clock joins always read current metadata. */
 async function computeTrending(db: ChainDb, block: number, sinceSec: number, untilSec?: number): Promise<TrendingRow[]> {
-  const bounded = untilSec === undefined ? '' : ' AND s.ts<=to_timestamp($3)';
-  // The hour's swaps are summed per coin first (an index-only read of ts, block, coin and usd) and only the coins are
-  // joined to their names and launch times. Joined swap by swap, one launch block's ranking read 115,000 buffers on a
-  // copy of 2026-10-13 (266 ms, against 6,400 and 87 ms), and every newly listed coin's rating asks for one.
-  return (await db.sql.query<{ coin: Uint8Array; name: string; symbol: string; created: Date; started: Date; volume: number }>(`SELECT a.coin,t.name,t.symbol,b.ts AS created,a.started,a.volume
-    FROM (SELECT s.coin,min(s.ts) AS started,sum(s.usd) AS volume FROM swaps s
-      WHERE s.block<=$1 AND s.ts>to_timestamp($2)${bounded} AND s.usd>0 GROUP BY s.coin) a
-    JOIN tokens t ON t.address=a.coin JOIN engine_block_times b ON b.number=t.first_block
-    WHERE t.name IS NOT NULL AND t.symbol IS NOT NULL ORDER BY a.volume DESC,a.coin LIMIT 50`, [block, sinceSec, ...(untilSec === undefined ? [] : [untilSec])])).rows
-    .map(r => ({ coin: hex(r.coin), name: r.name, symbol: r.symbol, created: new Date(r.created), started: new Date(r.started), volume: r.volume }));
+  const version=async()=> {
+    const r=(await db.sql.query<{v:string}>(`SELECT coalesce(sum(revision),0)::text AS v FROM engine_window_versions WHERE bucket<=($1::bigint/10000)`,[block])).rows[0];
+    return r.v;
+  };
+  const key=`${block}:${sinceSec}:${untilSec ?? ''}`;
+  let cache=windows.get(db);if(!cache){cache=new Map();windows.set(db,cache);}
+  let rows:VolumeRow[]|undefined;
+  for(let attempt=0;attempt<3;attempt++) {
+    const before=await version(),cached=cache.get(key);
+    if(cached?.version===before){rows=cached.rows;break;}
+    const bounded=untilSec===undefined ? '' : ' AND ts<=to_timestamp($3)';
+    rows=(await db.sql.query<VolumeRow>(`SELECT coin,min(ts) AS started,sum(usd) AS volume FROM swaps
+      WHERE block<=$1 AND ts>to_timestamp($2)${bounded} AND usd>0 GROUP BY coin ORDER BY sum(usd) DESC,coin`,
+      [block,sinceSec,...(untilSec===undefined ? [] : [untilSec])])).rows;
+    if(before!==await version()){rows=undefined;continue;}
+    cache.delete(key);cache.set(key,{version:before,rows});
+    if(cache.size>256)cache.delete(cache.keys().next().value!);
+    break;
+  }
+  if(!rows)throw new Error('Trending inputs changed during read');
+  const result:TrendingRow[]=[];
+  // Sorted volumes retain the original SQL order. Join only enough identities to find 50 eligible coins.
+  for(let offset=0;offset<rows.length && result.length<50;offset+=50) {
+    const chunk=rows.slice(offset,offset+50);
+    const identity=new Map((await db.sql.query<{address:Uint8Array;name:string;symbol:string;created:Date}>(
+      `SELECT t.address,t.name,t.symbol,b.ts AS created FROM tokens t JOIN engine_block_times b ON b.number=t.first_block
+       WHERE t.address=ANY($1::bytea[]) AND t.name IS NOT NULL AND t.symbol IS NOT NULL`,[chunk.map(r=>r.coin)])).rows.map(r=>[hex(r.address),r]));
+    for(const r of chunk) {
+      const coin=hex(r.coin),t=identity.get(coin);if(!t)continue;
+      result.push({coin,name:t.name,symbol:t.symbol,created:new Date(t.created),started:new Date(r.started),volume:r.volume});
+      if(result.length===50)break;
+    }
+  }
+  return result;
 }
 
 /**

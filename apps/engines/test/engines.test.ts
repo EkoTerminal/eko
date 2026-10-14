@@ -8,7 +8,7 @@ import { decodeEventLog, type Hex } from 'viem';
 import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, staleRatings, tradedSinceCard, unscannedCoins, type LivePlan } from '../src/worker.js';
 import { ReplayCache } from '../src/replay-cache.js';
 import { assembleCard, cardHash, evaluatedPlaybooks } from '../src/card.js';
-import { ratingOutcome } from '../src/rating-outcome.js';
+import { OutcomeDifferences, ratingOutcome } from '../src/rating-outcome.js';
 import { curveProgress,curveProgressAt,type PonsEventRow } from '../src/curve-progress.js';
 import { loadSources } from '../src/sources.js';
 import { coinActivity, refreshClock, type BlockReader, type ClockCache } from '../src/activity.js';
@@ -447,9 +447,9 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    const rerates:number[]=[],txs:string[]=[];
    const worker=new EngineWorker(db,{client:client(),now:()=>epoch+120,rerate:true,rerateIdleMs:10,rerateBefore:new Date(Date.now()+60_000).toISOString(),onRerate:n=>rerates.push(n)});
    worker.poll=async()=>{if(rerates.length)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
-   // Count write transactions (those that lock the schedule).
+   // Count the batch write transaction through its row mutex, replacing the retired schedule table lock.
    const tx=db.tx.bind(db);db.tx=(async (fn:Parameters<typeof db.tx>[0])=>tx(async t=>{const query=t.sql.query.bind(t.sql);
-    t.sql.query=((text:string,...rest:unknown[])=>{if(String(text).startsWith('LOCK TABLE engine_schedule'))txs.push('tx');return (query as (...a:unknown[])=>unknown)(text,...rest);}) as typeof t.sql.query;return fn(t);})) as typeof db.tx;
+    t.sql.query=((text:string,...rest:unknown[])=>{if(String(text).startsWith('SELECT key FROM engine_write_locks WHERE key=ANY'))txs.push('tx');return (query as (...a:unknown[])=>unknown)(text,...rest);}) as typeof t.sql.query;return fn(t);})) as typeof db.tx;
    await worker.run();db.tx=tx;
    expect(rerates[0]).toBe(2);expect(txs.length).toBe(1);
    for(const c of [coin,other])expect((await latest(db,c)).verdict.lastChecked?.block).toBe(2);
@@ -490,6 +490,19 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   const measured=structuredClone(before);measured.identity.pools[0].liquidityUsd+=100;measured.supply.top10Pct+=1;measured.verdict.reasons.push('Latest measurement');
   expect(ratingOutcome(measured,RULES_VERSION)).toBe(ratingOutcome(before,RULES_VERSION));
   expect(ratingOutcome(before,'changed-rules')).not.toBe(ratingOutcome(before,RULES_VERSION));
+  const details=structuredClone(before);
+  details.meta!.supply!.missing=['Latest measurement'];
+  details.meta!.supply!.flags=['attribution_incomplete'];
+  details.meta!.supply!.coverageGaps={holders:{status:'incomplete',reason:'missing_sender',window:'launch_to_checkpoint',threshold:0.9,
+    totalCount:100,unattributedCount:2,countShare:0.02,totalVolumeUsd:100,unattributedVolumeUsd:2,volumeShare:0.02,unknownVolumeCount:0}};
+  // Coverage details update in the mutable latest card without appending a decision.
+  expect(ratingOutcome(details,RULES_VERSION)).toBe(ratingOutcome(before,RULES_VERSION));
+  const emitted:unknown[]=[],differences=new OutcomeDifferences(value=>emitted.push(value));
+  differences.record(before,RULES_VERSION,details,RULES_VERSION);differences.flush();differences.flush();
+  expect(emitted[0]).toMatchObject({comparisons:1,components:{missingFields:1,flags:1,coverage:1,level:0,playbooks:0}});
+  expect(emitted[1]).toMatchObject({comparisons:0,components:{missingFields:0}});
+  const control=structuredClone(before);control.control.canMint=!before.control.canMint;
+  expect(ratingOutcome(control,RULES_VERSION)).not.toBe(ratingOutcome(before,RULES_VERSION));
   const coverage=structuredClone(before);coverage.verdict.evaluatedPlaybooks=[];
   expect(ratingOutcome(coverage,RULES_VERSION)).not.toBe(ratingOutcome(before,RULES_VERSION));
   const tables=['verdicts','coin_cards','receipt_publications','playbook_matches','verdict_events'];

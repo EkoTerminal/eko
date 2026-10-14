@@ -1,3 +1,4 @@
+import { incrementalSwaps } from './swap-reader.js';
 import { gapFromTotals, attributionGap } from './attribution-coverage.js';
 import { loadReferenceInputs } from './reference-simulation.js';
 import { loadSellCheckReference } from './sell-check-reference.js';
@@ -63,17 +64,57 @@ export const evidence = (r: { tx_hash: Uint8Array; log_index: number; block: str
   ({ kind: 'log', ref: `${rowHex(r.tx_hash)}:${r.log_index}`, block: Number(r.block), label });
 const eq = (a: Uint8Array, b: Uint8Array) => rowHex(a) === rowHex(b);
 
+let holderCursor=0;
 export async function holdingsAt(db: ChainDb, coin: Address, block: number, cache?:ReplayCache,lane='now'): Promise<Holding[]> {
   if(cache)return cache.holdingsAt(coin,block,lane);
-  // Latest balances are used only when the requested view contains all indexed transfers.
-  const future = (await db.sql.query('SELECT 1 FROM token_transfers WHERE token=$1 AND block>$2 LIMIT 1', [binary(coin), block])).rows.length;
-  if (!future) return (await db.sql.query<Holding>('SELECT holder,amount,last_block AS block FROM balances WHERE token=$1 AND amount>0 ORDER BY holder', [binary(coin)])).rows.map(prepareHolding);
-  return (await db.sql.query<Holding>(`SELECT holder,sum(amount)::text AS amount,max(block)::text AS block FROM (
-    SELECT to_address AS holder,amount,block FROM token_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
-    UNION ALL SELECT from_address,-amount,block FROM token_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
-    -- Compacted history (retention) is one net row per holder, exact for views at or after its newest block.
-    UNION ALL SELECT holder,amount,through_block FROM transfer_baselines WHERE token=$1 AND through_block<=$2
-    ) m GROUP BY holder HAVING sum(amount)>0 ORDER BY holder`, [binary(coin), block])).rows.map(prepareHolding);
+  // Select the nearer endpoint. Old horizon/opening views must not reverse a coin's entire future history.
+  const bounds=(await db.sql.query<{first:string|null;last:string|null;baseline:string|null}>(`SELECT
+    (SELECT min(block)::text FROM token_transfers WHERE token=$1) AS first,
+    (SELECT max(block)::text FROM token_transfers WHERE token=$1) AS last,
+    (SELECT max(through_block)::text FROM transfer_baselines WHERE token=$1) AS baseline`,[binary(coin)])).rows[0];
+  if(bounds.last==null || Number(bounds.last)<=block)return (await db.sql.query<Holding>(
+    'SELECT holder,amount,last_block::text AS block FROM balances WHERE token=$1 AND amount>0 ORDER BY holder',[binary(coin)])).rows.map(prepareHolding);
+  if(block<(Number(bounds.first)+Number(bounds.last))/2 || bounds.baseline!=null && block<Number(bounds.baseline)) {
+    // A cursor streams the two signed movement lanes and retained baselines from one statement snapshot.
+    // FETCH bounds the work per statement without a historical GROUP BY/sort or cross-page compaction races.
+    return db.tx(async tx=>{
+      const amounts=new Map<Address,{holder:Uint8Array;amount:bigint;block:number}>(),name=`engine_holder_prefix_${++holderCursor}`;
+      await tx.sql.query(`DECLARE ${name} NO SCROLL CURSOR FOR
+        SELECT to_address AS holder,amount,block FROM token_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
+        UNION ALL SELECT from_address,-amount,block FROM token_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
+        UNION ALL SELECT holder,amount,through_block FROM transfer_baselines WHERE token=$1 AND through_block<=$2`,[binary(coin),block]);
+      for(;;) {
+        const page=(await tx.sql.query<Holding>(`FETCH FORWARD 2000 FROM ${name}`)).rows;
+        for(const r of page) {
+          const key=rowHex(r.holder),prior=amounts.get(key);
+          amounts.set(key,{holder:r.holder,amount:(prior?.amount ?? 0n)+BigInt(r.amount),block:Math.max(prior?.block ?? -1,Number(r.block))});
+        }
+        if(page.length<2000)break;
+      }
+      await tx.sql.query(`CLOSE ${name}`);
+      return [...amounts].filter(([,r])=>r.amount>0n).sort(([a],[b])=>a<b ? -1:a>b ? 1:0)
+        .map(([,r])=>prepareHolding({holder:r.holder,amount:String(r.amount),block:String(r.block)}));
+    });
+  }
+
+  // One statement snapshot: current balances minus only the movements after the checkpoint.
+  // Include zero/negative balances, since a wallet that exited can have been positive then.
+  return (await db.sql.query<Holding>(`WITH later AS MATERIALIZED (
+    SELECT from_address,to_address,amount FROM token_transfers WHERE token=$1 AND block>$2 AND kind='Transfer'
+  ), delta AS (
+    SELECT holder,sum(amount) AS amount FROM (
+      SELECT to_address AS holder,amount FROM later UNION ALL SELECT from_address,-amount FROM later
+    ) d GROUP BY holder
+  ), historical AS (
+    SELECT b.holder,b.amount-coalesce(d.amount,0) AS amount,
+      CASE WHEN b.last_block<=$2 THEN b.last_block ELSE greatest(
+        (SELECT block FROM token_transfers WHERE token=$1 AND to_address=b.holder AND block<=$2 AND kind='Transfer' ORDER BY block DESC LIMIT 1),
+        (SELECT block FROM token_transfers WHERE token=$1 AND from_address=b.holder AND block<=$2 AND kind='Transfer' ORDER BY block DESC LIMIT 1),
+        (SELECT through_block FROM transfer_baselines WHERE token=$1 AND holder=b.holder AND through_block<=$2)
+      ) END AS block
+    FROM balances b LEFT JOIN delta d ON d.holder=b.holder WHERE b.token=$1
+  ) SELECT holder,amount::text,block::text FROM historical WHERE amount>0 ORDER BY holder`,
+    [binary(coin),block])).rows.map(prepareHolding);
 }
 export async function historyAt(db: ChainDb, deployer: Address, coin: Address, block: number, cache?:ReplayCache): Promise<HistoryView> {
   if(cache)return cache.historyAt(deployer,coin,block);
@@ -97,7 +138,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   if (!now || !created) return unavailable(db,coin,block,'missing_block_clock');
   const asOfSec = seconds(now.ts), createdAtSec = seconds(created.ts);
   const cachedRows=cache ? await cache.coinRows(coin) : undefined;
-  const swaps = cachedRows ? cachedRows.swaps : (await db.sql.query<SwapRow>('SELECT * FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY block,log_index,tx_hash', [binary(coin), block])).rows.map(prepareSwap);
+  const swaps = cachedRows ? cachedRows.swaps : await incrementalSwaps(db,coin,block);
   const swapEnd=cachedRows ? upperBlock(swaps,block) : swaps.length;
   const poolRows = cachedRows ? cachedRows.pools.filter(p=>Number(p.created_block)<=block) : (await db.sql.query<PoolRow>('SELECT * FROM pools WHERE (currency0=$1 OR currency1=$1) AND created_block<=$2 ORDER BY id', [binary(coin), block])).rows;
   const events = cachedRows ? cachedRows.events.slice(0,upperBlock(cachedRows.events,block)) : (await db.sql.query<EventRow>(`SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id
