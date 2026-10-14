@@ -17,6 +17,7 @@ const config=z.object({
   ENGINE_LIVE_SLICE_MS:z.coerce.number().int().min(1000).max(3600000).default(60000),
   // Live activity reads: 'incremental' reads only what changed since the previous poll; 'full' reads every coin's whole
   // history on every poll (the pre-2026-10-08 behaviour; it outgrew the heap in production, keep it for small databases).
+  ENGINE_WATCHER_REFRESH_ENABLED:z.enum(['true','false','1','0','']).default('true'),
   ENGINE_LIVE_ACTIVITY:z.enum(['incremental','full']).default('incremental'),
   // Live loop silent (no poll completed, no evaluation finished) this long: log engines_stalled and exit 1.
   ENGINE_STALL_SEC:z.coerce.number().int().min(60).max(86400).default(600),

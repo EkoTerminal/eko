@@ -1,3 +1,4 @@
+import { watcherRefreshEnabled } from './control.js';
 import { binary, hex, type ChainDb } from '@eko/db';
 import type { Address } from 'viem';
 import { walletLabelsAt, type WalletLabelRow } from '../registry-labels.js';
@@ -39,6 +40,7 @@ async function swapRows(db:ChainDb,block:number,from:Date,to:Date,coin?:Address)
 }
 /** Watcher-only writes. API consumers read these projections without running classification. */
 export async function refreshCoinFlow(db:ChainDb,coin:Address,block:number,options:FlowOptions={},fromSec?:number) {
+  if(!watcherRefreshEnabled())return {swaps:0,block,modelVersion:options.modelVersion??FP_MODEL.version};
   return db.tx(async tx=>{
     // This lock serializes writers and source invalidations, without locking source rows.
     await tx.sql.query('LOCK TABLE flow_dirty IN EXCLUSIVE MODE');
@@ -75,6 +77,7 @@ export async function refreshCoinFlow(db:ChainDb,coin:Address,block:number,optio
  * reject. Host watcher supplies model/crew/finality evidence; no provider client is created.
  */
 export async function refreshFlows(db:ChainDb,block:number,options:FlowOptions&{coinLimit?:number}={}) {
+  if(!watcherRefreshEnabled())return {coins:0};
   const h=(await db.sql.query<{ts:Date}>('SELECT ts FROM chain_blocks WHERE number=$1',[block])).rows[0];if(!h)return {coins:0};
   const limit=options.coinLimit??16;if(!Number.isInteger(limit)||limit<1||limit>256)throw new Error('Invalid flow coin bound');
   const rows=(await db.sql.query<{coin:Uint8Array}>(`WITH coins AS (SELECT DISTINCT coin FROM swaps WHERE block<=$1 AND ts>$2 UNION SELECT coin FROM flow_windows)
@@ -93,6 +96,7 @@ export async function refreshFlows(db:ChainDb,block:number,options:FlowOptions&{
  * not bypass the public precision gate.
  */
 export async function refreshCensus(db:ChainDb,options:FlowOptions={}) {
+  if(!watcherRefreshEnabled())return {status:'unavailable' as const};
   // TODO(spec): No persisted finalized-tag/complete-ingest certificate exists here. Require an upstream typed cut; never substitute head.
   if(options.finalized?.status!=='available')return {status:'unavailable' as const};
   const block=options.finalized.block,model=options.modelVersion??FP_MODEL.version;

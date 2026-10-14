@@ -1,3 +1,4 @@
+import { watcherRefreshEnabled } from './watcher/control.js';
 import { backfillBlueChip, publishBlueChipMeasurements } from './blue-chip.js';
 import { refreshFlows, refreshCoinFlow, type FlowOptions } from './watcher/flow-store.js';
 import { refreshFingerprints, replayFingerprints, type FingerprintOptions } from './watcher/store.js';
@@ -203,11 +204,13 @@ export class EngineWorker {
     if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from<0 || to<from) throw new Error('Invalid replay interval');
     await refreshClock(this.db,this.clock);
     await this.refreshRegistryLabels();
+    if(watcherRefreshEnabled()) {
     let after:import('./watcher/store.js').ReplayCursor|undefined;
     do {const batch=await replayFingerprints(this.db,from,to,{...this.options.fingerprints,after});after=batch.next??undefined;}while(after&&!this.stopped);
     const flowCoins=(await this.db.sql.query<{coin:Uint8Array}>('SELECT DISTINCT coin FROM swaps WHERE block BETWEEN $1 AND $2',[from,to])).rows;
     const fromTime=(await resolveClock(this.db,from,undefined,this.clock))?.ts;
     for(const row of flowCoins)if(await this.db.blockHash(BigInt(to)))await refreshCoinFlow(this.db,hex(row.coin),to,this.flowOptions,fromTime==null?undefined:seconds(fromTime)-1);
+    }
     try{return await this.evaluateActivity(from,to,false);}finally{this.cache=undefined;}
   }
   private get flowOptions():FlowOptions {

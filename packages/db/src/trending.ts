@@ -30,10 +30,11 @@ async function computeTrending(db: ChainDb, block: number, sinceSec: number, unt
   for(let attempt=0;attempt<3;attempt++) {
     const before=await version(),cached=cache.get(key);
     if(cached?.version===before){rows=cached.rows;break;}
-    const bounded=untilSec===undefined ? '' : ' AND ts<=to_timestamp($3)';
+    // A launch ranking is one hour. Always supply the upper timestamp for partition pruning.
+    const end=untilSec??sinceSec+3600;
     rows=(await db.sql.query<VolumeRow>(`SELECT coin,min(ts) AS started,sum(usd) AS volume FROM swaps
-      WHERE block<=$1 AND ts>to_timestamp($2)${bounded} AND usd>0 GROUP BY coin ORDER BY sum(usd) DESC,coin`,
-      [block,sinceSec,...(untilSec===undefined ? [] : [untilSec])])).rows;
+      WHERE block<=$1 AND ts>to_timestamp($2) AND ts<=to_timestamp($3) AND usd>0 GROUP BY coin ORDER BY sum(usd) DESC,coin`,
+      [block,sinceSec,end])).rows;
     if(before!==await version()){rows=undefined;continue;}
     cache.delete(key);cache.set(key,{version:before,rows});
     if(cache.size>256)cache.delete(cache.keys().next().value!);

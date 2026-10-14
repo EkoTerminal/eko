@@ -1,3 +1,4 @@
+import { watcherRefreshEnabled } from './control.js';
 import { createHash } from 'node:crypto';
 import { binary, hex, type ChainDb } from '@eko/db';
 import { loadRegistry, type AddressRegistry } from '@eko/chain';
@@ -7,6 +8,11 @@ import { walletFeatures, type FingerprintSwap, type FeatureInput } from './featu
 import { FP_MODEL, resolveFingerprintLabel, type FingerprintModel } from './score.js';
 import { calldataShape } from './calldata.js';
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export const FINGERPRINT_SWAP_LIMIT=200;
+export const FINGERPRINT_CUTS_PER_REFRESH=8;
+export const FINGERPRINT_WALLET_BATCH=4;
+// 200 revision rows plus 8 cuts, each with 200 sample rows and at most 200 indexed own-first probes.
+export const FINGERPRINT_REFRESH_ROW_BOUND=3400;
 const zero=`0x${'0'.repeat(40)}`;
 export const fingerprintCanonicalSql=(labelAlias:string)=>`NOT EXISTS(SELECT 1 FROM wallet_label_fingerprint_dependencies f
   JOIN wallet_fingerprint_dependencies d ON d.run_id=f.run_id WHERE f.label_id=${labelAlias}.id
@@ -33,8 +39,9 @@ export async function loadFingerprintInput(db:ChainDb,address:Address,block:numb
   const sec=Math.floor(new Date(header.ts).getTime()/1000),registry=options.registry??loadRegistry();
   const rows=(await db.sql.query<SwapRow>(`SELECT s.*,(SELECT jsonb_agg(c.data ORDER BY c.scope,c.input_hash) FROM wallet_protocol_coverage c
     WHERE c.chain_id=4663 AND c.tx_hash=s.tx_hash AND c.block=s.block AND c.block_hash=b.hash AND ((c.data->'knownAt'->'cursor'->>'blockNumber') IS NULL OR (c.data->'knownAt'->'cursor'->>'blockNumber')::bigint<=$2)) AS data
-    FROM swaps s JOIN chain_blocks b ON b.number=s.block WHERE s.trader=$1 AND s.block<=$2 AND s.ts BETWEEN $3 AND $4
-    AND NOT s.senders_pending ORDER BY s.block DESC,s.tx_hash DESC,s.log_index DESC LIMIT 200`,[binary(address),block,new Date((sec-14*86400)*1000),header.ts])).rows;
+    FROM (SELECT * FROM swaps WHERE trader=$1 AND block<=$2 AND NOT senders_pending
+      ORDER BY block DESC,tx_hash DESC,log_index DESC LIMIT 200) s JOIN chain_blocks b ON b.number=s.block
+    WHERE s.ts BETWEEN $3 AND $4 ORDER BY s.block DESC,s.tx_hash DESC,s.log_index DESC`,[binary(address),block,new Date((sec-14*86400)*1000),header.ts])).rows;
   const knownRouters=registry.entries().filter(([k,v])=>k.startsWith('fingerprints.unknownRouters.')&&v.address!=='TODO'&&v.verified).map(([,v])=>v.address as string);
   const orbio=registry.data.fingerprints.orbioCreditExchange;
   const weth=registry.addressOf('tokens.WETH')?.toLowerCase();
@@ -58,21 +65,20 @@ export async function loadFingerprintInput(db:ChainDb,address:Address,block:numb
     WHERE d.chain_id=4663 AND d.authority=$1 AND d.kind='code' AND d.block=$2 ORDER BY d.tx_hash,d.evidence_index LIMIT 1`,[binary(address),block])).rows[0];
   // TODO(spec): No reviewed agent-kit implementation list or complete wallet UserOp-history certificate is specified. Missing lists/history remain null; authorizations alone never prove current code.
   const delegated7702=delegation?.data.code ? delegation.data.code.startsWith('0xef0100') ? options.knownDelegates ? options.knownDelegates.some(a=>a.toLowerCase()=== (delegation.implementation?hex(delegation.implementation):null)) : null : false : null;
-  // Per-coin first-buy provenance survives compaction. The raw 28-day window still carries transaction timing.
+  // Maintained first buyers merge live and compacted history. Unknown buys remain per-event counts.
   // Legacy prunes without these statistics retain their conservative buyer-count bound.
   const reactions=(await db.sql.query<{coin:Uint8Array;first_buy:string;launch:string;rank:string}>(`WITH buys AS (
-    SELECT coin,block AS first_buy,pool_id,tx_hash,log_index FROM swaps WHERE trader=$1 AND side=1 AND block<=$2 AND coin=ANY($3::bytea[])
+    SELECT c.coin,s.block AS first_buy,s.pool_id,s.tx_hash,s.log_index FROM unnest($3::bytea[]) c(coin)
+    CROSS JOIN LATERAL (SELECT block,pool_id,tx_hash,log_index FROM swaps WHERE coin=c.coin AND trader=$1 AND trader IS NOT NULL AND side=1 AND block<=$2 ORDER BY block,tx_hash,log_index LIMIT 1) s
     UNION ALL SELECT coin,first_block,pool_id,tx_hash,log_index FROM coin_buyer_firsts WHERE trader=$1 AND first_block<=$2 AND coin=ANY($3::bytea[])
   ), firsts AS (SELECT DISTINCT ON(coin) * FROM buys ORDER BY coin,first_buy,tx_hash,log_index)
   SELECT f.coin,f.first_buy,greatest((SELECT p.created_block FROM pools p WHERE p.id=f.pool_id AND p.created_block<=f.first_buy),
     (SELECT CASE WHEN t.graduated_block<=f.first_buy THEN t.graduated_block ELSE t.first_block END FROM tokens t WHERE t.address=f.coin AND t.first_block<=f.first_buy)) AS launch,
-    (SELECT count(*) FROM (
-      SELECT s.trader FROM swaps s WHERE s.coin=f.coin AND s.side=1 AND s.block<=f.first_buy AND s.trader IS NOT NULL AND NOT s.senders_pending
-      UNION SELECT k.trader FROM coin_buyer_firsts k WHERE k.coin=f.coin AND k.first_block<=f.first_buy
-    ) known) + (SELECT count(*) FROM swaps s WHERE s.coin=f.coin AND s.side=1 AND s.block<=f.first_buy AND (s.trader IS NULL OR s.senders_pending))
+    (SELECT count(*) FROM read_buyer_firsts k WHERE k.coin=f.coin AND k.first_block<=f.first_buy)
+    + coalesce((SELECT sum(u.n) FROM read_unknown_buys u WHERE u.coin=f.coin AND u.block<=f.first_buy),0)
     + coalesce((SELECT sum(u.n) FROM coin_unknown_buys u WHERE u.coin=f.coin AND u.block<=f.first_buy),0)
     + coalesce((SELECT h.buyers FROM history_prunes h WHERE h.coin=f.coin AND NOT h.buyer_stats_complete AND h.swaps_through_block<f.first_buy),0) AS rank
-    FROM firsts f`,[binary(address),block,rows.filter(r=>r.side===1).map(r=>r.coin)])).rows;
+    FROM firsts f`,[binary(address),block,[...new Map(rows.filter(r=>r.side===1).map(r=>[hex(r.coin),r.coin])).values()]])).rows;
   const history=await options.useropHistoryAt?.(address,sec-14*86400,BigInt(block));
   const input:FeatureInput={block,sec,swaps,knownRouters:knownRouters.length?knownRouters:null,delegated7702,
     userops:ops.slice(0,200).map(o=>({block:Number(o.block),sec:Number(o.timestamp_sec),hash:hex(o.user_op_hash),paymaster:hex(o.paymaster)!==zero})),useropsComplete:history?.complete===true&&ops.length<=200,
@@ -118,6 +124,7 @@ export async function updateFingerprintWallet(db:ChainDb,address:Address,block:n
 export interface ReplayCursor {block:number;address:Address}
 /** Bounded keyset replay. Call with next until complete; original swap blocks are preserved for new model generations. */
 export async function replayFingerprints(db:ChainDb,from:number,to:number,options:FingerprintOptions&{limit?:number;after?:ReplayCursor}={}) {
+  if(!watcherRefreshEnabled())return {runs:0,labels:0,processed:0,next:null,modelVersion:(options.model??FP_MODEL).version,beta:true};
   const limit=options.limit??256;
   if(!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||from<0||to<from||!Number.isSafeInteger(limit)||limit<1||limit>1000)throw new Error('Invalid fingerprint replay bounds');
   const events=(await db.sql.query<{block:string;trader:Uint8Array}>(`SELECT DISTINCT s.block,s.trader FROM swaps s JOIN chain_blocks b ON b.number=s.block WHERE s.block BETWEEN $1 AND $2 AND trader IS NOT NULL AND NOT senders_pending
@@ -128,15 +135,16 @@ export async function replayFingerprints(db:ChainDb,from:number,to:number,option
   const last=batch.at(-1);
   return {runs,labels,processed:batch.length,next:events.length>limit&&last?{block:Number(last.block),address:hex(last.trader) as Address}:null,modelVersion:(options.model??FP_MODEL).version,beta:true};
 }
-/** Incremental changed-wallet refresh: bounded wallets and at most 200 swap boundaries per wallet. */
+/** Round-robin wallets, bounded source rows and resumable original snapshot cuts. */
 export async function refreshFingerprints(db:ChainDb,to:number,options:FingerprintOptions&{walletLimit?:number}={}) {
-  const limit=options.walletLimit??16,model=options.model??FP_MODEL;
-  if(!Number.isSafeInteger(limit)||limit<1||limit>256)throw new Error('Invalid fingerprint wallet bound');
+  if(!watcherRefreshEnabled())return {wallets:0,runs:0,labels:0};
+  const limit=options.walletLimit??FINGERPRINT_WALLET_BATCH,model=options.model??FP_MODEL;
+  if(!Number.isSafeInteger(limit)||limit<1||limit>FINGERPRINT_WALLET_BATCH)throw new Error('Invalid fingerprint wallet bound');
   const head=(await db.sql.query<{ts:Date}>('SELECT ts FROM chain_blocks WHERE number=$1',[to])).rows[0];
   if(!head)return {wallets:0,runs:0,labels:0};
   // Content revisions catch late sender/protocol enrichment and rollback, rather than max(block) alone.
-  const changed=(await db.sql.query<{trader:Uint8Array;revision:string;blocks:string[]}>(`WITH wallets AS (
-    SELECT DISTINCT trader FROM swaps WHERE block<=$1 AND ts BETWEEN $2 AND $3 AND trader IS NOT NULL AND NOT senders_pending
+  const changed=(await db.sql.query<{trader:Uint8Array;revision:string;blocks:string[];pending_blocks:string[];pending_revision:string|null;prior_revision:string|null}>(`WITH wallets AS (
+    SELECT trader FROM watcher_wallets ORDER BY checked_at,trader LIMIT $5
   ), revisions AS (SELECT w.trader, array_agg(s.block ORDER BY s.block) AS blocks,
     md5(string_agg(s.block::text||':'||encode(s.tx_hash,'hex')||':'||s.log_index::text||':'||s.amount_quote::text||':'||coalesce(encode(s.tx_to,'hex'),'')||':'||encode(b.hash,'hex'),',' ORDER BY s.block,s.tx_hash,s.log_index)
       ||coalesce((SELECT string_agg(encode(c.input_hash,'hex'),',' ORDER BY c.block,c.tx_hash,c.input_hash) FROM wallet_protocol_coverage c
@@ -144,16 +152,29 @@ export async function refreshFingerprints(db:ChainDb,to:number,options:Fingerpri
       ||coalesce((SELECT string_agg(encode(d.block_hash,'hex')||d.data::text,',' ORDER BY d.block,d.tx_hash,d.evidence_index) FROM delegations_7702 d WHERE d.authority=w.trader AND d.block<=$1 AND d.timestamp_sec BETWEEN extract(epoch FROM $2::timestamptz) AND extract(epoch FROM $3::timestamptz)),'')
       ||coalesce((SELECT string_agg(encode(u.user_op_hash,'hex')||encode(u.paymaster,'hex'),',' ORDER BY u.block,u.log_index) FROM userops u WHERE u.sender=w.trader AND u.block<=$1 AND u.timestamp_sec BETWEEN extract(epoch FROM $2::timestamptz) AND extract(epoch FROM $3::timestamptz)),'')
       ||coalesce((SELECT string_agg(a.wallet_block::text||encode(a.wallet,'hex')||encode(a.block_hash,'hex'),',' ORDER BY a.agent_id,a.wallet_block) FROM agent_registry a WHERE a.wallet_block<=$1 AND a.agent_id IN(SELECT agent_id FROM agent_registry WHERE wallet=w.trader AND wallet_block<=$1)),'')||$6::text
-    ) AS revision FROM wallets w CROSS JOIN LATERAL (SELECT * FROM swaps s WHERE s.trader=w.trader AND s.block<=$1 AND s.ts BETWEEN $2 AND $3 AND NOT s.senders_pending ORDER BY s.block DESC,s.tx_hash DESC,s.log_index DESC LIMIT 200) s
-    JOIN chain_blocks b ON b.number=s.block GROUP BY w.trader
-  ) SELECT r.* FROM revisions r LEFT JOIN wallet_fingerprint_state f ON f.address=r.trader AND f.model_version=$4
-    WHERE f.revision IS DISTINCT FROM r.revision ORDER BY r.trader LIMIT $5`,[to,new Date(new Date(head.ts).getTime()-14*86400*1000),head.ts,model.version,limit,digest({model,registry:(options.registry??loadRegistry()).data,knownDelegates:options.knownDelegates,evidenceRevision:options.evidenceRevision})])).rows;
-  let runs=0,labels=0;
+    ) AS revision FROM wallets w CROSS JOIN LATERAL (SELECT * FROM swaps s WHERE s.trader=w.trader AND s.block<=$1 AND NOT s.senders_pending ORDER BY s.block DESC,s.tx_hash DESC,s.log_index DESC LIMIT 200) s
+    JOIN chain_blocks b ON b.number=s.block WHERE s.ts BETWEEN $2 AND $3 GROUP BY w.trader
+  ) SELECT r.*,f.pending_blocks,f.pending_revision,f.revision AS prior_revision FROM revisions r LEFT JOIN wallet_fingerprint_state f ON f.address=r.trader AND f.model_version=$4
+    ORDER BY r.trader`,[to,new Date(new Date(head.ts).getTime()-14*86400*1000),head.ts,model.version,limit,digest({model,registry:(options.registry??loadRegistry()).data,knownDelegates:options.knownDelegates,evidenceRevision:options.evidenceRevision})])).rows;
+  let runs=0,labels=0,wallets=0;
   for(const w of changed) {
-    const address=hex(w.trader) as Address;
-    for(const block of [...new Set(w.blocks.map(Number))]){const r=await updateFingerprintWallet(db,address,block,options);runs+=r.runs;labels+=r.labels;}
-    await db.sql.query(`INSERT INTO wallet_fingerprint_state VALUES($1,$2,$3,$4) ON CONFLICT(address,model_version) DO UPDATE SET revision=excluded.revision,through_block=excluded.through_block`,[w.trader,model.version,w.revision,to]);
+    if(w.prior_revision!==w.revision) {
+      wallets++;
+      const address=hex(w.trader) as Address;
+      const available=[...new Set(w.blocks.map(Number))].sort((a,b)=>a-b);
+      const cuts=w.pending_revision===w.revision?w.pending_blocks.map(Number):
+        [...new Set([...(w.pending_blocks??[]).map(Number).filter(b=>available.includes(b)),...available])];
+      const batch=cuts.slice(0,FINGERPRINT_CUTS_PER_REFRESH),pending=cuts.slice(FINGERPRINT_CUTS_PER_REFRESH);
+      for(const block of batch){const r=await updateFingerprintWallet(db,address,block,options);runs+=r.runs;labels+=r.labels;}
+      await db.sql.query(`INSERT INTO wallet_fingerprint_state(address,model_version,revision,through_block,pending_blocks,pending_revision)
+        VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(address,model_version) DO UPDATE SET revision=excluded.revision,through_block=excluded.through_block,pending_blocks=excluded.pending_blocks,pending_revision=excluded.pending_revision`,
+        [w.trader,model.version,pending.length?w.prior_revision??'':w.revision,to,pending,pending.length?w.revision:null]);
+    }
+    await new Promise(resolve=>setTimeout(resolve,100));
   }
+  // Rotate even unchanged and inactive wallets, so enrichment and model changes are eventually revisited.
+  await db.sql.query(`UPDATE watcher_wallets SET checked_at=clock_timestamp() WHERE trader IN
+    (SELECT trader FROM watcher_wallets ORDER BY checked_at,trader LIMIT $1)`,[limit]);
   if(changed.length)await writeRegistryLabels(db,{crewAt:options.crewAt});
-  return {wallets:changed.length,runs,labels};
+  return {wallets,runs,labels};
 }

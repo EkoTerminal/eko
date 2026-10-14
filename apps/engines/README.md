@@ -243,3 +243,11 @@ before/after plans and a reproducible disposable-PGlite audit command. On its va
 
 EXPLAIN timings are single local samples, not production latency estimates. No new spec assumptions are introduced
 by the sliding window or indexes; BACKEND §6.5 replay order and §§7.2–7.3 historical inputs remain unchanged.
+
+`ENGINE_WATCHER_REFRESH_ENABLED=false` (default `true`) pauses fingerprint and flow refreshes, including replay,
+with one `watcher_refresh_paused` log per process. Restart engines after changing the service environment.
+Pause before installing 0206, then run `scripts/backfill-watcher-buyers.sql` before enabling refreshes.
+The backfill commits one coin at a time and shares the source triggers’ coin mutex.
+Live refreshes rotate through four wallets, process eight original snapshot cuts per wallet, and pause 100 ms
+between wallets. Each wallet reads at most 3,400 swap candidates (200 revision rows plus eight samples of 200
+and at most 200 indexed own-first buys per cut). Remaining cuts resume on subsequent refreshes.

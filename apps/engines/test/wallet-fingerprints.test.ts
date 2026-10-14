@@ -1,10 +1,12 @@
+import { readFile } from 'node:fs/promises';
+import { recordBuyerStatistics } from '../../../packages/db/src/lifetime.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDb, migrate, migrateEngines, binary, type ChainDb } from '@eko/db';
 import { encodeFunctionData, parseAbi, type Address, type Hex } from 'viem';
 import { walletFeatures, sizeBucket, entropy, type FeatureInput, type FingerprintSwap, type WalletFeatures } from '../src/watcher/features.js';
 import { FP_MODEL, likelyAgentScore, resolveFingerprintLabel } from '../src/watcher/score.js';
 import { calldataShape } from '../src/watcher/calldata.js';
-import { loadFingerprintInput, updateFingerprintWallet, replayFingerprints, refreshFingerprints } from '../src/watcher/store.js';
+import { loadFingerprintInput, updateFingerprintWallet, replayFingerprints, refreshFingerprints, FINGERPRINT_REFRESH_ROW_BOUND, FINGERPRINT_CUTS_PER_REFRESH } from '../src/watcher/store.js';
 import { walletLabelsAt, writeRegistryLabels } from '../src/registry-labels.js';
 const address=(n:number)=>`0x${n.toString(16).padStart(40,'0')}` as Address;
 const hash=(n:number)=>`0x${n.toString(16).padStart(64,'0')}` as Hex;
@@ -162,4 +164,89 @@ describe('indexed wallet fingerprint storage',()=>{
     expect(await refreshFingerprints(db,2)).toMatchObject({wallets:1,runs:2});
     expect(await refreshFingerprints(db,2)).toMatchObject({wallets:0});
   });
+});
+
+it('maintained ranks equal distinct raw buyers, pending events and retained history through repair, compaction, backfill and reorg',async()=>{
+  const db=await setup();
+  for(let b=1;b<=30;b++)await indexed(db,b,address(1000+b));
+  await db.insert('tokens',{address:binary(coin),deployer:binary(router),first_block:'1',block:'1'});
+  await db.sql.query(`INSERT INTO swaps(ts,block,tx_hash,log_index,venue,pool_id,coin,quote_asset,trader,side,amount_coin,amount_quote,senders_pending)
+    SELECT to_timestamp($1),1+n%25,decode(lpad(to_hex(10000+n),64,'0'),'hex'),0,'uniswap_v3',$2,$3,$2,
+      CASE WHEN n%17=0 THEN NULL ELSE decode(lpad(to_hex(2000+n%500),40,'0'),'hex') END,1,1,1,n%13=0
+    FROM generate_series(1,1500) n`,[sec,binary(router),binary(coin)]);
+  await indexed(db,31,wallet);
+  // A pending row with a named trader can still be the wallet's own first buy under the original query.
+  await db.sql.query(`UPDATE swaps SET trader=$1,senders_pending=true WHERE tx_hash=$2`,[binary(wallet),binary(hash(2))]);
+  const oldRank=async()=>{
+    const f=(await db.sql.query<{b:string}>(`SELECT min(b)::text AS b FROM (
+      SELECT block AS b FROM swaps WHERE trader=$1 AND coin=$2 AND side=1 AND block<=31
+      UNION ALL SELECT first_block FROM coin_buyer_firsts WHERE trader=$1 AND coin=$2 AND first_block<=31) x`,[binary(wallet),binary(coin)])).rows[0].b;
+    const rank=(await db.sql.query<{n:string}>(`SELECT
+      (SELECT count(*) FROM (SELECT trader FROM swaps WHERE coin=$1 AND side=1 AND block<=$2 AND trader IS NOT NULL AND NOT senders_pending
+        UNION SELECT trader FROM coin_buyer_firsts WHERE coin=$1 AND first_block<=$2) k)
+      +(SELECT count(*) FROM swaps WHERE coin=$1 AND side=1 AND block<=$2 AND (trader IS NULL OR senders_pending))
+      +coalesce((SELECT sum(n) FROM coin_unknown_buys WHERE coin=$1 AND block<=$2),0)
+      +coalesce((SELECT buyers FROM history_prunes WHERE coin=$1 AND NOT buyer_stats_complete AND swaps_through_block<$2),0) AS n`,[binary(coin),f])).rows[0].n;
+    return {firstBuyBlock:Number(f),buyerRank:Number(rank)};
+  };
+  const equal=async()=>expect((await loadFingerprintInput(db,wallet,31)).input.reactions[0]).toMatchObject(await oldRank());
+  await equal();
+  await db.sql.query(`UPDATE swaps SET senders_pending=false WHERE trader=$1`,[binary(wallet)]);await equal();
+  // Delete an earliest buy, then move a known buy back to pending.
+  await db.sql.query('DELETE FROM swaps WHERE tx_hash=$1',[binary(hash(10001))]);await equal();
+  await db.sql.query('UPDATE swaps SET senders_pending=true WHERE tx_hash=$1',[binary(hash(10002))]);await equal();
+  const before=(await loadFingerprintInput(db,wallet,31)).input.reactions;
+  await db.tx(async tx=>{
+    const rows=(await tx.sql.query<Record<string,unknown>>('SELECT * FROM swaps WHERE block<=10')).rows;
+    await recordBuyerStatistics(tx,binary(coin),rows);
+    await tx.sql.query("SELECT set_config('eko.retention','on',true)");
+    await tx.sql.query('DELETE FROM swaps WHERE block<=10');
+  });
+  expect((await loadFingerprintInput(db,wallet,31)).input.reactions).toEqual(before);await equal();
+  // Exercise the actual rerunnable script's function, including stale projection recovery.
+  const script=await readFile(new URL('../../../scripts/backfill-watcher-buyers.sql',import.meta.url),'utf8');
+  await db.sql.query(script.slice(0,script.indexOf('-- psql executes')));
+  await db.sql.query('DELETE FROM read_buyer_firsts');await db.sql.query('DELETE FROM read_unknown_buys');
+  for(let n=0;n<2;n++){await db.sql.query('SELECT pg_temp.backfill_watcher_coin($1)',[binary(coin)]);await equal();}
+  const orphanBuyer=address(9999);
+  await db.sql.query(`INSERT INTO swaps SELECT ts,31,$1,log_index,venue,pool_id,coin,quote_asset,$2,tx_from,tx_to,recipient,side,amount_coin,amount_quote,price_quote,usd,priced_block,code_version,false,pricing_pending FROM swaps WHERE tx_hash=$3`,[binary(hash(90000)),binary(orphanBuyer),binary(hash(31))]);
+  expect((await db.sql.query('SELECT first_block FROM read_buyer_firsts WHERE coin=$1 AND trader=$2',[binary(coin),binary(orphanBuyer)])).rows).toHaveLength(1);
+  await db.tx(tx=>tx.deleteAbove(30n));
+  expect((await db.sql.query('SELECT first_block FROM read_buyer_firsts WHERE coin=$1 AND trader=$2',[binary(coin),binary(orphanBuyer)])).rows).toHaveLength(0);
+  await indexed(db,31,wallet,100);await equal();
+  // Legacy prunes continue to contribute their conservative extra bound.
+  await db.sql.query(`INSERT INTO history_prunes(coin,rule,through_block,swaps_through_block,buyers) VALUES($1,'raw_cap',1,1,9)`,[binary(coin)]);
+  await equal();
+});
+
+it('bounds swap candidates per wallet refresh and resumes cuts while a busy wallet keeps trading',async()=>{
+  const db=await setup();
+  await db.sql.query(`INSERT INTO chain_blocks(number,block,hash,parent_hash,ts)
+    SELECT n,n,decode(lpad(to_hex(n),64,'0'),'hex'),decode(lpad(to_hex(n-1),64,'0'),'hex'),to_timestamp($1) FROM generate_series(1,601) n`,[sec]);
+  await db.sql.query(`INSERT INTO swaps(ts,block,tx_hash,log_index,venue,pool_id,coin,quote_asset,trader,side,amount_coin,amount_quote)
+    SELECT to_timestamp($1),n,decode(lpad(to_hex(n),64,'0'),'hex'),1,'uniswap_v3',$2,
+    decode(lpad(to_hex(100+n%200),40,'0'),'hex'),$2,$3,1,1,1 FROM generate_series(1,600) n`,[sec,binary(router),binary(wallet)]);
+  const query=db.sql.query.bind(db.sql),tx=db.tx.bind(db);let candidates=0;
+  const track=(original:typeof db.sql.query)=>(async(sql:string,params?:unknown[])=>{
+    const result=await original(sql,params);
+    if(sql.includes('FROM swaps')) {
+      expect(sql).toMatch(/LIMIT (200|1)/);
+      candidates+=sql.includes('WITH wallets AS')?(result.rows[0] as {blocks:string[]}).blocks.length:result.rows.length;
+    }
+    return result;
+  }) as typeof db.sql.query;
+  db.sql.query=track(query);
+  db.tx=((work:Parameters<typeof db.tx>[0])=>tx(async inner=>{
+    const original=inner.sql.query.bind(inner.sql);inner.sql.query=track(original);
+    try{return await work(inner);}finally{inner.sql.query=original;}
+  })) as typeof db.tx;
+  try {
+    expect(await refreshFingerprints(db,600)).toMatchObject({wallets:1,runs:FINGERPRINT_CUTS_PER_REFRESH});
+    expect(candidates).toBeLessThanOrEqual(FINGERPRINT_REFRESH_ROW_BOUND);
+  } finally {db.sql.query=query;db.tx=tx;}
+  expect((await db.sql.query<{pending_blocks:string[]}>('SELECT pending_blocks FROM wallet_fingerprint_state')).rows[0].pending_blocks).toHaveLength(192);
+  await db.sql.query(`INSERT INTO swaps SELECT ts,601,$1,log_index,venue,pool_id,coin,quote_asset,trader,tx_from,tx_to,recipient,side,amount_coin,amount_quote,price_quote,usd,priced_block,code_version,senders_pending,pricing_pending FROM swaps WHERE block=600`,[binary(hash(601))]);
+  expect(await refreshFingerprints(db,601)).toMatchObject({wallets:1,runs:8});
+  expect((await db.sql.query('SELECT block FROM wallet_fingerprint_runs ORDER BY block')).rows.map(r=>Number((r as {block:string}).block))).toEqual(Array.from({length:16},(_,n)=>401+n));
+  await expect(refreshFingerprints(db,601,{walletLimit:5})).rejects.toThrow('Invalid fingerprint wallet bound');
 });
