@@ -3,21 +3,22 @@ import { emptyLifetime, addLifetimeLiquidity, addLifetimePons, type Lifetime, ty
 
 /** The existing outcome engine resolves its three launch horizons with this same clock ordering. */
 async function outcomeBlocks(db:ChainDb,coin:Uint8Array) {
-  // Unrated coins can reach retention before the engine has copied their horizon clocks.
+  // Unrated launches can reach retention before the engine copies their clocks.
+  // The outcome engine never evaluates identities without a deployer (including high-volume quote tokens).
   await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source)
-    SELECT b.number,b.ts,b.hash,'head' FROM tokens t JOIN chain_blocks b ON b.number=t.first_block WHERE t.address=$1 ON CONFLICT DO NOTHING`,[coin]);
+    SELECT b.number,b.ts,b.hash,'head' FROM tokens t JOIN chain_blocks b ON b.number=t.first_block WHERE t.address=$1 AND t.deployer IS NOT NULL ON CONFLICT DO NOTHING`,[coin]);
   await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source)
     SELECT DISTINCT b.number,b.ts,b.hash,'head' FROM tokens t JOIN engine_block_times c ON c.number=t.first_block
     CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
     CROSS JOIN LATERAL (SELECT number,ts,hash FROM chain_blocks WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1) b
-    WHERE t.address=$1 ON CONFLICT DO NOTHING`,[coin]);
+    WHERE t.address=$1 AND t.deployer IS NOT NULL ON CONFLICT DO NOTHING`,[coin]);
 
   return (await db.sql.query<{block:string;prior:string|null}>(`SELECT DISTINCT e.number::text AS block,
-    (SELECT number::text FROM engine_block_times WHERE ts<=e.ts-interval '1 hour' AND number<=e.number ORDER BY number DESC LIMIT 1) AS prior
+    (SELECT number::text FROM engine_block_times WHERE ts<=e.ts-interval '1 hour' AND number<=e.number ORDER BY ts DESC,number DESC LIMIT 1) AS prior
     FROM tokens t JOIN engine_block_times c ON c.number=t.first_block
     CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
     CROSS JOIN LATERAL (SELECT number,ts FROM engine_block_times WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1) e
-    WHERE t.address=$1`,[coin])).rows;
+    WHERE t.address=$1 AND t.deployer IS NOT NULL`,[coin])).rows;
 }
 /** Capture a complete prefix only. Batches drain in block order, so no later fact can enter an old checkpoint. */
 export async function preserveOutcomeSwaps(db:ChainDb,coin:Uint8Array,data:Lifetime,through:bigint) {
@@ -51,7 +52,7 @@ export async function preserveOutcomeHoldings(db:ChainDb,coin:Uint8Array,through
 export async function addOutcomeHours(db:ChainDb,coin:Uint8Array,rows:Record<string,unknown>[]) {
   const ends=(await db.sql.query<{number:string;ts:Date}>(`SELECT e.number,e.ts FROM tokens t JOIN engine_block_times c ON c.number=t.first_block
     CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
-    CROSS JOIN LATERAL (SELECT number,ts FROM engine_block_times WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1) e WHERE t.address=$1`,[coin])).rows;
+    CROSS JOIN LATERAL (SELECT number,ts FROM engine_block_times WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1) e WHERE t.address=$1 AND t.deployer IS NOT NULL`,[coin])).rows;
   for(const end of new Map(ends.map(e=>[String(e.number),e])).values()) {
     const samples=rows.filter(r=>BigInt(String(r.block))<=BigInt(end.number) && new Date(r.ts as Date).getTime()>new Date(end.ts).getTime()-3600000);
     if(!samples.length)continue;

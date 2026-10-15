@@ -46,7 +46,7 @@ export interface RetentionOptions {
   quietCoinDays?: number;
   /** Rows per transaction (Feed batches are capped lower, see `FEED_BATCH_ROWS`). */
   batchRows?: number;
-  /** Each rule stops starting batches after this many milliseconds (default 6 seconds). */
+  /** Each rule stops starting batches after this many milliseconds (default 15 seconds for raw caps, 6 for others). */
   budgetMs?: number;
   /** Total pass deadline, capped at 115 seconds and checked before each statement. */
   passBudgetMs?: number;
@@ -92,11 +92,11 @@ export async function retentionHorizon(db: ChainDb, days: number, nowMs: number)
  * Ordering by (token, block) follows the `token_transfers(token, block)` index, so each batch reads about `limit`
  * rows; ordering by block alone made every batch scan and sort all eligible transfers of the given tokens.
  */
-export async function compactTransfers(db: ChainDb, tokens: Uint8Array[], through: bigint, limit: number): Promise<number> {
+export async function compactTransfers(db: ChainDb, tokens: Uint8Array[], through: bigint, limit: number, fromBlock?: bigint): Promise<number> {
   if (!tokens.length) return 0;
   return db.tx(async tx => {
-    const result = await tx.sql.query<{ rows: string }>(`WITH picked AS (
-        SELECT tableoid, ctid FROM token_transfers WHERE token = ANY($1::bytea[]) AND block <= $2 ORDER BY token, block LIMIT $3
+    const result = await tx.sql.query<{ rows: string }>(`WITH picked AS MATERIALIZED (
+        SELECT tableoid, ctid FROM token_transfers WHERE token = ANY($1::bytea[]) AND block <= $2 ${fromBlock===undefined ? '' : 'AND block >= $4'} ORDER BY token, block LIMIT $3 FOR UPDATE
       ), moved AS (
         DELETE FROM token_transfers t USING picked p WHERE t.tableoid = p.tableoid AND t.ctid = p.ctid
         RETURNING t.token, t.from_address, t.to_address, t.amount, t.block, t.kind
@@ -105,12 +105,12 @@ export async function compactTransfers(db: ChainDb, tokens: Uint8Array[], throug
         UNION ALL SELECT token, from_address, -amount, block FROM moved WHERE kind = 'Transfer'
       ), merged AS (
         INSERT INTO transfer_baselines(token, holder, amount, through_block)
-        SELECT token, holder, sum(amount), max(block) FROM deltas GROUP BY token, holder
+        SELECT token, holder, sum(amount), max(block) FROM deltas GROUP BY token, holder ORDER BY token,holder
         ON CONFLICT(token, holder) DO UPDATE SET amount = transfer_baselines.amount + excluded.amount,
           through_block = greatest(transfer_baselines.through_block, excluded.through_block)
         RETURNING 1
       ) SELECT (SELECT count(*) FROM moved)::text AS rows, (SELECT count(*) FROM merged)::text AS merged`,
-      [tokens, through.toString(), limit]);
+      [tokens, through.toString(), limit,...(fromBlock===undefined ? [] : [fromBlock.toString()])]);
     return Number(result.rows[0]?.rows ?? 0);
   });
 }
@@ -149,13 +149,22 @@ export async function prunePendingPoolEvents(db: ChainDb, through: bigint, limit
  * coin's remaining verdict rows, so the earliest one must survive. Coins without a recorded first verdict keep all
  * their verdict rows.
  */
+export async function feedBatch(db: ChainDb, through: bigint, limit: number, after?: unknown[]) {
+  const window=(await db.sql.query<{block:string;id:string}>(`SELECT block,id FROM read_feed WHERE block<=$1
+    ${after ? 'AND (block,id)>($2::bigint,$3::text)' : ''} ORDER BY block,id LIMIT ${limit}`,[through.toString(),...(after ?? [])])).rows;
+  if(!window.length)return {rows:0,after:undefined};
+  const rows=Number((await db.sql.query<{n:string}>(`WITH picked AS MATERIALIZED (
+      SELECT x.id FROM unnest($1::text[]) k(id) CROSS JOIN LATERAL (
+        SELECT f.* FROM read_feed f WHERE f.id=k.id OFFSET 0
+      ) x WHERE x.kind=ANY($2::text[])
+        AND (x.kind<>'verdict' OR EXISTS(SELECT 1 FROM read_first_verdict r WHERE r.coin=x.coin AND r.block<x.block))
+    ), locked AS (SELECT f.id FROM read_feed f JOIN picked p ON p.id=f.id FOR UPDATE OF f SKIP LOCKED),
+    gone AS (DELETE FROM read_feed f USING locked p WHERE f.id=p.id RETURNING 1) SELECT count(*)::text AS n FROM gone`,
+    [window.map(r=>r.id),FEED_KINDS])).rows[0]?.n ?? 0);
+  return {rows,after:[window.at(-1)!.block,window.at(-1)!.id]};
+}
 export async function pruneFeed(db: ChainDb, through: bigint, limit: number): Promise<number> {
-  return Number((await db.sql.query<{ n: string }>(`WITH gone AS (DELETE FROM read_feed f USING (
-      SELECT x.id FROM read_feed x WHERE x.kind = ANY($2::text[]) AND x.block <= $1
-        AND (x.kind <> 'verdict' OR EXISTS (SELECT 1 FROM read_first_verdict r WHERE r.coin = x.coin AND r.block < x.block))
-      ORDER BY x.block, x.id LIMIT $3 FOR UPDATE OF x SKIP LOCKED
-    ) d WHERE f.id = d.id RETURNING 1) SELECT count(*)::text AS n FROM gone`,
-    [through.toString(), FEED_KINDS, limit])).rows[0]?.n ?? 0);
+  return (await feedBatch(db,through,limit)).rows;
 }
 
 export type HistoryRule = 'danger_quiet' | 'quiet_coin' | 'settled' | 'raw_cap';
@@ -176,12 +185,12 @@ const prunableLiquidity = `FROM pools p JOIN liquidity_events e ON e.pool_id=p.i
  * `swapsThrough`.
  */
 export async function quietCoins(db: ChainDb, rule: HistoryRule, through: bigint, swapsThrough: bigint | null, exclude: Uint8Array[],
-  pairQuotes: Uint8Array[], after: Uint8Array | null, limit: number): Promise<QuietCoin[]> {
+  pairQuotes: Uint8Array[], after: Uint8Array | null, limit: number): Promise<(QuietCoin & {eligible:boolean})[]> {
   const swapStage = `($2::bigint IS NOT NULL AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.block<=$2)
     AND ($6::text IN ('settled','raw_cap') OR NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.block>$2)))`;
-  return (await db.sql.query<{ address: Uint8Array; swaps: boolean }>(`SELECT t.address,${swapStage} AS swaps
-    FROM tokens t JOIN engine_block_times created ON created.number=t.first_block
-    WHERE NOT (t.address=ANY($3::bytea[])) AND ($5::bytea IS NULL OR t.address>$5)
+  return (await db.sql.query<QuietCoin & {eligible:boolean}>(`WITH identities AS MATERIALIZED (
+      SELECT * FROM tokens ${after ? 'WHERE address>$5' : ''} ORDER BY address LIMIT $7
+    ) SELECT t.address,${swapStage} AS swaps,(created.number IS NOT NULL AND NOT (t.address=ANY($3::bytea[])) AND ($5::bytea IS NULL OR t.address>$5)
       AND ($6::text<>'danger_quiet' OR EXISTS(SELECT 1 FROM coin_card_latest c WHERE c.coin=t.address AND c.data->'verdict'->>'level'='danger'))
       AND ($6::text='raw_cap' OR (NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.block>$1)
         AND NOT EXISTS(SELECT 1 FROM token_transfers x WHERE x.token=t.address AND x.block>$1)))
@@ -190,7 +199,8 @@ export async function quietCoins(db: ChainDb, rule: HistoryRule, through: bigint
         AND NOT EXISTS(SELECT 1 FROM token_transfers x WHERE x.token=t.address AND x.block>c.as_of_block AND x.block<=$1)
         AND NOT EXISTS(SELECT 1 FROM pons_events e WHERE e.token=t.address AND e.block>c.as_of_block AND e.block<=$1)
         AND NOT EXISTS(SELECT 1 FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE (p.currency0=t.address OR p.currency1=t.address) AND e.block>c.as_of_block AND e.block<=$1)))
-      AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND (s.senders_pending OR s.pricing_pending))
+      AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.senders_pending)
+      AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.pricing_pending)
       AND NOT EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id WHERE (p.currency0=t.address OR p.currency1=t.address) AND e.senders_pending)
       AND NOT EXISTS(SELECT 1 FROM pools p JOIN pending_pool_events e ON e.emitter=p.id WHERE p.currency0=t.address OR p.currency1=t.address)
       AND NOT EXISTS(SELECT 1 FROM (VALUES ('1h',3600),('24h',86400),('7d',604800)) AS h(horizon,sec)
@@ -204,7 +214,8 @@ export async function quietCoins(db: ChainDb, rule: HistoryRule, through: bigint
           WHERE ((p.currency0=t.address AND p.currency1=ANY($4::bytea[])) OR (p.currency1=t.address AND p.currency0=ANY($4::bytea[]))) AND e.block<=$1
           AND ($6::text IN ('settled','raw_cap') OR t.deployer IS NULL OR e.actor IS NULL OR e.actor<>t.deployer OR e.kind NOT IN ('Burn','ModifyLiquidity')))
         OR ${swapStage})
-    ORDER BY t.address LIMIT $7`, [through.toString(), swapsThrough?.toString() ?? null, exclude, pairQuotes, after, rule, limit])).rows;
+    ) AS eligible FROM identities t LEFT JOIN engine_block_times created ON created.number=t.first_block
+    ORDER BY t.address`, [through.toString(), swapsThrough?.toString() ?? null, exclude, pairQuotes, after, rule, limit])).rows;
 }
 type PruneCounts = Partial<Record<'transfers' | 'liquidity' | 'pons' | 'swaps', number>>;
 /** The coin's current verdict level and Danger playbook ids (coin $1), recorded with every prune (0186). */
@@ -265,7 +276,7 @@ async function recordSwapSummary(db: ChainDb, coin: Uint8Array, rule: HistoryRul
       last_trade_ts=greatest(history_prunes.last_trade_ts,excluded.last_trade_ts),buyers=history_prunes.buyers+excluded.buyers,${keepRating},updated_at=now()`,
   [coin, rule, through.toString()]);
 }
-interface HistoryPass { pauseMs?:number; limit: number; timeLeft: () => boolean; result: RetentionResult }
+interface HistoryPass { pauseMs?:number; limit: number; timeLeft: () => boolean; result: RetentionResult; cursors?:Map<string,unknown[]> }
 /**
  * Drop one quiet coin's raw history and keep its summary. Transfers at or below `through` are compacted into
  * `transfer_baselines` (exact balances and holder views), its quote-pool liquidity events and Pons events there are
@@ -327,15 +338,16 @@ async function pruneQuietCoins(db: ChainDb, rule: HistoryRule, days: number, now
     if (!complete) swapsThrough = null;
   }
   const pairQuotes = [...exclude, ZERO_ADDRESS];
-  let after: Uint8Array | null = null;
+  let after=(pass.cursors?.get(rule)?.[0] as Uint8Array | undefined) ?? null;
   while (pass.timeLeft()) {
-    const coins = await quietCoins(db, rule, through, swapsThrough, exclude, pairQuotes, after, Math.min(pass.limit,100));
-    if (!coins.length) return;
+    const coins = await quietCoins(db, rule, through, swapsThrough, exclude, pairQuotes, after, Math.min(Math.max(pass.limit,32),100));
+    if (!coins.length) {pass.cursors?.delete(rule);return;}
     for (const coin of coins) {
+      if(!coin.eligible) {after=coin.address;pass.cursors?.set(rule,[after]);continue;}
       const done = await pruneCoinHistory(db, coin, rule, through, swapsThrough, pairQuotes, pass);
       pass.result[rule === 'danger_quiet' ? 'dangerCoins' : 'quietCoins']++;
       if (!done) return;
-      after = coin.address;
+      after = coin.address;pass.cursors?.set(rule,[after]);
     }
   }
 }
@@ -344,9 +356,9 @@ async function pruneQuietCoins(db: ChainDb, rule: HistoryRule, days: number, now
 export async function rawCandidates(db: ChainDb, through: bigint, quote: Uint8Array[], after: Uint8Array | null, swaps = false, limit = 200) {
   const event = swaps ? 'swaps' : 'token_transfers', key = swaps ? 'coin' : 'token';
   return (await db.sql.query<{ address: Uint8Array; eligible: boolean }>(`WITH identities AS MATERIALIZED (
-      SELECT address FROM tokens WHERE deployer IS NULL AND launchpad IS NULL
-        AND ($3::bytea IS NULL OR address>$3) AND NOT address=ANY($2::bytea[]) ORDER BY address LIMIT ${Math.min(limit,200)}
-    ) SELECT t.address, (EXISTS(SELECT 1 FROM ${event} x WHERE x.${key}=t.address AND x.block<=$1 LIMIT 1)
+      SELECT address,deployer,launchpad FROM tokens ${after ? 'WHERE address>$3' : ''} ORDER BY address LIMIT ${Math.min(limit,200)}
+    ) SELECT t.address, (t.deployer IS NULL AND t.launchpad IS NULL AND NOT t.address=ANY($2::bytea[])
+      AND ($3::bytea IS NULL OR t.address>$3) AND EXISTS(SELECT 1 FROM ${event} x WHERE x.${key}=t.address AND x.block<=$1 LIMIT 1)
       AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.senders_pending LIMIT 1)
       AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.pricing_pending LIMIT 1)
       ${swaps ? '' : `AND NOT EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id
@@ -359,8 +371,8 @@ export async function rawCandidates(db: ChainDb, through: bigint, quote: Uint8Ar
 export async function runRetention(source: ChainDb, options: RetentionOptions): Promise<RetentionResult> {
   options = { ...options, dryRun: options.dryRun ?? true };
   const passDeadline = Date.now() + Math.min(options.passBudgetMs ?? 115_000, 115_000);
-  let queryDeadline = passDeadline;
-  const db = retentionDb(source, () => queryDeadline), cursors = retentionCursors(source);
+  let queryDeadline = passDeadline, statementMs = 1_000;
+  const db = retentionDb(source, () => queryDeadline, () => statementMs), cursors = retentionCursors(source);
   const now = options.now ?? Date.now, started = now();
   let limit = Math.min(options.batchRows ?? 1000, 5000);
   if (options.quietCoinDays !== undefined && options.quietCoinDays <= ENGINE_IDLE_DAYS) throw new Error('Quiet-coin retention must exceed the engines idle window');
@@ -370,7 +382,10 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
     historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, skippedRules: [] };
   if (options.dryRun) { result.dryRun = true; result.tables = []; }
   const rules = retentionRules(options, result, budget => { queryDeadline = Math.min(passDeadline, Date.now() + budget); }, retentionBatchSizes(source));
-  const runRule: typeof rules = (name, work) => rules(name, (timeLeft, rows) => { limit = rows; return work(timeLeft, rows); });
+  const runRule: typeof rules = (name, work) => {
+    statementMs = name==='raw_swaps' || name==='raw_transfers' ? 5_000 : 1_000;
+    return rules(name, (timeLeft, rows) => { limit = rows; return work(timeLeft, rows); });
+  };
   const quote = options.quoteTokens.map(token => binary(token as `0x${string}`));
   if (options.rawDays !== undefined) quote.push(ZERO_ADDRESS);
   const capped = options.swapDays !== undefined || options.transferDays !== undefined;
@@ -456,14 +471,22 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
           cursors.set(name, batch.after);
         }
         result.finished = false;
-      } else await drain(timeLeft, tx => step(tx, through, Math.min(limit, FEED_BATCH_ROWS)), count);
+      } else {
+        while(timeLeft()) {
+          const batch=await retentionBatch(db,tx=>feedBatch(tx,through,Math.min(limit,FEED_BATCH_ROWS),cursors.get(name)),options.pauseMs);
+          result.feedRows+=batch.rows;
+          if(!batch.after) {cursors.delete(name);return;}
+          cursors.set(name,batch.after);
+        }
+        result.finished=false;
+      }
     });
   }
   if (!capped && !modern) for (const [rule, days] of [['danger_quiet', options.dangerQuietDays], ['quiet_coin', options.quietCoinDays]] as const) {
     if (days === undefined) continue;
     await runRule(rule, async timeLeft => {
       if (options.dryRun) { for (const table of ['token_transfers','liquidity_events','pons_events','swaps']) await report(table); return; }
-      await pruneQuietCoins(db, rule, days, started, quote, { limit, timeLeft, result, pauseMs: options.pauseMs });
+      await pruneQuietCoins(db, rule, days, started, quote, { limit, timeLeft, result, pauseMs: options.pauseMs, cursors });
     });
   }
   return result;

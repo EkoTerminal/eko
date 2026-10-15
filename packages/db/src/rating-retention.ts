@@ -6,6 +6,17 @@ import { addReport, reportRows, retentionBatch } from './determination-retention
 
 /** First grade since each rules cut is a permanent public measurement boundary. */
 export const GRADE_CUTS = ['2026-10-12T18:30:00Z', '2026-10-13T07:30:00Z'] as const;
+/** Seek one grade block first; only same-block ties need receipt-sequence ordering. */
+const gradeSeek = (coin:string) => `SELECT v.id,b.ts,v.data->>'level' AS level FROM (
+    SELECT v.valid_from_block FROM verdicts v WHERE v.coin=${coin}
+      AND v.valid_from_block>=(SELECT number FROM engine_block_times WHERE ts>=c.since ORDER BY ts,number LIMIT 1)
+      AND v.data->>'level' IN ('clear','monitor','danger')
+      AND EXISTS(SELECT 1 FROM engine_block_times b WHERE b.number=v.valid_from_block AND b.ts>=c.since)
+    ORDER BY v.valid_from_block LIMIT 1
+  ) first_grade JOIN verdicts v ON v.coin=${coin} AND v.valid_from_block=first_grade.valid_from_block
+  JOIN engine_block_times b ON b.number=v.valid_from_block LEFT JOIN receipt_publications p ON p.id=v.id
+  WHERE v.data->>'level' IN ('clear','monitor','danger')
+  ORDER BY p.publication_sequence ASC NULLS FIRST,v.id LIMIT 1`;
 export async function preserveGradePrices(db: ChainDb, coin: Uint8Array, before: Date, endangeredBefore = before) {
   await db.sql.query(`INSERT INTO retention_grade_prices(coin,since,horizon_sec,graded_at,level,p0,p1,hi)
     SELECT $1,c.since,h.sec,g.ts,g.level,
@@ -13,16 +24,12 @@ export async function preserveGradePrices(db: ChainDb, coin: Uint8Array, before:
     (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=$1 AND s.ts<=g.ts+h.sec*interval '1 second' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1),
     (SELECT max(s.usd/s.amount_coin::double precision) FROM swaps s WHERE s.coin=$1 AND s.ts>g.ts AND s.ts<=g.ts+h.sec*interval '1 second' AND s.usd>0 AND s.amount_coin>0)
     FROM unnest($2::timestamptz[]) c(since) CROSS JOIN (VALUES(3600),(86400)) h(sec)
-    CROSS JOIN LATERAL (SELECT bt.ts,v.data->>'level' AS level FROM verdicts v JOIN engine_block_times bt ON bt.number=v.valid_from_block LEFT JOIN receipt_publications p ON p.id=v.id
-      WHERE v.coin=$1 AND v.valid_from_block>=(SELECT number FROM engine_block_times WHERE ts>=c.since ORDER BY ts,number LIMIT 1) AND bt.ts>=c.since AND v.data->>'level' IN ('clear','monitor','danger') ORDER BY v.valid_from_block,p.publication_sequence ASC NULLS FIRST,v.id LIMIT 1) g
+    CROSS JOIN LATERAL (${gradeSeek('$1')}) g
     WHERE g.ts+h.sec*interval '1 second'<$3 AND g.ts<$4
       AND NOT EXISTS(SELECT 1 FROM retention_grade_prices p WHERE p.coin=$1 AND p.since=c.since AND p.horizon_sec=h.sec) ON CONFLICT DO NOTHING`, [coin,GRADE_CUTS,before,endangeredBefore]);
 }
 const old = (block: string) => `EXISTS(SELECT 1 FROM engine_block_times b WHERE b.number=${block} AND b.ts<$1)`;
-const gradeProbe = `SELECT v.id FROM verdicts v JOIN engine_block_times b ON b.number=v.valid_from_block LEFT JOIN receipt_publications p ON p.id=v.id
-  WHERE v.coin=x.coin AND v.valid_from_block>=(SELECT number FROM engine_block_times WHERE ts>=c.since ORDER BY ts,number LIMIT 1)
-    AND b.ts>=c.since AND v.data->>'level' IN ('clear','monitor','danger')
-  ORDER BY v.valid_from_block,p.publication_sequence ASC NULLS FIRST,v.id LIMIT 1`;
+const gradeProbe = `SELECT g.id FROM (${gradeSeek('x.coin')}) g`;
 const gradeException = `NOT EXISTS(SELECT 1 FROM unnest($2::timestamptz[]) c(since) WHERE x.id=(${gradeProbe}))`;
 /** Reader/FK exceptions are applied only to bounded candidate windows. Dry-run estimates are skipped. */
 export function ratingSelections() {
@@ -86,7 +93,11 @@ export async function ratingRetention(db: ChainDb, options: RetentionOptions, re
         let bounded=rule.select.replace('SELECT x.*',`SELECT ${selectedColumns.map(c=>`x.${c}`).join(',')}`).replace(`WHERE `,`WHERE ${predicate} AND `);
         if (rule.table==='verdicts') {
           // The same coin can occupy most of a window. Compute each permanent grade boundary once per coin/cut.
-          bounded=`WITH candidate_coins AS MATERIALIZED (SELECT DISTINCT coin FROM verdicts WHERE id=ANY($3::text[])),
+          const coins=(await tx.sql.query<{coin:Uint8Array}>(`SELECT v.coin FROM unnest($1::text[]) k(id)
+            CROSS JOIN LATERAL (SELECT coin FROM verdicts WHERE id=k.id OFFSET 0) v`,[window.map(r=>r.id)])).rows;
+          const unique=new Map(coins.map(r=>[Buffer.from(r.coin).toString('hex'),r.coin]));
+          params.push([...unique.values()]);
+          bounded=`WITH candidate_coins AS MATERIALIZED (SELECT coin FROM unnest($4::bytea[]) k(coin)),
             grade_boundaries AS MATERIALIZED (SELECT g.id FROM candidate_coins x CROSS JOIN unnest($2::timestamptz[]) c(since)
               CROSS JOIN LATERAL (${gradeProbe}) g)
             ${bounded.replace(gradeException,'NOT EXISTS(SELECT 1 FROM grade_boundaries g WHERE g.id=x.id)')}`;

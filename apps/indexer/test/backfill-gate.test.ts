@@ -71,7 +71,7 @@ describe('launch backfill evidence', () => {
   });
   it('refuses event-by-event backfill evidence after transfer history has been compacted',async()=>{
     const db=await openDb({pgliteDir:':memory:'});handles.push(db);await migrate(db);
-    await db.sql.query("INSERT INTO raw_history_watermarks VALUES('token_transfers',1)");
+    await db.sql.query("UPDATE raw_history_watermarks SET through_block=1 WHERE name='token_transfers'");
     await expect(captureBackfillSnapshot(db,load().plan,{origin:'fixture',checkpoint:'compacted'})).rejects.toThrow('use an archive');
   });
   it('exports bounded read-only database evidence and diagnoses a missing transfer baseline', async () => {

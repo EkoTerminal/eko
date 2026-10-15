@@ -130,7 +130,7 @@ assertions were replaced with skipped-estimate and read-only checks. Real mode's
 work, with `estimatedBytes=0` when bytes were not measured.
 
 Transactions normally process 1,000 candidates, capped at 5,000. Swaps retain complete minutes, bounded to at most
-10,000 rows. Every query, including direct reads, has a one-second statement timeout and one-second lock timeout.
+10,000 rows. Non-raw queries, including direct reads, have a one-second statement timeout and one-second lock timeout. The 0208 raw-cap timeout, cursor and locking changes are documented in [raw-history.md](raw-history.md#production-prebuild-for-0208).
 Retention transactions disable parallel gather workers and discourage sequential scans/hash/merge joins so bounded
 candidate windows use indexed probes. `read_feed` locks selected rows with `SKIP LOCKED` in block/id order. A table-level
 lock can still cause a timeout, which skips that rule. Statement timeouts halve that rule's batch size and retry within its original budget, down to 32 rows (or the configured ceiling if smaller).

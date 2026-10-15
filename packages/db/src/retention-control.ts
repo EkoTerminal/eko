@@ -12,11 +12,11 @@ export async function retentionLimits(db: ChainDb) {
 }
 
 /** Direct reads also get transaction-local limits, without enabling deletion triggers. */
-export function retentionDb(db: ChainDb, deadline: number | (() => number) = Date.now() + 115_000): ChainDb {
+export function retentionDb(db: ChainDb, deadline: number | (() => number) = Date.now() + 115_000, statementMs: () => number = () => 1_000): ChainDb {
   const transaction = <T>(work: (tx: ChainDb) => Promise<T>) => db.tx(async tx => {
     await retentionLimits(tx);
     const sql: SqlClient = { query: async (text, params) => {
-      const remaining = Math.min(1_000, (typeof deadline === 'function' ? deadline() : deadline) - Date.now());
+      const remaining = Math.min(statementMs(), (typeof deadline === 'function' ? deadline() : deadline) - Date.now());
       if (remaining <= 0) throw Object.assign(new Error('Retention pass deadline reached'), { code: '57014' });
       // Recheck before every statement in multi-statement batches, including nested compaction transactions.
       await tx.sql.query(`SET LOCAL statement_timeout='${remaining}ms'`);
@@ -45,13 +45,15 @@ export function retentionRules(options: RetentionOptions, result: RetentionResul
   const ceiling = Math.max(1, Math.min(options.batchRows ?? 1000, 5000)), floor = Math.min(32, ceiling);
   return async (name, work) => {
     const started = now(), before = removedRows(result);
-    const timeLeft = () => { const current = now(); return current - started < (options.budgetMs ?? 6_000) && current - passStarted < passBudget; };
+    // Initial immutable per-coin snapshots and hourly rankings are aggregates, not LIMIT-sized deletes.
+    const budget = options.budgetMs ?? (name==='raw_swaps' || name==='raw_transfers' ? 15_000 : 6_000);
+    const timeLeft = () => { const current = now(); return current - started < budget && current - passStarted < passBudget; };
     const state = sizes.get(name) ?? { rows: ceiling, successes: 0 };
     if (state.ceiling !== undefined && state.ceiling !== ceiling) { state.rows = ceiling; state.successes = 0; }
     state.ceiling = ceiling; state.rows = Math.min(state.rows, ceiling); sizes.set(name, state);
     const stats = (result.ruleStats ??= {})[name] = { rows: 0, skipped: 0, timeouts: 0, batchRows: state.rows };
     // Retries share the original rule and pass deadlines. Every failed transaction has rolled back first.
-    startDeadline(Math.max(1_000, options.budgetMs ?? 6_000));
+    startDeadline(Math.max(1_000, budget));
     let succeeded = false;
     while (timeLeft()) {
       try { await work(timeLeft, state.rows); succeeded = true; break; }

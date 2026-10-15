@@ -15,11 +15,11 @@ FINGERPRINT_REFRESH_DAYS=3
 
 The deployment default remains report-only (`RETENTION_DRY_RUN=true`). Swap days must be an integer of at least seven, transfer days at least one. The fingerprint windows must be positive integer days and their sum must not exceed swap days. Increasing them requires increasing the swap window on both roles. New caps supersede the old determination, quote, idle and quiet-coin swap/transfer deletion rules. The determination rules continue summarising Pons and liquidity events. Rating, pending-pool and Feed retention still run. The old `RETENTION_RAW_DAYS` remains a compatibility setting for direct legacy retention callers, not the worker's swap or transfer cap.
 
-Every identity is eligible, including active, quote, unrated, unknown and pending coins. Each rule selects the oldest raw timestamp/block first across all coins, drains that block in bounded batches, and advances. The existing adaptive control starts at 1,000 rows, halves on statement timeouts down to 32, grows after four successes, pauses 100 ms between batches, and limits each rule to six seconds and each pass to 115 seconds. Backlogged passes continue after a 100 ms pause. A coin with a dense minute does not strand that minute. Complete minute bars are frozen before partial-minute deletions. No new estimate scans of the raw tables run.
+Every identity is eligible, including active, quote, unrated, unknown and pending coins. Each rule selects the oldest raw timestamp/block first across all coins, drains that block in bounded batches, and advances. The existing adaptive control starts at 1,000 rows, halves on statement timeouts down to 32, grows after four successes, pauses 100 ms per row budget (rather than per sparse block), and limits each raw rule to fifteen seconds and each pass to 115 seconds. Raw statements have a five-second ceiling; other rules retain six-second budgets and one-second statements. Initial immutable holder snapshots and hourly trending aggregates do not scale with the deletion LIMIT, which justifies the raw-only exception. Lock waits still stop after one second. Backlogged passes continue after a 100 ms pause. A coin with a dense minute does not strand that minute. Complete minute bars are frozen before partial-minute deletions. No new estimate scans of the raw tables run.
 
-Swaps run first, after launch trending snapshots and completed grade-price samples are saved. Each deleted batch first writes lifetime facts, per-pool last prices, first buyers, unresolved-buy counts and the three outcome checkpoint summaries. Transfers run second, after opening, graduation and outcome holder snapshots, and fold exact signed integer movements into `transfer_baselines` in the same transaction as deletion. Pass logs include `rule`, `rows`, `skipped`, `timeouts` and `batch_rows`. A timed-out batch rolls back its summaries and deletions together.
+Swaps run first, after endangered launch trending snapshots and completed grade-price samples are saved. `trending_snapshot_queue` contains unsaved launch blocks and is maintained on token insertion/first-block changes; completed snapshots leave the queue. Each raw batch drains only the queue entries needed before deleting its next oldest block, committing snapshot progress even when more snapshots remain. Each deleted batch first writes lifetime facts, per-pool last prices, first buyers, unresolved-buy counts and the three outcome checkpoint summaries. Transfers run second, after opening, graduation and outcome holder snapshots (the outcome engine excludes identities without a deployer, so quote-token outcome scans are omitted), and fold exact signed integer movements into `transfer_baselines` in the same transaction as deletion. Pass logs include `rule`, `rows`, `skipped`, `timeouts` and `batch_rows`. A timed-out batch rolls back its summaries and deletions together.
 
-Deletion and rollback share table locks. The cap retains complete boundary minutes. Reorgs inside the retained raw window rebuild balances, bars and rating prices as before. Inserts attempting to replay compacted raw blocks also fail to prevent double-counting summaries. A rollback crossing a compacted watermark or frozen minute fails explicitly and requires restoring pre-compaction archive evidence. Never continue such a rollback by clearing its watermark. Previously deleted legacy history cannot be reconstructed and remains explicitly incomplete. Previously incomplete sender or price evidence remains incomplete in summaries, and old pending rows cease to be enrichment candidates.
+Before compaction, each raw rule advances and commits its insert fence. Insert triggers take compatible shared row locks on the two small fence rows, so the advance waits for earlier writers and later writers see the committed boundary. Compaction never holds these fence row locks. It shares advisory key `(4663,208)` with rollback, while ordinary indexer inserts do not acquire that key. A separate durable `raw_history_progress` row resumes block-index seeks at the current block, including partially drained blocks, without walking the growing deleted index prefix. The transfer block index and existing swap block/time index supply oldest-first discovery. No `SHARE ROW EXCLUSIVE` table lock runs in retention. The cap retains complete boundary minutes. Reorgs inside the retained raw window rebuild balances, bars and rating prices as before. Inserts attempting to replay compacted raw blocks also fail to prevent double-counting summaries. A rollback crossing a compacted watermark or frozen minute fails explicitly and requires restoring pre-compaction archive evidence. Never continue such a rollback by clearing its watermark. Previously deleted legacy history cannot be reconstructed and remains explicitly incomplete. Previously incomplete sender or price evidence remains incomplete in summaries, and old pending rows cease to be enrichment candidates.
 
 ## Reader inventory
 
@@ -64,11 +64,43 @@ All names below are parent index names; each attached month inherits a child. Mi
 | swaps | `swaps_unpriced_time` | Globally newest unpriced repair candidates |
 | swaps | `swaps_feed_trade_window` | Time-bounded large-trade Feed |
 | token_transfers | `token_transfers_pkey` | Event identity / deduplication and oldest time selection |
+| token_transfers | `token_transfers_block` | Oldest-first deletion and durable block cursor seeks |
 | token_transfers | `token_transfers_token_block` | Token movement ranges and baseline compaction |
 | token_transfers | `transfers_holder_from_block` | Last outgoing movement of a holder at a historical block |
 | token_transfers | `transfers_holder_to_block` | Last incoming movement of a holder at a historical block |
 
 The two unpriced indexes have different leading keys. The positive-price index avoids scanning all seven days for coins without a positive price. The Feed partial index avoids filtering the full raw trade volume. These are deliberate query-specific indexes, not redundant prefixes. Counts from the first hours of a new index do not justify removing it.
+
+## Production prebuild for 0208
+
+Apply chain migration `0208_raw_history_progress` and engines migration `0208_retention_reads`. Both are pinned in migration tests. Existing 0207 migrations are unchanged. Build indexes before deploying: transactional migration runners cannot build them concurrently. An ordinary parent build over 40 million transfers would block writes. These commands use the operator's existing database connection and run outside a transaction:
+
+```sql
+-- Full statement for the measured October partition:
+CREATE INDEX CONCURRENTLY IF NOT EXISTS token_transfers_2026_10_retention_block ON token_transfers_2026_10(block);
+-- Include EVERY attached leaf, including empty future months (the October build above is then a no-op):
+SELECT format('CREATE INDEX CONCURRENTLY IF NOT EXISTS %I ON %s(block);',
+              c.relname||'_retention_block',p.relid::regclass)
+FROM pg_partition_tree('token_transfers') p JOIN pg_class c ON c.oid=p.relid
+WHERE p.isleaf ORDER BY p.relid::regclass::text
+\gexec
+CREATE INDEX IF NOT EXISTS token_transfers_block ON ONLY token_transfers(block);
+SELECT format('ALTER INDEX token_transfers_block ATTACH PARTITION %I;',c.relname||'_retention_block')
+FROM pg_partition_tree('token_transfers') p JOIN pg_class c ON c.oid=p.relid
+WHERE p.isleaf AND NOT EXISTS(
+ SELECT 1 FROM pg_inherits i WHERE i.inhparent='token_transfers_block'::regclass
+ AND i.inhrelid=to_regclass(quote_ident(c.relname||'_retention_block')))
+ORDER BY p.relid::regclass::text
+\gexec
+CREATE INDEX CONCURRENTLY IF NOT EXISTS verdicts_grade_seek ON verdicts(coin,valid_from_block,id)
+WHERE data->>'level' IN ('clear','monitor','danger');
+```
+
+The migration's exact parent statement is `CREATE INDEX IF NOT EXISTS token_transfers_block ON token_transfers(block);`. After every leaf is attached, the parent is valid and that statement is a no-op. Future partitions inherit it. The grade seek first selects the earliest qualifying block through its partial index, then sorts only that block's receipt-sequence ties. Verdict candidate coins come from bounded ID primary-key probes; no global DISTINCT is needed. Identity and Feed windows apply LIMIT before eligibility; their cursors advance through retained windows. The preceding-hour clock lookup orders by `(ts DESC,number DESC)` through the existing timestamp index, rather than scanning block numbers backward across an hour.
+
+Projection models, ranks, single-coin card refreshes and retained buyer writes call `read_lock_coins` before their projection writes. It creates and immediately locks each mutex row in sorted bytea coin order before moving to the next key. This avoids a separate unordered insertion phase and does not allocate a heavyweight advisory lock for every coin in a large rank refresh. Raw compaction uses the same helper before freezing bars or inserting buyers. PostgreSQL concurrency regression: `EKO_TEST_POSTGRES_URL` must point to a disposable test database; the test uses and removes an isolated schema. The normal PGlite gate skips that one test because PGlite has only one backend.
+
+Throughput is an estimate until measured on the target server. For EACH raw rule, rows/hour = `3600 * committed_rows_per_pass / pass_seconds`. A planning example with a 115-second pass, 15 seconds per raw rule, 1,000 rows in 0.5 seconds of SQL plus a 0.1-second pause gives about **783,000 rows/hour per rule** (6M swaps: 7.7 hours; 30M transfers: 38.3 hours). This is not a forecast for sparse blocks: a one-row block does not become a 1,000-row transaction. With sparse blocks and a 10 ms transaction per row, the amortized pause adds 0.1 ms/row, giving about **46,500 rows/hour per rule** at the same worst-case duty cycle. Snapshot-only passes remove zero swaps; once caught up, other rules generally consume less than their full budgets. Use the existing per-rule committed-row log and observed pass durations to replace these assumptions. No production timing, 15M/40M-row load test or steady-state catch-up rate was measured offline.
 
 ## First deletion and disk reclamation
 

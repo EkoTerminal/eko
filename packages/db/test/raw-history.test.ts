@@ -80,7 +80,7 @@ it('validates raw horizons and leaves report-only history untouched',async()=>{
   await expect(runRetention(db,{quoteTokens:[],transferDays:0})).rejects.toThrow('transfer day');
   const r=await runRetention(db,{quoteTokens:[],swapDays:7,transferDays:3,now});
   expect(r.dryRun).toBe(true);expect(await rows('SELECT count(*)::int AS n FROM swaps')).toEqual(before);
-  expect(await rows('SELECT * FROM raw_history_watermarks')).toEqual([]);
+  expect(await rows('SELECT * FROM raw_history_watermarks ORDER BY name')).toEqual([{name:'swaps',through_block:-1},{name:'token_transfers',through_block:-1}]);
 });
 
 it('keeps legacy evidence explicitly incomplete when older deletions predate lifetime summaries',async()=>{
@@ -88,4 +88,22 @@ it('keeps legacy evidence explicitly incomplete when older deletions predate lif
   await db.sql.query("INSERT INTO history_prunes(coin,rule,through_block,liquidity) VALUES($1,'quiet_coin',1,1)",[bytes(1)]);
   await cap();
   expect((await db.sql.query<{data:{legacyIncomplete?:boolean}}>('SELECT data FROM coin_lifetime WHERE coin=$1',[bytes(1)])).rows[0].data.legacyIncomplete).toBe(true);
+});
+
+it('advances a separate scan cursor without locking hot tables and permits fresh inserts after the fence',async()=>{
+  await fixture();
+  const statements:string[]=[],transact=db.tx.bind(db);
+  db.tx=work=>transact(async tx=>{
+    const query=tx.sql.query.bind(tx.sql);
+    tx.sql.query=(async(sql:string,params?:unknown[])=>{statements.push(sql);return query(sql,params);}) as typeof tx.sql.query;
+    return work(tx);
+  });
+  await cap();
+  expect(statements.some(sql=>sql==='LOCK TABLE swaps,token_transfers IN SHARE ROW EXCLUSIVE MODE')).toBe(false);
+  expect(statements).toContain('SELECT pg_advisory_xact_lock(4663,208)');
+  expect(await rows('SELECT name,after_block FROM raw_history_progress ORDER BY name')).toEqual([
+    {name:'swaps',after_block:13},{name:'token_transfers',after_block:17}]);
+  await db.insert('token_transfers',{ts:new Date(epoch+20*DAY),block:21,tx_hash:bytes(9999,32),log_index:0,
+    token:bytes(1),from_address:bytes(0),to_address:bytes(10),amount:'1'});
+  expect((await rows('SELECT amount FROM token_transfers WHERE block=21'))[0]?.amount).toBe('1');
 });

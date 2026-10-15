@@ -49,6 +49,7 @@ export async function preserveGraduation(db: ChainDb, coin: Uint8Array, through:
 }
 /** Aggregate and delete exactly the same prefix in one short transaction. */
 export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, through: bigint, limit: number, firstBlocks = 35, cohortSec = 60, poolManager?: string, minimal=false, bounded=false): Promise<number> {
+  await db.sql.query('SELECT read_lock_coins($1::bytea[])',[[coin]]);
   const identity = (await db.sql.query<{ deployer: Uint8Array; first_block: string; ts: Date }>(`SELECT t.deployer,t.first_block,coalesce(b.ts,c.ts) AS ts FROM tokens t
     LEFT JOIN engine_block_times b ON b.number=t.first_block LEFT JOIN chain_blocks c ON c.number=t.first_block WHERE t.address=$1`, [coin])).rows[0];
   if (!bounded && !minimal && !identity?.ts) return 0;
@@ -57,7 +58,7 @@ export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, throug
   const before=(await db.sql.query<{ts:Date}>('SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1',[through.toString()])).rows[0]?.ts;
   if(before && !minimal && !bounded)await preserveGradePrices(db,coin,before);
   const rows = (await db.sql.query<Record<string, unknown>>(bounded
-    ? `SELECT * FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY block,log_index,tx_hash LIMIT $3 FOR UPDATE`
+    ? `SELECT * FROM swaps WHERE coin=$1 AND block=$2 ORDER BY block,log_index,tx_hash LIMIT $3 FOR UPDATE`
     : `WITH edge AS (SELECT date_trunc('minute',ts)+interval '1 minute' AS ts
       FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY ts LIMIT 1 OFFSET $3)
       SELECT * FROM swaps WHERE coin=$1 AND block<=$2 AND ts<coalesce((SELECT ts FROM edge),'infinity'::timestamptz)
@@ -171,7 +172,7 @@ export async function pruneDeterminedCoin(db: ChainDb, coin: QuietCoin, rule: Hi
 }
 
 export async function determinationPass(db: ChainDb, options: RetentionOptions, result: RetentionResult, quotes: Uint8Array[], nowMs: number,
-  rule: 'settled' | 'raw_cap', timeLeft: () => boolean, reported = new Map<string, RetentionTableReport>()) {
+  rule: 'settled' | 'raw_cap', timeLeft: () => boolean, reported = new Map<string, RetentionTableReport>(), cursors = new Map<string,unknown[]>()) {
   const days = rule === 'settled' ? (options.settleHours ?? 24)/24 : options.rawDays ?? 7;
   const through = await retentionHorizon(db, days, nowMs); if (through == null) return;
   const taxThrough=await retentionHorizon(db,1,nowMs);
@@ -183,12 +184,13 @@ export async function determinationPass(db: ChainDb, options: RetentionOptions, 
     while (timeLeft() && !done) { const saved = await snapshotTrending(db, swapsThrough, 1); result.trendingSnapshots += saved.saved; done = saved.complete; }
     if (!done) swapsThrough = null;
   }
-  let after: Uint8Array | null = null;
+  let after=(cursors.get(rule)?.[0] as Uint8Array | undefined) ?? null;
   while (timeLeft()) {
-    const coins = await quietCoins(db, rule, through, swapsThrough, quotes, [...quotes, Buffer.alloc(20)], after, Math.min(options.batchRows ?? 1000,100));
-    if (!coins.length) break;
+    const coins = await quietCoins(db, rule, through, swapsThrough, quotes, [...quotes, Buffer.alloc(20)], after, Math.min(Math.max(options.batchRows ?? 1000,32),100));
+    if (!coins.length) {cursors.delete(rule);break;}
     for (const coin of coins) {
       if (!timeLeft()) { result.finished = false; return; }
+      if (!coin.eligible) {after=coin.address;cursors.set(rule,[after]);continue;}
       if (options.dryRun) {
         const lp=await reportRows(db,'liquidity_events',`SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE e.block<=$2 AND ((p.currency0=$1 AND p.currency1=ANY($3::bytea[])) OR (p.currency1=$1 AND p.currency0=ANY($3::bytea[])))`,[coin.address,through.toString(),[...quotes,Buffer.alloc(20)]]);
         const lpKey=`liquidity_events:${hex(coin.address)}`,lpPrior=reported.get(lpKey);
@@ -200,7 +202,8 @@ export async function determinationPass(db: ChainDb, options: RetentionOptions, 
           if(!prior || r.rows>prior.rows) { addReport(result,{...r,rows:r.rows-(prior?.rows ?? 0),estimatedBytes:r.estimatedBytes-(prior?.estimatedBytes ?? 0)}); reported.set(reportKey,r); }
         }
       } else await pruneDeterminedCoin(db, coin, rule, through, swapsThrough, options, result, timeLeft);
-      after = coin.address;
+      if(!timeLeft()) {result.finished=false;return;}
+      after = coin.address;cursors.set(rule,[after]);
     }
   }
 }

@@ -6,7 +6,7 @@ export interface RetentionSettings { enabled?: boolean; settleHours?: number; ra
 
 /**
  * Run the configured retention (packages/db/src/retention.ts) on the singleton worker while backlogged, otherwise every ten minutes, each enabled
- * rule bounded to six seconds with a two-minute pass ceiling. The app supplies report-only defaults. Quote
+ * raw rule bounded to fifteen seconds (other rules six) with a 115-second pass ceiling. The app supplies report-only defaults. Quote
  * tokens are the address registry's verified `tokens.*` entries.
  */
 export class RetentionWorker {

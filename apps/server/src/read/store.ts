@@ -110,14 +110,18 @@ export class ReadStore {
       if(Number(clock.rows[0].window_sec)===window)return;
       const previous=Number(clock.rows[0].window_sec);
       const forward=window>previous && window-previous<3600;
-      await tx.sql.query(`WITH affected AS MATERIALIZED (
+      const affected=(await tx.sql.query<{coins:Uint8Array[]}>(`SELECT coalesce(array_agg(coin),'{}') AS coins FROM (
         ${forward ? `SELECT DISTINCT coin FROM bars_1m WHERE (minute>=to_timestamp($2::double precision-3540) AND minute<to_timestamp($1::double precision-3540))
           OR (minute>to_timestamp($2::double precision) AND minute<=to_timestamp($1::double precision))` : `SELECT coin FROM read_coins WHERE volume<>0 UNION SELECT coin FROM bars_1m
           WHERE minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision)`}
-        ), fresh AS (SELECT r.coin,CASE WHEN r.pricing_pending THEN 0 ELSE coalesce(b.volume,0) END AS volume
+
+        ) candidates`,forward ? [window,previous] : [window])).rows[0]!.coins;
+      // Models, single-coin card refreshes, retention buyer writes and ranks acquire the same complete key set first.
+      await tx.sql.query('SELECT read_lock_coins($1::bytea[])',[affected]);
+      await tx.sql.query(`WITH affected AS (SELECT unnest($2::bytea[]) AS coin), fresh AS (SELECT r.coin,CASE WHEN r.pricing_pending THEN 0 ELSE coalesce(b.volume,0) END AS volume
           FROM affected a JOIN read_coins r ON r.coin=a.coin LEFT JOIN LATERAL (SELECT sum(volume_usd) AS volume FROM bars_1m
             WHERE coin=a.coin AND minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision)) b ON true)
-        UPDATE read_coins r SET volume=f.volume FROM fresh f WHERE r.coin=f.coin AND r.volume IS DISTINCT FROM f.volume`,forward ? [window,previous] : [window]);
+        UPDATE read_coins r SET volume=f.volume FROM fresh f WHERE r.coin=f.coin AND r.volume IS DISTINCT FROM f.volume`,[window,affected]);
       await tx.sql.query('UPDATE read_rank_clock SET window_sec=$1 WHERE singleton=true',[window]);
     }).finally(()=>{this.rankRefresh=undefined;});
     return this.rankRefresh;

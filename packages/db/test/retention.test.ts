@@ -178,10 +178,11 @@ describe('Feed retention', () => {
     const statements: unknown[][] = [], transact=db.tx.bind(db);
     db.tx=fn=>transact(async tx=>{
       const query=tx.sql.query.bind(tx.sql);
-      tx.sql.query=(async (sql:string,params?:unknown[])=>{if(sql.includes('DELETE FROM read_feed')){expect(sql).toContain('FOR UPDATE OF x SKIP LOCKED');statements.push(params ?? []);}return query(sql,params);}) as typeof tx.sql.query;
+      tx.sql.query=(async (sql:string,params?:unknown[])=>{if(sql.includes('DELETE FROM read_feed')){expect(sql).toContain('FOR UPDATE OF f SKIP LOCKED');statements.push(params ?? []);}return query(sql,params);}) as typeof tx.sql.query;
       return fn(tx);
     });
     expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], feedDays: 3, batchRows: 50_000, now: () => epoch + 20.5 * DAY })).toMatchObject({ feedRows: 4, finished: true });
-    expect(statements.map(params => params[2])).toEqual([FEED_BATCH_ROWS]);
+    expect(statements).toHaveLength(1);
+    expect((statements[0]![0] as unknown[]).length).toBeLessThanOrEqual(FEED_BATCH_ROWS);
   });
 });

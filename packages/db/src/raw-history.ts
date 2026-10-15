@@ -16,29 +16,33 @@ export async function rawHistoryPass(db: ChainDb, options: RetentionOptions, res
   for(const swaps of [true,false]) await run(swaps ? 'raw_swaps' : 'raw_transfers',async(timeLeft,limit)=>{
     const table=swaps ? 'swaps' : 'token_transfers',key=swaps ? 'coin' : 'token';
     if(options.dryRun) {addReport(result,await reportRows(db,table,'',[]));return;}
-    const through=await retentionHorizon(db,swaps ? swapDays : transferDays,now);
+    // Keep the cutoff outside its boundary minute; selection then needs only the block-leading index.
+    const through=await retentionHorizon(db,swaps ? swapDays : transferDays,Math.floor(now/60000)*60000);
     if(through==null)return;
-    if(swaps) {
-      let complete=false;
-      while(timeLeft() && !complete) {
-        const saved=await retentionBatch(db,tx=>snapshotTrending(tx,through,1),options.pauseMs);result.trendingSnapshots+=saved.saved;complete=saved.complete;
-      }
-      if(!complete){result.finished=false;return;}
-    }
+    // Commit the insert fence BEFORE reading source rows. Concurrent inserts finish first or observe the fence.
+    // Do not hold a watermark row lock while building summaries or deleting raw history.
+    await db.tx(async tx=>{
+      await tx.sql.query('SELECT pg_advisory_xact_lock(4663,208)');
+      await tx.sql.query(`UPDATE raw_history_watermarks SET through_block=greatest(through_block,$2) WHERE name=$1 AND through_block<$2`,[table,through.toString()]);
+    });
+    let sincePause=0;
     while(timeLeft()) {
       const moved=await retentionBatch(db,async tx=>{
-        // Shares the reorg lock. No deletion can race a rollback or a partition rewrite.
-        await tx.sql.query(`LOCK TABLE swaps,token_transfers IN SHARE ROW EXCLUSIVE MODE`);
+        // Reorgs and compactors share this mutex; ordinary indexer inserts never acquire it.
+        await tx.sql.query('SELECT pg_advisory_xact_lock(4663,208)');
         const oldest=(await tx.sql.query<{coin:Uint8Array;block:string}>(`SELECT ${key} AS coin,block FROM ${table}
-          WHERE ts<$2 AND block<=$1
-          ORDER BY ts,block,tx_hash,log_index LIMIT 1 FOR UPDATE`,[through.toString(),new Date(Math.floor((now-(swaps ? swapDays : transferDays)*86400000)/60000)*60000)])).rows[0];
-        if(!oldest) {
-          // A completed horizon also rejects later backfills into already summarised gaps.
-          await tx.sql.query(`INSERT INTO raw_history_watermarks(name,through_block) VALUES($1,$2)
-            ON CONFLICT(name) DO UPDATE SET through_block=greatest(raw_history_watermarks.through_block,excluded.through_block)`,[table,through.toString()]);
-          return 0;
-        }
+          WHERE block>=(SELECT after_block FROM raw_history_progress WHERE name=$2) AND block<=$1
+          ORDER BY block LIMIT 1 FOR UPDATE`,[through.toString(),table])).rows[0];
+        if(!oldest)return {rows:0,pending:false};
         const coin=oldest.coin,target=BigInt(oldest.block);
+        let snapshots=0;
+        if(swaps) {
+          // Save only windows threatened by THIS prefix, committing partial snapshot progress independently.
+          const saved=await snapshotTrending(tx,target,1);
+          snapshots=saved.saved;
+          if(!saved.complete)return {rows:0,pending:true,snapshots:saved.saved};
+        }
+        await tx.sql.query('SELECT read_lock_coins($1::bytea[])',[[coin]]);
         if(!await readLifetime(tx,coin)) {
           const data=emptyLifetime();
           if((await tx.sql.query('SELECT 1 FROM history_prunes WHERE coin=$1 AND transfers+swaps+liquidity+pons>0',[coin])).rows.length) {
@@ -53,7 +57,7 @@ export async function rawHistoryPass(db: ChainDb, options: RetentionOptions, res
           // Capture every completed grade while all of its raw samples still exist.
           await preserveGradePrices(tx,coin,new Date(now),new Date(now-swapDays*86400000+3600000));
           const minutes=(await tx.sql.query<{minute:Date}>(`SELECT DISTINCT date_trunc('minute',ts) AS minute FROM (
-            SELECT ts FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY block,log_index,tx_hash LIMIT $3) s`,[coin,target.toString(),limit])).rows;
+            SELECT ts FROM swaps WHERE coin=$1 AND block=$2 ORDER BY block,log_index,tx_hash LIMIT $3) s`,[coin,target.toString(),limit])).rows;
           // Freeze the complete bar before the first partial-minute batch. Later rebuilds keep this summary.
           for(const {minute} of minutes) {
             const frozen=(await tx.sql.query('SELECT 1 FROM raw_history_bar_keys WHERE coin=$1 AND minute=$2',[coin,minute])).rows.length;
@@ -66,15 +70,23 @@ export async function rawHistoryPass(db: ChainDb, options: RetentionOptions, res
           await preserveOutcomeSwaps(tx,coin,(await readLifetime(tx,coin))!,through);
         } else {
           await preserveOutcomeHoldings(tx,coin,through);
-          n=await compactTransfers(tx,[coin],target,limit);
+          n=await compactTransfers(tx,[coin],target,limit,target);
           if(n)await tx.sql.query('UPDATE coin_lifetime SET revision=revision+1 WHERE coin=$1',[coin]);
         }
-        if(n)await tx.sql.query(`INSERT INTO raw_history_watermarks(name,through_block) VALUES($1,$2)
-          ON CONFLICT(name) DO UPDATE SET through_block=greatest(raw_history_watermarks.through_block,excluded.through_block)`,[table,target.toString()]);
-        return n;
-      },options.pauseMs);
-      result[swaps ? 'historySwaps' : 'historyTransfers']+=moved;
-      if(!moved)return;
+        await tx.sql.query('UPDATE raw_history_progress SET after_block=$2 WHERE name=$1',[table,target.toString()]);
+        return {rows:n,pending:false,snapshots};
+      },0);
+      // Sparse blocks often contain only one row. A pause per block capped throughput at ten rows/second.
+      // Amortize the same I/O pause over a row budget, while retaining short transactions and global block order.
+      sincePause+=moved.rows;
+      if(sincePause>=limit || moved.snapshots) {
+        sincePause=0;
+        const pause=options.pauseMs ?? 100;
+        if(pause)await new Promise(resolve=>setTimeout(resolve,pause));
+      }
+      result.trendingSnapshots+=moved.snapshots ?? 0;
+      result[swaps ? 'historySwaps' : 'historyTransfers']+=moved.rows;
+      if(!moved.rows && !moved.pending)return;
     }
     result.finished=false;
   });

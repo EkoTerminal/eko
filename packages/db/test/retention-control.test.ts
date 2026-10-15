@@ -141,7 +141,8 @@ describe('bounded retention control', () => {
   it('drives raw candidates from bounded token identities and indexed existence probes',async()=>{
     const {db,statements}=fixture();await rawCandidates(db,10n,[],Buffer.alloc(20));
     const query=statements[0]!.sql;
-    expect(query).toContain('WITH identities AS MATERIALIZED');expect(query).toContain('FROM tokens WHERE deployer IS NULL AND launchpad IS NULL');
+    expect(query).toContain('WITH identities AS MATERIALIZED');expect(query).toContain('FROM tokens WHERE address>$3 ORDER BY address LIMIT 200');
+    expect(query.indexOf('LIMIT 200')).toBeLessThan(query.indexOf('t.deployer IS NULL'));
     expect(query).toContain('address>$3');expect(query).toContain('ORDER BY address LIMIT 200');
     expect(query).toContain('x.token=t.address AND x.block<=$1 LIMIT 1');expect(query).not.toContain('DISTINCT');
     await rawCandidates(db,10n,[],null,true);
@@ -172,4 +173,17 @@ describe('bounded retention control', () => {
     expect(result.tables).toEqual(expect.arrayContaining([expect.objectContaining({table:'token_transfers',rows:0,estimatedBytes:0,estimateSkipped:true}),expect.objectContaining({table:'receipt_publications',estimateSkipped:true})]));
     expect(statements.every(s=>s.sql.startsWith('SET LOCAL') || s.sql.includes('FROM chain_blocks'))).toBe(true);
   });
+});
+
+it('allows the raw aggregate timeout while preserving the normal rule limit and shrinking at the deadline',async()=>{
+  const clock=vi.spyOn(Date,'now').mockReturnValue(1_000);
+  try {
+    const {db,statements}=fixture();let ceiling=5_000,deadline=10_000;
+    const bounded=retentionDb(db,()=>deadline,()=>ceiling);
+    await bounded.sql.query('SELECT 1');ceiling=1_000;
+    await bounded.sql.query('SELECT 2');ceiling=5_000;deadline=1_250;
+    await bounded.sql.query('SELECT 3');
+    expect(statements.map(s=>s.sql)).toEqual(expect.arrayContaining([
+      "SET LOCAL statement_timeout='5000ms'","SET LOCAL statement_timeout='1000ms'","SET LOCAL statement_timeout='250ms'"]));
+  } finally {clock.mockRestore();}
 });

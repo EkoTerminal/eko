@@ -63,17 +63,20 @@ async function computeTrending(db: ChainDb, block: number, sinceSec: number, unt
  * time are skipped: the engines cannot evaluate such a coin either.
  */
 export async function snapshotTrending(db: ChainDb, horizon: bigint, limit: number): Promise<{ saved: number; complete: boolean }> {
-  // Launch times as the engines resolve them (engine clock first, then the indexed header).
-  const due = (await db.sql.query<{ block: string; ts: Date }>(`SELECT DISTINCT t.first_block AS block,coalesce(e.ts,c.ts) AS ts
-    FROM tokens t LEFT JOIN engine_block_times e ON e.number=t.first_block LEFT JOIN chain_blocks c ON c.number=t.first_block
-    WHERE coalesce(e.ts,c.ts)<(SELECT ts FROM chain_blocks WHERE number=$1)+interval '1 hour'
-      AND NOT EXISTS(SELECT 1 FROM trending_snapshots s WHERE s.created_block=t.first_block)
-    ORDER BY t.first_block LIMIT $2`, [horizon.toString(), limit + 1])).rows;
+  // Bound by block first (queue PK), then resolve clocks by number. Completed launches leave the queue.
+  const due = (await db.sql.query<{ block: string; ts: Date }>(`SELECT q.created_block AS block,coalesce(e.ts,c.ts) AS ts
+    FROM trending_snapshot_queue q LEFT JOIN engine_block_times e ON e.number=q.created_block LEFT JOIN chain_blocks c ON c.number=q.created_block
+    WHERE q.created_block<=(SELECT number FROM chain_blocks
+      WHERE ts<(SELECT ts FROM chain_blocks WHERE number=$1)+interval '1 hour' ORDER BY ts DESC,number DESC LIMIT 1)
+      AND coalesce(e.ts,c.ts)<(SELECT ts FROM chain_blocks WHERE number=$1)+interval '1 hour'
+    ORDER BY q.created_block LIMIT $2`, [horizon.toString(), limit + 1])).rows;
   for (const row of due.slice(0, limit)) {
     const sec = new Date(row.ts).getTime() / 1000;
-    const rows = await computeTrending(db, Number(row.block), sec - 3600, sec + 1);
+    const exists=(await db.sql.query('SELECT 1 FROM trending_snapshots WHERE created_block=$1',[row.block])).rows.length;
+    const rows = exists ? [] : await computeTrending(db, Number(row.block), sec - 3600, sec + 1);
     const data: Stored[] = rows.map(r => ({ coin: r.coin, name: r.name, symbol: r.symbol, created: r.created.toISOString(), started: r.started.toISOString(), volume: String(r.volume) }));
     await db.sql.query('INSERT INTO trending_snapshots VALUES($1,$2) ON CONFLICT(created_block) DO NOTHING', [row.block, JSON.stringify(data)]);
+    await db.sql.query('DELETE FROM trending_snapshot_queue WHERE created_block=$1',[row.block]);
   }
   return { saved: Math.min(limit, due.length), complete: due.length <= limit };
 }
