@@ -4,8 +4,8 @@ import { binary, hex, type Hex } from './types.js';
 // Balances are a sum over event identities: a replayed event is never counted twice. WETH's
 // Deposit/Withdrawal are redundant with its Transfer events and are not counted twice.
 // Compacted history (retention.ts) survives as one net baseline per holder, so recomputed balances stay exact.
-const movements = `SELECT token,to_address AS holder,amount,block FROM token_transfers WHERE kind='Transfer'
-  UNION ALL SELECT token,from_address AS holder,-amount,block FROM token_transfers WHERE kind='Transfer'
+const movements = `SELECT token,to_address AS holder,amount,block FROM raw_history_live_transfers WHERE kind='Transfer'
+  UNION ALL SELECT token,from_address AS holder,-amount,block FROM raw_history_live_transfers WHERE kind='Transfer'
   UNION ALL SELECT token,holder,amount,through_block AS block FROM transfer_baselines`;
 export async function rebuildBalances(db: ChainDb, touched?: { token: Uint8Array; holder: Uint8Array }[]) {
   await db.sql.query('LOCK TABLE balances IN EXCLUSIVE MODE');
@@ -65,7 +65,7 @@ const activeVenue = `(t.launchpad IS DISTINCT FROM 'pons' OR
     (s.venue='pons_curve' AND (t.graduated_block IS NULL OR s.block < t.graduated_block)) OR
     (s.venue <> 'pons_curve' AND t.graduated_block IS NOT NULL AND s.block >= t.graduated_block))`;
 const eligible = `SELECT s.*,s.usd / (s.amount_coin::double precision / power(10,t.decimals)) AS price
-  FROM swaps s JOIN tokens t ON t.address=s.coin WHERE s.usd IS NOT NULL AND s.usd > 0 AND s.amount_coin > 0 AND t.decimals IS NOT NULL
+  FROM raw_history_live_swaps s JOIN tokens t ON t.address=s.coin WHERE s.usd IS NOT NULL AND s.usd > 0 AND s.amount_coin > 0 AND t.decimals IS NOT NULL
   AND ${activeVenue}`;
 const summarize = `SELECT coin,minute,(array_agg(price ORDER BY ts,block,log_index,tx_hash))[1] AS open,
   max(price) AS high,min(price) AS low,(array_agg(price ORDER BY ts DESC,block DESC,log_index DESC,tx_hash DESC))[1] AS close,
@@ -85,9 +85,9 @@ async function writeBars(db: ChainDb, keys: string, params: unknown[], perKey = 
   // coin's entire swap history (6.2 million rows for 44 bars on 2026-10-13). The lateral LIMIT 1 keeps it per key.
   const present = perKey
     ? `SELECT k.coin,k.minute FROM (SELECT DISTINCT coin,minute FROM (${keys}) keyed) k
-      CROSS JOIN LATERAL (SELECT 1 FROM swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute' LIMIT 1) present`
+      CROSS JOIN LATERAL (SELECT 1 FROM raw_history_live_swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute' LIMIT 1) present`
     : `SELECT k.coin,k.minute FROM (${keys}) k
-      WHERE EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute')`;
+      WHERE EXISTS(SELECT 1 FROM raw_history_live_swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute')`;
   const mutable = `SELECT k.* FROM (${present}) k WHERE NOT EXISTS(SELECT 1 FROM raw_history_bar_keys a WHERE a.coin=k.coin AND a.minute=k.minute)`;
   await db.sql.query(`DELETE FROM bars_1m b USING (${mutable}) k WHERE b.coin=k.coin AND b.minute=k.minute`, params);
   const priced = perKey
@@ -120,7 +120,7 @@ export async function rebuildBars(db: ChainDb, from: bigint, to: bigint, coin?: 
   if (from < 0n || to < from) throw new Error('Invalid bars interval');
   const params = [from.toString(), to.toString(), ...(coin ? [binary(coin)] : [])];
   const filter = coin ? ' AND coin=$3' : '';
-  const keys = `SELECT DISTINCT coin,date_trunc('minute',ts) AS minute FROM swaps WHERE block BETWEEN $1 AND $2${filter}
+  const keys = `SELECT DISTINCT coin,date_trunc('minute',ts) AS minute FROM raw_history_live_swaps WHERE block BETWEEN $1 AND $2${filter}
     UNION SELECT coin,minute FROM bars_1m WHERE first_block <= $2 AND last_block >= $1${filter}`;
   // Materialize keys before locking so the write cannot introduce an unlocked coin on a later snapshot.
   const touched=(await db.sql.query<BarKey>(keys,params)).rows;
@@ -168,7 +168,7 @@ export async function candles(db: ChainDb, coin: Hex, tf: Timeframe, from: numbe
     SELECT min(s.ts) AS first,max(s.ts) AS last,
       bool_or(s.ts >= to_timestamp($4) AND s.ts < to_timestamp($5) AND
         (s.usd IS NULL OR s.usd <= 0 OR s.amount_coin <= 0 OR t.decimals IS NULL OR s.pricing_pending)) AS unpriced
-    FROM swaps s JOIN tokens t ON t.address=s.coin
+    FROM raw_history_live_swaps s JOIN tokens t ON t.address=s.coin
     WHERE s.coin=$1 AND s.ts >= to_timestamp($2) AND s.ts < to_timestamp($3) AND ${activeVenue}`,
     [binary(coin), now - 6 * 3600, now, start, end])).rows[0] : undefined;
   const token = (await db.sql.query<{ total_supply: string | null; decimals: number | null; supply_block: string | null }>('SELECT total_supply,decimals,supply_block FROM tokens WHERE address=$1', [binary(coin)])).rows[0];

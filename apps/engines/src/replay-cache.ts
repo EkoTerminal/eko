@@ -56,7 +56,7 @@ export class ReplayCache {
       if(!cached)this.clock.set(number,{ts:row.ts,hash:row.hash});
       this.clockPoints.push({number,sec:new Date((cached ?? row).ts).getTime()/1000});
     }
-    if(this.marketWindow){const market=(await this.db.sql.query<{coin:Uint8Array;block:string;sec:number;usd:number}>(`SELECT coin,block,extract(epoch FROM ts)::double precision AS sec,usd FROM swaps WHERE block<=$1 AND usd>0 AND usd<'Infinity'::double precision ORDER BY block,ts,tx_hash,log_index`,[this.to])).rows;
+    if(this.marketWindow){const market=(await this.db.sql.query<{coin:Uint8Array;block:string;sec:number;usd:number}>(`SELECT coin,block,extract(epoch FROM ts)::double precision AS sec,usd FROM raw_history_live_swaps WHERE block<=$1 AND usd>0 AND usd<'Infinity'::double precision ORDER BY block,ts,tx_hash,log_index`,[this.to])).rows;
     this.market=new MarketWindow(market.map(row=>({coin:rowHex(row.coin),block:Number(row.block),sec:row.sec,usd:row.usd})));}
     for(const t of (await this.db.sql.query<TokenRow>('SELECT * FROM tokens WHERE first_block<=$1',[this.to])).rows){rowHex(t.address);if(t.deployer)rowHex(t.deployer);if(t.curve)rowHex(t.curve);if(t.graduated_pool)rowHex(t.graduated_pool);this.tokens.set(rowHex(t.address),t);}
     for(const r of (await this.db.sql.query<{coin:Uint8Array;block:string}>('SELECT coin,block FROM engine_runs WHERE rules_version=$1 AND block<=$2',[RULES_VERSION,this.to])).rows)this.runs.add(`${hex(r.coin)}:${r.block}`);
@@ -71,8 +71,8 @@ export class ReplayCache {
         swapPages(this.db,coin,this.to,-1,'replay').then(rows=>({rows})),
         this.db.sql.query<PoolRow>('SELECT * FROM pools WHERE (currency0=$1 OR currency1=$1) AND created_block<=$2 ORDER BY id',[key,this.to]),
         this.db.sql.query<EventRow>('SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block<=$2 ORDER BY e.block,e.log_index,e.tx_hash',[key,this.to]),
-        this.db.sql.query<Transfer>('SELECT block,from_address,to_address,amount,kind FROM token_transfers WHERE token=$1 AND block<=$2 ORDER BY block,log_index,tx_hash',[key,this.to]),
-        this.db.sql.query<{block:string|null}>('SELECT max(block) AS block FROM token_transfers WHERE token=$1',[key]),
+        this.db.sql.query<Transfer>('SELECT block,from_address,to_address,amount,kind FROM raw_history_live_transfers WHERE token=$1 AND block<=$2 ORDER BY block,log_index,tx_hash',[key,this.to]),
+        this.db.sql.query<{block:string|null}>('SELECT max(block) AS block FROM raw_history_live_transfers WHERE token=$1',[key]),
         this.db.sql.query<Holding>('SELECT holder,amount,last_block AS block FROM balances WHERE token=$1 AND amount>0 ORDER BY holder',[key]),
         this.db.sql.query<PonsEventRow>("SELECT block,kind,data FROM pons_events WHERE token=$1 AND block<=$2 AND kind IN ('launch','trade') ORDER BY block,log_index,tx_hash",[key,this.to]),
         this.db.sql.query<Exemption>('SELECT * FROM pons_exemptions WHERE token=$1 AND block<=$2 ORDER BY wallet',[key,this.to]),

@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { binary, candles, holders, migrate, migrateEngines, openDb, rebuildBalances, rebuildBars, runRetention, trendingAt, type ChainDb } from '../src/index.js';
-const epoch=Date.parse('2026-10-12T00:00:00Z'),DAY=86400000,now=()=>epoch+20*DAY;
+const epoch=Date.parse('2026-10-12T00:00:00Z'),DAY=86400000,now=()=>epoch+20*DAY+1000;
 const bytes=(n:number,size=20)=>binary(`0x${n.toString(16).padStart(size*2,'0')}`);
 let db:ChainDb;
 afterEach(async()=>{await db?.close();});
@@ -37,7 +37,7 @@ it('caps every identity and keeps charts, balances, first buyers, unknown counts
   const [bars,held,first,price]=await Promise.all([chart(),balance(),firsts(),prices()]);
   const trending=await trendingAt(db,2,epoch/1000+86400-3600);
   const result=await cap();
-  expect(result.skippedRules).toEqual([]);expect(result.ruleStats?.raw_swaps.rows).toBe(24);expect(result.ruleStats?.raw_transfers.rows).toBe(15);
+  expect(result.skippedRules).toEqual([]);expect(result.historySwaps).toBe(24);expect(result.historyTransfers).toBe(15);
   expect(await rows('SELECT DISTINCT block FROM swaps ORDER BY block')).toEqual([{block:17},{block:19},{block:20}]);
   expect(await rows('SELECT DISTINCT block FROM token_transfers ORDER BY block')).toEqual([{block:19},{block:20}]);
   await db.tx(tx=>rebuildBalances(tx));await db.tx(tx=>rebuildBars(tx,0n,21n));
@@ -52,7 +52,7 @@ it('caps every identity and keeps charts, balances, first buyers, unknown counts
   expect(grade.length).toBe(2);expect(grade.every(g=>g.p0===0.5)).toBe(true);
   expect((await cap()).historySwaps).toBe(0);expect((await cap()).historyTransfers).toBe(0);
 });
-it('deletes in oldest-block order across coins, writes summaries first, and never strands a dense minute',async()=>{
+it('drops whole days without row deletes, writes summaries first, and never strands a dense minute',async()=>{
   await fixture();
   await db.sql.query('CREATE TABLE deletion_order(id bigserial,kind text,block bigint)');
   await db.sql.query(`CREATE FUNCTION observe_raw_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
@@ -64,7 +64,8 @@ it('deletes in oldest-block order across coins, writes summaries first, and neve
   await cap();
   for(const table of ['swaps','token_transfers']) {
     const order=(await db.sql.query<{block:string}>('SELECT block FROM deletion_order WHERE kind=$1 ORDER BY id',[table])).rows.map(r=>Number(r.block));
-    expect(order.length).toBeGreaterThan(2);expect(order).toEqual([...order].sort((a,b)=>a-b));
+    expect(order).toEqual([]);
+    expect((await rows(`SELECT rows FROM raw_history_seals WHERE name='${table}' AND sealed AND dropped`)).length).toBeGreaterThan(0);
   }
   expect(await rows('SELECT count(*)::int AS n FROM swaps WHERE block=1')).toEqual([{n:0}]);
   const before=await rows('SELECT * FROM bars_1m ORDER BY coin,minute');
@@ -75,7 +76,7 @@ it('rolls back normally inside the raw window and rejects reorgs across compacte
   await db.tx(tx=>tx.deleteAbove(19n));
   expect(await rows('SELECT max(block)::int AS n FROM swaps')).toEqual([{n:19}]);
   await expect(db.tx(tx=>tx.deleteAbove(10n))).rejects.toThrow('compacted raw history');
-  await expect(db.insert('token_transfers',{ts:new Date(epoch),block:1,tx_hash:bytes(9999,32),log_index:0,token:bytes(1),from_address:bytes(0),to_address:bytes(10),amount:'1'})).rejects.toThrow('compacted raw history');
+  await expect(db.insert('token_transfers',{ts:new Date(epoch),block:1,tx_hash:bytes(9999,32),log_index:0,token:bytes(1),from_address:bytes(0),to_address:bytes(10),amount:'1'})).rejects.toThrow(/compacted raw history|no partition/);
 });
 it('validates raw horizons and leaves report-only history untouched',async()=>{
   await fixture();const before=await rows('SELECT count(*)::int AS n FROM swaps');
@@ -93,7 +94,7 @@ it('keeps legacy evidence explicitly incomplete when older deletions predate lif
   expect((await db.sql.query<{data:{legacyIncomplete?:boolean}}>('SELECT data FROM coin_lifetime WHERE coin=$1',[bytes(1)])).rows[0].data.legacyIncomplete).toBe(true);
 });
 
-it('advances a separate scan cursor without locking hot tables and permits fresh inserts after the fence',async()=>{
+it('persists partition seals and permits fresh inserts after the fence',async()=>{
   await fixture();
   const statements:string[]=[],transact=db.tx.bind(db);
   db.tx=work=>transact(async tx=>{
@@ -103,10 +104,42 @@ it('advances a separate scan cursor without locking hot tables and permits fresh
   });
   await cap();
   expect(statements.some(sql=>sql==='LOCK TABLE swaps,token_transfers IN SHARE ROW EXCLUSIVE MODE')).toBe(false);
-  expect(statements).toContain('SELECT pg_try_advisory_xact_lock(4663,208) AS acquired');
-  expect(await rows('SELECT name,after_block FROM raw_history_progress ORDER BY name')).toEqual([
-    {name:'swaps',after_block:13},{name:'token_transfers',after_block:17}]);
+  expect(statements.some(sql=>sql.startsWith('ALTER TABLE swaps DETACH PARTITION swaps_d'))).toBe(true);
+  expect(await rows("SELECT to_regclass('raw_history_progress') AS relation")).toEqual([{relation:null}]);
   await db.insert('token_transfers',{ts:new Date(epoch+20*DAY),block:21,tx_hash:bytes(9999,32),log_index:0,
     token:bytes(1),from_address:bytes(0),to_address:bytes(10),amount:'1'});
   expect((await rows('SELECT amount FROM token_transfers WHERE block=21'))[0]?.amount).toBe('1');
+});
+
+
+it('matches the existing batch summaries and public chart, buyer, holder, lifetime and trending readers',async()=>{
+  const {rawHistoryPass}=await import('./helpers/raw-history-batch.js');
+  const {retentionRules}=await import('../src/retention-control.js');
+  const snapshot=async()=>{
+    await db.sql.query('SELECT refresh_read_models($1::bytea[],$2)',[[bytes(1),bytes(2)],now()/1000]);
+    const tables=['coin_lifetime','reference_price_baselines','coin_buyer_firsts','coin_unknown_buys','coin_outcome_hours','coin_lifetime_checkpoints','coin_holder_checkpoints',
+      'transfer_baselines','retention_grade_prices','trending_snapshots','raw_history_bar_keys','bars_1m','history_prunes','read_buyers','read_buyer_firsts','read_unknown_buys','coin_rating_prices','trending_snapshot_queue','engine_block_times','coin_outcome_events'];
+    const summaries:Record<string,unknown>={};
+    for(const table of tables)summaries[table]=(await rows(`SELECT to_jsonb(t)-'revision'-'updated_at' AS data FROM ${table} t ORDER BY (to_jsonb(t)-'revision'-'updated_at')::text`));
+    return {summaries,trades:await rows('SELECT * FROM retention_read_swaps ORDER BY coin,block,log_index,tx_hash'),charts:await candles(db,`0x${'1'.padStart(40,'0')}`,'1m',epoch/1000,now()/1000),
+      holders:await holders(db,`0x${'1'.padStart(40,'0')}`,21n),buyers:await rows('SELECT coin,buyers,buyers_pending,activity FROM read_coins ORDER BY coin'),
+      trending:await trendingAt(db,2,epoch/1000+86400-3600)};
+  };
+  const prepare=async()=>{
+    await fixture();
+    await db.sql.query('UPDATE tokens SET graduated_block=3 WHERE address=$1',[bytes(1)]);
+    await db.insert('tokens',{address:bytes(5),deployer:bytes(11),first_block:1,block:1,decimals:0});
+    await db.insert('swaps',{ts:new Date(epoch+DAY),block:2,tx_hash:bytes(5555,32),log_index:0,coin:bytes(5),pool_id:bytes(50),quote_asset:bytes(3),side:1,amount_coin:'10',amount_quote:'5',price_quote:0.5,usd:null,venue:'uniswap_v3',trader:null});
+    // A launch inside the retained window and a normal reorg never enter sealed summaries.
+    await db.insert('tokens',{address:bytes(4),deployer:bytes(12),first_block:19,block:19,decimals:0});
+    await db.insert('swaps',{ts:new Date(epoch+20*DAY),block:21,tx_hash:bytes(9999,32),log_index:0,coin:bytes(4),pool_id:bytes(50),quote_asset:bytes(3),side:1,amount_coin:'10',amount_quote:'5',price_quote:0.5,usd:5,venue:'uniswap_v3'});
+    await db.tx(tx=>tx.deleteAbove(20n));
+  };
+  await prepare();
+  const result={quoteRows:0,idleTokens:0,idleRows:0,pendingRows:0,feedRows:0,dangerCoins:0,quietCoins:0,historyTransfers:0,historyLiquidity:0,historyPons:0,historySwaps:0,trendingSnapshots:0,finished:true,skippedRules:[]};
+  const options={quoteTokens:[],swapDays:7,transferDays:3,dryRun:false,batchRows:2,pauseMs:0,budgetMs:100000,now};
+  await rawHistoryPass(db,options,result,now(),retentionRules(options,result));
+  const expected=await snapshot();await db.close();
+  await prepare();await cap();
+  expect(await snapshot()).toEqual(expected);
 });

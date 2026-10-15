@@ -13,6 +13,7 @@ export async function liveHistory(shape: LiveHistoryShape) {
   const db = await openDb({ pgliteDir: ':memory:' });
   await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(LIVE_EPOCH * 1000));
   const days = shape.days ?? 30, now = LIVE_EPOCH + days * 86400;
+  for(let day=0;day<=days;day++)await db.ensurePartitions(new Date((LIVE_EPOCH+day*86400)*1000));
   // Coins: ids 1..idle are idle, idle+1..idle+active are active. Launch times in seconds after the epoch.
   await db.sql.query(`INSERT INTO tokens(address,deployer,name,symbol,launchpad,decimals,total_supply,supply_block,first_block,block)
     SELECT decode(lpad(to_hex(1000+c),40,'0'),'hex'),decode(lpad(to_hex(900000+c),40,'0'),'hex'),'Sample coin','DEMO','other',0,1000000000,b,b,b

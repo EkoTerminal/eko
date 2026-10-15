@@ -16,7 +16,7 @@ export async function swapPages(db:ChainDb,coin:Address,through:number,after=-1,
     const params:unknown[]=[binary(coin),after,through,SWAP_PAGE_SIZE];
     const seek=cursor ? ' AND (block,log_index,tx_hash,ts)>($5::bigint,$6::integer,$7::bytea,$8::timestamptz)' : '';
     if(cursor)params.push(cursor.block,cursor.log_index,cursor.tx_hash,cursor.ts);
-    const page=(await db.sql.query<SwapRow>(`SELECT ${columns} FROM swaps WHERE coin=$1 AND block>$2 AND block<=$3${seek}
+    const page=(await db.sql.query<SwapRow>(`SELECT ${columns} FROM raw_history_live_swaps WHERE coin=$1 AND block>$2 AND block<=$3${seek}
       ORDER BY block,log_index,tx_hash,ts LIMIT $4`,params)).rows.map(prepareSwap);
     rows.push(...page);
     if(page.length<SWAP_PAGE_SIZE)return rows;
@@ -34,7 +34,7 @@ export async function incrementalSwaps(db:ChainDb,coin:Address,block:number):Pro
   const read=(async()=>{
     // Existing production history is seeded per coin through its index, not backfilled in a migration.
     if(!state.seeded.has(coin))await db.sql.query(`INSERT INTO engine_swap_versions AS v(coin,revision,high_block)
-      SELECT $1,0,coalesce(max(block),-1) FROM swaps WHERE coin=$1
+      SELECT $1,0,coalesce(max(block),-1) FROM raw_history_live_swaps WHERE coin=$1
       ON CONFLICT(coin) DO UPDATE SET high_block=greatest(v.high_block,excluded.high_block),
         revision=v.revision+CASE WHEN v.high_block<excluded.high_block THEN 1 ELSE 0 END`,[binary(coin)]);
     state.seeded.add(coin);

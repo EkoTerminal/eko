@@ -1,9 +1,9 @@
 import { retentionDb, retentionRules, retentionCursors, retentionBatchSizes } from './retention-control.js';
-import { determinationPass, compactUnratedTransfers, compactLifetimeSwaps, reportRows, addReport, retentionBatch, type RetentionTableReport } from './determination-retention.js';
+import { determinationPass, compactUnratedTransfers, reportRows, addReport, retentionBatch, type RetentionTableReport } from './determination-retention.js';
 import { ratingRetention } from './rating-retention.js';
 import type { ChainDb } from './client.js';
 import { snapshotTrending } from './trending.js';
-import { rawHistoryPass } from './raw-history.js';
+import { rawPartitionPass } from './raw-history.js';
 import { binary } from './types.js';
 
 /**
@@ -25,6 +25,10 @@ export interface RetentionOptions {
   swapDays?: number;
   transferDays?: number;
   ratingDays?: number;
+  /** Worker runs partition maintenance at start and hourly; other rules retain their cadence. */
+  rawPartitions?: boolean;
+  /** Compatibility rawDays callers retain their other transfer rules. */
+  rawPartitionTables?: ('swaps'|'token_transfers')[];
   pauseMs?: number;
   /** Frozen rule inputs supplied by the worker, defaults match playbooks v1. */
   firstBlocks?: number;
@@ -46,7 +50,7 @@ export interface RetentionOptions {
   quietCoinDays?: number;
   /** Rows per transaction (Feed batches are capped lower, see `FEED_BATCH_ROWS`). */
   batchRows?: number;
-  /** Each rule stops starting batches after this many milliseconds (default 15 seconds for raw caps, 6 for others). */
+  /** Each rule stops starting batches after this many milliseconds (default six seconds; partition seals have no deadline). */
   budgetMs?: number;
   /** Total pass deadline, capped at 115 seconds and checked before each statement. */
   passBudgetMs?: number;
@@ -64,6 +68,7 @@ export interface RetentionResult {
   ruleStats?: Record<string, { rows: number; skipped: number; timeouts: number; batchRows: number }>;
   dryRun?: boolean;
   tables?: RetentionTableReport[];
+  partitions?: {table:string;partition:string;rows:number;seconds:number}[];
 }
 
 const DAY_MS = 86_400_000;
@@ -368,29 +373,28 @@ export async function rawCandidates(db: ChainDb, through: bigint, quote: Uint8Ar
     FROM identities t ORDER BY t.address`, [through.toString(), quote, after])).rows;
 }
 
-/** Each rule owns a short budget. A timed-out transaction rolls back before the next rule starts. */
+/** Non-partition rules own a short budget. A timed-out transaction rolls back before the next rule starts. */
 export async function runRetention(source: ChainDb, options: RetentionOptions): Promise<RetentionResult> {
   options = { ...options, dryRun: options.dryRun ?? true };
-  const passDeadline = Date.now() + Math.min(options.passBudgetMs ?? 115_000, 115_000);
-  let queryDeadline = passDeadline, statementMs = 1_000;
-  const db = retentionDb(source, () => queryDeadline, () => statementMs), cursors = retentionCursors(source);
   const now = options.now ?? Date.now, started = now();
-  let limit = Math.min(options.batchRows ?? 1000, 5000);
   if (options.quietCoinDays !== undefined && options.quietCoinDays <= ENGINE_IDLE_DAYS) throw new Error('Quiet-coin retention must exceed the engines idle window');
   if (options.idleTokenDays !== undefined && options.idleTokenDays <= ENGINE_IDLE_DAYS) throw new Error('Idle-token retention must exceed the engines idle window');
   if (options.dangerQuietDays !== undefined && !(options.dangerQuietDays >= 1)) throw new Error('Danger-coin retention needs at least one quiet day');
   const result: RetentionResult = { quoteRows: 0, idleTokens: 0, idleRows: 0, pendingRows: 0, feedRows: 0, dangerCoins: 0, quietCoins: 0,
     historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, skippedRules: [] };
   if (options.dryRun) { result.dryRun = true; result.tables = []; }
+  const capped = options.swapDays !== undefined || options.transferDays !== undefined;
+  if ((capped || options.rawDays !== undefined) && options.rawPartitions !== false) await rawPartitionPass(source, { ...options,
+    swapDays:options.swapDays ?? Math.max(options.rawDays ?? 7,7),rawPartitionTables:capped ? undefined : ['swaps'] }, result, started);
+  // Long partition maintenance must not consume the other rules' unchanged per-pass budgets.
+  const passDeadline = Date.now() + Math.min(options.passBudgetMs ?? 115_000, 115_000);
+  let queryDeadline = passDeadline;
+  const db = retentionDb(source, () => queryDeadline), cursors = retentionCursors(source);
+  let limit = Math.min(options.batchRows ?? 1000, 5000);
   const rules = retentionRules(options, result, budget => { queryDeadline = Math.min(passDeadline, Date.now() + budget); }, retentionBatchSizes(source));
-  const runRule: typeof rules = (name, work) => {
-    statementMs = name==='raw_swaps' || name==='raw_transfers' ? 5_000 : 1_000;
-    return rules(name, (timeLeft, rows) => { limit = rows; return work(timeLeft, rows); });
-  };
+  const runRule: typeof rules = (name, work) => rules(name, (timeLeft, rows) => { limit = rows; return work(timeLeft, rows); });
   const quote = options.quoteTokens.map(token => binary(token as `0x${string}`));
   if (options.rawDays !== undefined) quote.push(ZERO_ADDRESS);
-  const capped = options.swapDays !== undefined || options.transferDays !== undefined;
-  if (capped) await rawHistoryPass(db, options, result, started, runRule);
   const modern = options.settleHours !== undefined || options.rawDays !== undefined;
   const report = async (table: string) => {
     if (!result.tables?.some(r => r.table === table)) addReport(result, await reportRows(db, table, '', []));
@@ -412,31 +416,21 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
     result.finished = false; return false;
   };
   if (options.rawDays !== undefined && !capped) {
-    for (const swaps of [false, true]) await runRule(swaps ? 'raw_swaps' : 'unrated_transfers', async timeLeft => {
-      if (options.dryRun) { await report(swaps ? 'swaps' : 'token_transfers'); return; }
-      const through = await retentionHorizon(db, swaps ? Math.max(options.rawDays!, SWAP_EVIDENCE_DAYS) : options.rawDays!, started);
-      if (through == null) return;
-      if (swaps) {
-        let complete = false;
-        while (timeLeft() && !complete) { const saved = await snapshotTrending(db, through, 1); result.trendingSnapshots += saved.saved; complete = saved.complete; }
-        if (!complete) { result.finished = false; return; }
-      }
-      const name = swaps ? 'raw_swaps' : 'unrated_transfers';
-      let after = (cursors.get(name)?.[0] as Uint8Array | undefined) ?? null;
-      while (timeLeft()) {
-        const page = await rawCandidates(db, through, swaps ? [] : quote, after, swaps, limit);
-        if (!page.length) { cursors.delete(name); return; }
-        for (const token of page) {
-          if (!timeLeft()) { result.finished = false; return; }
-          if (token.eligible) {
-            const complete = await drain(timeLeft, tx => swaps ? compactLifetimeSwaps(tx, token.address, through, limit, options.firstBlocks, options.cohortSec,
-              options.poolManager, quote.some(q => Buffer.from(q).equals(Buffer.from(token.address)))) : compactUnratedTransfers(tx, token.address, through, limit), swaps ? 'historySwaps' : 'idleRows');
-            if (!complete) return;
-          }
-          after = token.address; cursors.set(name, [after]);
+    await runRule('unrated_transfers', async timeLeft => {
+      if (options.dryRun) { await report('token_transfers'); return; }
+      const through=await retentionHorizon(db,options.rawDays!,started);
+      if(through==null)return;
+      let after=(cursors.get('unrated_transfers')?.[0] as Uint8Array | undefined) ?? null;
+      while(timeLeft()) {
+        const page=await rawCandidates(db,through,quote,after,false,limit);
+        if(!page.length){cursors.delete('unrated_transfers');return;}
+        for(const token of page) {
+          if(!timeLeft()){result.finished=false;return;}
+          if(token.eligible && !await drain(timeLeft,tx=>compactUnratedTransfers(tx,token.address,through,limit),'idleRows'))return;
+          after=token.address;cursors.set('unrated_transfers',[after]);
         }
       }
-      result.finished = false;
+      result.finished=false;
     });
   }
   const quoteDays = modern ? (options.rawDays === undefined ? undefined : Math.min(options.rawDays, options.quoteDays ?? options.rawDays)) : options.quoteDays;

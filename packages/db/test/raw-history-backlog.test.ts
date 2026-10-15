@@ -1,92 +1,76 @@
 import { afterEach, expect, it } from 'vitest';
 import { ChainDb, migrate, openDb } from '../src/client.js';
 import { migrateEngines } from '../src/engines-migrate.js';
-import { parseBacklogOptions, runRawHistoryBacklog, type BacklogProgress } from '../src/raw-history-backlog.js';
 import { runRetention } from '../src/retention.js';
-const epoch=Date.parse('2026-10-01T00:00:00Z'),now=epoch+20*86400000;
-const options={...parseBacklogOptions([]),batchRows:2,pauseMs:0};
-const bytes=(n:number,size=20)=>Buffer.alloc(size,n);
-let db:ChainDb|undefined;
-afterEach(async()=>{await db?.close();db=undefined;});
+import { sealRawPartition } from '../src/raw-partitions.js';
+let db:ChainDb;
+afterEach(async()=>{await db?.close();});
 async function fixture() {
-  const handle=await openDb({pgliteDir:':memory:'});db=handle;
-  await migrate(handle);await migrateEngines(handle);await handle.ensurePartitions(new Date(epoch));
-  for(const [block,day] of [[1,0],[2,1],[3,2],[4,8],[5,12],[6,16],[7,20]]) {
-    await handle.insert('chain_blocks',{number:block,block,hash:bytes(block!,32),parent_hash:bytes(0,32),ts:new Date(epoch+day!*86400000)});
-  }
-  await handle.insert('tokens',{address:bytes(1),first_block:1,block:1,decimals:0,deployer:bytes(3)});
-  // No pool FK on the configured reference sources; the source set controls baseline preservation.
-  await handle.sql.query("INSERT INTO pools(id,venue,currency0,currency1,created_block,block,fee,tick_spacing) VALUES($1,'uniswap_v3',$2,$3,1,1,3000,60)",[bytes(2),bytes(1),bytes(4)]);
-  await handle.sql.query("INSERT INTO eth_usd_reference_sources(block,pool_id,venue,fee) VALUES(1,$1,'uniswap_v3',3000)",[bytes(2)]);
-  for(let i=0;i<5;i++) {
-    await handle.insert('swaps',{ts:new Date(epoch+i*1000),block:1,tx_hash:bytes(i,32),log_index:i,venue:'uniswap_v3',pool_id:bytes(2),coin:bytes(1),quote_asset:bytes(4),side:1,amount_coin:'10',amount_quote:'5',price_quote:i+1,usd:10});
-    await handle.insert('token_transfers',{ts:new Date(epoch+i*1000),block:1,tx_hash:bytes(i,32),log_index:i,token:bytes(1),from_address:bytes(0),to_address:bytes(3),amount:'10'});
-  }
-  return handle;
+ db=await openDb({pgliteDir:':memory:'});await migrate(db);await migrateEngines(db);
+ const ts=new Date('2026-09-01T00:00:00Z');await db.ensurePartitions(ts);
+ await db.insert('token_transfers',{ts,block:1,tx_hash:Buffer.alloc(32,1),log_index:0,token:Buffer.alloc(20,1),from_address:Buffer.alloc(20),to_address:Buffer.alloc(20,2),amount:'10'});
+ return db;
 }
-it('parses explicit settings and rejects invalid or unknown flags',()=>{
-  expect(parseBacklogOptions([])).toEqual({statementMs:60000,batchRows:2000,pauseMs:50,dryRun:false});
-  expect(parseBacklogOptions(['--statement-timeout-ms','90000','--batch-rows','500','--pause-ms','0','--dry-run'])).toEqual({statementMs:90000,batchRows:500,pauseMs:0,dryRun:true});
-  for(const args of [['--other'],['--batch-rows','0'],['--pause-ms','-1'],['--statement-timeout-ms'],['--batch-rows','1.5']])expect(()=>parseBacklogOptions(args)).toThrow();
+const options={quoteTokens:[],swapDays:7,transferDays:3,dryRun:false,now:()=>Date.parse('2026-09-20T00:00:00Z')};
+it('excludes a second owner through the existing mutex, without changing data',async()=>{
+ const queries:string[]=[];
+ const sql={query:async(text:string)=>{queries.push(text);return {rows:[{acquired:false}]};}};
+ const handle=new ChainDb(sql as never,async work=>work(sql as never));
+ const result=await runRetention(handle,options);
+ expect(result.skippedRules).toEqual(['raw_partitions']);
+ expect(queries).toEqual(['SELECT pg_try_advisory_lock(4663,208) AS acquired']);
 });
-it('dry run counts exact eligible rows without summaries, fences, cursor writes or deletes',async()=>{
-  const handle=await fixture(),events:BacklogProgress[]=[];
-  const before=await handle.sql.query('SELECT * FROM raw_history_watermarks ORDER BY name');
-  await runRawHistoryBacklog(handle,{...options,dryRun:true},{now:()=>now,report:e=>events.push(e)});
-  expect(events.map(e=>[e.event,e.rule,e.rows])).toEqual([['dry_run','raw_swaps',5],['dry_run','raw_transfers',5]]);
-  expect(await handle.sql.query('SELECT * FROM raw_history_watermarks ORDER BY name')).toEqual(before);
-  expect((await handle.sql.query('SELECT * FROM coin_lifetime')).rows).toHaveLength(0);
-  expect((await handle.sql.query('SELECT after_block FROM raw_history_progress')).rows).toEqual([{after_block:-1},{after_block:-1}]);
+it('dry run does not fence, seal, detach, drop or set a cursor',async()=>{
+ await fixture();const before=await db.sql.query('SELECT * FROM raw_history_watermarks ORDER BY name');
+ const result=await runRetention(db,{...options,dryRun:true});expect(result.tables?.length).toBeGreaterThan(0);
+ expect(await db.sql.query('SELECT * FROM raw_history_watermarks ORDER BY name')).toEqual(before);
+ expect((await db.sql.query('SELECT * FROM raw_history_seals')).rows).toHaveLength(0);
+ expect((await db.sql.query('SELECT * FROM token_transfers')).rows).toHaveLength(1);
 });
-it('commits a partial block, stops, resumes without double counting, and allows fresh indexer inserts',async()=>{
-  const handle=await fixture(),events:BacklogProgress[]=[];let stopped=false;
-  await runRawHistoryBacklog(handle,options,{now:()=>now,stopped:()=>stopped,report:e=>{events.push(e);if(e.event==='batch' && e.rows)stopped=true;}});
-  expect(events.at(-1)?.event).toBe('stopped');expect(events.at(-1)?.totalRows).toBe(2);
-  expect((await handle.sql.query('SELECT count(*)::int AS n FROM swaps')).rows).toEqual([{n:3}]);
-  await handle.insert('token_transfers',{ts:new Date(now),block:7,tx_hash:bytes(99,32),log_index:0,token:bytes(1),from_address:bytes(0),to_address:bytes(3),amount:'1'});
-  events.length=0;
-  await runRawHistoryBacklog(handle,options,{now:()=>now,report:e=>events.push(e)});
-  expect(events.at(-1)).toMatchObject({event:'complete',totalRows:8});
-  expect(events.filter(e=>e.rows).map(e=>e.rows)).toEqual([2,1,2,2,1]);
-  expect(events.filter(e=>e.event==='batch').every(e=>typeof e.rowsPerMinute==='number' && e.throughBlock==='1')).toBe(true);
-  expect((await handle.sql.query('SELECT amount FROM transfer_baselines WHERE holder=$1',[bytes(3)])).rows).toEqual([{amount:'50'}]);
-  expect((await handle.sql.query('SELECT block,log_index,price_quote FROM reference_price_baselines')).rows).toEqual([{block:1,log_index:4,price_quote:5}]);
-  expect((await handle.sql.query('SELECT * FROM token_transfers')).rows).toHaveLength(1);
+it('seals before detach/drop, advances the watermark last, uses dedicated unlimited maintenance and bounded DDL',async()=>{
+ await fixture();const events:string[]=[],transact=db.tx.bind(db);
+ db.tx=work=>transact(async tx=>{
+  const query=tx.sql.query.bind(tx.sql);
+  tx.sql.query=(async(sql:string,params?:unknown[])=>{events.push(sql);return query(sql,params);}) as typeof tx.sql.query;
+  return work(tx);
+ });
+ const result=await runRetention(db,options);
+ const baseline=events.findIndex(q=>q.startsWith('INSERT INTO transfer_baselines'));
+ const marked=events.findIndex((q,i)=>i>baseline && q.startsWith('UPDATE raw_history_seals SET sealed=true'));
+ const detach=events.findIndex(q=>q==='ALTER TABLE token_transfers DETACH PARTITION token_transfers_d2026_09_01');
+ const drop=events.findIndex(q=>q==='DROP TABLE IF EXISTS token_transfers_d2026_09_01');
+ const watermark=events.findIndex((q,i)=>i>drop && q.startsWith('UPDATE raw_history_watermarks'));
+ expect(marked).toBeGreaterThanOrEqual(0);expect(detach).toBeGreaterThan(marked);expect(drop).toBeGreaterThan(detach);expect(watermark).toBeGreaterThan(drop);
+ expect(events).toContain('SET LOCAL statement_timeout=0');expect(events).toContain("SET LOCAL lock_timeout='5s'");
+ expect(result.partitions?.find(p=>p.partition==='token_transfers_d2026_09_01')?.rows).toBe(1);
+ expect((await db.sql.query("SELECT through_block FROM raw_history_watermarks WHERE name='token_transfers'")).rows).toEqual([{through_block:1}]);
 });
-it('does no raw work when the session mutex is held by another owner',async()=>{
-  const queries:string[]=[];
-  const sql={query:async(text:string)=>{queries.push(text);return {rows:[{acquired:false}]};}};
-  const handle=new ChainDb(sql as never,async work=>work(sql as never));
-  await expect(runRawHistoryBacklog(handle,options,{report:()=>{}})).rejects.toThrow('mutex is busy');
-  expect(queries).toEqual(['SELECT pg_try_advisory_lock(4663,208) AS acquired']);
+it('a lock conflict retains the sealed partition and retries without adding its balances twice',async()=>{
+ await fixture();const transact=db.tx.bind(db);let blocked=true;
+ db.tx=work=>transact(async tx=>{
+  const query=tx.sql.query.bind(tx.sql);
+  tx.sql.query=(async(sql:string,params?:unknown[])=>{
+   if(blocked && sql==='ALTER TABLE token_transfers DETACH PARTITION token_transfers_d2026_09_01')throw Object.assign(new Error('lock'),{code:'55P03'});
+   return query(sql,params);
+  }) as typeof tx.sql.query;return work(tx);
+ });
+ expect((await runRetention(db,options)).skippedRules).toContain('token_transfers_d2026_09_01');
+ expect((await db.sql.query("SELECT through_block FROM raw_history_watermarks WHERE name='token_transfers'")).rows).toEqual([{through_block:-1}]);
+ blocked=false;await runRetention(db,options);
+ expect((await db.sql.query('SELECT amount FROM transfer_baselines WHERE holder=$1',[Buffer.alloc(20,2)])).rows).toEqual([{amount:'10'}]);
 });
-it('the in-process worker skips both raw rules when the same advisory mutex is busy',async()=>{
-  const queries:string[]=[];
-  const sql={query:async(text:string)=>{queries.push(text);return {rows:text.includes('AS n FROM chain_blocks')?[{n:'1'}]:text.includes('pg_try_advisory_xact_lock')?[{acquired:false}]:[]};}};
-  const handle=new ChainDb(sql as never,async work=>work(sql as never));
-  const result=await runRetention(handle,{quoteTokens:[],swapDays:7,transferDays:3,dryRun:false});
-  expect(result.skippedRules).toEqual(['raw_swaps','raw_transfers']);
-  expect(queries.some(q=>/UPDATE raw_history|DELETE FROM/.test(q))).toBe(false);
+it('range fences reject late inserts and mutations after seal, before detach and the block watermark',async()=>{
+ await fixture();await sealRawPartition(db,'token_transfers','token_transfers_d2026_09_01');
+ await expect(db.insert('token_transfers',{ts:new Date('2026-09-01T01:00:00Z'),block:2,tx_hash:Buffer.alloc(32,3),log_index:0,token:Buffer.alloc(20,1),from_address:Buffer.alloc(20),to_address:Buffer.alloc(20,2),amount:'1'})).rejects.toThrow('compacted raw history');
+ await expect(db.sql.query('UPDATE token_transfers SET amount=11 WHERE block=1')).rejects.toThrow('sealed raw history');
+ expect((await db.sql.query('SELECT amount FROM token_transfers')).rows).toEqual([{amount:'10'}]);
 });
-it('shrinks only after a failed statement and releases the mutex after failure',async()=>{
-  const handle=await fixture(),events:BacklogProgress[]=[],statements:string[]=[];
-  const query=handle.sql.query.bind(handle.sql),transact=handle.tx.bind(handle);let failures=1,alwaysFail=false;
-  handle.sql.query=(async(text:string,params?:unknown[])=>{statements.push(text);return query(text,params);}) as typeof handle.sql.query;
-  handle.tx=work=>transact(async tx=>{
-    const execute=tx.sql.query.bind(tx.sql);
-    tx.sql.query=(async(text:string,params?:unknown[])=>{
-      statements.push(text);
-      if(text.startsWith('SELECT number::text AS n') && (alwaysFail || failures-->0))throw Object.assign(new Error('timeout'),{code:'57014'});
-      return execute(text,params);
-    }) as typeof tx.sql.query;
-    return work(tx);
-  });
-  await runRawHistoryBacklog(handle,options,{now:()=>now,report:e=>events.push(e)});
-  expect(events.find(e=>e.event==='retry')).toMatchObject({code:'57014',batchRows:1});
-  expect(events.filter(e=>e.event==='batch' && e.rule==='raw_swaps' && e.rows).map(e=>e.rows)).toEqual([1,1,1,1,1]);
-  expect(statements).toContain("SET LOCAL statement_timeout='60000ms'");
-  expect(statements.at(-1)).toBe('SELECT pg_advisory_unlock(4663,208)');
-  alwaysFail=true;
-  await expect(runRawHistoryBacklog(handle,{...options,batchRows:1},{now:()=>now,report:()=>{}})).rejects.toThrow('cannot progress');
-  expect(statements.at(-1)).toBe('SELECT pg_advisory_unlock(4663,208)');
+it('recovers a crash after detach and after drop, before watermark advance',async()=>{
+ await fixture();await sealRawPartition(db,'token_transfers','token_transfers_d2026_09_01');
+ await db.sql.query('ALTER TABLE token_transfers DETACH PARTITION token_transfers_d2026_09_01');
+ await runRetention(db,options);
+ expect((await db.sql.query("SELECT to_regclass('token_transfers_d2026_09_01') AS p")).rows).toEqual([{p:null}]);
+ await db.sql.query("UPDATE raw_history_watermarks SET through_block=-1 WHERE name='token_transfers'");
+ await runRetention(db,options);
+ expect((await db.sql.query("SELECT through_block FROM raw_history_watermarks WHERE name='token_transfers'")).rows).toEqual([{through_block:1}]);
 });

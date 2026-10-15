@@ -147,6 +147,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     result => {
       if(!('failed' in result))for(const table of result.tables ?? [])logger.info({dryRun:result.dryRun ?? false,...table},
         `retention dry_run=${result.dryRun ?? false} table=${table.table} rows=${table.rows} estimated_bytes=${table.estimatedBytes}`);
+      if(!('failed' in result))for(const partition of result.partitions ?? [])logger.info(partition,`retention table=${partition.table} partition=${partition.partition} rows=${partition.rows} seconds=${partition.seconds}`);
       if(!('failed' in result))for(const [rule,stats] of Object.entries(result.ruleStats ?? {}))logger.info({rule,...stats},`retention rule=${rule} rows=${stats.rows} skipped=${stats.skipped} timeouts=${stats.timeouts} batch_rows=${stats.batchRows}`);
       logger['failed' in result ? 'warn' : 'info']({retention:result},'Chain retention pass');
     });

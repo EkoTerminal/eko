@@ -103,3 +103,18 @@ describe('retention worker', () => {
     expect(failing).toHaveBeenCalledWith({ failed: true });
   });
 });
+
+
+it('runs raw partitions at start and hourly while other retention rules keep their cadence',async()=>{
+ vi.useFakeTimers();
+ const result={quoteRows:0,idleTokens:0,idleRows:0,pendingRows:0,feedRows:0,dangerCoins:0,quietCoins:0,historyTransfers:0,historyLiquidity:0,historyPons:0,historySwaps:0,trendingSnapshots:0,skippedRules:[],finished:true};
+ const run=vi.spyOn(retention,'runRetention').mockResolvedValue(result);
+ const worker=new RetentionWorker({} as ChainDb,{swapDays:7,transferDays:3,ratingDays:7,dryRun:false},vi.fn());
+ try{
+  worker.start();await worker.tick();expect(run.mock.calls[0]?.[1].rawPartitions).toBe(true);
+  await vi.advanceTimersByTimeAsync(3_599_999);expect(run.mock.calls.filter(c=>c[1].rawPartitions)).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1);expect(run.mock.calls.filter(c=>c[1].rawPartitions)).toHaveLength(2);
+  expect(run).toHaveBeenCalledTimes(7);
+  await worker.stop();worker.start();await worker.tick();expect(run.mock.calls.at(-1)?.[1].rawPartitions).toBe(true);
+ }finally{await worker.stop();run.mockRestore();vi.useRealTimers();}
+});

@@ -6,7 +6,8 @@ export interface RetentionSettings { enabled?: boolean; settleHours?: number; ra
 
 /**
  * Run the configured retention (packages/db/src/retention.ts) on the singleton worker while backlogged, otherwise every ten minutes, each enabled
- * raw rule bounded to fifteen seconds (other rules six) with a 115-second pass ceiling. The app supplies report-only defaults. Quote
+ * non-partition rule bounded to six seconds with a 115-second pass ceiling. Raw partitions run at start and hourly
+ * in a dedicated maintenance session without a statement deadline. The app supplies report-only defaults. Quote
  * tokens are the address registry's verified `tokens.*` entries.
  */
 export class RetentionWorker {
@@ -14,12 +15,14 @@ export class RetentionWorker {
   private running?: Promise<void>;
   private started = false;
   private backlogged = false;
+  private nextRawPass = 0;
   constructor(private readonly db: ChainDb, private readonly settings: RetentionSettings,
     private readonly report: (result: RetentionResult | { failed: true }) => void, private readonly intervalMs = 600_000) {}
   get enabled() { return this.settings.enabled !== false && Object.entries(this.settings).some(([key,value]) => key !== 'enabled' && value !== undefined); }
   start() {
     if (this.started || !this.enabled) return;
     this.started = true;
+    this.nextRawPass = 0;
     void this.tick();
   }
   async stop() { this.started = false; if (this.timer) clearTimeout(this.timer); this.timer = undefined; await this.running; }
@@ -39,7 +42,9 @@ export class RetentionWorker {
       const quoteTokens = registry.entries()
         .filter(([key, entry]) => key.startsWith('tokens.') && entry.address !== 'TODO')
         .map(([, entry]) => String(entry.address).toLowerCase());
-      const result = await runRetention(this.db, { quoteTokens, ...RETENTION_RULE_INPUTS, poolManager:registry.addressOf('uniswapV4.poolManager') ?? undefined, ...this.settings });
+      const rawPartitions = Date.now() >= this.nextRawPass;
+      if(rawPartitions)this.nextRawPass=Date.now()+3_600_000;
+      const result = await runRetention(this.db, { quoteTokens, ...RETENTION_RULE_INPUTS, poolManager:registry.addressOf('uniswapV4.poolManager') ?? undefined, ...this.settings, rawPartitions });
       this.backlogged = !result.dryRun && !result.finished;
       this.report(result);
     } catch { this.backlogged = false; this.report({ failed: true }); } // Retry next interval; no SQL or row data enters logs.

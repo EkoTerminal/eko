@@ -123,8 +123,9 @@ it('keeps pool-position sums identical to event history through updates, deletio
 });
 it('reads only the spark window of an old coin and preserves the latest 96 trade points',async()=>{
   const db=await fixture();
+  // Keep cold rows in the same UTC partition: a tiny pruned daily leaf may correctly use a sequential scan.
   await db.sql.query(`INSERT INTO swaps(ts,block,tx_hash,log_index,venue,pool_id,coin,quote_asset,trader,side,amount_coin,amount_quote,usd)
-    SELECT to_timestamp($2::double precision+CASE WHEN n<=20000 THEN -200000+n ELSE -20150+n END),n,decode(lpad(to_hex(n),64,'0'),'hex'),0,'pons_curve',$1,$1,$1,$1,1,1e18,1,n FROM generate_series(1,20150) n`,[binary(coin),sec]);
+    SELECT to_timestamp($2::double precision+CASE WHEN n<=20000 THEN -43200+n/10.0 ELSE -20150+n END),n,decode(lpad(to_hex(n),64,'0'),'hex'),0,'pons_curve',$1,$1,$1,$1,1,1e18,1,n FROM generate_series(1,20150) n`,[binary(coin),sec]);
   await db.sql.query('ANALYZE swaps');let sql='',params:unknown[]=[];
   const store=new ReadStore(traced(db,(text,p)=>{if(text.includes('WITH candidates AS MATERIALIZED')){sql=text;params=p;}}),()=>now);
   const rows=await store.rows(coin);

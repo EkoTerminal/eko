@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { binary } from '@eko/db';
+import { binary, runRetention } from '@eko/db';
 import type { CoinCard } from '@eko/shared';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
@@ -93,4 +93,13 @@ describe('CoinGecko daily listing sync',()=>{
     const fetcher=vi.fn(),db={sql:{query:()=>{throw new Error('disabled');}}} as unknown as typeof built.ctx.dbh.chain;
     const worker=new BlueChipListingWorker(db,false,fetcher);worker.start();expect(await worker.sync()).toBe(false);await worker.stop();expect(fetcher).not.toHaveBeenCalled();
   });
+});
+
+
+it('keeps published blue-chip membership when expired raw partitions are sealed and dropped',async()=>{
+ const reader=built.ctx.reads.store.blueChip!,coins=[listed,earned,recovered,curve,both];
+ await built.ctx.dbh.chain.sql.query("UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','\"clear\"') WHERE coin=$1",[binary(earned)]);
+ const before=await reader.members(coins);expect(before.get(earned)?.member).toBe(true);
+ await runRetention(built.ctx.dbh.chain,{quoteTokens:[],swapDays:7,transferDays:3,dryRun:false,now:()=>now+8*86400000});
+ expect(await reader.members(coins)).toEqual(before);
 });

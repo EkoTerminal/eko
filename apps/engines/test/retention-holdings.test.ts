@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, compactTransfers, migrate, migrateEngines, openDb, rebuildBalances, type ChainDb } from '@eko/db';
+import { binary, compactTransfers, sealRawPartition, readLifetime, migrate, migrateEngines, openDb, rebuildBalances, type ChainDb } from '@eko/db';
 import type { Address } from '@eko/shared';
 import type { Hex } from 'viem';
 import { holdingsAt } from '../src/sources.js';
@@ -44,4 +44,19 @@ describe('engine holdings over compacted transfer history', () => {
     expect(amounts(await holdingsAt(db, coin, 20))).toEqual(amounts((await db.sql.query<{ holder: Uint8Array; amount: string }>(
       'SELECT holder, amount::text FROM balances WHERE token=$1 AND amount>0', [binary(coin)])).rows));
   });
+});
+
+
+it('invalidates cached swaps and avoids counting sealed swaps or transfer baselines twice while detach is pending',async()=>{
+ const {incrementalSwaps}=await import('../src/swap-reader.js');
+ const db=await fixture();
+ for(let n=1;n<=5;n++)await db.insert('swaps',{ts:new Date((epoch+n*60)*1000),block:n,tx_hash:binary(hash(n)),log_index:0,coin:binary(coin),pool_id:binary(address(50)),quote_asset:binary(address(0)),trader:binary(holders[0]!),side:1,amount_coin:'10',amount_quote:'5',price_quote:0.5,usd:10,venue:'uniswap_v3'});
+ expect(await incrementalSwaps(db,coin,20)).toHaveLength(5);
+ const before=amounts(await holdingsAt(db,coin,20));
+ await sealRawPartition(db,'swaps','swaps_d2026_10_01');
+ expect(await incrementalSwaps(db,coin,20)).toHaveLength(0);expect((await readLifetime(db,binary(coin)))?.count).toBe(5);
+ await sealRawPartition(db,'token_transfers','token_transfers_d2026_10_01');
+ expect(amounts(await holdingsAt(db,coin,20))).toEqual(before);
+ const cache=new ReplayCache(db,20,new Map(),false);await cache.initialize();expect(amounts(await cache.holdingsAt(coin,20))).toEqual(before);
+ await db.tx(tx=>rebuildBalances(tx));expect(amounts(await holdingsAt(db,coin,20))).toEqual(before);
 });

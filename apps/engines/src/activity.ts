@@ -41,8 +41,8 @@ export async function refreshClock(db: ChainDb, cache?:ClockCache) {
     `SELECT ts - interval '10 minutes' AS ts FROM engine_block_times WHERE number<=$1 ORDER BY number DESC LIMIT 1`, [from])).rows[0]?.ts ?? null;
   await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source)
     SELECT block,min(ts),NULL,'activity' FROM (
-      SELECT block,ts FROM swaps WHERE block>$1
-      UNION ALL SELECT block,ts FROM token_transfers WHERE block>$1 AND ($2::timestamptz IS NULL OR ts>=$2)
+      SELECT block,ts FROM raw_history_live_swaps WHERE block>$1
+      UNION ALL SELECT block,ts FROM raw_history_live_transfers WHERE block>$1 AND ($2::timestamptz IS NULL OR ts>=$2)
       UNION ALL SELECT block,ts FROM liquidity_events WHERE block>$1
     ) e GROUP BY block ON CONFLICT(number) DO NOTHING`, [from, since]);
   // Rewrite only rows that changed, or each poll leaves a dead copy of every row.
@@ -111,8 +111,8 @@ function activitySql(scope?:ActivityScope) {
       count(*)::text||':'||count(usd)::text||':'||(count(*) FILTER(WHERE senders_pending))::text||':'||coalesce(string_agg(coalesce(encode(trader,'hex'),'missing'),',' ORDER BY log_index,tx_hash),'') AS revision`;
   const liquidity=`SELECT e.block,min(e.ts) AS ts,count(*)::text||':'||(count(*) FILTER(WHERE e.senders_pending))::text||':'||coalesce(string_agg(coalesce(encode(e.actor,'hex'),'missing'),',' ORDER BY e.log_index,e.tx_hash),'') AS revision`;
   if(scope && 'ranges' in scope) return `WITH activity AS (
-    SELECT r.c AS coin,x.block,'swap' AS kind,x.ts,x.low,x.high,x.price,x.revision FROM ${ranged(`${swaps} FROM swaps WHERE coin=r.c AND block>r.lo AND block<=r.hi GROUP BY block`)}
-    UNION ALL SELECT r.c,x.block,'transfer',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged('SELECT block,min(ts) AS ts,count(*)::text AS revision FROM token_transfers WHERE token=r.c AND block>r.lo AND block<=r.hi GROUP BY block')}
+    SELECT r.c AS coin,x.block,'swap' AS kind,x.ts,x.low,x.high,x.price,x.revision FROM ${ranged(`${swaps} FROM raw_history_live_swaps WHERE coin=r.c AND block>r.lo AND block<=r.hi GROUP BY block`)}
+    UNION ALL SELECT r.c,x.block,'transfer',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged('SELECT block,min(ts) AS ts,count(*)::text AS revision FROM raw_history_live_transfers WHERE token=r.c AND block>r.lo AND block<=r.hi GROUP BY block')}
     UNION ALL SELECT r.c,x.block,'liquidity',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged(`${liquidity} FROM (SELECT id FROM pools WHERE currency0=r.c UNION SELECT id FROM pools WHERE currency1=r.c) p
       CROSS JOIN LATERAL (SELECT * FROM liquidity_events WHERE pool_id=p.id AND block>r.lo AND block<=r.hi OFFSET 0) e GROUP BY e.block`)}
     UNION ALL SELECT r.c,x.block,'pons',x.ts,NULL,NULL,NULL,x.revision FROM ${ranged(`SELECT e.block,b.ts,count(*)::text AS revision FROM pons_events e JOIN engine_block_times b ON b.number=e.block
@@ -124,13 +124,13 @@ function activitySql(scope?:ActivityScope) {
     )`;
   const after=!!scope && 'after' in scope;
   const above=(column:string)=>after ? ` AND ${column}>$2` : '';
-  const transfers=after ? `(SELECT ts,tx_hash,log_index,token,block FROM token_transfers WHERE block<=$1 AND block>$2 AND ($3::timestamptz IS NULL OR ts>=$3)
-      UNION SELECT ts,tx_hash,log_index,token,block FROM token_transfers WHERE block<=$1 AND block>$2 AND token=ANY($4)) t`
-    : 'token_transfers WHERE block<=$1';
+  const transfers=after ? `(SELECT ts,tx_hash,log_index,token,block FROM raw_history_live_transfers WHERE block<=$1 AND block>$2 AND ($3::timestamptz IS NULL OR ts>=$3)
+      UNION SELECT ts,tx_hash,log_index,token,block FROM raw_history_live_transfers WHERE block<=$1 AND block>$2 AND token=ANY($4)) t`
+    : 'raw_history_live_transfers WHERE block<=$1';
   return `WITH activity AS (
     SELECT coin,block,'swap' AS kind,min(ts) AS ts,min(price_quote) AS low,max(price_quote) AS high,
       (array_agg(price_quote ORDER BY log_index DESC,tx_hash DESC))[1] AS price,
-      count(*)::text||':'||count(usd)::text||':'||(count(*) FILTER(WHERE senders_pending))::text||':'||coalesce(string_agg(coalesce(encode(trader,'hex'),'missing'),',' ORDER BY log_index,tx_hash),'') AS revision FROM swaps WHERE block<=$1${above('block')} GROUP BY coin,block
+      count(*)::text||':'||count(usd)::text||':'||(count(*) FILTER(WHERE senders_pending))::text||':'||coalesce(string_agg(coalesce(encode(trader,'hex'),'missing'),',' ORDER BY log_index,tx_hash),'') AS revision FROM raw_history_live_swaps WHERE block<=$1${above('block')} GROUP BY coin,block
     UNION ALL SELECT token,block,'transfer',min(ts),NULL,NULL,NULL,count(*)::text FROM ${transfers} GROUP BY token,block
     UNION ALL SELECT t.address,e.block,'liquidity',min(e.ts),NULL,NULL,NULL,count(*)::text||':'||(count(*) FILTER(WHERE e.senders_pending))::text||':'||coalesce(string_agg(coalesce(encode(e.actor,'hex'),'missing'),',' ORDER BY e.log_index,e.tx_hash),'') FROM liquidity_events e
       JOIN pools p ON p.id=e.pool_id JOIN tokens t ON t.address=p.currency0 OR t.address=p.currency1 WHERE e.block<=$1${above('e.block')} GROUP BY t.address,e.block
@@ -147,8 +147,8 @@ const scopeParams=(to:number,scope?:ActivityScope):unknown[]=>!scope ? [to] : 'r
 /** At most 256 distinct event blocks per indexed source read, including sparse old histories. */
 async function nextActivityBlock(db:ChainDb,coin:Address,after:number,to:number) {
   return Number((await db.sql.query<{block:string | null}>(`SELECT max(block)::text AS block FROM (SELECT DISTINCT block FROM (
-    (SELECT DISTINCT block FROM swaps WHERE coin=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
-    UNION ALL (SELECT DISTINCT block FROM token_transfers WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
+    (SELECT DISTINCT block FROM raw_history_live_swaps WHERE coin=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
+    UNION ALL (SELECT DISTINCT block FROM raw_history_live_transfers WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
     UNION ALL (SELECT DISTINCT e.block FROM (SELECT id FROM pools WHERE currency0=$1 UNION SELECT id FROM pools WHERE currency1=$1) p
       CROSS JOIN LATERAL (SELECT DISTINCT block FROM liquidity_events WHERE pool_id=p.id AND block>$2 AND block<=$3 ORDER BY block LIMIT 256) e ORDER BY e.block LIMIT 256)
     UNION ALL (SELECT DISTINCT block FROM pons_events WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)

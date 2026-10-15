@@ -244,11 +244,12 @@ describe('determination retention',()=>{
     expect(report.tables?.find(t=>t.table==='swaps')).toMatchObject({estimatedBytes:0,estimateSkipped:true});
     expect(await snapshot()).toEqual(before);
   });
-  it('keeps ordered swap evidence for seven days and leaves undecided past horizons and pending attribution alone',async()=>{
+  it('keeps seven days of raw swaps and summarizes older pending and undecided swaps without pruning their auxiliary evidence',async()=>{
     const db=await fixture(),pending=await counts(db,coins.pending),unlabeled=await counts(db,coins.unlabeled);
     await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now});
     expect((await counts(db,coins.calm)).swaps).toBe(2);
-    expect(await counts(db,coins.pending)).toEqual(pending);expect(await counts(db,coins.unlabeled)).toEqual(unlabeled);
+    expect(await counts(db,coins.pending)).toEqual({...pending,swaps:0});expect(await counts(db,coins.unlabeled)).toEqual({...unlabeled,swaps:0});
+    for(const coin of [coins.pending,coins.unlabeled])expect((await db.sql.query<{data:{count:number}}>('SELECT data FROM coin_lifetime WHERE coin=$1',[binary(coin)])).rows[0].data.count).toBe(5);
     expect((await counts(db,coins.calm)).transfers).toBe(0);
   });
 });
@@ -362,10 +363,11 @@ describe('settlement evidence floor',()=>{
     expect((await db.sql.query('SELECT 1 FROM token_transfers WHERE token=$1 AND ts>=$2',[binary(coins.active),at(39)])).rows).toHaveLength(1);
     expect((await db.sql.query("SELECT 1 FROM pons_events WHERE token=$1 AND block=$2",[binary(coins.active),n])).rows).toHaveLength(1);
   });
-  it('does not freeze an old card by compacting activity the rating engine has not evaluated',async()=>{
+  it('retains ungraded auxiliary activity while preserving expired swaps in lifetime summaries',async()=>{
     const db=await fixture(),before=await counts(db,coins.dead);
     await db.sql.query('UPDATE coin_card_latest SET as_of_block=1 WHERE coin=$1',[binary(coins.dead)]);
     await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now});
-    expect(await counts(db,coins.dead)).toEqual(before);
+    expect(await counts(db,coins.dead)).toEqual({...before,swaps:0});
+    expect((await db.sql.query<{data:{count:number}}>('SELECT data FROM coin_lifetime WHERE coin=$1',[binary(coins.dead)])).rows[0].data.count).toBe(before.swaps);
   });
 });

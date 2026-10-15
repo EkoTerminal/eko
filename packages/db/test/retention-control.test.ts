@@ -171,7 +171,7 @@ describe('bounded retention control', () => {
   it('skips dry-run estimates without reading large relations',async()=>{
     const {db,statements}=fixture();const result=await runRetention(db,{...options,dryRun:true,settleHours:24,rawDays:7});
     expect(result.tables).toEqual(expect.arrayContaining([expect.objectContaining({table:'token_transfers',rows:0,estimatedBytes:0,estimateSkipped:true}),expect.objectContaining({table:'receipt_publications',estimateSkipped:true})]));
-    expect(statements.every(s=>s.sql.startsWith('SET LOCAL') || s.sql.includes('FROM chain_blocks'))).toBe(true);
+    expect(statements.every(s=>s.sql.startsWith('SET LOCAL') || s.sql.includes('FROM chain_blocks') || s.sql.includes('FROM pg_inherits') || s.sql.includes('FROM raw_history_seals'))).toBe(true);
   });
 });
 

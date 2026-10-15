@@ -95,7 +95,7 @@ export class DeferredEvents {
     }
     if (!done.length) return 0;
     await this.db.tx(async tx => {
-      for (const date of new Set(batch.get('swaps').map(row => (row.ts as Date).toISOString().slice(0, 7)))) await tx.ensurePartitions(new Date(`${date}-01T00:00:00Z`));
+      for (const date of new Set(batch.get('swaps').map(row => (row.ts as Date).toISOString().slice(0, 10)))) await tx.ensurePartitions(new Date(`${date}T00:00:00Z`));
       // Old trades are not news: no notices (the API reads each swap notice as a trade that just happened).
       await batch.flush(tx, undefined, { notify: false });
       for (let offset = 0; offset < done.length; offset += 500) {

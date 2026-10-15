@@ -83,7 +83,7 @@ it.skipIf(!databaseUrl)('manual raw mutex excludes the worker without blocking n
     await clients[0]!.query('INSERT INTO chain_blocks VALUES(1,1,$1,$1,$2)',[hash,old]);
     await clients[0]!.query('SELECT pg_advisory_lock(4663,208)');
     const result=await runRetention(handles[1]!,{quoteTokens:[],swapDays:7,transferDays:3,dryRun:false});
-    expect(result.skippedRules).toEqual(['raw_swaps','raw_transfers']);
+    expect(result.skippedRules).toEqual(['raw_partitions']);
     await handles[1]!.tx(async tx=>{
       await tx.sql.query("SET LOCAL statement_timeout='2s'");
       await tx.insert('token_transfers',{ts:current,block:2,tx_hash:hash,log_index:0,token:coin,from_address:coin,to_address:other,amount:'1'});

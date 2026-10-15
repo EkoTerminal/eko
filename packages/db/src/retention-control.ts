@@ -46,7 +46,7 @@ export function retentionRules(options: RetentionOptions, result: RetentionResul
   return async (name, work) => {
     const started = now(), before = removedRows(result);
     // Initial immutable per-coin snapshots and hourly rankings are aggregates, not LIMIT-sized deletes.
-    const budget = options.budgetMs ?? (name==='raw_swaps' || name==='raw_transfers' ? 15_000 : 6_000);
+    const budget = options.budgetMs ?? 6_000;
     const timeLeft = () => { const current = now(); return current - started < budget && current - passStarted < passBudget; };
     const state = sizes.get(name) ?? { rows: ceiling, successes: 0 };
     if (state.ceiling !== undefined && state.ceiling !== ceiling) { state.rows = ceiling; state.successes = 0; }

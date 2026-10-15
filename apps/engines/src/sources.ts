@@ -71,8 +71,8 @@ export async function holdingsAt(db: ChainDb, coin: Address, block: number, cach
   if(cache)return cache.holdingsAt(coin,block,lane);
   // Select the nearer endpoint. Old horizon/opening views must not reverse a coin's entire future history.
   const bounds=(await db.sql.query<{first:string|null;last:string|null;baseline:string|null}>(`SELECT
-    (SELECT min(block)::text FROM token_transfers WHERE token=$1) AS first,
-    (SELECT max(block)::text FROM token_transfers WHERE token=$1) AS last,
+    (SELECT min(block)::text FROM raw_history_live_transfers WHERE token=$1) AS first,
+    (SELECT max(block)::text FROM raw_history_live_transfers WHERE token=$1) AS last,
     (SELECT max(through_block)::text FROM transfer_baselines WHERE token=$1) AS baseline`,[binary(coin)])).rows[0];
   if(bounds.last==null || Number(bounds.last)<=block)return (await db.sql.query<Holding>(
     'SELECT holder,amount,last_block::text AS block FROM balances WHERE token=$1 AND amount>0 ORDER BY holder',[binary(coin)])).rows.map(prepareHolding);
@@ -82,8 +82,8 @@ export async function holdingsAt(db: ChainDb, coin: Address, block: number, cach
     return db.tx(async tx=>{
       const amounts=new Map<Address,{holder:Uint8Array;amount:bigint;block:number}>(),name=`engine_holder_prefix_${++holderCursor}`;
       await tx.sql.query(`DECLARE ${name} NO SCROLL CURSOR FOR
-        SELECT to_address AS holder,amount,block FROM token_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
-        UNION ALL SELECT from_address,-amount,block FROM token_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
+        SELECT to_address AS holder,amount,block FROM raw_history_live_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
+        UNION ALL SELECT from_address,-amount,block FROM raw_history_live_transfers WHERE token=$1 AND block<=$2 AND kind='Transfer'
         UNION ALL SELECT holder,amount,through_block FROM transfer_baselines WHERE token=$1 AND through_block<=$2`,[binary(coin),block]);
       for(;;) {
         const page=(await tx.sql.query<Holding>(`FETCH FORWARD 2000 FROM ${name}`)).rows;
@@ -102,7 +102,7 @@ export async function holdingsAt(db: ChainDb, coin: Address, block: number, cach
   // One statement snapshot: current balances minus only the movements after the checkpoint.
   // Include zero/negative balances, since a wallet that exited can have been positive then.
   return (await db.sql.query<Holding>(`WITH later AS MATERIALIZED (
-    SELECT from_address,to_address,amount FROM token_transfers WHERE token=$1 AND block>$2 AND kind='Transfer'
+    SELECT from_address,to_address,amount FROM raw_history_live_transfers WHERE token=$1 AND block>$2 AND kind='Transfer'
   ), delta AS (
     SELECT holder,sum(amount) AS amount FROM (
       SELECT to_address AS holder,amount FROM later UNION ALL SELECT from_address,-amount FROM later
@@ -110,8 +110,8 @@ export async function holdingsAt(db: ChainDb, coin: Address, block: number, cach
   ), historical AS (
     SELECT b.holder,b.amount-coalesce(d.amount,0) AS amount,
       CASE WHEN b.last_block<=$2 THEN b.last_block ELSE greatest(
-        (SELECT block FROM token_transfers WHERE token=$1 AND to_address=b.holder AND block<=$2 AND kind='Transfer' ORDER BY block DESC LIMIT 1),
-        (SELECT block FROM token_transfers WHERE token=$1 AND from_address=b.holder AND block<=$2 AND kind='Transfer' ORDER BY block DESC LIMIT 1),
+        (SELECT block FROM raw_history_live_transfers WHERE token=$1 AND to_address=b.holder AND block<=$2 AND kind='Transfer' ORDER BY block DESC LIMIT 1),
+        (SELECT block FROM raw_history_live_transfers WHERE token=$1 AND from_address=b.holder AND block<=$2 AND kind='Transfer' ORDER BY block DESC LIMIT 1),
         (SELECT through_block FROM transfer_baselines WHERE token=$1 AND holder=b.holder AND through_block<=$2)
       ) END AS block
     FROM balances b LEFT JOIN delta d ON d.holder=b.holder WHERE b.token=$1

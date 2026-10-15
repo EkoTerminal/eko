@@ -97,7 +97,7 @@ describe('served sub-minute candles from isolated database rows', () => {
         expect(body.bars[0].ts).toBe(epoch - 21600); expect(body.asOfBlock).toBe(22);
         expect(body.firstTradeTs).toBe(epoch - 21600); expect(body.lastTradeTs).toBe(epoch - 21599);
       }
-      const queries = spy.mock.calls.filter(([sql]) => sql.includes('FROM swaps'));
+      const queries = spy.mock.calls.filter(([sql]) => sql.includes('FROM raw_history_live_swaps'));
       expect(queries.length).toBeGreaterThan(0);
       for (const [sql, params] of queries) {
         expect(sql).toMatch(/ts >= to_timestamp\(\$2\)/); expect(sql).toMatch(/ts < to_timestamp\(\$3\)/);
