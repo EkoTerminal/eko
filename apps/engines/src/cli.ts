@@ -4,6 +4,7 @@ import { createPublicClient } from 'viem';
 import { z } from 'zod';
 import type { BlockReader } from './activity.js';
 import { EngineWorker, RATING_CODE_AT, UNISWAP_RATING_CODE_AT } from './worker.js';
+import { fingerprintWindows } from './watcher/store.js';
 import { SellChecker, SellCheckScheduler } from './sell-check.js';
 const flag=z.enum(['true','false','1','0','']).optional().transform(v=>v==='true' || v==='1');
 const config=z.object({
@@ -36,6 +37,7 @@ async function main() {
   const parsed=config.safeParse(process.env);
   if (!parsed.success) throw new Error(`Invalid engine environment: ${parsed.error.issues.map(i=>i.path.join('.')).join(', ')}`);
   const env=parsed.data;
+  const fingerprints=fingerprintWindows();
   loadRegistry();
   if (env.ENGINE_MODE==='replay' && (env.FROM==null || env.TO==null || env.TO<env.FROM)) throw new Error('Replay requires FROM <= TO');
   const db=await openDb({ databaseUrl:env.DATABASE_URL,pgliteDir:env.PGLITE_DIR });
@@ -77,7 +79,7 @@ async function main() {
     // Every probe goes through the process meter (paid archive route, pinned block) and the daily cap below.
     const sellChecks=env.SELL_CHECK_ENABLED && rpc && env.ENGINE_MODE==='live' ? new SellCheckScheduler(db,new SellChecker(db,{request:request=>rpc.archive.request(request as never)}),
       {batch:env.SELL_CHECK_BATCH,dailyRequests:env.SELL_CHECK_DAILY_REQUESTS,minIntervalSec:env.SELL_CHECK_MIN_INTERVAL_SEC,maxAgeSec:env.SELL_CHECK_MAX_AGE_SEC},log) : undefined;
-    const worker=new EngineWorker(db,{ blueChipEnabled:env.BLUE_CHIP_ENABLED,client,readBlock,outcomeLoadsPerWrite:env.ENGINE_OUTCOME_LOADS_PER_WRITE,onScanComplete:ms=>telemetry.emit('pair_to_complete_verdict_ms',ms),onQueueCompletion:ms=>telemetry.emit('queue_completion_ms',ms),onHeartbeat:()=>{stallWatch?.progress();if(Date.now()-heartbeatAt>=30000){telemetry.emit('role_engines',1);heartbeatAt=Date.now();}},onPlanned:plan=>console.log(JSON.stringify({event:'replay_planned',...plan})),onProgress:(evaluations,block)=>{stallWatch?.progress();if(evaluations%100===0 || Date.now()-progressAt>=30000){console.log(JSON.stringify({event:'engine_progress',evaluations,block,...worker.telemetry()}));progressAt=Date.now();}},concurrency:env.ENGINE_CONCURRENCY,pollMs:env.ENGINE_POLL_MS,liveBacklogSec:env.ENGINE_LIVE_BACKLOG_SEC,liveSliceMs:env.ENGINE_LIVE_SLICE_MS,liveActivity:env.ENGINE_LIVE_ACTIVITY,
+    const worker=new EngineWorker(db,{ fingerprints,blueChipEnabled:env.BLUE_CHIP_ENABLED,client,readBlock,outcomeLoadsPerWrite:env.ENGINE_OUTCOME_LOADS_PER_WRITE,onScanComplete:ms=>telemetry.emit('pair_to_complete_verdict_ms',ms),onQueueCompletion:ms=>telemetry.emit('queue_completion_ms',ms),onHeartbeat:()=>{stallWatch?.progress();if(Date.now()-heartbeatAt>=30000){telemetry.emit('role_engines',1);heartbeatAt=Date.now();}},onPlanned:plan=>console.log(JSON.stringify({event:'replay_planned',...plan})),onProgress:(evaluations,block)=>{stallWatch?.progress();if(evaluations%100===0 || Date.now()-progressAt>=30000){console.log(JSON.stringify({event:'engine_progress',evaluations,block,...worker.telemetry()}));progressAt=Date.now();}},concurrency:env.ENGINE_CONCURRENCY,pollMs:env.ENGINE_POLL_MS,liveBacklogSec:env.ENGINE_LIVE_BACKLOG_SEC,liveSliceMs:env.ENGINE_LIVE_SLICE_MS,liveActivity:env.ENGINE_LIVE_ACTIVITY,
       onLiveActivity:stats=>{if(stats.cold || stats.summedCoins || stats.ms>=10000)log('live_activity',{...stats,ms:Math.round(stats.ms)});},
       // Every minute of a live evaluation phase, with or without completed cards, and at its end.
       onEvaluation:progress=>log('engine_evaluation',{...progress}),onBudgetWait:()=>log('engines_budget_wait',{reason:'rpc_budget_exhausted',retrySec:60}),rerate:env.ENGINE_MODE==='live',rerateBefore:RATING_CODE_AT,rerateOtherBefore:UNISWAP_RATING_CODE_AT,onRerate:(cards,firstScans,traded)=>log('engine_rerate',{cards,firstScans,traded}),onRerateError:error=>log('engine_rerate_failed',{error:error instanceof Error ? error.message.replace(/https?:\/\/\S+/g,'<url>').slice(0,200) : 'unknown'}),onLivePlanned:plan=>{if(plan.coalescedCheckpoints || plan.firstScans>10)console.log(JSON.stringify({event:'live_planned',...plan}));},bus:env.DATABASE_URL ? new PostgresBus(env.DATABASE_URL) : db.bus });

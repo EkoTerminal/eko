@@ -26,6 +26,7 @@ interface Coverage {
 interface SwapRow {block:string;ts:Date;tx_hash:Uint8Array;log_index:number;coin:Uint8Array;side:number;tx_to:Uint8Array|null;quote_asset:Uint8Array;amount_quote:string;data:Coverage[]|null}
 export interface FingerprintOptions {
   model?:FingerprintModel; registry?:AddressRegistry;
+  lookbackDays?:number; refreshDays?:number;
   /** Reviewed agent-kit implementations supplied by existing acquisition; no defaults are invented. */
   knownDelegates?:readonly Address[];
   crewAt?:(address:Address,block:bigint)=>Promise<QualifiedCrewAttachment|null>;
@@ -33,15 +34,25 @@ export interface FingerprintOptions {
   evidenceRevision?:string;
   useropHistoryAt?:(address:Address,fromSec:number,block:bigint)=>Promise<{complete:boolean;evidence:unknown}>;
 }
+/** Refresh cuts plus their lookback must fit wholly inside retained raw swaps. */
+export function fingerprintWindows(options:FingerprintOptions={},env:NodeJS.ProcessEnv=process.env) {
+  const lookbackDays=options.lookbackDays ?? Number(env.FINGERPRINT_LOOKBACK_DAYS ?? 3);
+  const refreshDays=options.refreshDays ?? Number(env.FINGERPRINT_REFRESH_DAYS ?? 3);
+  const swapDays=Number(env.RETENTION_SWAP_DAYS ?? 7);
+  if(![lookbackDays,refreshDays,swapDays].every(n=>Number.isInteger(n)&&n>=1) || swapDays<7 || lookbackDays+refreshDays>swapDays)
+    throw new Error('Fingerprint lookback plus refresh must fit RETENTION_SWAP_DAYS');
+  return {lookbackDays,refreshDays};
+}
 export async function loadFingerprintInput(db:ChainDb,address:Address,block:number,options:FingerprintOptions={}) {
   const header=(await db.sql.query<{ts:Date;hash:Uint8Array}>('SELECT ts,hash FROM chain_blocks WHERE number=$1',[block])).rows[0];
   if(!header)throw new Error('Missing canonical fingerprint block');
+  const {lookbackDays}=fingerprintWindows(options);
   const sec=Math.floor(new Date(header.ts).getTime()/1000),registry=options.registry??loadRegistry();
   const rows=(await db.sql.query<SwapRow>(`SELECT s.*,(SELECT jsonb_agg(c.data ORDER BY c.scope,c.input_hash) FROM wallet_protocol_coverage c
     WHERE c.chain_id=4663 AND c.tx_hash=s.tx_hash AND c.block=s.block AND c.block_hash=b.hash AND ((c.data->'knownAt'->'cursor'->>'blockNumber') IS NULL OR (c.data->'knownAt'->'cursor'->>'blockNumber')::bigint<=$2)) AS data
     FROM (SELECT * FROM swaps WHERE trader=$1 AND block<=$2 AND NOT senders_pending
       ORDER BY block DESC,tx_hash DESC,log_index DESC LIMIT 200) s JOIN chain_blocks b ON b.number=s.block
-    WHERE s.ts BETWEEN $3 AND $4 ORDER BY s.block DESC,s.tx_hash DESC,s.log_index DESC`,[binary(address),block,new Date((sec-14*86400)*1000),header.ts])).rows;
+    WHERE s.ts BETWEEN $3 AND $4 ORDER BY s.block DESC,s.tx_hash DESC,s.log_index DESC`,[binary(address),block,new Date((sec-lookbackDays*86400)*1000),header.ts])).rows;
   const knownRouters=registry.entries().filter(([k,v])=>k.startsWith('fingerprints.unknownRouters.')&&v.address!=='TODO'&&v.verified).map(([,v])=>v.address as string);
   const orbio=registry.data.fingerprints.orbioCreditExchange;
   const weth=registry.addressOf('tokens.WETH')?.toLowerCase();
@@ -60,7 +71,7 @@ export async function loadFingerprintInput(db:ChainDb,address:Address,block:numb
       orbio:orbio.address!=='TODO'&&orbio.verified&&r.tx_to?hex(r.tx_to).toLowerCase()===orbio.address.toLowerCase():null};
   });
   const ops=(await db.sql.query<{block:string;timestamp_sec:string;user_op_hash:Uint8Array;paymaster:Uint8Array}>(`SELECT u.* FROM userops u JOIN chain_blocks b ON b.number=u.block AND b.hash=u.block_hash
-    WHERE u.chain_id=4663 AND u.sender=$1 AND u.block<=$2 AND u.timestamp_sec BETWEEN $3 AND $4 AND ((u.data->'knownAt'->'cursor'->>'blockNumber') IS NULL OR (u.data->'knownAt'->'cursor'->>'blockNumber')::bigint<=$2) ORDER BY u.block DESC,u.log_index DESC LIMIT 201`,[binary(address),block,sec-14*86400,sec])).rows;
+    WHERE u.chain_id=4663 AND u.sender=$1 AND u.block<=$2 AND u.timestamp_sec BETWEEN $3 AND $4 AND ((u.data->'knownAt'->'cursor'->>'blockNumber') IS NULL OR (u.data->'knownAt'->'cursor'->>'blockNumber')::bigint<=$2) ORDER BY u.block DESC,u.log_index DESC LIMIT 201`,[binary(address),block,sec-lookbackDays*86400,sec])).rows;
   const delegation=(await db.sql.query<{implementation:Uint8Array|null;data:{code?:string};block:string}>(`SELECT d.* FROM delegations_7702 d JOIN chain_blocks b ON b.number=d.block AND b.hash=d.block_hash
     WHERE d.chain_id=4663 AND d.authority=$1 AND d.kind='code' AND d.block=$2 ORDER BY d.tx_hash,d.evidence_index LIMIT 1`,[binary(address),block])).rows[0];
   // TODO(spec): No reviewed agent-kit implementation list or complete wallet UserOp-history certificate is specified. Missing lists/history remain null; authorizations alone never prove current code.
@@ -79,8 +90,8 @@ export async function loadFingerprintInput(db:ChainDb,address:Address,block:numb
     + coalesce((SELECT sum(u.n) FROM coin_unknown_buys u WHERE u.coin=f.coin AND u.block<=f.first_buy),0)
     + coalesce((SELECT h.buyers FROM history_prunes h WHERE h.coin=f.coin AND NOT h.buyer_stats_complete AND h.swaps_through_block<f.first_buy),0) AS rank
     FROM firsts f`,[binary(address),block,[...new Map(rows.filter(r=>r.side===1).map(r=>[hex(r.coin),r.coin])).values()]])).rows;
-  const history=await options.useropHistoryAt?.(address,sec-14*86400,BigInt(block));
-  const input:FeatureInput={block,sec,swaps,knownRouters:knownRouters.length?knownRouters:null,delegated7702,
+  const history=await options.useropHistoryAt?.(address,sec-lookbackDays*86400,BigInt(block));
+  const input:FeatureInput={block,sec,swaps,lookbackDays,knownRouters:knownRouters.length?knownRouters:null,delegated7702,
     userops:ops.slice(0,200).map(o=>({block:Number(o.block),sec:Number(o.timestamp_sec),hash:hex(o.user_op_hash),paymaster:hex(o.paymaster)!==zero})),useropsComplete:history?.complete===true&&ops.length<=200,
     reactions:reactions.filter(r=>r.launch!=null).map(r=>({coin:hex(r.coin),firstBuyBlock:Number(r.first_buy),launchBlock:Number(r.launch),buyerRank:Number(r.rank)}))};
   const dependencies=(await db.sql.query<{number:string;hash:Uint8Array}>(`SELECT number,hash FROM chain_blocks WHERE number=ANY($1::bigint[]) ORDER BY number`,[[...new Set([block,...swaps.map(s=>s.block),...ops.map(o=>Number(o.block)),...input.reactions.flatMap(r=>[r.firstBuyBlock,r.launchBlock])])]])).rows;
@@ -126,9 +137,11 @@ export interface ReplayCursor {block:number;address:Address}
 export async function replayFingerprints(db:ChainDb,from:number,to:number,options:FingerprintOptions&{limit?:number;after?:ReplayCursor}={}) {
   if(!watcherRefreshEnabled())return {runs:0,labels:0,processed:0,next:null,modelVersion:(options.model??FP_MODEL).version,beta:true};
   const limit=options.limit??256;
+  const {refreshDays}=fingerprintWindows(options);
   if(!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||from<0||to<from||!Number.isSafeInteger(limit)||limit<1||limit>1000)throw new Error('Invalid fingerprint replay bounds');
   const events=(await db.sql.query<{block:string;trader:Uint8Array}>(`SELECT DISTINCT s.block,s.trader FROM swaps s JOIN chain_blocks b ON b.number=s.block WHERE s.block BETWEEN $1 AND $2 AND trader IS NOT NULL AND NOT senders_pending
-    AND ($3::bigint IS NULL OR s.block>$3 OR (s.block=$3 AND trader>$4)) ORDER BY s.block,s.trader LIMIT $5`,[from,to,options.after?.block??null,options.after?binary(options.after.address):null,limit+1])).rows;
+    AND s.ts>=(SELECT ts FROM chain_blocks WHERE number=$2)-$6*interval '1 day'
+    AND ($3::bigint IS NULL OR s.block>$3 OR (s.block=$3 AND trader>$4)) ORDER BY s.block,s.trader LIMIT $5`,[from,to,options.after?.block??null,options.after?binary(options.after.address):null,limit+1,refreshDays])).rows;
   let runs=0,labels=0;const batch=events.slice(0,limit);
   for(const e of batch){const result=await updateFingerprintWallet(db,hex(e.trader) as Address,Number(e.block),options);runs+=result.runs;labels+=result.labels;}
   await writeRegistryLabels(db,{crewAt:options.crewAt});
@@ -140,6 +153,7 @@ export async function refreshFingerprints(db:ChainDb,to:number,options:Fingerpri
   if(!watcherRefreshEnabled())return {wallets:0,runs:0,labels:0};
   const limit=options.walletLimit??FINGERPRINT_WALLET_BATCH,model=options.model??FP_MODEL;
   if(!Number.isSafeInteger(limit)||limit<1||limit>FINGERPRINT_WALLET_BATCH)throw new Error('Invalid fingerprint wallet bound');
+  const {lookbackDays,refreshDays}=fingerprintWindows(options);
   const head=(await db.sql.query<{ts:Date}>('SELECT ts FROM chain_blocks WHERE number=$1',[to])).rows[0];
   if(!head)return {wallets:0,runs:0,labels:0};
   // Content revisions catch late sender/protocol enrichment and rollback, rather than max(block) alone.
@@ -155,14 +169,14 @@ export async function refreshFingerprints(db:ChainDb,to:number,options:Fingerpri
     ) AS revision FROM wallets w CROSS JOIN LATERAL (SELECT * FROM swaps s WHERE s.trader=w.trader AND s.block<=$1 AND NOT s.senders_pending ORDER BY s.block DESC,s.tx_hash DESC,s.log_index DESC LIMIT 200) s
     JOIN chain_blocks b ON b.number=s.block WHERE s.ts BETWEEN $2 AND $3 GROUP BY w.trader
   ) SELECT r.*,f.pending_blocks,f.pending_revision,f.revision AS prior_revision FROM revisions r LEFT JOIN wallet_fingerprint_state f ON f.address=r.trader AND f.model_version=$4
-    ORDER BY r.trader`,[to,new Date(new Date(head.ts).getTime()-14*86400*1000),head.ts,model.version,limit,digest({model,registry:(options.registry??loadRegistry()).data,knownDelegates:options.knownDelegates,evidenceRevision:options.evidenceRevision})])).rows;
+    ORDER BY r.trader`,[to,new Date(new Date(head.ts).getTime()-refreshDays*86400*1000),head.ts,model.version,limit,digest({model,lookbackDays,refreshDays,registry:(options.registry??loadRegistry()).data,knownDelegates:options.knownDelegates,evidenceRevision:options.evidenceRevision})])).rows;
   let runs=0,labels=0,wallets=0;
   for(const w of changed) {
     if(w.prior_revision!==w.revision) {
       wallets++;
       const address=hex(w.trader) as Address;
       const available=[...new Set(w.blocks.map(Number))].sort((a,b)=>a-b);
-      const cuts=w.pending_revision===w.revision?w.pending_blocks.map(Number):
+      const cuts=w.pending_revision===w.revision?w.pending_blocks.map(Number).filter(b=>available.includes(b)):
         [...new Set([...(w.pending_blocks??[]).map(Number).filter(b=>available.includes(b)),...available])];
       const batch=cuts.slice(0,FINGERPRINT_CUTS_PER_REFRESH),pending=cuts.slice(FINGERPRINT_CUTS_PER_REFRESH);
       for(const block of batch){const r=await updateFingerprintWallet(db,address,block,options);runs+=r.runs;labels+=r.labels;}

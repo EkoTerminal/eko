@@ -10,7 +10,7 @@ import { CoinSignalPanel } from './CoinSignal';
 import { createRadarCard, createRadarRows } from '../../mocks/demo/radar';
 import { CandlesSchema, mergeMarkers } from './useCoin';
 import * as coinData from './useCoin';
-import Coin from './Coin';
+import Coin, {RAW_TRADES_NOTE} from './Coin';
 import { ChartStage } from '../../components/chart/ChartStage';
 import { reconcileCandleTicks } from '../../components/chart/coinMath';
 import { SUB_MINUTE_UNAVAILABLE } from '../../copy/availability';
@@ -64,4 +64,8 @@ describe('coin card and signal copy',()=>{
    expect(html).toContain('More timeframes');
  });
  it('deduplicates marker REST/WS snapshots without removing distinct trades',()=>{const ms=coinMarkers(row.address);expect(mergeMarkers(ms,ms)).toEqual(ms);expect(mergeMarkers(ms,[{...ms[0],sizeUsd:ms[0].sizeUsd+1}])).toHaveLength(ms.length+1);});
+});
+
+it('explains that individual trades end while chart and summary history remain',()=>{
+  expect(RAW_TRADES_NOTE).toBe('Individual trades cover recent history. Older activity remains in the chart and coin summaries.');
 });

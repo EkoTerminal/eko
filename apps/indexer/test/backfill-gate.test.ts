@@ -69,6 +69,11 @@ describe('launch backfill evidence', () => {
     expect(finding(s, 'follower').status).toBe('verified');
     s.follower.sourceRevision = 'other'; expect(finding(s, 'follower').status).toBe('unresolved');
   });
+  it('refuses event-by-event backfill evidence after transfer history has been compacted',async()=>{
+    const db=await openDb({pgliteDir:':memory:'});handles.push(db);await migrate(db);
+    await db.sql.query("INSERT INTO raw_history_watermarks VALUES('token_transfers',1)");
+    await expect(captureBackfillSnapshot(db,load().plan,{origin:'fixture',checkpoint:'compacted'})).rejects.toThrow('use an archive');
+  });
   it('exports bounded read-only database evidence and diagnoses a missing transfer baseline', async () => {
     const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db); await migrate(db);
     const seed = load(), plan = seed.plan, token = plan.tokens[0], owner = `0x${'2'.repeat(40)}`, zero = `0x${'0'.repeat(40)}`;

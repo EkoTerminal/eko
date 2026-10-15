@@ -1,5 +1,7 @@
 # Determination retention
 
+The worker now uses the [short raw-history policy](raw-history.md). Its all-coin swap and transfer caps supersede the raw rules below. This page documents compatibility callers and rating retention.
+
 This owner-requested policy replaces BACKEND §3.6's perpetual raw/rating history for the tables below. The specification
 files remain unchanged. It extends the existing worker, `history_prunes`, `transfer_baselines`, trending snapshots,
 onboarding and scan jobs. It does not add another scheduler or an automatic chain-history download.
@@ -29,7 +31,7 @@ cleanup, commit or deployment was performed as part of this change.
 | Table | Retained | Compacted or removed | Reader setting the boundary |
 |---|---|---|---|
 | `token_transfers` | Recent rows, pending enrichment inputs, and inputs of an undecided past outcome | Eligible prefixes become exact `(token, holder)` net baselines, never a plain transfer deletion | `apps/engines/src/sources.ts` holdings and graduation, `outcomes.ts` opening holdings, `sell-check-reference.ts` transaction-level tax samples, `apps/server/src/coin-onboarding.ts` attribution |
-| `swaps` | At least 28 days, pending attribution/pricing and undecided past horizons | Older prefixes become lifetime statistics, buyer sets and at most 60 trade samples, with whole-minute bars retained | `apps/engines/src/watcher/store.ts` reads 14-day wallet windows at boundaries up to 14 days back, `sources.ts` lifetime checks, `apps/server/src/read/pool-liquidity.ts` latest 50/60 trades |
+| `swaps` | At least seven days for compatibility callers, pending attribution/pricing and undecided past horizons | Older prefixes become lifetime statistics, buyer sets and at most 60 trade samples, with whole-minute bars retained | `apps/engines/src/watcher/store.ts` reads configured three-day wallet windows at boundaries up to three days back, `sources.ts` lifetime checks, `apps/server/src/read/pool-liquidity.ts` latest 50/60 trades |
 | `liquidity_events` | Pending/deferred attribution and pools shared by two non-quote coins | Quote-pool prefixes become position balances, wallet peaks, launch provider, additions and removal statistics | `apps/engines/src/sources.ts` ownership/pulls/prior removals, `outcomes.ts` pool peaks, `apps/server/src/read/pool-liquidity.ts` range sums |
 | `pons_events` | Event kinds other than `launch` and `trade`, and the common pending/outcome exceptions | Launch/trade prefixes become threshold, exact quote reserves, validity and lifetime volume/progress | `apps/engines/src/curve-progress.ts`, `sources.ts`, `apps/server/src/read/pool-liquidity.ts` |
 | `coin_cards` | Current `coin_card_latest` target, latest per coin/rules version, and seven days | Older versions deleted | `apps/engines/src/worker.ts` prior-card comparison, `apps/server/src/read/store.ts`, `read/live.ts` |
@@ -72,8 +74,7 @@ New compaction does not introduce `history_pruned` coverage gaps or manufacture 
 
 The seven-day raw cap has explicit exceptions, rather than changing a check's meaning:
 
-- Wallet fingerprints require ordered cross-coin 28-day swap evidence, including buy ordering. Per-coin lifetime totals
-  cannot reconstruct these overlapping point-in-time windows, so those swaps remain raw for 28 days.
+- Wallet fingerprints now use three-day lookback and refresh windows. The worker’s seven-day swap cap covers their combined span. Buyer order uses retained first-buyer statistics.
 - An undecided horizon whose checkpoint is already inside the proposed deletion prefix keeps its inputs. A *future*
   seven-day horizon can use the opening/LP/lifetime summaries, and does not prevent 24-hour settlement.
 - A current card must cover the proposed prefix. Activity not yet evaluated is retained, so an engine outage cannot
@@ -149,7 +150,7 @@ unchanged. The existing engine-activity trigger keeps its single marker per SQL 
 still match full-history planning, without per-row invalidation work. Append-only exceptions permit only the intended record deletion or engines-verdict payload nulling with
 all immutable identity fields unchanged. Private/Guard payload mutation stays disallowed.
 
-If swaps cover the same nine-day interval as the supplied transfer observations, 7.3 GB implies roughly **22.7 GB** for the required 28-day window.
+Historical estimate, superseded by [raw-history.md](raw-history.md): if swaps cover the same nine-day interval as the supplied transfer observations, 7.3 GB implies roughly **22.7 GB** for the required 28-day window.
 Seven days of transfers is at most **7.5 GB** before settlement savings, plus holder baselines. Recent publication
 payloads are roughly **4.5 GB** at that rate, plus latest payloads, receipt-item copies and permanent small headers.
 Cards/shadows/Feed are approximately 1.2/1.1/0.9 GB before latest-version and first-row exceptions. The supplied total

@@ -15,6 +15,11 @@ describe('chain retention settings', () => {
   it('defaults to report-only settlement, a seven-day cap and seven-day rating history',()=>{
     const c=loadConfig(base);expect(c.RETENTION_ENABLED).toBe(true);expect(loadConfig({...base,RETENTION_ENABLED:'false'}).RETENTION_ENABLED).toBe(false);expect([c.RETENTION_DRY_RUN,c.RETENTION_SETTLE_HOURS,c.RETENTION_RAW_DAYS,c.RETENTION_RATING_DAYS]).toEqual([true,24,7,7]);
     expect(loadConfig({...base,RETENTION_DRY_RUN:'false'}).RETENTION_DRY_RUN).toBe(false);
+    expect([c.RETENTION_SWAP_DAYS,c.RETENTION_TRANSFER_DAYS,c.FINGERPRINT_LOOKBACK_DAYS,c.FINGERPRINT_REFRESH_DAYS]).toEqual([7,3,3,3]);
+    expect(loadConfig({...base,RETENTION_SWAP_DAYS:'10',RETENTION_TRANSFER_DAYS:'2',FINGERPRINT_LOOKBACK_DAYS:'6',FINGERPRINT_REFRESH_DAYS:'4'}).RETENTION_SWAP_DAYS).toBe(10);
+    for(const key of ['RETENTION_TRANSFER_DAYS','FINGERPRINT_LOOKBACK_DAYS','FINGERPRINT_REFRESH_DAYS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
+    expect(()=>loadConfig({...base,RETENTION_SWAP_DAYS:'6'})).toThrow('RETENTION_SWAP_DAYS');
+    expect(()=>loadConfig({...base,FINGERPRINT_LOOKBACK_DAYS:'5'})).toThrow('must fit');
     for(const key of ['RETENTION_SETTLE_HOURS','RETENTION_RAW_DAYS','RETENTION_RATING_DAYS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
     expect(()=>loadConfig({...base,RETENTION_DRY_RUN:'false',SECURITY_COLLECTORS:walletCollectors})).toThrow('wallet outflow collectors');
     expect(loadConfig({...base,RETENTION_ENABLED:'false',RETENTION_DRY_RUN:'false',SECURITY_COLLECTORS:walletCollectors}).RETENTION_ENABLED).toBe(false);

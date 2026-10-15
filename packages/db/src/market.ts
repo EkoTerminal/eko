@@ -88,14 +88,15 @@ async function writeBars(db: ChainDb, keys: string, params: unknown[], perKey = 
       CROSS JOIN LATERAL (SELECT 1 FROM swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute' LIMIT 1) present`
     : `SELECT k.coin,k.minute FROM (${keys}) k
       WHERE EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute')`;
-  await db.sql.query(`DELETE FROM bars_1m b USING (${present}) k WHERE b.coin=k.coin AND b.minute=k.minute`, params);
+  const mutable = `SELECT k.* FROM (${present}) k WHERE NOT EXISTS(SELECT 1 FROM raw_history_bar_keys a WHERE a.coin=k.coin AND a.minute=k.minute)`;
+  await db.sql.query(`DELETE FROM bars_1m b USING (${mutable}) k WHERE b.coin=k.coin AND b.minute=k.minute`, params);
   const priced = perKey
     ? `SELECT e.*,date_trunc('minute',e.ts) AS minute FROM (SELECT DISTINCT coin,minute FROM (${keys}) keyed) k
       CROSS JOIN LATERAL (${eligible} AND s.coin=k.coin AND s.ts >= k.minute AND s.ts < k.minute + interval '1 minute' OFFSET 0) e`
     : `SELECT e.*,date_trunc('minute',e.ts) AS minute FROM (${eligible}) e
       JOIN (${keys}) k ON k.coin=e.coin AND e.ts >= k.minute AND e.ts < k.minute + interval '1 minute'`;
   await db.sql.query(`INSERT INTO bars_1m ${summarize}
-    FROM (${priced}) priced GROUP BY coin,minute
+    FROM (${priced}) priced WHERE NOT EXISTS(SELECT 1 FROM raw_history_bar_keys a WHERE a.coin=priced.coin AND a.minute=priced.minute) GROUP BY coin,minute
     ON CONFLICT(coin,minute) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,
       volume_usd=excluded.volume_usd,trades=excluded.trades,first_block=excluded.first_block,last_block=excluded.last_block`, params);
 }

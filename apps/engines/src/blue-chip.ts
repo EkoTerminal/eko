@@ -1,9 +1,9 @@
 import { loadRegistry } from '@eko/chain';
-import { binary, hex, type ChainDb } from '@eko/db';
+import { binary, hex, type ChainDb, type Lifetime, unpackSwap } from '@eko/db';
 import { isSink, rowHex } from './aggregates.js';
 import { holdingsAt, type LoadedSources, type PoolRow } from './sources.js';
 
-type MeasurementSources = Pick<LoadedSources, 'coin' | 'asOfBlock' | 'createdAtSec' | 'launchpad' | 'swaps' | 'events' | 'holdings' | 'blueChipHolderCount'> & {
+type MeasurementSources = {lifetime?:Lifetime} & Pick<LoadedSources, 'coin' | 'asOfBlock' | 'createdAtSec' | 'launchpad' | 'swaps' | 'events' | 'holdings' | 'blueChipHolderCount'> & {
   poolRefs: Pick<LoadedSources['poolRefs'][number], 'id' | 'quote'>[];
   token: Pick<LoadedSources['token'], 'curve' | 'graduated_block'>;
 };
@@ -12,10 +12,17 @@ type MeasurementSources = Pick<LoadedSources, 'coin' | 'asOfBlock' | 'createdAtS
 export function blueChipMeasurements(s: MeasurementSources) {
   const pools = new Map(s.poolRefs.map(p => [p.id, p]));
   const latest = new Map<string, LoadedSources['swaps'][number]>();
-  for (const swap of s.swaps) if (Number(swap.block) <= s.asOfBlock && swap.venue !== 'pons_curve' &&
-    swap.usd != null && swap.usd > 0 && Number(swap.amount_coin) > 0 && Number(swap.amount_quote) > 0) latest.set(rowHex(swap.pool_id), swap);
+  const samples=[...Object.values(s.lifetime?.poolLastPriced ?? {}).map(unpackSwap),...s.swaps];
+  for (const swap of samples) if (Number(swap.block) <= s.asOfBlock && swap.venue !== 'pons_curve' &&
+    swap.usd != null && swap.usd > 0 && Number(swap.amount_coin) > 0 && Number(swap.amount_quote) > 0) {
+      const key=rowHex(swap.pool_id),prior=latest.get(key);
+      if(!prior || Number(swap.block)>Number(prior.block) || Number(swap.block)===Number(prior.block) && (swap.log_index>prior.log_index || swap.log_index===prior.log_index && rowHex(swap.tx_hash)>rowHex(prior.tx_hash)))latest.set(key,swap as LoadedSources['swaps'][number]);
+    }
   const positions = new Map<string, { pool: string; lower: number; upper: number; liquidity: number }>();
+  for(const [pool,data] of Object.entries(s.lifetime?.liquidity ?? {}))for(const [range,p] of Object.entries(data.moneyPositions ?? {}))
+    positions.set(`${pool}:${range}`,{pool,lower:p.lower,upper:p.upper,liquidity:Number(p.liquidity)});
   for (const e of s.events) {
+    if(s.lifetime?.liquidity?.[rowHex(e.pool_id)])continue;
     if (Number(e.block) > s.asOfBlock || !['Mint', 'Burn', 'ModifyLiquidity'].includes(e.kind)) continue;
     const pool = rowHex(e.pool_id), lower = Number(e.data.tickLower), upper = Number(e.data.tickUpper);
     if (!pools.has(pool) || !Number.isFinite(lower) || !Number.isFinite(upper) || upper <= lower) continue;

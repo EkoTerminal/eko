@@ -73,6 +73,9 @@ export class ChainDb {
   }
   async deleteAbove(n: bigint) {
     await this.sql.query('LOCK TABLE tokens,pools,swaps,token_transfers IN SHARE ROW EXCLUSIVE MODE');
+    const compacted=(await this.sql.query('SELECT 1 FROM raw_history_watermarks WHERE through_block>$1 LIMIT 1',[n.toString()])).rows.length;
+    const frozen=(await this.sql.query('SELECT 1 FROM raw_history_bar_keys k JOIN bars_1m b USING(coin,minute) WHERE b.last_block>$1 LIMIT 1',[n.toString()])).rows.length;
+    if(compacted || frozen)throw new Error('Reorg crosses compacted raw history: restore an archive before replay');
     for (const table of chainTables) await this.sql.query(`DELETE FROM ${table} WHERE block > $1`, [n.toString()]);
     await this.sql.query('UPDATE tokens SET graduated_pool=NULL,graduated_block=NULL WHERE graduated_block > $1', [n.toString()]);
     await rebuildBalances(this);
@@ -123,14 +126,14 @@ export async function openDb(options: { databaseUrl?: string; pgliteDir?: string
   } catch (error) { await release(); throw error; }
 }
 export async function migrate(db: ChainDb) {
-  const migrations = await Promise.all(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources', '0181_transfer_baselines', '0184_sparse_parent_links', '0187_drop_holder_transfer_indexes', '0188_block_and_pool_lookups', '0190_chain_block_time_index', '0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes'].map(async id => ({ id, sql: await readFile(new URL(`${import.meta.url.includes('/dist/') ? './chain-drizzle/' : '../drizzle/'}${id}.sql`, import.meta.url), 'utf8') })));
+  const migrations = await Promise.all(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources', '0181_transfer_baselines', '0184_sparse_parent_links', '0187_drop_holder_transfer_indexes', '0188_block_and_pool_lookups', '0190_chain_block_time_index', '0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes'].map(async id => ({ id, sql: await readFile(new URL(`${import.meta.url.includes('/dist/') ? './chain-drizzle/' : '../drizzle/'}${id}.sql`, import.meta.url), 'utf8') })));
   await db.sql.query('CREATE TABLE IF NOT EXISTS eko_indexer_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
   await db.tx(async tx => {
     await tx.sql.query('LOCK TABLE eko_indexer_migrations IN EXCLUSIVE MODE');
     for (const migration of migrations) {
       const { rows } = await tx.sql.query('SELECT id FROM eko_indexer_migrations WHERE id=$1', [migration.id]);
       if (!rows.length) {
-        for (const statement of (migration.id === '0205_chain_read_indexes' ? migration.sql.split('-- statement-breakpoint').flatMap(s=>s.includes('CREATE FUNCTION') ? [s] : s.split(';')) : migration.id === '0115_guard_sources' ? migration.sql.split('-- statement-breakpoint') : migration.sql.split(';')).map(s => s.trim()).filter(Boolean)) await tx.sql.query(statement);
+        for (const statement of (['0205_chain_read_indexes','0207_raw_history_indexes'].includes(migration.id) ? migration.sql.split('-- statement-breakpoint').flatMap(s=>s.includes('CREATE FUNCTION') ? [s] : s.split(';')) : migration.id === '0115_guard_sources' ? migration.sql.split('-- statement-breakpoint') : migration.sql.split(';')).map(s => s.trim()).filter(Boolean)) await tx.sql.query(statement);
         await tx.sql.query('INSERT INTO eko_indexer_migrations(id) VALUES($1)', [migration.id]);
       }
     }

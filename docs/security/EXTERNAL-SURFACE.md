@@ -285,7 +285,7 @@ Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
 | `buildApp` | function | [apps/server/src/app.ts:121](../../apps/server/src/app.ts#L121) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:404](../../apps/server/src/app.ts#L404) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:405](../../apps/server/src/app.ts#L405) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |
@@ -642,7 +642,7 @@ Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 | `unavailableFlow` | function | [packages/db/src/flow-read.ts:28](../../packages/db/src/flow-read.ts#L28) | Yes |
 | `readFlows` | function | [packages/db/src/flow-read.ts:38](../../packages/db/src/flow-read.ts#L38) | Yes |
 | `readMarkers` | function | [packages/db/src/flow-read.ts:51](../../packages/db/src/flow-read.ts#L51) | Yes |
-| `readCensus` | function | [packages/db/src/flow-read.ts:70](../../packages/db/src/flow-read.ts#L70) | Yes |
+| `readCensus` | function | [packages/db/src/flow-read.ts:71](../../packages/db/src/flow-read.ts#L71) | Yes |
 | `GuardReceiptStore.constructor` | constructor | [packages/db/src/guard-receipts.ts:32](../../packages/db/src/guard-receipts.ts#L32) | Yes |
 | `GuardReceiptStore.record` | method | [packages/db/src/guard-receipts.ts:41](../../packages/db/src/guard-receipts.ts#L41) | Yes |
 | `GuardReceiptStore.get` | method | [packages/db/src/guard-receipts.ts:59](../../packages/db/src/guard-receipts.ts#L59) | Yes |

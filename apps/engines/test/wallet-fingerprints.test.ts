@@ -6,7 +6,7 @@ import { encodeFunctionData, parseAbi, type Address, type Hex } from 'viem';
 import { walletFeatures, sizeBucket, entropy, type FeatureInput, type FingerprintSwap, type WalletFeatures } from '../src/watcher/features.js';
 import { FP_MODEL, likelyAgentScore, resolveFingerprintLabel } from '../src/watcher/score.js';
 import { calldataShape } from '../src/watcher/calldata.js';
-import { loadFingerprintInput, updateFingerprintWallet, replayFingerprints, refreshFingerprints, FINGERPRINT_REFRESH_ROW_BOUND, FINGERPRINT_CUTS_PER_REFRESH } from '../src/watcher/store.js';
+import { fingerprintWindows, loadFingerprintInput, updateFingerprintWallet, replayFingerprints, refreshFingerprints, FINGERPRINT_REFRESH_ROW_BOUND, FINGERPRINT_CUTS_PER_REFRESH } from '../src/watcher/store.js';
 import { walletLabelsAt, writeRegistryLabels } from '../src/registry-labels.js';
 const address=(n:number)=>`0x${n.toString(16).padStart(40,'0')}` as Address;
 const hash=(n:number)=>`0x${n.toString(16).padStart(64,'0')}` as Hex;
@@ -16,11 +16,19 @@ const swap=(n:number,changes:Partial<FingerprintSwap>={}):FingerprintSwap=>({blo
 const input=(swaps:FingerprintSwap[],changes:Partial<FeatureInput>={}):FeatureInput=>({swaps,block:1000,sec:sec+1000,delegated7702:false,knownRouters:[router],userops:[],useropsComplete:true,reactions:[],...changes});
 const empty=():WalletFeatures=>walletFeatures(input([]));
 describe('fp-1.0.0 pure features',()=>{
-  it('uses at most 200 swaps within an inclusive 14-day cut, excludes future blocks and deduplicates',()=>{
+  it('defaults both windows to three days and rejects a combined window beyond retained swaps',()=>{
+    expect(fingerprintWindows({},{})).toEqual({lookbackDays:3,refreshDays:3});
+    expect(fingerprintWindows({},{FINGERPRINT_LOOKBACK_DAYS:'4',FINGERPRINT_REFRESH_DAYS:'2'})).toEqual({lookbackDays:4,refreshDays:2});
+    expect(()=>fingerprintWindows({},{FINGERPRINT_LOOKBACK_DAYS:'5'})).toThrow('must fit');
+    expect(()=>fingerprintWindows({lookbackDays:0},{})).toThrow('must fit');
+    expect(walletFeatures(input([swap(1,{sec:sec+1000-4*86400})],{lookbackDays:4})).swaps).toBe(1);
+    expect(walletFeatures(input([swap(1,{sec:sec+1000-4*86400})])).swaps).toBe(0);
+  });
+  it('uses at most 200 swaps within an inclusive configured cut, excludes future blocks and deduplicates',()=>{
     const swaps=Array.from({length:201},(_,n)=>swap(n+1));
-    swaps.push(swap(1001),swap(999,{sec:sec+1001}),swap(0,{sec:sec+1000-14*86400-1}),swap(201));
+    swaps.push(swap(1001),swap(999,{sec:sec+1001}),swap(0,{sec:sec+1000-3*86400-1}),swap(201));
     expect(walletFeatures(input(swaps)).swaps).toBe(200);
-    expect(walletFeatures(input([swap(1,{sec:sec+1000-14*86400})])).swaps).toBe(1);
+    expect(walletFeatures(input([swap(1,{sec:sec+1000-3*86400})])).swaps).toBe(1);
     expect(()=>walletFeatures(input([swap(1),swap(1,{aa4337:true})]))).toThrow('Conflicting');
   });
   it('computes actor shares, modal routers/shapes, buy sizes and distinct transaction gas patterns',()=>{

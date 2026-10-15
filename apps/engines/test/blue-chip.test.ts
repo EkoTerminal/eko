@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { binary } from '@eko/db';
+import { binary, emptyLifetime, packSwap, addLifetimeLiquidity } from '@eko/db';
 import { blueChipMeasurements } from '../src/blue-chip.js';
 import type { LoadedSources } from '../src/sources.js';
 const coin=`0x${'11'.repeat(20)}` as const,quote=`0x${'22'.repeat(20)}` as const,pool=`0x${'33'.repeat(20)}` as const;
@@ -14,6 +14,14 @@ function fixture(pons=false):LoadedSources {
 describe('Blue chip latest measurements',()=>{
   it('measures both sides of a graduated launchpad pool and Uniswap launch pool',()=>{
     for(const pons of [true,false]){const m=blueChipMeasurements(fixture(pons));expect(m.realPool).toBe(true);expect(m.liquidityUsd).toBeCloseTo(20000,4);expect(m.holders).toBe(250);}
+  });
+  it('values every pool from retained summaries after its last raw trade is deleted',()=>{
+    const s=fixture(),before=blueChipMeasurements(s),life=emptyLifetime();
+    const trade={...s.swaps[0],ts:new Date('2026-10-01'),tx_hash:binary(`0x${'ab'.repeat(32)}`),log_index:0,quote_asset:binary(quote),trader:null,side:1,price_quote:1};
+    life.poolLastPriced={[pool]:packSwap(trade)};
+    addLifetimeLiquidity(life,s.events.map(e=>({...e,tx_hash:trade.tx_hash,log_index:0,actor:null})),s.launchpad,'');
+    s.lifetime=life;s.swaps=[];s.events=[];
+    expect(blueChipMeasurements(s)).toEqual(before);
   });
   it('rejects an ungraduated curve even if somebody opened a pool for it',()=>{
     const s=fixture(true);s.token.graduated_block=null;expect(blueChipMeasurements(s).realPool).toBe(false);

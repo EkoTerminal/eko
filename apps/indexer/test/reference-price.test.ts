@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, hex, migrate, openDb, type ChainDb } from '@eko/db';
+import { binary, hex, migrate, migrateEngines, compactLifetimeSwaps, openDb, type ChainDb } from '@eko/db';
 import { loadRegistry, v3Abi } from '@eko/chain';
 import { encodeAbiParameters, encodeEventTopics, toHex, type AbiEvent, type Address, type Hex } from 'viem';
 import { BlockDecoder, type Prepared } from '../src/decode.js';
@@ -89,6 +89,15 @@ describe('canonical ETH/USD reference provenance', () => {
     expect((await db.sql.query('SELECT block,pool_id,venue,fee FROM eth_usd_reference_sources')).rows.map(r => ({ ...r, pool_id: hex(r.pool_id as Uint8Array) }))).toEqual([{ block: 1, pool_id: trusted, venue: selected.venue, fee: selected.fee }]);
     await db.tx(tx => tx.deleteAbove(0n));
     expect((await db.sql.query('SELECT * FROM eth_usd_reference_sources')).rows).toEqual([]);
+  });
+
+  it('recovers the identical trusted reference after its old raw observation is compacted',async()=>{
+    const db=await database();await migrateEngines(db);const b1=block(1);
+    const before=await apply(db,decoder(),b1,[creation(b1,canonical,trusted,0),swap(b1,trusted,1,3000)]);
+    await db.tx(tx=>compactLifetimeSwaps(tx,binary(weth),1n,1000,35,60,undefined,true));
+    expect((await db.sql.query('SELECT 1 FROM swaps WHERE pool_id=$1',[binary(trusted)])).rows).toHaveLength(0);
+    const after=await apply(db,decoder(),block(2),[swap(block(2),trading,0)]);
+    expect(after.rate).toEqual(before.rate);expect(await trades(db)).toEqual([{block:2,usd:3000,priced_block:1}]);
   });
 
   it('does not promote a verified canonical event when archive discovery has no selected source', async () => {

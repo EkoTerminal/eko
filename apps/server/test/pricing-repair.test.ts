@@ -71,6 +71,15 @@ describe('Pons swap repricing', () => {
     expect(Number(bars.volume)).toBe(3525);
     expect(await repricePonsSwaps(db, assets, new Date(now - 200 * 60_000), new Date(now), undefined, candleFloor)).toBe(0);
   });
+  it('uses the retained reference price after the last old reference swap is gone',async()=>{
+    const db=await openDb({pgliteDir:':memory:'});handles.push(db);await migrate(db);await migrateEngines(db);
+    await db.insert('tokens',{address:binary(coin),deployer:binary(other),decimals:18,launchpad:'pons',first_block:1,block:1});
+    await db.insert('eth_usd_reference_sources',{block:10,pool_id:binary(pool),venue:'uniswap_v3',fee:100});
+    await db.sql.query('INSERT INTO reference_price_baselines VALUES($1,$2,$3,10,0,2000)',[binary(pool),binary(weth),binary(usdg)]);
+    await swap(db,20,coin,native,'1000000000000000000');
+    expect(await repricePonsSwaps(db,assets,new Date(now-200*60000),new Date(now),undefined,candleFloor)).toBe(1);
+    expect(await priced(db)).toEqual([{block:'20',usd:2000,pending:false,priced_block:'10'}]);
+  });
   it('resumes an hour the budget cut short instead of skipping it', async () => {
     const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
     await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(now - 30 * 3_600_000));

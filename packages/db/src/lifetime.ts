@@ -8,11 +8,16 @@ export interface LifetimeSwap {
   usd: number | null; venue: string; pool_id: string; quote_asset: string;
 }
 export interface Lifetime {
+  legacyIncomplete?:boolean;
+  checkpointHour?:{totalCount:number;unattributedCount:number;totalVolumeUsd:number;unattributedVolumeUsd:number;unknownVolumeCount:number};
   liquidity?: Record<string,LifetimePool>;
+  liquidityThrough?:number; ponsThrough?:number;
   priorRemovalCount?: number;
   priorRemovals?: LifetimeEvidence[];
   tail?:LifetimeSwap[];
   lastPositivePriced?:LifetimeSwap;
+  lastRatingPriced?:LifetimeSwap; peakRawPrice?:number;
+  poolLastPriced?:Record<string,LifetimeSwap>;
   graduation?:LifetimeGraduation;
   first?:LifetimeSwap;
   firstPriced?: LifetimeSwap;
@@ -58,6 +63,12 @@ export function addLifetimeSwaps(s: Lifetime, rows: LifetimeSwap[], id: Lifetime
         const a=g.actors[r.trader!] ??= {amount:0,minPrice:Number.MAX_VALUE,atSec:sec,refs:[]};a.amount+=amount;
         a.minPrice=Math.min(a.minPrice,Number.isFinite(r.usd/amount) ? r.usd/amount : Number.MAX_VALUE);if(a.refs.length<5)a.refs.push(r);
       }
+    }
+    if(r.usd!=null && r.usd>0 && amount>0 && Number(r.amount_quote)>0) {
+      s.poolLastPriced ??= {};s.poolLastPriced[r.pool_id]=r;
+    }
+    if(r.usd!=null && r.usd>0 && amount>0) {
+      s.peakRawPrice=Math.max(s.peakRawPrice ?? 0,r.usd/amount);s.lastRatingPriced=r;
     }
     s.count++; s.volume += r.usd ?? 0; s.net += r.side * amount; s.usdComplete &&= r.usd != null;
     if(attributed) {

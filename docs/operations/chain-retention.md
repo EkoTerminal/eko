@@ -1,5 +1,8 @@
 # Chain-table retention (staging)
 
+The worker now follows [raw-history.md](raw-history.md), which supersedes the legacy raw rules below.
+
+
 Full chain history is the default and the production rule (BACKEND §3.6). On staging, the chain is busy enough that
 raw tables grew about 12 GB a day on 2026-10-04, so the owner approved two measures that day: pause wallet-protocol
 storage and keep a bounded raw history on a 100 GB volume.
@@ -18,7 +21,7 @@ storage and keep a bounded raw history on a 100 GB volume.
   - `RETENTION_PENDING_POOL_DAYS=3`: raw events of pools still unknown after three days.
 - **Derived tables** (`RETENTION_FEED_DAYS` and the table-by-table decisions): [retention.md](retention.md).
 - **Per-coin history** (`RETENTION_DANGER_QUIET_DAYS`, `RETENTION_QUIET_COIN_DAYS`, off until set): quiet Danger and
-  dead coins keep a summary instead of raw transfers, liquidity, Pons events and, after 28 quiet days, swaps. Decisions
+  dead coins keep a summary instead of raw transfers, liquidity, Pons events and, after seven quiet days, swaps. Decisions
   per table and per reader: [retention.md](retention.md#per-coin-history-of-quiet-coins).
 
 ## Why compaction and not deletion

@@ -22,10 +22,11 @@ describe('settled indexed API reads',()=>{
     const urls=[`/v1/coins/${coin}`,`/v1/coins/${coin}/verdict`,`/v1/coins/${coin}/candles?tf=1m&from=${now/1000-45*86400}&to=${now/1000}`,`/v1/coins/${coin}/flow?window=1h`];
     const read=async()=>Promise.all(urls.map(async url=>{const r=await built.app.inject(url);expect(r.statusCode,url).toBe(200);return r.json();}));
     const money=async()=>Promise.all([readCurveStates(db,[coin]),readPoolLiquidity(db,[coin]),readPoolMoney(db,[coin],now)]);
+    const grades=await built.ctx.reads.grades.read();
     const before=await read(),values=await money(),usage=JSON.stringify(built.ctx.chains.meter.usage());
-    const result=await runRetention(db,{quoteTokens:[],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now:()=>now});
+    const result=await runRetention(db,{quoteTokens:[],swapDays:7,transferDays:3,dryRun:false,pauseMs:0,now:()=>now});
     expect(result.historyTransfers+result.historySwaps+result.historyPons).toBeGreaterThan(0);
-    expect(await read()).toEqual(before);expect(await money()).toEqual(values);
+    expect(await read()).toEqual(before);expect(await built.ctx.reads.grades.read()).toEqual(grades);expect(await money()).toEqual(values);
     const scan=(await built.app.inject(`/v1/scan?q=${coin}`)).json();expect(scan.status).toBe('ready');const {delayedSec:_transport,...storedCard}=before[0];expect(scan.card).toEqual(storedCard);
     expect(JSON.stringify(built.ctx.chains.meter.usage())).toBe(usage);
   });

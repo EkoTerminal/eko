@@ -6,7 +6,7 @@ import { addReport, reportRows, retentionBatch } from './determination-retention
 
 /** First grade since each rules cut is a permanent public measurement boundary. */
 export const GRADE_CUTS = ['2026-10-12T18:30:00Z', '2026-10-13T07:30:00Z'] as const;
-export async function preserveGradePrices(db: ChainDb, coin: Uint8Array, before: Date) {
+export async function preserveGradePrices(db: ChainDb, coin: Uint8Array, before: Date, endangeredBefore = before) {
   await db.sql.query(`INSERT INTO retention_grade_prices(coin,since,horizon_sec,graded_at,level,p0,p1,hi)
     SELECT $1,c.since,h.sec,g.ts,g.level,
     (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=$1 AND s.ts<=g.ts AND s.ts>g.ts-interval '1 hour' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1),
@@ -15,7 +15,8 @@ export async function preserveGradePrices(db: ChainDb, coin: Uint8Array, before:
     FROM unnest($2::timestamptz[]) c(since) CROSS JOIN (VALUES(3600),(86400)) h(sec)
     CROSS JOIN LATERAL (SELECT bt.ts,v.data->>'level' AS level FROM verdicts v JOIN engine_block_times bt ON bt.number=v.valid_from_block LEFT JOIN receipt_publications p ON p.id=v.id
       WHERE v.coin=$1 AND v.valid_from_block>=(SELECT number FROM engine_block_times WHERE ts>=c.since ORDER BY ts,number LIMIT 1) AND bt.ts>=c.since AND v.data->>'level' IN ('clear','monitor','danger') ORDER BY v.valid_from_block,p.publication_sequence ASC NULLS FIRST,v.id LIMIT 1) g
-    WHERE g.ts+h.sec*interval '1 second'<$3 ON CONFLICT DO NOTHING`, [coin,GRADE_CUTS,before]);
+    WHERE g.ts+h.sec*interval '1 second'<$3 AND g.ts<$4
+      AND NOT EXISTS(SELECT 1 FROM retention_grade_prices p WHERE p.coin=$1 AND p.since=c.since AND p.horizon_sec=h.sec) ON CONFLICT DO NOTHING`, [coin,GRADE_CUTS,before,endangeredBefore]);
 }
 const old = (block: string) => `EXISTS(SELECT 1 FROM engine_block_times b WHERE b.number=${block} AND b.ts<$1)`;
 const gradeProbe = `SELECT v.id FROM verdicts v JOIN engine_block_times b ON b.number=v.valid_from_block LEFT JOIN receipt_publications p ON p.id=v.id

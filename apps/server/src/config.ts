@@ -165,6 +165,10 @@ const EnvSchema = z.object({
   SECURITY_COLLECTORS: z.string().default('{}').transform(parseSecurityCollectors),
   /** Owner-requested determination retention on the worker. Defaults only report, including legacy rules. */
   RETENTION_SETTLE_HOURS: z.coerce.number().int().min(1).max(8760).default(24),
+  RETENTION_SWAP_DAYS: z.coerce.number().int().min(7).max(365).default(7),
+  RETENTION_TRANSFER_DAYS: z.coerce.number().int().min(1).max(365).default(3),
+  FINGERPRINT_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(365).default(3),
+  FINGERPRINT_REFRESH_DAYS: z.coerce.number().int().min(1).max(365).default(3),
   RETENTION_RAW_DAYS: z.coerce.number().int().min(1).max(365).default(7),
   RETENTION_RATING_DAYS: z.coerce.number().int().min(1).max(365).default(7),
   RETENTION_ENABLED: z.enum(['true','false','1','0']).default('true').transform(v=>v==='true' || v==='1'),
@@ -202,7 +206,7 @@ export const identityConfigKeys = {
   AI_TIMEOUT_MS: true, RPC_PAID_MAX_RPM: true, RPC_PUBLIC_MAX_RPM: true,
   RPC_PAID_DAILY_BUDGET: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
   LIVE_TRADING_ENABLED: true, SECURITY_COLLECTORS: true,
-  RETENTION_SETTLE_HOURS: true, RETENTION_RAW_DAYS: true, RETENTION_RATING_DAYS: true, RETENTION_DRY_RUN: true, RETENTION_ENABLED: true,
+  RETENTION_SWAP_DAYS: true, RETENTION_TRANSFER_DAYS: true, FINGERPRINT_LOOKBACK_DAYS: true, FINGERPRINT_REFRESH_DAYS: true, RETENTION_SETTLE_HOURS: true, RETENTION_RAW_DAYS: true, RETENTION_RATING_DAYS: true, RETENTION_DRY_RUN: true, RETENTION_ENABLED: true,
   RETENTION_QUOTE_TRANSFER_DAYS: true, RETENTION_IDLE_TOKEN_DAYS: true, RETENTION_PENDING_POOL_DAYS: true, RETENTION_FEED_DAYS: true,
   RETENTION_DANGER_QUIET_DAYS: true, RETENTION_QUIET_COIN_DAYS: true,
   SELL_CHECK_ENABLED: true, SELL_CHECK_DAILY_REQUESTS: true,
@@ -262,6 +266,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (c.NODE_ENV === 'production' && !c.DATABASE_URL?.trim()) throw new Error('DATABASE_URL is required in production; PGlite is for local development and tests');
   if (c.NODE_ENV === 'production' && c.APP_ROLE === 'api' && c.RUN_WORKER) throw new Error('API replicas require RUN_WORKER=false; use APP_ROLE=worker for the reconciler');
   if (c.APP_ROLE === 'worker' && !c.RUN_WORKER) throw new Error('APP_ROLE=worker requires RUN_WORKER=true');
+  if(c.FINGERPRINT_LOOKBACK_DAYS+c.FINGERPRINT_REFRESH_DAYS>c.RETENTION_SWAP_DAYS)throw new Error('Fingerprint lookback plus refresh must fit RETENTION_SWAP_DAYS');
   if (c.RETENTION_ENABLED && (!c.RETENTION_DRY_RUN || (c.RETENTION_QUOTE_TRANSFER_DAYS ?? c.RETENTION_IDLE_TOKEN_DAYS ?? c.RETENTION_DANGER_QUIET_DAYS ?? c.RETENTION_QUIET_COIN_DAYS) !== undefined) && c.SECURITY_COLLECTORS.wallets)
     throw new Error('Transfer retention cannot run with the wallet outflow collectors, which read transfer history');
   if (c.APP_ROLE === 'dev' && (!c.RPC_HTTP_URL || !c.RPC_WS_URL)) throw new Error('APP_ROLE=dev requires RPC_HTTP_URL and RPC_WS_URL');

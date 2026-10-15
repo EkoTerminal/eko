@@ -42,10 +42,10 @@ export async function repairRatingPricesAfterReorg(db: ChainDb, through: bigint)
   await db.sql.query('DELETE FROM coin_rating_prices WHERE coin=ANY($1::bytea[])',[affected]);
   await db.sql.query(`INSERT INTO coin_rating_prices(coin,price,peak,ts,block,log_index,tx_hash)
     SELECT a.coin,coalesce(s.usd/s.amount_coin::double precision,b.close/power(10,coalesce(t.decimals,18))),
-      greatest(hi.peak,bhi.peak/power(10,coalesce(t.decimals,18))),coalesce(s.ts,b.minute),coalesce(s.block,b.last_block),coalesce(s.log_index,0),coalesce(s.tx_hash,decode(repeat('00',32),'hex'))
-    FROM unnest($1::bytea[]) a(coin) LEFT JOIN tokens t ON t.address=a.coin
-    LEFT JOIN LATERAL (SELECT * FROM swaps WHERE coin=a.coin AND usd>0 AND amount_coin>0 ORDER BY ts DESC,block DESC,log_index DESC,tx_hash DESC LIMIT 1) s ON true
-    LEFT JOIN LATERAL (SELECT max(usd/amount_coin::double precision) AS peak FROM swaps WHERE coin=a.coin AND usd>0 AND amount_coin>0) hi ON true
+      greatest(hi.peak,bhi.peak/power(10,coalesce(t.decimals,18)),(life.data->>'peakRawPrice')::double precision),coalesce(s.ts,b.minute),coalesce(s.block,b.last_block),coalesce(s.log_index,0),coalesce(s.tx_hash,decode(repeat('00',32),'hex'))
+    FROM unnest($1::bytea[]) a(coin) LEFT JOIN tokens t ON t.address=a.coin LEFT JOIN coin_lifetime life ON life.coin=a.coin
+    LEFT JOIN LATERAL (SELECT * FROM retention_read_swaps WHERE coin=a.coin AND usd>0 AND amount_coin>0 ORDER BY ts DESC,block DESC,log_index DESC,tx_hash DESC LIMIT 1) s ON true
+    LEFT JOIN LATERAL (SELECT max(usd/amount_coin::double precision) AS peak FROM retention_read_swaps WHERE coin=a.coin AND usd>0 AND amount_coin>0) hi ON true
     LEFT JOIN LATERAL (SELECT close,minute,last_block FROM bars_1m WHERE coin=a.coin ORDER BY minute DESC LIMIT 1) b ON true
     LEFT JOIN LATERAL (SELECT max(high) AS peak FROM bars_1m WHERE coin=a.coin) bhi ON true
     WHERE s.coin IS NOT NULL OR b.close IS NOT NULL`,[affected]);

@@ -270,9 +270,11 @@ export class BlockDecoder {
         // pool that fails the check (no reference pool had creation_verified on 2026-10-13) made the scan walk the pool's
         // whole history to return nothing: 21 head ticks stalled 10 to 40 s in 30 hours, longer as the history grew.
         const last = await db.sql.query<{ price_quote: number; block: string }>(`SELECT x.price_quote,x.block FROM pools p CROSS JOIN LATERAL (
-            SELECT s.price_quote,s.block FROM swaps s WHERE s.pool_id=p.id AND s.venue=$1 AND s.coin=$2 AND s.quote_asset=$3
+            SELECT y.price_quote,y.block FROM ((SELECT s.price_quote,s.block,s.log_index FROM swaps s WHERE s.pool_id=p.id AND s.venue=$1 AND s.coin=$2 AND s.quote_asset=$3
               AND s.block <= $4 AND s.block >= p.created_block AND s.price_quote>0 AND s.price_quote<'Infinity'::double precision
-            ORDER BY s.block DESC,s.log_index DESC LIMIT 1) x
+            ORDER BY s.block DESC,s.log_index DESC LIMIT 1)
+            UNION ALL SELECT s.price_quote,s.block,s.log_index FROM reference_price_baselines s WHERE s.pool_id=p.id AND s.coin=$2 AND s.quote_asset=$3 AND s.block<=$4 AND s.block>=p.created_block
+            ) y ORDER BY y.block DESC,y.log_index DESC LIMIT 1) x
           WHERE p.id=$5 AND p.venue=$1 AND p.creation_verified AND p.fee=$6
             AND ((p.currency0=$2 AND p.currency1=$3) OR (p.currency0=$3 AND p.currency1=$2))`, ['uniswap_v3', binary(weth), binary(usdg), n.toString(), binary(selected.address), selected.fee]);
         if (last.rows[0]) this.referenceRate = { value: last.rows[0].price_quote, block: BigInt(last.rows[0].block), source: selected };

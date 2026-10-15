@@ -55,6 +55,7 @@ export async function readMarkers(db:ChainDb,coin:Address,from:number,to:number)
   if(!ready)return {rows:[],markers:[],cursor:null,unavailable:['labels'],delayedSec:0};
   const rows=(await db.sql.query<{data:unknown}>(`SELECT e.data FROM flow_events e JOIN chain_blocks b ON b.number=e.block AND b.hash=e.block_hash
     WHERE e.coin=$1 AND e.model_version=$2 AND e.ts>=to_timestamp($3::double precision) AND e.ts<to_timestamp($4::double precision)
+      AND e.block>coalesce((SELECT swaps_through_block FROM history_prunes WHERE coin=$1),-1)
     ORDER BY e.ts,e.block,e.tx_hash,e.log_index LIMIT 5001`,[binary(coin),model,from,to])).rows;
   const pending=(await db.sql.query<{n:string}>(`SELECT count(*) AS n FROM swaps s WHERE s.coin=$1 AND s.ts>=to_timestamp($2::double precision) AND s.ts<to_timestamp($3::double precision)
     AND NOT EXISTS(SELECT 1 FROM flow_events e JOIN chain_blocks b ON b.number=e.block AND b.hash=e.block_hash WHERE e.tx_hash=s.tx_hash AND e.log_index=s.log_index AND e.model_version=$4)`,[binary(coin),from,to,model])).rows[0];

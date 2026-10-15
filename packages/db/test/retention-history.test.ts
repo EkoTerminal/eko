@@ -125,7 +125,7 @@ describe('per-coin history retention', () => {
     expect(await prune(db, coins.dead)).toMatchObject({ rule: 'quiet_coin', verdict_level: 'monitor', danger_playbooks: [], buyers: '2', transfers: String(before.dead.transfers), swaps: String(before.dead.swaps),
       liquidity: '2', pons: '2', first_trade_ts: at(0.001), last_trade_ts: at(3) });
     expect((await prune(db, coins.dead))!.swaps_through_block).not.toBeNull();
-    // Danger and quiet for three days: transfers and events go now, swaps stay until they are 28 days quiet.
+    // Danger and quiet for three days: transfers and events go now, swaps stay until they are seven days quiet.
     expect(await counts(db, coins.danger)).toEqual({ ...before.danger, transfers: 0, liquidity: 1, pons: 0 });
     // The verdict at prune time is recorded: Danger, with its Danger playbooks.
     expect(await prune(db, coins.danger)).toMatchObject({ rule: 'danger_quiet', swaps_through_block: null, verdict_level: 'danger', danger_playbooks: ['bundle_dump', 'honeypot'] });
@@ -228,6 +228,13 @@ describe('determination retention',()=>{
     expect(state.count).toBe(5);expect(state.buyers).toHaveLength(2);
     expect(await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now})).toMatchObject({historyTransfers:0,historySwaps:0,historyLiquidity:0,historyPons:0});
   });
+  it('continues Pons and liquidity summary cleanup without shortening the all-coin raw windows',async()=>{
+    const db=await fixture();await refreshReads(db);const before=await kept(db);
+    const result=await runRetention(db,{quoteTokens:[weth],swapDays:7,transferDays:3,settleHours:24,rawDays:7,dryRun:false,pauseMs:0,batchRows:2,now});
+    expect(result.historyPons).toBeGreaterThan(0);expect(result.historyLiquidity).toBeGreaterThan(0);
+    expect(await counts(db,coins.calm)).toMatchObject({swaps:2,transfers:1,pons:0,liquidity:0});
+    await db.tx(tx=>rebuildBalances(tx));await refreshReads(db);expect(await kept(db)).toEqual(before);
+  });
   it('defaults to a read-only report and does not create snapshots, baselines or deletion invalidations',async()=>{
     const db=await fixture(),tables=['tokens','swaps','token_transfers','liquidity_events','pons_events','transfer_baselines','history_prunes','coin_lifetime','trending_snapshots','read_dirty','flow_dirty','engine_activity_changes'];
     const snapshot=()=>Promise.all(tables.map(t=>table(db,`SELECT * FROM ${t} ORDER BY 1,2`)));
@@ -237,10 +244,10 @@ describe('determination retention',()=>{
     expect(report.tables?.find(t=>t.table==='swaps')).toMatchObject({estimatedBytes:0,estimateSkipped:true});
     expect(await snapshot()).toEqual(before);
   });
-  it('keeps ordered swap evidence for 28 days and leaves undecided past horizons and pending attribution alone',async()=>{
+  it('keeps ordered swap evidence for seven days and leaves undecided past horizons and pending attribution alone',async()=>{
     const db=await fixture(),pending=await counts(db,coins.pending),unlabeled=await counts(db,coins.unlabeled);
     await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now});
-    expect((await counts(db,coins.calm)).swaps).toBe(5);
+    expect((await counts(db,coins.calm)).swaps).toBe(2);
     expect(await counts(db,coins.pending)).toEqual(pending);expect(await counts(db,coins.unlabeled)).toEqual(unlabeled);
     expect((await counts(db,coins.calm)).transfers).toBe(0);
   });

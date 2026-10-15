@@ -1,3 +1,4 @@
+import { addOutcomeHours, prepareOutcomeEvents, addOutcomeEvents } from './raw-history-checkpoints.js';
 import { retentionLimits } from './retention-control.js';
 import type { ChainDb } from './client.js';
 import { addLifetimePons, addLifetimeSwaps, addLifetimeLiquidity, type LifetimeLiquidityRow, emptyLifetime, packSwap, readLifetime, saveLifetime, recordBuyerStatistics } from './lifetime.js';
@@ -26,7 +27,7 @@ export async function retentionBatch<T>(db: ChainDb, work: (tx: ChainDb) => Prom
     if (pauseMs) await new Promise(resolve => setTimeout(resolve, pauseMs));
   }
 }
-async function preserveGraduation(db: ChainDb, coin: Uint8Array, through: bigint) {
+export async function preserveGraduation(db: ChainDb, coin: Uint8Array, through: bigint) {
   await db.sql.query(`UPDATE coin_lifetime l SET opening_holdings=x.data FROM tokens t CROSS JOIN LATERAL (
     SELECT coalesce(jsonb_object_agg(encode(holder,'hex'),amount::text),'{}') AS data FROM (
       SELECT holder,sum(amount) AS amount FROM (
@@ -47,22 +48,35 @@ async function preserveGraduation(db: ChainDb, coin: Uint8Array, through: bigint
   ) x WHERE l.coin=$1 AND t.address=l.coin AND t.graduated_block<=$2 AND l.graduation_holdings IS NULL`, [coin, through.toString()]);
 }
 /** Aggregate and delete exactly the same prefix in one short transaction. */
-export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, through: bigint, limit: number, firstBlocks = 35, cohortSec = 60, poolManager?: string, minimal=false): Promise<number> {
+export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, through: bigint, limit: number, firstBlocks = 35, cohortSec = 60, poolManager?: string, minimal=false, bounded=false): Promise<number> {
   const identity = (await db.sql.query<{ deployer: Uint8Array; first_block: string; ts: Date }>(`SELECT t.deployer,t.first_block,coalesce(b.ts,c.ts) AS ts FROM tokens t
     LEFT JOIN engine_block_times b ON b.number=t.first_block LEFT JOIN chain_blocks c ON c.number=t.first_block WHERE t.address=$1`, [coin])).rows[0];
-  if (!minimal && !identity?.ts) return 0;
-  if(!minimal && (await db.sql.query('SELECT 1 FROM history_prunes p WHERE p.coin=$1 AND p.transfers+p.swaps+p.liquidity+p.pons>0 AND NOT EXISTS(SELECT 1 FROM coin_lifetime l WHERE l.coin=p.coin)',[coin])).rows.length)return 0;
+  if (!bounded && !minimal && !identity?.ts) return 0;
+  if(!bounded && !minimal && (await db.sql.query('SELECT 1 FROM history_prunes p WHERE p.coin=$1 AND p.transfers+p.swaps+p.liquidity+p.pons>0 AND NOT EXISTS(SELECT 1 FROM coin_lifetime l WHERE l.coin=p.coin)',[coin])).rows.length)return 0;
   // Entire old minutes, as in pruneSwaps: charts must never rebuild a partly removed minute.
   const before=(await db.sql.query<{ts:Date}>('SELECT ts FROM engine_block_times WHERE number=$1 UNION ALL SELECT ts FROM chain_blocks WHERE number=$1 LIMIT 1',[through.toString()])).rows[0]?.ts;
-  if(before && !minimal)await preserveGradePrices(db,coin,before);
-  const rows = (await db.sql.query<Record<string, unknown>>(`WITH edge AS (SELECT date_trunc('minute',ts)+interval '1 minute' AS ts
-    FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY ts LIMIT 1 OFFSET $3)
-    SELECT * FROM swaps WHERE coin=$1 AND block<=$2 AND ts<coalesce((SELECT ts FROM edge),'infinity'::timestamptz)
-    ORDER BY ts LIMIT $4 FOR UPDATE`, [coin, through.toString(), Math.max(0, limit-1),Math.max(1000,limit*2)+1])).rows;
+  if(before && !minimal && !bounded)await preserveGradePrices(db,coin,before);
+  const rows = (await db.sql.query<Record<string, unknown>>(bounded
+    ? `SELECT * FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY block,log_index,tx_hash LIMIT $3 FOR UPDATE`
+    : `WITH edge AS (SELECT date_trunc('minute',ts)+interval '1 minute' AS ts
+      FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY ts LIMIT 1 OFFSET $3)
+      SELECT * FROM swaps WHERE coin=$1 AND block<=$2 AND ts<coalesce((SELECT ts FROM edge),'infinity'::timestamptz)
+      ORDER BY ts LIMIT $4 FOR UPDATE`, bounded ? [coin, through.toString(),limit]
+      : [coin, through.toString(), Math.max(0, limit-1),Math.max(1000,limit*2)+1])).rows;
   rows.sort((a,b)=>BigInt(String(a.block))<BigInt(String(b.block)) ? -1 : BigInt(String(a.block))>BigInt(String(b.block)) ? 1 : Number(a.log_index)-Number(b.log_index) || hex(a.tx_hash as Uint8Array).localeCompare(hex(b.tx_hash as Uint8Array)));
   // A pathological minute is retained rather than creating an unbounded transaction.
-  if (!rows.length || rows.length > Math.max(1000,limit*2)) return 0;
+  if (!rows.length || !bounded && rows.length > Math.max(1000,limit*2)) return 0;
+  await db.sql.query(`INSERT INTO reference_price_baselines(pool_id,coin,quote_asset,block,log_index,price_quote)
+    SELECT DISTINCT ON(s.pool_id,s.coin,s.quote_asset) s.pool_id,s.coin,s.quote_asset,s.block,s.log_index,s.price_quote
+    FROM swaps s JOIN unnest($2::timestamptz[],$3::bytea[],$4::integer[]) p(ts,hash,idx) ON s.ts=p.ts AND s.tx_hash=p.hash AND s.log_index=p.idx
+    WHERE s.coin=$1 AND s.price_quote>0 AND s.price_quote<'Infinity'::double precision
+      AND EXISTS(SELECT 1 FROM eth_usd_reference_sources r WHERE r.pool_id=s.pool_id)
+    ORDER BY s.pool_id,s.coin,s.quote_asset,s.block DESC,s.log_index DESC
+    ON CONFLICT(pool_id,coin,quote_asset) DO UPDATE SET block=excluded.block,log_index=excluded.log_index,price_quote=excluded.price_quote
+    WHERE (excluded.block,excluded.log_index)>(reference_price_baselines.block,reference_price_baselines.log_index)`,
+    [coin,rows.map(r=>new Date(r.ts as Date)),rows.map(r=>r.tx_hash),rows.map(r=>r.log_index)]);
   await recordBuyerStatistics(db,coin,rows);
+  if(bounded)await addOutcomeHours(db,coin,rows);
   const data = minimal ? emptyLifetime() : await readLifetime(db, coin) ?? emptyLifetime();
   if(!minimal && !data.graduation) {
     const graduation=(await db.sql.query<{block:string;ts:Date}>('SELECT t.graduated_block AS block,b.ts FROM tokens t JOIN engine_block_times b ON b.number=t.graduated_block WHERE t.address=$1',[coin])).rows[0];
@@ -74,11 +88,11 @@ export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, throug
     }
   }
   const pools = (await db.sql.query<{ id: Uint8Array }>('SELECT id FROM pools WHERE currency0=$1 OR currency1=$1', [coin])).rows;
-  if(!minimal)addLifetimeSwaps(data, rows.map(packSwap), { deployer:identity!.deployer ? hex(identity!.deployer) : '', firstBlock: Number(identity!.first_block), createdSec: new Date(identity!.ts).getTime()/1000,
+  if(!minimal)addLifetimeSwaps(data, rows.map(packSwap), { deployer:identity?.deployer ? hex(identity.deployer) : '', firstBlock: Number(identity?.first_block ?? 0), createdSec: identity?.ts ? new Date(identity.ts).getTime()/1000 : 0,
     pools: new Set([...pools.map(p => hex(p.id)),...(poolManager ? [poolManager.toLowerCase()] : [])]), firstBlocks, cohortSec });
   if(!minimal)await saveLifetime(db, coin, data);
   const known=rows.filter(r=>r.side===1 && r.trader!=null && !r.senders_pending);
-  if(known.length && !minimal && identity)await db.sql.query('INSERT INTO read_buyers(coin,trader) SELECT $1,holder FROM unnest($2::bytea[]) holder ON CONFLICT DO NOTHING',[coin,known.map(r=>r.trader)]);
+  if(known.length && !minimal)await db.sql.query('INSERT INTO read_buyers(coin,trader) SELECT $1,holder FROM unnest($2::bytea[]) holder ON CONFLICT DO NOTHING',[coin,known.map(r=>r.trader)]);
   const last = rows.at(-1)!;
   await db.sql.query(`INSERT INTO history_prunes(coin,rule,through_block,swaps_through_block,first_trade_ts,last_trade_ts,buyers,swaps)
     VALUES($1,'raw_cap',$2,$2,$3,$4,$5,$6) ON CONFLICT(coin) DO UPDATE SET
@@ -96,7 +110,8 @@ async function compactPons(db: ChainDb, coin: Uint8Array, through: bigint, limit
   if (!rows.length) return 0;
   const launch = (await db.sql.query<{ first_block: string }>('SELECT first_block FROM tokens WHERE address=$1', [coin])).rows[0];
   const data = await readLifetime(db, coin) ?? emptyLifetime();
-  addLifetimePons(data, rows, Number(launch!.first_block)); await saveLifetime(db, coin, data);
+  await addOutcomeEvents(db,coin,rows,'pons',{launchpad:'pons',deployer:'',firstBlock:Number(launch!.first_block)});
+  addLifetimePons(data, rows, Number(launch!.first_block));data.ponsThrough=Math.max(data.ponsThrough ?? 0,...rows.map(r=>Number(r.block))); await saveLifetime(db, coin, data);
   await db.sql.query('DELETE FROM pons_events e USING unnest($1::bytea[],$2::integer[]) AS p(hash,idx) WHERE e.tx_hash=p.hash AND e.log_index=p.idx',[rows.map(r=>r.tx_hash),rows.map(r=>r.log_index)]);
   return rows.length;
 }
@@ -108,7 +123,8 @@ async function compactLiquidity(db:ChainDb,coin:Uint8Array,through:bigint,quotes
   if(!rows.length)return 0;
   const token=(await db.sql.query<{launchpad:string;deployer:Uint8Array}>('SELECT launchpad,deployer FROM tokens WHERE address=$1',[coin])).rows[0]!;
   const data=await readLifetime(db,coin) ?? emptyLifetime();
-  addLifetimeLiquidity(data,rows,token.launchpad,hex(token.deployer));await saveLifetime(db,coin,data);
+  await addOutcomeEvents(db,coin,rows,'liquidity',{launchpad:token.launchpad,deployer:hex(token.deployer),firstBlock:0});
+  addLifetimeLiquidity(data,rows,token.launchpad,hex(token.deployer));data.liquidityThrough=Math.max(data.liquidityThrough ?? 0,...rows.map(r=>Number(r.block)));await saveLifetime(db,coin,data);
   await db.sql.query('DELETE FROM liquidity_events e USING unnest($1::bytea[],$2::integer[]) p(hash,idx) WHERE e.tx_hash=p.hash AND e.log_index=p.idx',[rows.map(r=>r.tx_hash),rows.map(r=>r.log_index)]);
   await db.sql.query(`INSERT INTO history_prunes(coin,rule,through_block,liquidity) VALUES($1,'raw_cap',$2,$3)
     ON CONFLICT(coin) DO UPDATE SET liquidity=history_prunes.liquidity+excluded.liquidity,through_block=greatest(history_prunes.through_block,excluded.through_block)`,[coin,through.toString(),rows.length]);
@@ -132,8 +148,9 @@ export async function pruneDeterminedCoin(db: ChainDb, coin: QuietCoin, rule: Hi
   await retentionBatch(db, async tx => {
     if (!await readLifetime(tx, coin.address)) await saveLifetime(tx, coin.address, emptyLifetime());
     await preserveGraduation(tx, coin.address, through);
+    await prepareOutcomeEvents(tx,coin.address,(await readLifetime(tx,coin.address))!);
   }, 0);
-  await drain(async tx => {
+  if(options.swapDays === undefined && options.transferDays === undefined) await drain(async tx => {
     if(transferThrough==null)return 0;
     const n = await compactTransfers(tx, [coin.address], transferThrough, limit);
     if (n) await tx.sql.query(`INSERT INTO history_prunes(coin,rule,through_block,transfers,verdict_level,danger_playbooks)
@@ -159,8 +176,8 @@ export async function determinationPass(db: ChainDb, options: RetentionOptions, 
   const through = await retentionHorizon(db, days, nowMs); if (through == null) return;
   const taxThrough=await retentionHorizon(db,1,nowMs);
   const transferThrough=taxThrough==null ? null : through<taxThrough ? through : taxThrough;
-  // Fingerprints genuinely require ordered cross-coin 28-day evidence. This exception is not converted into a pass.
-  let swapsThrough = await retentionHorizon(db, Math.max(days, SWAP_EVIDENCE_DAYS), nowMs);
+  // The Census requires seven days, independent of a coin’s determination status.
+  let swapsThrough = options.swapDays !== undefined || options.transferDays !== undefined ? null : await retentionHorizon(db, Math.max(days, SWAP_EVIDENCE_DAYS), nowMs);
   if (swapsThrough != null && !options.dryRun) {
     let done = false;
     while (timeLeft() && !done) { const saved = await snapshotTrending(db, swapsThrough, 1); result.trendingSnapshots += saved.saved; done = saved.complete; }

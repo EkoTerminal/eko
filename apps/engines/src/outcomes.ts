@@ -1,4 +1,4 @@
-import { binary, type ChainDb } from '@eko/db';
+import { binary, unpackSwap, type ChainDb } from '@eko/db';
 import type { Address, EvidenceRef, PlaybookMatch } from '@eko/shared';
 import { RULES_VERSION, type PriorLaunch } from '@eko/playbooks';
 import type { ClockCache } from './activity.js';
@@ -97,8 +97,13 @@ export async function updateOutcomes(db: ChainDb, block: number, nowSec: number,
       liquidityRug || (drop!=null && drop>=0.9 && sellsCount>0) ? 'rugged' :
       denominator>0 && firstHourSold/denominator>0.5 ? 'dumped' : 'survived';
     if(outcome==='survived' && Object.values(s.attributionCoverage ?? {}).some(g=>g.status==='incomplete')){ skip(); continue; }
-    const refs: EvidenceRef[]=[...s.swaps.slice(0,1).map(r=>evidence(r,'Outcome initial price')),...s.swaps.slice(-1).map(r=>evidence(r,'Outcome horizon price')),
-      ...sells.map(r=>evidence(r,'Outcome insider sell'))];
+    const firstSample=s.lifetime?.first ? unpackSwap(s.lifetime.first) : s.swaps[0];
+    const lastSample=s.lifetime?.last ? unpackSwap(s.lifetime.last) : s.swaps.at(-1);
+    // Five canonical insider examples suffice for evidence links, alongside the exact aggregate counts.
+    const sellSamples=(s.lifetime ? [...insiders].flatMap(w=>(s.lifetime!.sellEvidence[w] ?? []).map(unpackSwap)) : sells)
+      .sort((a,b)=>Number(a.block)-Number(b.block)||a.log_index-b.log_index||rowHex(a.tx_hash).localeCompare(rowHex(b.tx_hash))).slice(0,5);
+    const refs: EvidenceRef[]=[...(firstSample ? [evidence(firstSample,'Outcome initial price')] : []),
+      ...(lastSample ? [evidence(lastSample,'Outcome horizon price')] : []),...sellSamples.map(r=>evidence(r,'Outcome insider sell'))];
     const data={ evidence:refs,attributionCoverage:s.attributionCoverage,priceDrop:drop,liquidityRug,firstHourSoldShare:denominator ? firstHourSold/denominator : null };
     await db.sql.query('INSERT INTO outcomes VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [token.address,horizon,end.number,outcome,JSON.stringify(data)]);
     if(!cache)token.done=[...token.done ?? [],horizon];

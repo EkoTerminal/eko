@@ -35,6 +35,7 @@ async function lp(db: ChainDb, n: number, sec: number, actor: Address, kind: str
     kind, actor: binary(actor), data: JSON.stringify({ owner: actor, amount: '1000', tickLower: '-100', tickUpper: '100' }) });
 }
 async function fixture() {
+  event=0;
   const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
   await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(epoch * 1000));
   await block(db, 1, 0);
@@ -64,7 +65,7 @@ describe('engines over pruned coin history', () => {
     const worker = (sec: number) => new EngineWorker(db, { now: () => epoch + sec });
     expect(await worker(5 * DAY + 600).poll()).toBeGreaterThan(0);
     // A Danger card, all three outcome horizons labeled, then two quiet days: the Danger rule drops its transfers and
-    // liquidity events. Its swaps stay (they are younger than 28 days).
+    // liquidity events. Its swaps stay (they are younger than seven days).
     await db.sql.query(`UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','"danger"') WHERE coin=$1`, [binary(coin)]);
     for (const horizon of ['1h', '24h', '7d']) await db.sql.query("INSERT INTO outcomes VALUES($1,$2,1,'rugged','{}') ON CONFLICT DO NOTHING", [binary(coin), horizon]);
     await block(db, 20, 8 * DAY);
@@ -104,7 +105,7 @@ describe('engines over pruned coin history', () => {
     // Its swaps were kept, so whole-life trade checks are still measured.
     expect(sources.attributionCoverage?.deployer_sells?.reason).toBe('unattributed_swaps');
 
-    // Quiet again for 28 days: its swaps go too (trending lists are saved first). A later revival marks the whole-life
+    // Quiet again for seven days: its swaps go too (trending lists are saved first). A later revival marks the whole-life
     // trade checks partial, and a buyer's place among the coin's buyers counts the deleted buyers.
     for (const horizon of ['1h', '24h', '7d']) expect((await db.sql.query('SELECT 1 FROM outcomes WHERE coin=$1 AND horizon=$2', [binary(coin), horizon])).rows).toHaveLength(1);
     await block(db, 30, 40 * DAY);
@@ -156,7 +157,7 @@ describe('revival with lifetime sufficient statistics',()=>{
       await block(db,30,40*DAY);
     }
     const stored=await latest(compacted);
-    await runRetention(compacted,{quoteTokens:[],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,batchRows:2,now:()=>(epoch+40*DAY)*1000});
+    await runRetention(compacted,{quoteTokens:[],swapDays:7,transferDays:3,dryRun:false,pauseMs:0,batchRows:2,now:()=>(epoch+40*DAY)*1000});
     expect(await latest(compacted)).toEqual(stored);
     expect((await compacted.sql.query('SELECT 1 FROM swaps WHERE coin=$1',[binary(coin)])).rows).toHaveLength(0);
     const job=await new ScanJobs(compacted).ensure(coin,coin,'pending');await compacted.sql.query("UPDATE scan_jobs SET phase='evaluating' WHERE id=$1",[job.id]);
@@ -214,5 +215,29 @@ describe('liquidity-only revival',()=>{
       expect(await new EngineWorker(db,{now:()=>epoch+41*DAY+100}).poll()).toBeGreaterThan(0);
     }
     expect((await latest(compacted)).verdict.level).toBe('danger');expect((await latest(compacted)).verdict.level).toBe((await latest(full)).verdict.level);
+  });
+});
+
+
+describe('delayed outcomes after the all-coin raw caps',()=>{
+  it('keeps all three horizon measurements identical when the outcome job runs after deletion',async()=>{
+    const {updateOutcomes}=await import('../src/outcomes.js');
+    const full=await fixture(),compacted=await fixture();
+    for(const db of [full,compacted]) {
+      await db.sql.query("UPDATE tokens SET launchpad='pons',curve=$2 WHERE address=$1",[binary(coin),binary(address(3))]);
+      await db.insert('pons_events',{block:1,tx_hash:binary(hash(++event)),log_index:0,token:binary(coin),emitter:binary(address(3)),kind:'launch',data:{graduationThreshold:'1000'}});
+      await db.insert('pons_events',{block:2,tx_hash:binary(hash(++event)),log_index:0,token:binary(coin),emitter:binary(address(3)),kind:'trade',data:{amountEth:'10',feeEth:'0',taxEth:'0',side:1}});
+      await block(db,20,8*DAY);await block(db,30,40*DAY);
+      await db.sql.query("INSERT INTO coin_cards VALUES('sample-delayed-card',$1,30,'fixture','{\"verdict\":{\"level\":\"monitor\"}}','1.0.2')",[binary(coin)]);
+      await db.sql.query("INSERT INTO coin_card_latest VALUES($1,'sample-delayed-card',30,'{\"verdict\":{\"level\":\"monitor\"}}')",[binary(coin)]);
+      await db.sql.query("INSERT INTO engine_block_times SELECT number,ts,hash,'head' FROM chain_blocks ON CONFLICT DO NOTHING");
+    }
+    const r=await runRetention(compacted,{quoteTokens:[],swapDays:7,transferDays:3,settleHours:24,rawDays:7,dryRun:false,pauseMs:0,batchRows:2,now:()=>(epoch+40*DAY)*1000});
+    expect(r.historyPons).toBe(2);expect(r.historyLiquidity).toBe(2);expect(r.historySwaps).toBe(4);expect(r.historyTransfers).toBe(5);
+    expect((await compacted.sql.query('SELECT * FROM swaps')).rows).toHaveLength(0);
+    expect((await compacted.sql.query<{data:{curve:{reserve:string}}}>('SELECT data FROM coin_outcome_events')).rows.every(r=>r.data.curve.reserve==='10')).toBe(true);
+    for(const db of [full,compacted])await updateOutcomes(db,30,epoch+40*DAY);
+    const read=async(db:ChainDb)=>(await db.sql.query("SELECT horizon,outcome,data FROM outcomes ORDER BY horizon")).rows;
+    expect((await read(full)).length).toBe(3);expect(await read(compacted)).toEqual(await read(full));
   });
 });

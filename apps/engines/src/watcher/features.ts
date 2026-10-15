@@ -12,7 +12,7 @@ export interface WalletFeatures {
   missing:string[];
 }
 export interface FeatureInput {
-  swaps:readonly FingerprintSwap[]; block:number; sec:number;
+  swaps:readonly FingerprintSwap[]; block:number; sec:number; lookbackDays?:number;
   delegated7702:boolean|null; knownRouters:readonly string[]|null;
   userops:readonly {block:number;sec:number;hash:string;paymaster:boolean|null}[];
   useropsComplete:boolean;
@@ -32,10 +32,11 @@ export function sizeBucket(wei:string):string {
   const scale=10n**BigInt(digits-4);return ((n+scale/2n)/scale*scale).toString();
 }
 export function walletFeatures(input:FeatureInput):WalletFeatures {
-  const {block,sec}=input;
+  const {block,sec}=input,days=input.lookbackDays ?? 3;
+  if(!Number.isInteger(days)||days<1)throw new Error('Invalid fingerprint lookback');
   if(!Number.isSafeInteger(block)||block<0||!Number.isSafeInteger(sec)||sec<0)throw new Error('Invalid feature cut');
   const unique=new Map<string,FingerprintSwap>();
-  for(const s of input.swaps)if(s.block<=block && s.sec<=sec && s.sec>=sec-14*86400) {
+  for(const s of input.swaps)if(s.block<=block && s.sec<=sec && s.sec>=sec-days*86400) {
     const key=`${s.txHash}:${s.logIndex}`;
     if(unique.has(key)&&JSON.stringify(unique.get(key))!==JSON.stringify(s))throw new Error('Conflicting swap observation');
     unique.set(key,s);
@@ -43,7 +44,7 @@ export function walletFeatures(input:FeatureInput):WalletFeatures {
   const swaps=[...unique.values()].sort((a,b)=>b.block-a.block||b.txHash.localeCompare(a.txHash)||b.logIndex-a.logIndex).slice(0,200).reverse();
   const n=swaps.length;
   const aa4337Share=n&&swaps.every(s=>s.aa4337!==null)?swaps.filter(s=>s.aa4337).length/n:null;
-  const ops=[...new Map(input.userops.filter(o=>o.block<=block&&o.sec<=sec&&o.sec>=sec-14*86400).map(o=>[o.hash,o])).values()];
+  const ops=[...new Map(input.userops.filter(o=>o.block<=block&&o.sec<=sec&&o.sec>=sec-days*86400).map(o=>[o.hash,o])).values()];
   const paymasterShare=input.useropsComplete ? ops.length&&ops.every(o=>o.paymaster!==null)?ops.filter(o=>o.paymaster).length/ops.length:ops.length===0?0:null : null;
   const routers=swaps.map(s=>s.router?.toLowerCase()??null),routerTopShare=share(routers);
   // Equal modal routers are resolved lexically, independent of ingest order.

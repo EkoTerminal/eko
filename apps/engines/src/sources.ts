@@ -66,6 +66,8 @@ const eq = (a: Uint8Array, b: Uint8Array) => rowHex(a) === rowHex(b);
 
 let holderCursor=0;
 export async function holdingsAt(db: ChainDb, coin: Address, block: number, cache?:ReplayCache,lane='now'): Promise<Holding[]> {
+  const checkpoint=(await db.sql.query<{data:Record<string,{amount:string;block:string}>}>('SELECT data FROM coin_holder_checkpoints WHERE coin=$1 AND block=$2',[binary(coin),block])).rows[0];
+  if(checkpoint)return Object.entries(checkpoint.data).sort(([a],[b])=>a.localeCompare(b)).map(([holder,r])=>prepareHolding({holder:Buffer.from(holder,'hex'),...r}));
   if(cache)return cache.holdingsAt(coin,block,lane);
   // Select the nearer endpoint. Old horizon/opening views must not reverse a coin's entire future history.
   const bounds=(await db.sql.query<{first:string|null;last:string|null;baseline:string|null}>(`SELECT
@@ -129,8 +131,16 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   // A coin whose raw history retention dropped is evaluated again only after it trades or moves again; its earlier
   // checkpoints and quiet period cannot be rebuilt from what is left (docs/operations/retention.md).
   const prune=await historyPrune(db,coin);
-  const savedLifetime=await readLifetime(db,binary(coin));
-  if(prune && (block<=prune.watermark || !(savedLifetime && retrospective) && !(await revivedBy(db,coin,prune,block))))return unavailable(db,coin,block,'history_pruned');
+  const checkpoint=retrospective ? (await db.sql.query<{data:Lifetime}>('SELECT data FROM coin_lifetime_checkpoints WHERE coin=$1 AND block=$2',[binary(coin),block])).rows[0] : undefined;
+  if(checkpoint)cache=undefined;
+  const savedLifetime=checkpoint?.data ?? await readLifetime(db,binary(coin));
+  if(checkpoint && savedLifetime) {
+    const events=(await db.sql.query<{data:Lifetime}>('SELECT data FROM coin_outcome_events WHERE coin=$1 AND block=$2',[binary(coin),block])).rows[0];
+    if(events)for(const key of ['liquidity','curve','priorRemovalCount','priorRemovalLastBlock','priorRemovals'] as const)Object.assign(savedLifetime,{[key]:events.data[key]});
+    else if(savedLifetime.liquidity && (savedLifetime.liquidityThrough==null || savedLifetime.liquidityThrough>block)
+      || savedLifetime.curve.launchSeen && (savedLifetime.ponsThrough==null || savedLifetime.ponsThrough>block))savedLifetime.legacyIncomplete=true;
+  }
+  if(prune && (block<=prune.watermark && !checkpoint || !(savedLifetime && retrospective) && !(await revivedBy(db,coin,prune,block))))return unavailable(db,coin,block,'history_pruned');
   const token = cache ? cache.tokens.get(coin) : (await db.sql.query<TokenRow>('SELECT * FROM tokens WHERE address=$1 AND first_block<=$2', [binary(coin), block])).rows[0];
   if(token && Number(token.first_block)>block)return unavailable(db,coin,block,'launch_after_checkpoint');
   if (!token?.deployer || token.name == null || token.symbol == null) return unavailable(db,coin,block,'missing_launch_identity');
@@ -454,7 +464,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   s.trending=cache ? await cache.trending(s.createdAtBlock,trending) : await trending();
   const ranked=cache ? await cache.ranked(block,asOfSec) : memo ? await sharedRanks(db,memo,block,asOfSec) : await liveRanks(db,block,asOfSec);
   const rank=ranked.get(coin);if(rank!=null)s.trendingRank=rank;
-  const lifetimeGap=trade.attribution,hour=attributionGap(trade.recent,'trailing_1h');
+  const lifetimeGap=trade.attribution,hour=checkpoint?.data.checkpointHour ? gapFromTotals(checkpoint.data.checkpointHour,'trailing_1h') : attributionGap(trade.recent,'trailing_1h');
   const compactedLiquidity=Object.values(savedLifetime?.liquidity ?? {}).reduce((v,p)=>({events:v.events+p.events,missing:v.missing+p.missing}),{events:0,missing:0});
   const liquidityMissing=compactedLiquidity.missing+events.filter(e=>e.actor==null || e.senders_pending).length;
   const deferred=Number((await db.sql.query<{n:string}>(`SELECT count(*) AS n FROM pending_pool_events e JOIN pools p ON p.id=e.emitter
@@ -490,7 +500,7 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     if(lifetime.usdComplete && s.curve) { s.curve.volumeUsd=lifetime.curveVolume;s.curve.progressUsd=Math.max(0,lifetime.curveNet); }
   }
   s.attributionCoverage=coverage;
-  if(prune && !savedLifetime) {
+  if(prune && (!savedLifetime || savedLifetime.legacyIncomplete)) {
     // Checks over the coin's whole life or early history lost their raw rows. Holdings stay exact (balances and
     // baselines) and the trailing-hour checks read only new activity, so those are still measured.
     if(prune.swaps)for(const key of ['deployer_sells','bundles','fresh_wallet_share','exempt_insiders'] as const)coverage[key]=prunedGap(prune.swaps,swapEnd);

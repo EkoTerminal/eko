@@ -3,6 +3,7 @@ import { determinationPass, compactUnratedTransfers, compactLifetimeSwaps, repor
 import { ratingRetention } from './rating-retention.js';
 import type { ChainDb } from './client.js';
 import { snapshotTrending } from './trending.js';
+import { rawHistoryPass } from './raw-history.js';
 import { binary } from './types.js';
 
 /**
@@ -20,6 +21,9 @@ export interface RetentionOptions {
   dryRun?: boolean;
   settleHours?: number;
   rawDays?: number;
+  /** All-coin raw caps, superseding the legacy determination rules when supplied. */
+  swapDays?: number;
+  transferDays?: number;
   ratingDays?: number;
   pauseMs?: number;
   /** Frozen rule inputs supplied by the worker, defaults match playbooks v1. */
@@ -67,13 +71,8 @@ const DAY_MS = 86_400_000;
 export const FEED_BATCH_ROWS = 5_000;
 /** The engines stop evaluating a coin seven days after its last activity. */
 export const ENGINE_IDLE_DAYS = 7;
-/**
- * Swaps stay at least this long after a coin's last swap, whatever the rule. Wallet fingerprints read each wallet's
- * swaps of the 14 days before a swap block, plus the buy order of every coin it bought then, and refresh every swap
- * block of a wallet's last 14 days (28 days in all). The Census reads seven days. Deleting younger swaps would change
- * labels and the Census for wallets and coins that are still active.
- */
-export const SWAP_EVIDENCE_DAYS = 28;
+/** The Census requires seven complete days of raw swaps. */
+export const SWAP_EVIDENCE_DAYS = 7;
 /** Feed kinds projected from kept sources and never re-derived by the read-model refresh. `new_pair` and `graduation`
  * rows are a few per coin and are re-derived by every refresh of their coin, so they stay. */
 const FEED_KINDS = ['verdict', 'playbook', 'wash'];
@@ -374,6 +373,8 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
   const runRule: typeof rules = (name, work) => rules(name, (timeLeft, rows) => { limit = rows; return work(timeLeft, rows); });
   const quote = options.quoteTokens.map(token => binary(token as `0x${string}`));
   if (options.rawDays !== undefined) quote.push(ZERO_ADDRESS);
+  const capped = options.swapDays !== undefined || options.transferDays !== undefined;
+  if (capped) await rawHistoryPass(db, options, result, started, runRule);
   const modern = options.settleHours !== undefined || options.rawDays !== undefined;
   const report = async (table: string) => {
     if (!result.tables?.some(r => r.table === table)) addReport(result, await reportRows(db, table, '', []));
@@ -394,7 +395,7 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
     }
     result.finished = false; return false;
   };
-  if (options.rawDays !== undefined) {
+  if (options.rawDays !== undefined && !capped) {
     for (const swaps of [false, true]) await runRule(swaps ? 'raw_swaps' : 'unrated_transfers', async timeLeft => {
       if (options.dryRun) { await report(swaps ? 'swaps' : 'token_transfers'); return; }
       const through = await retentionHorizon(db, swaps ? Math.max(options.rawDays!, SWAP_EVIDENCE_DAYS) : options.rawDays!, started);
@@ -423,13 +424,13 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
     });
   }
   const quoteDays = modern ? (options.rawDays === undefined ? undefined : Math.min(options.rawDays, options.quoteDays ?? options.rawDays)) : options.quoteDays;
-  if (quoteDays !== undefined && quote.length) await runRule('quote_transfers', async timeLeft => {
+  if (!capped && quoteDays !== undefined && quote.length) await runRule('quote_transfers', async timeLeft => {
     const through = await retentionHorizon(db, quoteDays, started); if (through == null) return;
     if (options.dryRun) await report('token_transfers');
     else await drain(timeLeft, tx => compactTransfers(tx, quote, through, limit), 'quoteRows');
   });
   if (options.ratingDays !== undefined) await ratingRetention(db, options, result, started, runRule, cursors);
-  if (!modern && options.idleTokenDays !== undefined) await runRule('idle_transfers', async timeLeft => {
+  if (!capped && !modern && options.idleTokenDays !== undefined) await runRule('idle_transfers', async timeLeft => {
     const through = await retentionHorizon(db, options.idleTokenDays!, started); if (through == null) return;
     if (options.dryRun) { await report('token_transfers'); return; }
     while (timeLeft()) {
@@ -458,7 +459,7 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
       } else await drain(timeLeft, tx => step(tx, through, Math.min(limit, FEED_BATCH_ROWS)), count);
     });
   }
-  if (!modern) for (const [rule, days] of [['danger_quiet', options.dangerQuietDays], ['quiet_coin', options.quietCoinDays]] as const) {
+  if (!capped && !modern) for (const [rule, days] of [['danger_quiet', options.dangerQuietDays], ['quiet_coin', options.quietCoinDays]] as const) {
     if (days === undefined) continue;
     await runRule(rule, async timeLeft => {
       if (options.dryRun) { for (const table of ['token_transfers','liquidity_events','pons_events','swaps']) await report(table); return; }

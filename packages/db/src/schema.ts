@@ -31,7 +31,7 @@ export const pools = pgTable('pools', {
 export const swaps = pgTable('swaps', {
   ts: ts('ts').notNull(), ...event(), venue: text('venue').notNull(), poolId: bytes('pool_id').notNull(), coin: bytes('coin').notNull(), quoteAsset: bytes('quote_asset').notNull(), trader: bytes('trader'), txFrom: bytes('tx_from'), txTo: bytes('tx_to'), sendersPending: boolean('senders_pending').notNull().default(false), recipient: bytes('recipient'), side: smallint('side').notNull(),
   amountCoin: numeric('amount_coin', { precision: 78, scale: 0 }).notNull(), amountQuote: numeric('amount_quote', { precision: 78, scale: 0 }).notNull(), priceQuote: doublePrecision('price_quote'), pricingPending: boolean('pricing_pending').notNull().default(false), usd: doublePrecision('usd'), pricedBlock: bigint('priced_block', { mode: 'bigint' }),
-}, t => [primaryKey({ columns: [t.ts, t.txHash, t.logIndex] }), index('swaps_coin_block').on(t.coin, t.block), index('swaps_trader_block').on(t.trader, t.block)]);
+}, t => [primaryKey({ columns: [t.ts, t.txHash, t.logIndex] }), index('swaps_coin_order').on(t.coin, t.block, t.logIndex, t.txHash, t.ts)]);
 export const liquidityEvents = pgTable('liquidity_events', {
   ...event(), ts: ts('ts').notNull(), venue: text('venue').notNull(), poolId: bytes('pool_id').notNull(), kind: text('kind').notNull(), actor: bytes('actor'), txFrom: bytes('tx_from'), txTo: bytes('tx_to'), sendersPending: boolean('senders_pending').notNull().default(false), data: jsonb('data').notNull(),
 }, t => [primaryKey({ columns: [t.txHash, t.logIndex] })]);

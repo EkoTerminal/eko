@@ -14,6 +14,9 @@ export async function captureBackfillSnapshot(db: ChainDb, input: unknown, meta:
       return rows;
     };
     const head = plan.head.block, recent = plan.recent.block;
+    const compacted=(await query<{present:boolean}>("SELECT to_regclass('raw_history_watermarks') IS NOT NULL AS present"))[0]?.present;
+    if(compacted && (await query(`SELECT 1 FROM raw_history_watermarks WHERE name='token_transfers' OR (name='swaps' AND through_block>=$1) LIMIT 1`,[recent])).length)
+      throw new Error('Backfill evidence crosses compacted raw history: use an archive');
     const ranges = await bounded<GateSnapshot['ranges'][number]>(`SELECT stream,from_block::text AS "from",to_block::text AS "to",status,lease_owner AS "leaseOwner",to_char(lease_until AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "leaseUntil",attempts
       FROM ingest_ranges WHERE stream=ANY($1::text[]) AND from_block <= $2 ORDER BY stream,from_block`, [Object.values(plan.streams), head]);
     const checkpoints = await bounded<GateSnapshot['checkpoints'][number]>(`SELECT c.stream,c.block::text,CASE WHEN c.hash IS NOT NULL THEN '0x'||encode(c.hash,'hex') END AS hash,
