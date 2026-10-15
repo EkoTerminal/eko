@@ -59,3 +59,55 @@ it.skipIf(!databaseUrl)('two concurrent refreshes with overlapping, reversed coi
     await pool.end();await admin.sql.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();
   }
 });
+
+it.skipIf(!databaseUrl)('manual raw mutex excludes the worker without blocking new inserts; bar locks isolate coins',async()=>{
+  const {runRetention}=await import('../src/retention.js');
+  const {refreshBars}=await import('../src/market.js');
+  const admin=await openDb({databaseUrl});
+  const schema=`backlog_test_${randomUUID().replaceAll('-','')}`;
+  const pool=new pg.Pool({connectionString:databaseUrl,max:2});
+  const clients=await Promise.all([pool.connect(),pool.connect()]);
+  const handles=clients.map(client=>new ChainDb(client,async work=>{
+    await client.query('BEGIN');
+    try {const result=await work(client);await client.query('COMMIT');return result;}
+    catch(error) {await client.query('ROLLBACK');throw error;}
+  }));
+  let release:()=>void=()=>{},held:Promise<void>|undefined;
+  try {
+    await admin.sql.query(`CREATE SCHEMA ${schema}`);
+    for(const client of clients)await client.query(`SET search_path TO ${schema},public`);
+    await migrate(handles[0]!);await migrateEngines(handles[0]!);
+    const current=new Date(),minute=new Date(Math.floor(current.getTime()/60000)*60000),old=new Date(current.getTime()-20*86400000);
+    const coin=Buffer.alloc(20,1),other=Buffer.alloc(20,2),hash=Buffer.alloc(32,1);
+    await handles[0]!.ensurePartitions(old);
+    await clients[0]!.query('INSERT INTO chain_blocks VALUES(1,1,$1,$1,$2)',[hash,old]);
+    await clients[0]!.query('SELECT pg_advisory_lock(4663,208)');
+    const result=await runRetention(handles[1]!,{quoteTokens:[],swapDays:7,transferDays:3,dryRun:false});
+    expect(result.skippedRules).toEqual(['raw_swaps','raw_transfers']);
+    await handles[1]!.tx(async tx=>{
+      await tx.sql.query("SET LOCAL statement_timeout='2s'");
+      await tx.insert('token_transfers',{ts:current,block:2,tx_hash:hash,log_index:0,token:coin,from_address:coin,to_address:other,amount:'1'});
+    });
+    await clients[0]!.query('SELECT pg_advisory_unlock(4663,208)');
+    // Ensure partition DDL is already done on both connections before holding the bar mutex.
+    await handles[1]!.ensurePartitions(current);
+    let ready:()=>void=()=>{};
+    const acquired=new Promise<void>(resolve=>{ready=resolve;});
+    const finish=new Promise<void>(resolve=>{release=resolve;});
+    held=handles[0]!.tx(async tx=>{await refreshBars(tx,[{coin,minute}]);ready();await finish;});
+    await Promise.race([acquired,held]);
+    await handles[1]!.tx(async tx=>{
+      await tx.sql.query("SET LOCAL lock_timeout='200ms'");
+      await refreshBars(tx,[{coin:other,minute}]);
+    });
+    await expect(handles[1]!.tx(async tx=>{
+      await tx.sql.query("SET LOCAL lock_timeout='200ms'");
+      await refreshBars(tx,[{coin,minute}]);
+    })).rejects.toMatchObject({code:'55P03'});
+    release();await held;
+  } finally {
+    release();await held?.catch(()=>{});
+    for(const client of clients) {await client.query('ROLLBACK');await client.query('SELECT pg_advisory_unlock_all()');client.release();}
+    await pool.end();await admin.sql.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();
+  }
+});

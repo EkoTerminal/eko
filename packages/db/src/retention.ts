@@ -96,9 +96,10 @@ export async function compactTransfers(db: ChainDb, tokens: Uint8Array[], throug
   if (!tokens.length) return 0;
   return db.tx(async tx => {
     const result = await tx.sql.query<{ rows: string }>(`WITH picked AS MATERIALIZED (
-        SELECT tableoid, ctid FROM token_transfers WHERE token = ANY($1::bytea[]) AND block <= $2 ${fromBlock===undefined ? '' : 'AND block >= $4'} ORDER BY token, block LIMIT $3 FOR UPDATE
+        SELECT ts, tx_hash, log_index FROM token_transfers WHERE token = ANY($1::bytea[]) AND block <= $2 ${fromBlock===undefined ? '' : 'AND block >= $4'} ORDER BY token, block LIMIT $3 FOR UPDATE
       ), moved AS (
-        DELETE FROM token_transfers t USING picked p WHERE t.tableoid = p.tableoid AND t.ctid = p.ctid
+        DELETE FROM token_transfers t USING picked p WHERE t.ts = p.ts AND t.tx_hash = p.tx_hash AND t.log_index = p.log_index
+          AND t.ts >= (SELECT min(ts) FROM picked) AND t.ts <= (SELECT max(ts) FROM picked)
         RETURNING t.token, t.from_address, t.to_address, t.amount, t.block, t.kind
       ), deltas AS (
         SELECT token, to_address AS holder, amount, block FROM moved WHERE kind = 'Transfer'

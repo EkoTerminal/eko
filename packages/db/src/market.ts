@@ -104,7 +104,11 @@ async function writeBars(db: ChainDb, keys: string, params: unknown[], perKey = 
 export async function refreshBars(db: ChainDb, touched: BarKey[]) {
   const unique = [...new Map(touched.map(r => [`${hex(r.coin)}:${new Date(r.minute).toISOString()}`,r])).values()];
   for (const row of unique) await db.ensurePartitions(new Date(row.minute));
-  await db.sql.query('LOCK TABLE bars_1m IN EXCLUSIVE MODE');
+  // Serialize same-coin writers, including absent bars, without blocking unrelated live minutes.
+  for (const coin of [...new Map(unique.map(r => [hex(r.coin), r.coin])).entries()].sort(([a],[b])=>a.localeCompare(b)).map(([,coin])=>coin)) {
+    await db.sql.query('INSERT INTO bar_write_locks(coin) VALUES($1) ON CONFLICT DO NOTHING',[coin]);
+    await db.sql.query('SELECT coin FROM bar_write_locks WHERE coin=$1 FOR UPDATE',[coin]);
+  }
   for (let offset=0;offset<unique.length;offset+=250) {
     const params: unknown[]=[];
     const values=unique.slice(offset,offset+250).map(r=>{params.push(r.coin,r.minute);return `($${params.length-1}::bytea,$${params.length}::timestamptz)`;});
@@ -118,11 +122,9 @@ export async function rebuildBars(db: ChainDb, from: bigint, to: bigint, coin?: 
   const filter = coin ? ' AND coin=$3' : '';
   const keys = `SELECT DISTINCT coin,date_trunc('minute',ts) AS minute FROM swaps WHERE block BETWEEN $1 AND $2${filter}
     UNION SELECT coin,minute FROM bars_1m WHERE first_block <= $2 AND last_block >= $1${filter}`;
-  const months = await db.sql.query<{ minute: string | Date }>(`SELECT DISTINCT date_trunc('month',minute) AS minute FROM (${keys}) k`, params);
-  for (const row of months.rows) await db.ensurePartitions(new Date(row.minute));
-  await db.sql.query('LOCK TABLE bars_1m IN EXCLUSIVE MODE');
-  // The raw swaps retain boundary keys even after deletion of an obsolete bar.
-  await writeBars(db, keys, params);
+  // Materialize keys before locking so the write cannot introduce an unlocked coin on a later snapshot.
+  const touched=(await db.sql.query<BarKey>(keys,params)).rows;
+  await refreshBars(db,touched);
 }
 
 export async function holders(db: ChainDb, token: Hex, block: bigint, limit = 20) {

@@ -28,6 +28,7 @@ await build({
     receipts: '../engines/src/receipts/cli.ts',
     mcp: '../mcp/src/cli.ts',
     'census-eval': 'src/ops/census-eval-cli.ts',
+    'raw-history-backlog': 'src/db/raw-history-backlog-cli.ts',
     'db/migrate-cli': 'src/db/migrate-cli.ts',
   },
   outdir: 'dist',

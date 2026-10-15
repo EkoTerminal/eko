@@ -10,6 +10,7 @@
     "indexer.js",
     "launch.js",
     "mcp.js",
+    "raw-history-backlog.js",
     "receipts.js"
   ]
 }

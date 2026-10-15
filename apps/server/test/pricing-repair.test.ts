@@ -26,7 +26,7 @@ const priced = async (db: ChainDb) => (await db.sql.query<{ block: string; usd: 
   'SELECT block::text,usd,pricing_pending AS pending,priced_block::text FROM swaps WHERE coin<>$1 ORDER BY swaps.block', [binary(weth)])).rows;
 
 describe('Pons swap repricing', () => {
-  it('rebuilds candles with the coin\'s read-model row taken before the candle table\'s lock', async () => {
+  it('rebuilds candles with the coin\'s read-model row taken before the candle coin\'s row lock', async () => {
     const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db);
     await migrate(db); await migrateEngines(db); await db.ensurePartitions(new Date(now));
     await db.insert('tokens', { address: binary(coin), name: 'Sample token', symbol: 'DEMO', decimals: 18, launchpad: 'pons', first_block: '1', block: '1' });
@@ -36,11 +36,12 @@ describe('Pons swap repricing', () => {
     const statements: string[] = [], tx = db.tx.bind(db);
     (db as { tx: unknown }).tx = (work: (inner: ChainDb) => Promise<unknown>) => tx(inner => {
       const query = inner.sql.query.bind(inner.sql);
-      (inner.sql as { query: unknown }).query = (text: string, params?: unknown[]) => { statements.push(text.trim().slice(0, 22)); return query(text, params); };
+      (inner.sql as { query: unknown }).query = (text: string, params?: unknown[]) => { statements.push(text.trim()); return query(text, params); };
       return work(inner);
     });
     await rebuildCandles(db, [{ coin: binary(coin), minute: new Date(Math.floor(row.ts.getTime() / 60_000) * 60_000) }]);
-    const marked = statements.indexOf('INSERT INTO read_dirty'), locked = statements.indexOf('LOCK TABLE bars_1m IN ');
+    const marked = statements.findIndex(sql=>sql.startsWith('INSERT INTO read_dirty')), locked = statements.indexOf('SELECT coin FROM bar_write_locks WHERE coin=$1 FOR UPDATE');
+    expect(statements.some(sql=>sql.startsWith('LOCK TABLE bars_1m'))).toBe(false);
     expect(marked).toBe(0);
     expect(locked).toBeGreaterThan(marked);
     expect((await db.sql.query<{ volume_usd: number }>('SELECT volume_usd FROM bars_1m WHERE coin=$1', [binary(coin)])).rows).toEqual([{ volume_usd: 2000 }]);

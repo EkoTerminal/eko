@@ -2,7 +2,7 @@ import type { ChainDb } from './client.js';
 import { emptyLifetime, addLifetimeLiquidity, addLifetimePons, type Lifetime, type LifetimeLiquidityRow } from './lifetime.js';
 
 /** The existing outcome engine resolves its three launch horizons with this same clock ordering. */
-async function outcomeBlocks(db:ChainDb,coin:Uint8Array) {
+export async function outcomeBlocks(db:ChainDb,coin:Uint8Array) {
   // Unrated launches can reach retention before the engine copies their clocks.
   // The outcome engine never evaluates identities without a deployer (including high-volume quote tokens).
   await db.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source)
@@ -13,16 +13,17 @@ async function outcomeBlocks(db:ChainDb,coin:Uint8Array) {
     CROSS JOIN LATERAL (SELECT number,ts,hash FROM chain_blocks WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1) b
     WHERE t.address=$1 AND t.deployer IS NOT NULL ON CONFLICT DO NOTHING`,[coin]);
 
-  return (await db.sql.query<{block:string;prior:string|null}>(`SELECT DISTINCT e.number::text AS block,
+  return (await db.sql.query<{block:string;prior:string|null;ts:Date}>(`SELECT DISTINCT e.number::text AS block,e.ts,
     (SELECT number::text FROM engine_block_times WHERE ts<=e.ts-interval '1 hour' AND number<=e.number ORDER BY ts DESC,number DESC LIMIT 1) AS prior
     FROM tokens t JOIN engine_block_times c ON c.number=t.first_block
     CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
     CROSS JOIN LATERAL (SELECT number,ts FROM engine_block_times WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1) e
     WHERE t.address=$1 AND t.deployer IS NOT NULL`,[coin])).rows;
 }
+export type OutcomeCuts = Awaited<ReturnType<typeof outcomeBlocks>>;
 /** Capture a complete prefix only. Batches drain in block order, so no later fact can enter an old checkpoint. */
-export async function preserveOutcomeSwaps(db:ChainDb,coin:Uint8Array,data:Lifetime,through:bigint) {
-  for(const {block} of await outcomeBlocks(db,coin)) {
+export async function preserveOutcomeSwaps(db:ChainDb,coin:Uint8Array,data:Lifetime,through:bigint,cuts?:OutcomeCuts) {
+  for(const {block} of cuts ?? await outcomeBlocks(db,coin)) {
     if(BigInt(block)>through || data.last && BigInt(data.last.block)>BigInt(block))continue;
     const hour=(await db.sql.query<{total:number;missing:number;volume:number;missing_volume:number;unknown:number}>('SELECT * FROM coin_outcome_hours WHERE coin=$1 AND block=$2',[coin,block])).rows[0];
     const snapshot={...data,checkpointHour:{totalCount:hour?.total ?? 0,unattributedCount:hour?.missing ?? 0,totalVolumeUsd:hour?.volume ?? 0,unattributedVolumeUsd:hour?.missing_volume ?? 0,unknownVolumeCount:hour?.unknown ?? 0}};
@@ -32,8 +33,8 @@ export async function preserveOutcomeSwaps(db:ChainDb,coin:Uint8Array,data:Lifet
   }
 }
 /** Holder views at outcome cuts and their preceding hour survive the three-day movement window. */
-export async function preserveOutcomeHoldings(db:ChainDb,coin:Uint8Array,through:bigint) {
-  const blocks=new Set((await outcomeBlocks(db,coin)).flatMap(r=>[r.block,...r.prior ? [r.prior] : []]));
+export async function preserveOutcomeHoldings(db:ChainDb,coin:Uint8Array,through:bigint,cuts?:OutcomeCuts) {
+  const blocks=new Set((cuts ?? await outcomeBlocks(db,coin)).flatMap(r=>[r.block,...r.prior ? [r.prior] : []]));
   for(const block of blocks) {
     if(BigInt(block)>through)continue;
     if((await db.sql.query('SELECT 1 FROM coin_holder_checkpoints WHERE coin=$1 AND block=$2',[coin,block])).rows.length)continue;
@@ -49,8 +50,8 @@ export async function preserveOutcomeHoldings(db:ChainDb,coin:Uint8Array,through
 }
 
 /** Five sufficient statistics per outcome hour, accumulated with the exact batch being removed. */
-export async function addOutcomeHours(db:ChainDb,coin:Uint8Array,rows:Record<string,unknown>[]) {
-  const ends=(await db.sql.query<{number:string;ts:Date}>(`SELECT e.number,e.ts FROM tokens t JOIN engine_block_times c ON c.number=t.first_block
+export async function addOutcomeHours(db:ChainDb,coin:Uint8Array,rows:Record<string,unknown>[],cuts?:OutcomeCuts) {
+  const ends=cuts?.map(c=>({number:c.block,ts:c.ts})) ?? (await db.sql.query<{number:string;ts:Date}>(`SELECT e.number,e.ts FROM tokens t JOIN engine_block_times c ON c.number=t.first_block
     CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
     CROSS JOIN LATERAL (SELECT number,ts FROM engine_block_times WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1) e WHERE t.address=$1 AND t.deployer IS NOT NULL`,[coin])).rows;
   for(const end of new Map(ends.map(e=>[String(e.number),e])).values()) {

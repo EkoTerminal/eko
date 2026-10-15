@@ -1,4 +1,4 @@
-import { addOutcomeHours, prepareOutcomeEvents, addOutcomeEvents } from './raw-history-checkpoints.js';
+import { addOutcomeHours, prepareOutcomeEvents, addOutcomeEvents, type OutcomeCuts } from './raw-history-checkpoints.js';
 import { retentionLimits } from './retention-control.js';
 import type { ChainDb } from './client.js';
 import { addLifetimePons, addLifetimeSwaps, addLifetimeLiquidity, type LifetimeLiquidityRow, emptyLifetime, packSwap, readLifetime, saveLifetime, recordBuyerStatistics } from './lifetime.js';
@@ -48,7 +48,7 @@ export async function preserveGraduation(db: ChainDb, coin: Uint8Array, through:
   ) x WHERE l.coin=$1 AND t.address=l.coin AND t.graduated_block<=$2 AND l.graduation_holdings IS NULL`, [coin, through.toString()]);
 }
 /** Aggregate and delete exactly the same prefix in one short transaction. */
-export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, through: bigint, limit: number, firstBlocks = 35, cohortSec = 60, poolManager?: string, minimal=false, bounded=false): Promise<number> {
+export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, through: bigint, limit: number, firstBlocks = 35, cohortSec = 60, poolManager?: string, minimal=false, bounded=false, cuts?:OutcomeCuts): Promise<number> {
   await db.sql.query('SELECT read_lock_coins($1::bytea[])',[[coin]]);
   const identity = (await db.sql.query<{ deployer: Uint8Array; first_block: string; ts: Date }>(`SELECT t.deployer,t.first_block,coalesce(b.ts,c.ts) AS ts FROM tokens t
     LEFT JOIN engine_block_times b ON b.number=t.first_block LEFT JOIN chain_blocks c ON c.number=t.first_block WHERE t.address=$1`, [coin])).rows[0];
@@ -68,18 +68,19 @@ export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, throug
   // A pathological minute is retained rather than creating an unbounded transaction.
   if (!rows.length || !bounded && rows.length > Math.max(1000,limit*2)) return 0;
   await db.sql.query(`INSERT INTO reference_price_baselines(pool_id,coin,quote_asset,block,log_index,price_quote)
-    SELECT DISTINCT ON(s.pool_id,s.coin,s.quote_asset) s.pool_id,s.coin,s.quote_asset,s.block,s.log_index,s.price_quote
-    FROM unnest($2::timestamptz[],$3::bytea[],$4::integer[]) p(ts,hash,idx)
-    -- One primary-key probe per row. A join let the planner walk the coin's whole history, minutes on a busy coin.
-    CROSS JOIN LATERAL (SELECT x.pool_id,x.coin,x.quote_asset,x.block,x.log_index,x.price_quote FROM swaps x WHERE x.ts=p.ts AND x.tx_hash=p.hash AND x.log_index=p.idx) s
-    WHERE s.coin=$1 AND s.price_quote>0 AND s.price_quote<'Infinity'::double precision
+    SELECT DISTINCT ON(s.pool_id,c.coin,s.quote_asset) s.pool_id,c.coin,s.quote_asset,s.block,s.log_index,s.price_quote
+    -- Reuse the locked batch: no second cold primary-key read of every swap.
+    FROM unnest($2::bytea[],$3::bytea[],$4::bigint[],$5::integer[],$6::double precision[])
+      s(pool_id,quote_asset,block,log_index,price_quote)
+    CROSS JOIN LATERAL (SELECT $1::bytea AS coin) c
+    WHERE c.coin=$1 AND s.price_quote>0 AND s.price_quote<'Infinity'::double precision
       AND EXISTS(SELECT 1 FROM eth_usd_reference_sources r WHERE r.pool_id=s.pool_id)
-    ORDER BY s.pool_id,s.coin,s.quote_asset,s.block DESC,s.log_index DESC
+    ORDER BY s.pool_id,c.coin,s.quote_asset,s.block DESC,s.log_index DESC
     ON CONFLICT(pool_id,coin,quote_asset) DO UPDATE SET block=excluded.block,log_index=excluded.log_index,price_quote=excluded.price_quote
     WHERE (excluded.block,excluded.log_index)>(reference_price_baselines.block,reference_price_baselines.log_index)`,
-    [coin,rows.map(r=>new Date(r.ts as Date)),rows.map(r=>r.tx_hash),rows.map(r=>r.log_index)]);
+    [coin,rows.map(r=>r.pool_id),rows.map(r=>r.quote_asset),rows.map(r=>String(r.block)),rows.map(r=>r.log_index),rows.map(r=>r.price_quote)]);
   await recordBuyerStatistics(db,coin,rows);
-  if(bounded)await addOutcomeHours(db,coin,rows);
+  if(bounded)await addOutcomeHours(db,coin,rows,cuts);
   const data = minimal ? emptyLifetime() : await readLifetime(db, coin) ?? emptyLifetime();
   if(!minimal && !data.graduation) {
     const graduation=(await db.sql.query<{block:string;ts:Date}>('SELECT t.graduated_block AS block,b.ts FROM tokens t JOIN engine_block_times b ON b.number=t.graduated_block WHERE t.address=$1',[coin])).rows[0];

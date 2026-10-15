@@ -45,6 +45,9 @@ it('caps every identity and keeps charts, balances, first buyers, unknown counts
   expect(await trendingAt(db,2,epoch/1000+86400-3600)).toEqual(trending);
   expect(await rows('SELECT sum(n)::int AS n FROM coin_unknown_buys')).toEqual([{n:8}]);
   expect(await rows('SELECT opening_holdings FROM coin_lifetime ORDER BY coin')).toEqual(Array.from({length:3},()=>({opening_holdings:{[Buffer.from(bytes(10)).toString('hex')]:'10'}})));
+  const checkpoints=await db.sql.query<{block:number;data:Record<string,{amount:string;block:string}>}>('SELECT block,data FROM coin_holder_checkpoints WHERE coin=$1 ORDER BY block',[bytes(1)]);
+  const holder=Buffer.from(bytes(10)).toString('hex');
+  expect(checkpoints.rows).toEqual([{block:1,data:{[holder]:{amount:'10',block:'1'}}},{block:2,data:{[holder]:{amount:'20',block:'2'}}},{block:7,data:{[holder]:{amount:'30',block:'3'}}},{block:8,data:{[holder]:{amount:'30',block:'3'}}}]);
   const grade=await rows('SELECT p0,p1,hi FROM retention_grade_prices WHERE coin=decode(lpad(\'1\',40,\'0\'),\'hex\') ORDER BY since,horizon_sec');
   expect(grade.length).toBe(2);expect(grade.every(g=>g.p0===0.5)).toBe(true);
   expect((await cap()).historySwaps).toBe(0);expect((await cap()).historyTransfers).toBe(0);
@@ -100,7 +103,7 @@ it('advances a separate scan cursor without locking hot tables and permits fresh
   });
   await cap();
   expect(statements.some(sql=>sql==='LOCK TABLE swaps,token_transfers IN SHARE ROW EXCLUSIVE MODE')).toBe(false);
-  expect(statements).toContain('SELECT pg_advisory_xact_lock(4663,208)');
+  expect(statements).toContain('SELECT pg_try_advisory_xact_lock(4663,208) AS acquired');
   expect(await rows('SELECT name,after_block FROM raw_history_progress ORDER BY name')).toEqual([
     {name:'swaps',after_block:13},{name:'token_transfers',after_block:17}]);
   await db.insert('token_transfers',{ts:new Date(epoch+20*DAY),block:21,tx_hash:bytes(9999,32),log_index:0,

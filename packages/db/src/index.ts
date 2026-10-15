@@ -38,3 +38,5 @@ export { GRADE_CUTS } from './rating-retention.js';
 export * from './blue-chip-schema.js';
 
 export * from './rating-checks.js';
+
+export * from './raw-history-backlog.js';

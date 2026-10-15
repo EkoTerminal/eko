@@ -47,6 +47,8 @@ describe('bar refresh', () => {
     // The refresh statement bounds its index scan by the minute as well as the coin.
     const statements: { sql: string; params?: unknown[] }[] = [], keys = await touched(db, 400, 410);
     await db.tx(async tx => { const query = tx.sql.query.bind(tx.sql); tx.sql.query = async (sql, params) => { statements.push({ sql, params }); return query(sql, params); }; await refreshBars(tx, keys); });
+    expect(statements.some(s=>s.sql==='LOCK TABLE bars_1m IN EXCLUSIVE MODE')).toBe(false);
+    expect(statements.some(s=>s.sql==='SELECT coin FROM bar_write_locks WHERE coin=$1 FOR UPDATE')).toBe(true);
     const insert = statements.find(s => s.sql.trimStart().startsWith('INSERT INTO bars_1m'))!;
     const plan = (await db.sql.query<{ 'QUERY PLAN': string }>(`EXPLAIN ${insert.sql}`, insert.params)).rows.map(r => r['QUERY PLAN']).join('\n');
     expect(plan).toMatch(/Index Cond: \(\(coin = [^)]*\) AND \(ts >= [^)]*\) AND \(ts < /);
