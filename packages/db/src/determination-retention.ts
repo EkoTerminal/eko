@@ -69,7 +69,9 @@ export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, throug
   if (!rows.length || !bounded && rows.length > Math.max(1000,limit*2)) return 0;
   await db.sql.query(`INSERT INTO reference_price_baselines(pool_id,coin,quote_asset,block,log_index,price_quote)
     SELECT DISTINCT ON(s.pool_id,s.coin,s.quote_asset) s.pool_id,s.coin,s.quote_asset,s.block,s.log_index,s.price_quote
-    FROM swaps s JOIN unnest($2::timestamptz[],$3::bytea[],$4::integer[]) p(ts,hash,idx) ON s.ts=p.ts AND s.tx_hash=p.hash AND s.log_index=p.idx
+    FROM unnest($2::timestamptz[],$3::bytea[],$4::integer[]) p(ts,hash,idx)
+    -- One primary-key probe per row. A join let the planner walk the coin's whole history, minutes on a busy coin.
+    CROSS JOIN LATERAL (SELECT x.pool_id,x.coin,x.quote_asset,x.block,x.log_index,x.price_quote FROM swaps x WHERE x.ts=p.ts AND x.tx_hash=p.hash AND x.log_index=p.idx) s
     WHERE s.coin=$1 AND s.price_quote>0 AND s.price_quote<'Infinity'::double precision
       AND EXISTS(SELECT 1 FROM eth_usd_reference_sources r WHERE r.pool_id=s.pool_id)
     ORDER BY s.pool_id,s.coin,s.quote_asset,s.block DESC,s.log_index DESC
