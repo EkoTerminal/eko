@@ -69,10 +69,11 @@ export async function holdingsAt(db: ChainDb, coin: Address, block: number, cach
   const checkpoint=(await db.sql.query<{data:Record<string,{amount:string;block:string}>}>('SELECT data FROM coin_holder_checkpoints WHERE coin=$1 AND block=$2',[binary(coin),block])).rows[0];
   if(checkpoint)return Object.entries(checkpoint.data).sort(([a],[b])=>a.localeCompare(b)).map(([holder,r])=>prepareHolding({holder:Buffer.from(holder,'hex'),...r}));
   if(cache)return cache.holdingsAt(coin,block,lane);
+  // ORDER BY ... LIMIT 1 stops at the first index entry; min() and max() through the live view walk the coin's whole index.
   // Select the nearer endpoint. Old horizon/opening views must not reverse a coin's entire future history.
   const bounds=(await db.sql.query<{first:string|null;last:string|null;baseline:string|null}>(`SELECT
-    (SELECT min(block)::text FROM raw_history_live_transfers WHERE token=$1) AS first,
-    (SELECT max(block)::text FROM raw_history_live_transfers WHERE token=$1) AS last,
+    (SELECT block FROM raw_history_live_transfers WHERE token=$1 ORDER BY block LIMIT 1)::text AS first,
+    (SELECT block FROM raw_history_live_transfers WHERE token=$1 ORDER BY block DESC LIMIT 1)::text AS last,
     (SELECT max(through_block)::text FROM transfer_baselines WHERE token=$1) AS baseline`,[binary(coin)])).rows[0];
   if(bounds.last==null || Number(bounds.last)<=block)return (await db.sql.query<Holding>(
     'SELECT holder,amount,last_block::text AS block FROM balances WHERE token=$1 AND amount>0 ORDER BY holder',[binary(coin)])).rows.map(prepareHolding);

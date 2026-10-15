@@ -72,7 +72,7 @@ export class ReplayCache {
         this.db.sql.query<PoolRow>('SELECT * FROM pools WHERE (currency0=$1 OR currency1=$1) AND created_block<=$2 ORDER BY id',[key,this.to]),
         this.db.sql.query<EventRow>('SELECT e.* FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE (p.currency0=$1 OR p.currency1=$1) AND e.block<=$2 ORDER BY e.block,e.log_index,e.tx_hash',[key,this.to]),
         this.db.sql.query<Transfer>('SELECT block,from_address,to_address,amount,kind FROM raw_history_live_transfers WHERE token=$1 AND block<=$2 ORDER BY block,log_index,tx_hash',[key,this.to]),
-        this.db.sql.query<{block:string|null}>('SELECT max(block) AS block FROM raw_history_live_transfers WHERE token=$1',[key]),
+        this.db.sql.query<{block:string|null}>('SELECT (SELECT block FROM raw_history_live_transfers WHERE token=$1 ORDER BY block DESC LIMIT 1) AS block',[key]),
         this.db.sql.query<Holding>('SELECT holder,amount,last_block AS block FROM balances WHERE token=$1 AND amount>0 ORDER BY holder',[key]),
         this.db.sql.query<PonsEventRow>("SELECT block,kind,data FROM pons_events WHERE token=$1 AND block<=$2 AND kind IN ('launch','trade') ORDER BY block,log_index,tx_hash",[key,this.to]),
         this.db.sql.query<Exemption>('SELECT * FROM pons_exemptions WHERE token=$1 AND block<=$2 ORDER BY wallet',[key,this.to]),
