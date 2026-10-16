@@ -3,8 +3,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { keccak256, toHex } from 'viem';
-import { openDb, migrate, migrateEngines, GhostReportStore, GuardSourceStore, GuardVerdictStore,
+import { migrate, migrateEngines, GhostReportStore, GuardSourceStore, GuardVerdictStore,
   guardManifestId, guardStorageHash, GuardReceiptStore, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { canonicalize, Bytes32Schema, GuardCursorSchema, GuardCoverageSchema, GuardAssessmentV2Schema, guardDecisionBody, ghostReportShare, ghostReportFindings,
   GhostReportReviewSchema, type ReceiptLookup } from '@eko/shared';
 import { assessment as sample, cursor as sampleCursor, hash as sampleHash, coverage } from '../../../packages/shared/test/fixtures/contracts/guard-v2.js';

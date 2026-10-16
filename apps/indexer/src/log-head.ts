@@ -1,3 +1,4 @@
+import { PartitionLockTimeoutError } from '@eko/db';
 import { walletProtocolTopics } from './wallet-protocol.js';
 import { decodePoolEvents } from './pool-events.js';
 import { loadSenderScope, extendSenderScope, needsSender, type SenderScope } from './sender-scope.js';
@@ -23,7 +24,7 @@ const order = (a: RpcLog, b: RpcLog) => BigInt(a.blockNumber) === BigInt(b.block
 class ReorgDuringTick extends Error {}
 /** A deadlock or serialization failure reported by the database (SQLSTATE 40P01, 40001): the transaction rolled back whole. */
 export const lockContention = (error: unknown) => { const e = error as { code?: unknown; message?: unknown } | null;
-  return e?.code === '40P01' || e?.code === '40001' || (typeof e?.message === 'string' && /deadlock detected|could not serialize access/i.test(e.message)); };
+  return error instanceof PartitionLockTimeoutError || e?.code === '40P01' || e?.code === '40001' || (typeof e?.message === 'string' && /deadlock detected|could not serialize access/i.test(e.message)); };
 /** A single block's logs exceed the provider's reply limits even alone. */
 class SpanTooLarge extends Error {}
 /**
@@ -625,8 +626,8 @@ export class LogHeadFollower {
         const {batch,states,dates,last}=staged;
         const writeBegan=performance.now();
         try {
+          for(const date of dates) await this.db.ensurePartitions(date);
           await this.db.tx(async tx=>{
-            for(const date of dates) await tx.ensurePartitions(date);
             await batch.flush(tx,this.timings.flush);
             await tx.setCursor('head_logs',covered,null);
             if(last) { const applied=await tx.cursor('head');if(applied==null||BigInt(last.number)>=applied)await tx.setCursor('head',BigInt(last.number),last.hash); }

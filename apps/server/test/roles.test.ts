@@ -7,7 +7,8 @@ import pg from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acquireRoleLease, imageRoles, planRole, roleStartupMessage, runRole, type RolePlan } from '../src/roles.js';
 import { loadConfig } from '../src/config.js';
-import { openDb } from '@eko/db';
+
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 
 const directory = mkdtempSync(join(tmpdir(), 'eko-role-tests-'));
 for (const file of ['index.js', 'indexer.js', 'engines.js', 'receipts.js', 'mcp.js']) writeFileSync(join(directory, file), '');

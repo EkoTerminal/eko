@@ -1,6 +1,6 @@
 import type { ChainDb } from './client.js';
 import type { RetentionOptions, RetentionResult } from './retention.js';
-import { rawMaintenance, sealRawPartition, type RawSeal, type RawTable } from './raw-partitions.js';
+import { rawMaintenance, sealRawPartition, type RawSeal, type RawTable, rawSealStatementMs } from './raw-partitions.js';
 
 /** One backend owns the existing reorg/retention mutex across the independently committed phases. */
 export async function rawPartitionPass(db: ChainDb, options: RetentionOptions, result: RetentionResult, now: number) {
@@ -33,32 +33,32 @@ export async function rawPartitionPass(db: ChainDb, options: RetentionOptions, r
       try {
         const seal=await sealRawPartition(session,p.name,p.partition_name,{firstBlocks:options.firstBlocks,cohortSec:options.cohortSec,poolManager:options.poolManager,now:new Date(now),checkpointBefore:new Date(now-windows[p.name]*86400000)});
         await session.tx(async tx=>{
-          await tx.sql.query('SET LOCAL statement_timeout=0');
+          await tx.sql.query(`SET LOCAL statement_timeout='${rawSealStatementMs()}ms'`);
           await tx.sql.query("SET LOCAL lock_timeout='5s'");
           const isAttached=(await tx.sql.query(`SELECT 1 FROM pg_inherits WHERE inhrelid=to_regclass($1) AND inhparent=$2::regclass`,[p.partition_name,p.name])).rows.length;
           if(isAttached)await tx.sql.query(`ALTER TABLE ${p.name} DETACH PARTITION ${p.partition_name}`);
         });
         await session.tx(async tx=>{
-          await tx.sql.query('SET LOCAL statement_timeout=0');
+          await tx.sql.query(`SET LOCAL statement_timeout='${rawSealStatementMs()}ms'`);
           await tx.sql.query("SET LOCAL lock_timeout='5s'");
           await tx.sql.query(`DROP TABLE IF EXISTS ${p.partition_name}`);
           await tx.sql.query('UPDATE raw_history_seals SET dropped=true WHERE name=$1 AND partition_name=$2',[p.name,p.partition_name]);
         });
         await session.tx(async tx=>{
-          await tx.sql.query('SET LOCAL statement_timeout=0');
+          await tx.sql.query(`SET LOCAL statement_timeout='${rawSealStatementMs()}ms'`);
           await tx.sql.query("SET LOCAL lock_timeout='5s'");
           await tx.sql.query('UPDATE raw_history_watermarks SET through_block=greatest(through_block,$2) WHERE name=$1',[p.name,seal.through_block]);
         });
         result[p.name==='swaps'?'historySwaps':'historyTransfers']+=Number(seal.rows);
         (result.partitions ??=[]).push({table:p.name,partition:p.partition_name,rows:Number(seal.rows),seconds:(Date.now()-started)/1000});
       } catch(error) {
-        if((error as {code?:string}).code!=='55P03')throw error;
+        if((error as {code?:string}).code!=='55P03' && (error as {code?:string}).code!=='57014')throw error;
         blockedTables.add(p.name);result.finished=false;result.skippedRules.push(p.partition_name); // Next hourly pass resumes the persisted phase.
       }
     }
   };
   try { if(options.dryRun)await pass(db);else await rawMaintenance(db,pass); } catch(error) {
-    if((error as {code?:string}).code!=='55P03')throw error;
+    if((error as {code?:string}).code!=='55P03' && (error as {code?:string}).code!=='57014')throw error;
     result.finished=false;result.skippedRules.push('raw_partitions');
   }
 }

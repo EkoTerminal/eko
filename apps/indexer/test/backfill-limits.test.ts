@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, migrate, openDb, type ChainDb } from '@eko/db';
+import { binary, migrate, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry, RpcGuardError } from '@eko/chain';
 import { toHex, type Address } from 'viem';
 import { AdaptiveWindow, BackfillFailedError, isRangeLimit, PonsBackfill, RangeLeases } from '../src/backfill.js';

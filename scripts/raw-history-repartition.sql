@@ -1,7 +1,9 @@
 -- Load with psql -X -v ON_ERROR_STOP=1 -f scripts/raw-history-repartition.sql.
 -- Operator helpers only. Loading this file never detaches or deletes history.
 -- Session settings: eko.days_ahead (DAYS_AHEAD, default 3), eko.reorg_tail (REORG_TAIL, default 300).
-SET statement_timeout=0;
+SET statement_timeout='300s';
+-- statement-breakpoint
+SET lock_timeout='10s';
 -- statement-breakpoint
 SET TIME ZONE 'UTC';
 -- statement-breakpoint
@@ -42,7 +44,7 @@ DECLARE leaf text; source text; cutoff timestamptz; x record; idx text; already 
 BEGIN
  IF t NOT IN ('swaps','token_transfers') OR d IS NULL OR d<>(date_trunc('day',d AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') THEN RAISE EXCEPTION 'Invalid day'; END IF;
  IF NOT pg_try_advisory_xact_lock(4663,208) THEN RAISE EXCEPTION 'Raw mutex is busy' USING ERRCODE='55P03'; END IF;
- PERFORM set_config('statement_timeout','0',true);PERFORM set_config('lock_timeout','10s',true);
+ PERFORM set_config('lock_timeout','10s',true);
  SELECT copied INTO STRICT already FROM raw_history_repartition_days WHERE name=t AND day=d FOR UPDATE;
  IF already THEN RETURN; END IF;
  source:=t||'_2026_10';leaf:=t||'_d'||to_char(d AT TIME ZONE 'UTC','YYYY_MM_DD');
@@ -83,7 +85,7 @@ DECLARE r record; leaf text; source text; cutoff timestamptz; high bigint; tail_
 BEGIN
  IF t NOT IN ('swaps','token_transfers') OR days_ahead<0 OR days_ahead>366 OR reorg_tail<1 THEN RAISE EXCEPTION 'Invalid cutover settings'; END IF;
  IF NOT pg_try_advisory_xact_lock(4663,208) THEN RAISE EXCEPTION 'Raw mutex is busy' USING ERRCODE='55P03'; END IF;
- PERFORM set_config('lock_timeout','10s',true);PERFORM set_config('statement_timeout','0',true);
+ PERFORM set_config('lock_timeout','10s',true);
  source:=t||'_2026_10';
  SELECT end_ts INTO STRICT cutoff FROM raw_history_seals WHERE name=t AND partition_name=source AND sealed;
  -- Metadata-only checks; no raw heap scan is permitted in this transaction.

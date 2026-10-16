@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openDb, migrate, migrateEngines, binary, type ChainDb } from '@eko/db';
+import { migrate, migrateEngines, binary, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { Address, Hex } from 'viem';
 import { writeRegistryLabels, walletLabelsAt, REGISTRY_LABEL_MODEL } from '../src/registry-labels.js';
 const address=(n:number)=>`0x${n.toString(16).padStart(40,'0')}` as Address;

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, hex, openDb, migrate, holders, candles, rebuildBars, type ChainDb } from '@eko/db';
+import { binary, hex, migrate, holders, candles, rebuildBars, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry, v3Abi, v4Abi, erc20Abi } from '@eko/chain';
 import { encodeAbiParameters, encodeEventTopics, toHex, toEventSelector, type AbiEvent, type Address, type Hex } from 'viem';
 import { PonsBackfill } from '../src/backfill.js';
@@ -118,7 +119,7 @@ describe('candles and derived state',()=>{
   it('keeps OHLCV ordered across minutes, aggregates 5m/1h, clips 1s/15s to six hours, and rebuilds/reorgs',async()=>{
     const db=await database(); await token(db); const rows=new BlockRows();
     [[1,0,2],[2,2,5],[3,10,1],[4,59,3],[5,60,4],[6,300,6]].forEach(([n,t,p])=>swap(rows,n,t,p));
-    await db.tx(async tx=>{ await tx.ensurePartitions(new Date(epoch*1000)); await rows.flush(tx); });
+    await db.ensurePartitions(new Date(epoch*1000));await db.tx(async tx=>{ await rows.flush(tx); });
     const minutes=await candles(db,coin,'1m',epoch,epoch+3600,epoch+3600);
     expect(minutes.bars.map(b=>[b.o,b.h,b.l,b.c,b.vUsd,b.trades])).toEqual([[2,5,1,3,11,4],[4,4,4,4,4,1],[6,6,6,6,6,1]]); expect(minutes.bars[0].marketCapUsd).toBe(3000); expect(minutes.asOfBlock).toBe(6);
     const five=await candles(db,coin,'5m',epoch,epoch+3600); expect(five.bars.map(b=>[b.o,b.h,b.l,b.c,b.vUsd])).toEqual([[2,5,1,4,15],[6,6,6,6,6]]);
@@ -131,7 +132,7 @@ describe('candles and derived state',()=>{
   });
   it('includes curve trades before graduation and pool swaps afterward, recalculating the graduation minute',async()=>{
     const db=await database();await token(db,'pons'); const rows=new BlockRows(); swap(rows,1,0,2,'pons_curve');swap(rows,2,2,100);swap(rows,3,3,200,'pons_curve');swap(rows,4,4,4);
-    await db.tx(async tx=>{await tx.ensurePartitions(new Date(epoch*1000));await rows.flush(tx);});
+    await db.ensurePartitions(new Date(epoch*1000));await db.tx(async tx=>{await rows.flush(tx);});
     expect((await candles(db,coin,'1m',epoch,epoch+60)).bars[0].vUsd).toBe(202);
     const graduation=new BlockRows(); graduation.graduation(coin,hash(500),3n); await db.tx(tx=>graduation.flush(tx));
     expect((await candles(db,coin,'1m',epoch,epoch+60)).bars[0]).toMatchObject({o:2,h:4,l:2,c:4,vUsd:6,trades:2});

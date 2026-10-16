@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { OUTCOME_SKIP_RETRY_SEC, updateOutcomes } from '../src/outcomes.js';
 
 const address = (n: number) => `0x${n.toString(16).padStart(40, '0')}` as const;

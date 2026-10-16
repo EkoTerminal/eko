@@ -1,7 +1,8 @@
 import { keccak256, stringToHex } from 'viem';
 import { canonicalize } from '@eko/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, publishReceipt, ReceiptOutbox, ReceiptCommitJournal, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, publishReceipt, ReceiptOutbox, ReceiptCommitJournal, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { PonsResult } from '@eko/chain';
 import { PERSONA_SET_V1 } from '@eko/engines';
 import type { PersonaVote } from '@eko/shared';

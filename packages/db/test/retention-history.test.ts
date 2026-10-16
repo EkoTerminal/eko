@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, hex, migrate, migrateEngines, openDb, pruneSwaps, rebuildBalances, rebuildBars, refreshBars, runRetention, trendingAt, type ChainDb } from '../src/index.js';
+import { binary, hex, migrate, migrateEngines, pruneSwaps, rebuildBalances, rebuildBars, refreshBars, runRetention, trendingAt, type ChainDb } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 
 // Per-coin history retention: quiet Danger coins after two days, every quiet coin after eight. Days are counted from
 // the fixture epoch; the pass runs on day 40.

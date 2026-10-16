@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, migrate, openDb, type ChainDb } from '@eko/db';
+import { binary, migrate, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { captureBackfillSnapshot } from '../src/backfill-gate-snapshot.js';
 import { GateSnapshotSchema, rangeGaps, verifyBackfill, type GateSnapshot } from '../src/backfill-gate.js';
 const load = () => GateSnapshotSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/backfill-gate/snapshot.json', import.meta.url), 'utf8')));

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, ChainDb, migrate, migrateEngines, openDb, pruneSwaps, type SqlClient } from '@eko/db';
+import { binary, ChainDb, migrate, migrateEngines, pruneSwaps, type SqlClient } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { CoinsService } from '../src/read/coins.js';
 import { FEED_SHARED_TTL_MS, FeedService } from '../src/read/feed.js';
 import { GuardReadStore } from '../src/read/guard-store.js';

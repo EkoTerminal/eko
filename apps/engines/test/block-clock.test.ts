@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { binary, ChainDb, migrate, migrateEngines, openDb } from '@eko/db';
+import { binary, ChainDb, migrate, migrateEngines, } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { CLOCK_CACHE_LIMIT, CLOCK_LOOKBACK_BLOCKS, refreshClock, resolveClock, type ClockCache } from '../src/activity.js';
 
 const epoch = Date.parse('2026-10-01T00:00:00Z');

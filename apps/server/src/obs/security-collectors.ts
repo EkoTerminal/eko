@@ -122,6 +122,7 @@ export class SecurityCollectors {
     await this.db.tx(async tx => {
       if (indexed) {
         // Serialize with indexer rollback/replay before accepting receipt evidence.
+        await tx.sql.query("SET LOCAL lock_timeout='5s'");
         await tx.sql.query('LOCK TABLE chain_blocks,token_transfers IN SHARE MODE');
         if (await tx.blockHash(end.number) !== end.hash) throw new Error('Indexed head changed');
       }

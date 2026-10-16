@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { priceMovedCoins, binary, hex, openDb, migrate, migrateEngines, rebuildBalances, InProcessBus, ChainDb, ReceiptOutbox } from '@eko/db';
+import { priceMovedCoins, binary, hex, migrate, migrateEngines, rebuildBalances, InProcessBus, ChainDb, ReceiptOutbox } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { openDb, migrate, binary, hex, type ChainDb } from '@eko/db';
+import { migrate, binary, hex, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry } from '@eko/chain';
 import { encodeAbiParameters, encodeEventTopics, parseAbi, toHex, type Address, type Hex } from 'viem';
 import { AgentRegistryCollector, agentTransferAbi, type RegistryWalletEventProfile } from '../src/agent-registry.js';

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect,it } from 'vitest';
-import { openDb,type ChainDb } from '@eko/db';
+import { type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { enqueueOutcomeLabels,runOutcomeMaturityQueue,readOutcomeLabels,invalidateOutcomeDependency } from '../src/outcome-queue.js';
 import { outcomeStreamKey } from '../src/outcome-labels.js';
 import { outcomeFixture,confirmation } from './outcome-fixtures.js';

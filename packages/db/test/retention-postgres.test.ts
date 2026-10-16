@@ -1,3 +1,4 @@
+import { provisionHistory } from './helpers/historical-db.js';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { expect, it } from 'vitest';
@@ -79,6 +80,7 @@ it.skipIf(!databaseUrl)('manual raw mutex excludes the worker without blocking n
     await migrate(handles[0]!);await migrateEngines(handles[0]!);
     const current=new Date(),minute=new Date(Math.floor(current.getTime()/60000)*60000),old=new Date(current.getTime()-20*86400000);
     const coin=Buffer.alloc(20,1),other=Buffer.alloc(20,2),hash=Buffer.alloc(32,1);
+    await provisionHistory(handles[0]!,old);
     await handles[0]!.ensurePartitions(old);
     await clients[0]!.query('INSERT INTO chain_blocks VALUES(1,1,$1,$1,$2)',[hash,old]);
     await clients[0]!.query('SELECT pg_advisory_lock(4663,208)');
@@ -108,6 +110,45 @@ it.skipIf(!databaseUrl)('manual raw mutex excludes the worker without blocking n
   } finally {
     release();await held?.catch(()=>{});
     for(const client of clients) {await client.query('ROLLBACK');await client.query('SELECT pg_advisory_unlock_all()');client.release();}
+    await pool.end();await admin.sql.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();
+  }
+});
+
+it.skipIf(!databaseUrl)('partition DDL times out in two seconds and seal statements honor RAW_SEAL_STATEMENT_SEC on independent backends',async()=>{
+  const {PartitionLockTimeoutError}=await import('../src/client.js');
+  const {sealRawPartition}=await import('../src/raw-partitions.js');
+  const admin=await openDb({databaseUrl}),schema=`bounded_seal_${randomUUID().replaceAll('-','')}`;
+  const pool=new pg.Pool({connectionString:databaseUrl,max:2});
+  const clients=await Promise.all([pool.connect(),pool.connect()]);
+  const handles=clients.map(client=>new ChainDb(client,async work=>{
+    await client.query('BEGIN');try{const result=await work(client);await client.query('COMMIT');return result;}
+    catch(error){await client.query('ROLLBACK');throw error;}
+  }));
+  const saved=process.env.RAW_SEAL_STATEMENT_SEC;
+  try {
+    await admin.sql.query(`CREATE SCHEMA ${schema}`);
+    for(const client of clients)await client.query(`SET search_path TO ${schema},public`);
+    await migrate(handles[0]!);await migrateEngines(handles[0]!);
+    await clients[0]!.query('BEGIN');await clients[0]!.query('LOCK TABLE swaps IN ACCESS SHARE MODE');
+    const pid=(await clients[1]!.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+    const began=performance.now();
+    await expect(handles[1]!.ensurePartitions(new Date(),{daysAhead:5})).rejects.toBeInstanceOf(PartitionLockTimeoutError);
+    expect(performance.now()-began).toBeLessThan(5000);
+    expect((await clients[0]!.query('SELECT state FROM pg_stat_activity WHERE pid=$1',[pid])).rows[0].state).toBe('idle');
+    await clients[0]!.query('ROLLBACK');
+    // Inject a slow statement after the seal installs its local deadline, before any fence can commit.
+    process.env.RAW_SEAL_STATEMENT_SEC='0.025';
+    const query=clients[1]!.query.bind(clients[1]!);
+    clients[1]!.query=(async(sql:string,params?:unknown[])=>{
+      if(sql.startsWith('SELECT * FROM raw_history_seals'))await query('SELECT pg_sleep(0.2)');
+      return query(sql,params);
+    }) as typeof clients[number]['query'];
+    const leaf=`swaps_d${new Date().toISOString().slice(0,10).replaceAll('-','_')}`;
+    await expect(sealRawPartition(handles[1]!,'swaps',leaf)).rejects.toMatchObject({code:'57014'});
+    expect((await clients[0]!.query('SELECT * FROM raw_history_seals')).rows).toHaveLength(0);
+  }finally{
+    if(saved===undefined)delete process.env.RAW_SEAL_STATEMENT_SEC;else process.env.RAW_SEAL_STATEMENT_SEC=saved;
+    for(const client of clients){await client.query('ROLLBACK');client.release();}
     await pool.end();await admin.sql.query(`DROP SCHEMA ${schema} CASCADE`);await admin.close();
   }
 });

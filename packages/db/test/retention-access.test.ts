@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, type ChainDb } from '../src/index.js';
+import { binary, migrate, migrateEngines, type ChainDb } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 import { rawCandidates, quietCoins } from '../src/retention.js';
 import { snapshotTrending } from '../src/trending.js';
 let db:ChainDb;

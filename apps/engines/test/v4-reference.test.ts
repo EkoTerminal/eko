@@ -1,5 +1,6 @@
 import { afterEach,describe,it,expect } from 'vitest';
-import { binary,openDb,migrate,migrateEngines,type ChainDb } from '@eko/db';
+import { binary,migrate,migrateEngines,type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { V4ReferenceSimulation,referenceDigest } from '@eko/chain';
 import { cursor,v4Route,v4Input,v4Clients } from '../../../packages/chain/test/v4-reference-fixtures.js';
 import { persistV4Reference,runV4References,loadV4References,expireV4ReferenceTraces } from '../src/v4-reference.js';

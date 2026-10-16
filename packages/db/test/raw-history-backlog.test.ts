@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
-import { ChainDb, migrate, openDb } from '../src/client.js';
+import { ChainDb, migrate, } from '../src/client.js';
+import { openDb } from './helpers/historical-db.js';
 import { migrateEngines } from '../src/engines-migrate.js';
 import { runRetention } from '../src/retention.js';
 import { sealRawPartition } from '../src/raw-partitions.js';
@@ -27,7 +28,7 @@ it('dry run does not fence, seal, detach, drop or set a cursor',async()=>{
  expect((await db.sql.query('SELECT * FROM raw_history_seals')).rows).toHaveLength(0);
  expect((await db.sql.query('SELECT * FROM token_transfers')).rows).toHaveLength(1);
 });
-it('seals before detach/drop, advances the watermark last, uses dedicated unlimited maintenance and bounded DDL',async()=>{
+it('seals before detach/drop, advances the watermark last, uses bounded maintenance statements and bounded DDL',async()=>{
  await fixture();const events:string[]=[],transact=db.tx.bind(db);
  db.tx=work=>transact(async tx=>{
   const query=tx.sql.query.bind(tx.sql);
@@ -41,7 +42,7 @@ it('seals before detach/drop, advances the watermark last, uses dedicated unlimi
  const drop=events.findIndex(q=>q==='DROP TABLE IF EXISTS token_transfers_d2026_09_01');
  const watermark=events.findIndex((q,i)=>i>drop && q.startsWith('UPDATE raw_history_watermarks'));
  expect(marked).toBeGreaterThanOrEqual(0);expect(detach).toBeGreaterThan(marked);expect(drop).toBeGreaterThan(detach);expect(watermark).toBeGreaterThan(drop);
- expect(events).toContain('SET LOCAL statement_timeout=0');expect(events).toContain("SET LOCAL lock_timeout='5s'");
+ expect(events).toContain("SET LOCAL statement_timeout='300000ms'");expect(events).not.toContain('SET LOCAL statement_timeout=0');expect(events).toContain("SET LOCAL lock_timeout='5s'");
  expect(result.partitions?.find(p=>p.partition==='token_transfers_d2026_09_01')?.rows).toBe(1);
  expect((await db.sql.query("SELECT through_block FROM raw_history_watermarks WHERE name='token_transfers'")).rows).toEqual([{through_block:1}]);
 });

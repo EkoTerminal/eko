@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
-import { binary, ChainDb, migrate, migrateEngines, openDb, type SqlClient } from '@eko/db';
+import { binary, ChainDb, migrate, migrateEngines, type SqlClient } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { ReadStore } from '../src/read/store.js';
 import { FeedService } from '../src/read/feed.js';
 import { RadarService } from '../src/read/radar.js';

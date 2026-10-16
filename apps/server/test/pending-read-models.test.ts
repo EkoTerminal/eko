@@ -1,5 +1,6 @@
 import { expect,it } from 'vitest';
-import { binary,openDb,migrate,migrateEngines } from '@eko/db';
+import { binary,migrate,migrateEngines } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { PairRowSchema } from '@eko/shared';
 import { loadRegistry,v3Abi } from '@eko/chain';
 import { encodeAbiParameters,encodeEventTopics,toHex,type Hex } from 'viem';

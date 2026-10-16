@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { rebuildCandles, PricingRepairWorker, repricePonsSwaps, repricePoolQuotes, retagPairQuotes, type PricingAssets } from '../src/pricing-repair.js';
 
 // 2026-10-11: 694,000 of 1.96 million Pons swaps in seven days had no USD (USDG quotes, and curve swaps decoded before

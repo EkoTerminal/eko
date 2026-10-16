@@ -2,9 +2,10 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { keccak256, toHex } from 'viem';
 import {
-  openDb, migrate, migrateEngines, GuardSourceStore, GuardMeasurementStore, GuardVerdictStore,
+  migrate, migrateEngines, GuardSourceStore, GuardMeasurementStore, GuardVerdictStore,
   guardManifestId, guardStorageHash, type ChainDb,
 } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import {
   CoinCardV2Schema, CoinSignalV2Schema, GUARD_CAPABILITIES,
   type CoinSignalV2, type GuardVerdictRevisionInput, type CoinSignal,

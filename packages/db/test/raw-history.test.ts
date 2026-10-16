@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
-import { binary, candles, holders, migrate, migrateEngines, openDb, rebuildBalances, rebuildBars, runRetention, trendingAt, type ChainDb } from '../src/index.js';
+import { binary, candles, holders, migrate, migrateEngines, rebuildBalances, rebuildBars, runRetention, trendingAt, type ChainDb } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 const epoch=Date.parse('2026-10-12T00:00:00Z'),DAY=86400000,now=()=>epoch+20*DAY+1000;
 const bytes=(n:number,size=20)=>binary(`0x${n.toString(16).padStart(size*2,'0')}`);
 let db:ChainDb;

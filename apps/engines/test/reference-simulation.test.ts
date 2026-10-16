@@ -1,5 +1,6 @@
 import {afterEach,describe,it,expect,vi} from 'vitest';
-import {binary,openDb,migrate,migrateEngines,type ChainDb} from '@eko/db';
+import {binary,migrate,migrateEngines,type ChainDb} from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import {V3ReferenceSimulation,referenceDigest,type ReferenceResult} from '@eko/chain';
 import type {createMeteredClients} from '@eko/chain';
 import {encodeAbiParameters,toHex} from 'viem';

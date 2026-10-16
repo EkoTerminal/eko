@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { backfillBlueChip, BLUE_CHIP_BACKFILL_WIDTH } from '../src/blue-chip.js';
 import { EngineWorker } from '../src/worker.js';
 import { sampleAddress } from './replay-fixture.js';

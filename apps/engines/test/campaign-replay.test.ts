@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect,it } from 'vitest';
-import { openDb,binary,type ChainDb } from '@eko/db';
+import { binary,type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { replayPonsCampaign } from '@eko/chain';
 import { enqueueCampaignReplay,runQueuedCampaignReplay,readCampaignReplay,campaignControlEligibility } from '../src/campaign-replay.js';
 import type { QualifiedGraphSnapshot } from '../src/qualified-graphs.js';

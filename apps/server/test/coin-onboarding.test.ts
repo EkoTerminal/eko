@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, hex, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
+import { binary, hex, migrate, migrateEngines, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { CoinOnboardingWorker, attributeLiquidity, attributeSwaps, decodeText, type AttributionAddresses, type OnboardingChain } from '../src/coin-onboarding.js';
 import type { PricingAssets } from '../src/pricing-repair.js';
 

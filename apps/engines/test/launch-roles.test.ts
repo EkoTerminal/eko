@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect } from 'vitest';
-import { binary, openDb, migrate, migrateEngines, guardManifestId, guardStorageHash, guardRowsKnownAt, GuardSourceStore } from '@eko/db';
+import { binary, migrate, migrateEngines, guardManifestId, guardStorageHash, guardRowsKnownAt, GuardSourceStore } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { ChainDb } from '@eko/db';
 import { captureLaunchRolesV2, resolveLaunchRolesV2 } from '@eko/chain';
 import type { LaunchRoleInput, LaunchFeeObservation, LaunchEventObservation } from '@eko/chain';

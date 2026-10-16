@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { RpcGuardError, type PonsProfileClient } from '@eko/chain';
 import type { Address } from '@eko/shared';
 import { ownerPowers, ponsProfiles } from '../src/pons-profile.js';

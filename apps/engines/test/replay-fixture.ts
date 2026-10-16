@@ -1,4 +1,5 @@
-import { binary, migrate, migrateEngines, openDb, rebuildBalances, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, rebuildBalances, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { Address } from '@eko/shared';
 export const sampleAddress=(n:number):Address=>`0x${n.toString(16).padStart(40,'0')}`;
 const txHash=(n:number)=>binary(`0x${n.toString(16).padStart(64,'0')}`);

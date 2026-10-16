@@ -2,7 +2,7 @@ import { loadSenderScope, extendSenderScope, needsSender, type SenderScope } fro
 import { safeError } from './safe-error.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { rpcStopReason, ponsFactoryAbi, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, wethAbi } from '@eko/chain';
-import { hex, type ChainDb } from '@eko/db';
+import { PartitionLockTimeoutError, hex, type ChainDb } from '@eko/db';
 import { toEventSelector, type Address, type Hex } from 'viem';
 import { lower, native } from './clients.js';
 import { type BlockDecoder } from './decode.js';
@@ -189,6 +189,11 @@ export class PonsBackfill {
           if (rpcStopReason(error) || this.client.rpcStopped?.() || this.stopping) {
             this.stop(); await leases.finish(this.db, range, 'todo'); throw error;
           }
+          if(error instanceof PartitionLockTimeoutError) {
+            await leases.finish(this.db,range,'todo');
+            await new Promise(resolve=>setTimeout(resolve,1000));
+            continue;
+          }
           (this.options.logger ?? log)('backfill_range_retry', { stream, from: range.from_block, attempt: range.attempts, error: safeError(error) });
           try {
             const repeats = await leases.fail(range,error);
@@ -255,9 +260,9 @@ export class PonsBackfill {
           batch.merge(this.decoder.collect(b.block, b.filtered, prepared, { ponsOnly }));
         }
         if (this.stopping || this.client.rpcStopped?.()) return false;
+        for (const b of data) await this.db.ensurePartitions(new Date(Number(BigInt(b.block.timestamp)) * 1000));
         await this.db.tx(async tx => {
           await leases.renew(range, tx);
-          for (const b of data) await tx.ensurePartitions(new Date(Number(BigInt(b.block.timestamp)) * 1000));
           await batch.flush(tx);
         });
       }

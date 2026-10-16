@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, tokens as tokenSchema, chainTables, hex, migrate, openDb, ChainDb } from '@eko/db';
+import { binary, tokens as tokenSchema, chainTables, hex, migrate, ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { RpcGuardError, decodeResult, loadRegistry, v3Abi, v4Abi, ponsCurveAbi, wethAbi, erc20Abi, AddressRegistry } from '@eko/chain';
 import { encodeAbiParameters, encodeEventTopics, getAddress, toHex, toEventSelector, parseAbi, type AbiEvent, type Address, type Hex } from 'viem';
 import { AdaptiveWindow, PonsBackfill, RangeLeases } from '../src/backfill.js';
@@ -183,7 +184,7 @@ describe('chain ingestion on PGlite', () => {
     const db = await database(); await migrate(db); await db.ensurePartitions(new Date('2026-12-31T23:59:00Z'));
     const names = (await db.sql.query<{ relname: string }>("SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid")).rows.map(r => r.relname);
     for (const table of ['swaps','token_transfers']) for (const suffix of ['d2026_12_31','d2027_01_01','d2027_01_02','d2027_01_03']) expect(names).toContain(`${table}_${suffix}`);
-    expect((await db.sql.query<{ id: string }>('SELECT id FROM eko_indexer_migrations ORDER BY id')).rows.map(row => row.id)).toEqual(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources', '0181_transfer_baselines', '0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index', '0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history']);
+    expect((await db.sql.query<{ id: string }>('SELECT id FROM eko_indexer_migrations ORDER BY id')).rows.map(row => row.id)).toEqual(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources', '0181_transfer_baselines', '0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index', '0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history','0211_bounded_raw_seals']);
     expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename='guard_chain_evidence'")).rows).toHaveLength(1);
     expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename IN ('guard_measurement_evidence','guard_verdict_revisions')")).rows).toHaveLength(0);
     expect((await db.sql.query("SELECT tablename FROM pg_tables WHERE tablename='rpc_usage'")).rows).toHaveLength(1);

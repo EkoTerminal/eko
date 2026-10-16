@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, readRatingPrices } from '../src/index.js';
+import { binary, migrate, migrateEngines, readRatingPrices } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 // The backfill runs by hand on production (no lock on swaps), so tests run the same script after the migration.
 const backfill=async(db:Awaited<ReturnType<typeof openDb>>)=>{
   const sql=readFileSync(new URL('../../../scripts/backfill-rating-checks.sql',import.meta.url),'utf8').split('\n').filter(l=>!l.startsWith('--')).join('\n');

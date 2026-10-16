@@ -1,9 +1,9 @@
 import type { ChainDb } from './client.js';
-import { emptyLifetime } from './lifetime.js';
+import { addLifetimeSwaps, emptyLifetime, packSwap, type Lifetime, type LifetimeIdentity } from './lifetime.js';
 import { GRADE_CUTS } from './rating-retention.js';
 
 export type RawTable = 'swaps' | 'token_transfers';
-export interface RawSealOptions { tsBefore?: Date; firstBlocks?: number; cohortSec?: number; poolManager?: string; now?: Date; checkpointBefore?: Date }
+export interface RawSealOptions { tsBefore?: Date; firstBlocks?: number; cohortSec?: number; poolManager?: string; now?: Date; checkpointBefore?: Date; coinBatchSize?: number; onProgress?: (progress: {day:string;coins:number;rows:number;seconds:number}) => void }
 export interface RawSeal { name: RawTable; partition_name: string; start_ts: Date; end_ts: Date; rows: string; through_block: string; sealed: boolean; dropped: boolean }
 export function rawPartitionName(table: RawTable, date: Date) { return `${table}_d${date.toISOString().slice(0,10).replaceAll('-','_')}`; }
 function validate(table: RawTable, partition: string) {
@@ -22,19 +22,32 @@ const packed = (alias: string) => `jsonb_build_object('block',${alias}.block::te
  'amount_coin',${alias}.amount_coin::text,'amount_quote',${alias}.amount_quote::text,'price_quote',${alias}.price_quote,'usd',${alias}.usd,'venue',${alias}.venue,
  'pool_id','0x'||encode(${alias}.pool_id,'hex'),'quote_asset','0x'||encode(${alias}.quote_asset,'hex'))`;
 
-/** Set-based maintenance, pinned backend, no statement deadline. A committed seal is immutable and rerunnable. */
+export function rawSealStatementMs() {
+  const seconds=Number(process.env.RAW_SEAL_STATEMENT_SEC ?? 300);
+  if(!Number.isFinite(seconds) || seconds<=0 || seconds>2147483)throw new Error('Invalid RAW_SEAL_STATEMENT_SEC');
+  return Math.max(1,Math.floor(seconds*1000));
+}
+async function sealTx<T>(db:ChainDb,work:(tx:ChainDb)=>Promise<T>) {
+  return db.tx(async tx=>{
+    await tx.sql.query(`SET LOCAL statement_timeout='${rawSealStatementMs()}ms'`);
+    await tx.sql.query("SET LOCAL lock_timeout='5s'");
+    return work(tx);
+  });
+}
+/** Fence once, then commit one ordered coin batch per UTC day. */
 export async function sealRawPartition(db: ChainDb, table: RawTable, partition: string, options: RawSealOptions = {}): Promise<RawSeal> {
   validate(table,partition);
   return rawMaintenance(db, session=>sealOnSession(session,table,partition,options));
 }
 async function sealOnSession(db: ChainDb, table: RawTable, partition: string, options: RawSealOptions): Promise<RawSeal> {
-  const previous=(await db.sql.query<RawSeal>('SELECT * FROM raw_history_seals WHERE name=$1 AND partition_name=$2',[table,partition])).rows[0];
+  const batchSize=options.coinBatchSize ?? 200;
+  if(!Number.isInteger(batchSize) || batchSize<1 || batchSize>1000)throw new Error('Invalid seal coin batch size');
+  const previous=await sealTx(db,async tx=>(await tx.sql.query<RawSeal>('SELECT * FROM raw_history_seals WHERE name=$1 AND partition_name=$2',[table,partition])).rows[0]);
   if(previous && options.tsBefore && +new Date(previous.end_ts)!==+options.tsBefore) throw new Error('Seal cutoff differs from persisted cutoff');
   if(previous?.sealed)return previous;
   // This barrier waits only for in-flight insert/update statements, not for the aggregate work.
   // Their boundary triggers take FOR SHARE on the same row and see the committed range fence.
-  if(!previous) await db.tx(async tx=>{
-    await tx.sql.query("SET LOCAL lock_timeout='5s'");
+  if(!previous) await sealTx(db,async tx=>{
     await tx.sql.query('SELECT through_block FROM raw_history_watermarks WHERE name=$1 FOR UPDATE',[table]);
     const bound=(await tx.sql.query<{bound:string}>(`SELECT pg_get_expr(c.relpartbound,c.oid) AS bound FROM pg_class c
       JOIN pg_inherits i ON i.inhrelid=c.oid WHERE c.oid=to_regclass($1) AND i.inhparent=$2::regclass`,[partition,table])).rows[0];
@@ -45,64 +58,91 @@ async function sealOnSession(db: ChainDb, table: RawTable, partition: string, op
     await tx.sql.query(`INSERT INTO raw_history_seals(name,partition_name,start_ts,end_ts,rows,through_block)
       VALUES($1,$2,$3,$4,0,-1) ON CONFLICT DO NOTHING`,[table,partition,start,before]);
   });
-  return db.tx(async tx=>{
-    await tx.sql.query('SET LOCAL statement_timeout=0');
-    await tx.sql.query("SET LOCAL lock_timeout='5s'");
-    const seal=(await tx.sql.query<RawSeal>('SELECT * FROM raw_history_seals WHERE name=$1 AND partition_name=$2 FOR UPDATE',[table,partition])).rows[0]!;
-    const swaps=table==='swaps',key=swaps?'coin':'token';
-    await tx.sql.query(`CREATE TEMP TABLE raw_seal_rows ON COMMIT DROP AS SELECT * FROM ${partition} WHERE ts<$1`,[seal.end_ts]);
-    await tx.sql.query(`CREATE INDEX ON raw_seal_rows(${key},block)`);
-    await tx.sql.query('ANALYZE raw_seal_rows');
-    await tx.sql.query(`CREATE TEMP TABLE raw_seal_coins ON COMMIT DROP AS SELECT k.coin,t.first_block,t.graduated_block,t.deployer,
-      coalesce(e.ts,c.ts) AS created,l.opening_holdings,l.graduation_holdings,l.revision,
-      coalesce(l.data,$1::jsonb || CASE WHEN EXISTS(SELECT 1 FROM history_prunes p WHERE p.coin=k.coin AND p.transfers+p.swaps+p.liquidity+p.pons>0)
-        THEN '{"legacyIncomplete":true,"earlyComplete":false,"usdComplete":false}'::jsonb ELSE '{}'::jsonb END) AS data
-      FROM (SELECT DISTINCT ${key} AS coin FROM raw_seal_rows) k LEFT JOIN tokens t ON t.address=k.coin
-      LEFT JOIN engine_block_times e ON e.number=t.first_block LEFT JOIN chain_blocks c ON c.number=t.first_block LEFT JOIN coin_lifetime l ON l.coin=k.coin`,[JSON.stringify(emptyLifetime())]);
-    await tx.sql.query('CREATE UNIQUE INDEX ON raw_seal_coins(coin)');
-    const outOfOrder=(await tx.sql.query(`SELECT 1 FROM raw_seal_coins c WHERE (c.data->'last'->>'block')::bigint >=
-      (SELECT min(block) FROM raw_seal_rows r WHERE r.${key}=c.coin) LIMIT 1`)).rows.length;
-    if(swaps && outOfOrder)throw new Error('Seal raw swap partitions in chronological order');
-    await tx.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source) SELECT b.number,b.ts,b.hash,'head'
-      FROM raw_seal_coins t JOIN chain_blocks b ON b.number=t.first_block WHERE t.deployer IS NOT NULL ON CONFLICT DO NOTHING`);
-    await tx.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source) SELECT DISTINCT b.number,b.ts,b.hash,'head'
-      FROM raw_seal_coins t JOIN engine_block_times c ON c.number=t.first_block CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
-      CROSS JOIN LATERAL(SELECT number,ts,hash FROM chain_blocks WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1)b
-      WHERE t.deployer IS NOT NULL ON CONFLICT DO NOTHING`);
-    await tx.sql.query(`CREATE TEMP TABLE raw_seal_cuts ON COMMIT DROP AS SELECT DISTINCT t.coin,e.number AS block,e.ts,
-      (SELECT number FROM engine_block_times WHERE ts<=e.ts-interval '1 hour' AND number<=e.number ORDER BY ts DESC,number DESC LIMIT 1) AS prior
-      FROM raw_seal_coins t JOIN engine_block_times c ON c.number=t.first_block CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
-      CROSS JOIN LATERAL(SELECT number,ts FROM engine_block_times WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1)e WHERE t.deployer IS NOT NULL`);
-    await tx.sql.query(`UPDATE raw_seal_coins l SET opening_holdings=x.data FROM (
-      SELECT t.coin,coalesce(jsonb_object_agg(encode(h.holder,'hex'),h.amount::text) FILTER(WHERE h.holder IS NOT NULL),'{}') AS data
-      FROM raw_seal_coins t LEFT JOIN LATERAL(SELECT holder,sum(amount) AS amount FROM (
-        SELECT to_address AS holder,amount FROM raw_history_live_transfers WHERE token=t.coin AND block<=t.first_block AND kind='Transfer'
-        UNION ALL SELECT from_address,-amount FROM raw_history_live_transfers WHERE token=t.coin AND block<=t.first_block AND kind='Transfer'
-        UNION ALL SELECT holder,amount FROM transfer_baselines WHERE token=t.coin AND through_block<=t.first_block
-      ) a GROUP BY holder HAVING sum(amount)>0)h ON true GROUP BY t.coin
-    )x WHERE l.coin=x.coin AND l.first_block IS NOT NULL AND l.opening_holdings IS NULL`);
-    await tx.sql.query(`UPDATE raw_seal_coins l SET graduation_holdings=x.data FROM (
-      SELECT t.coin,coalesce(jsonb_object_agg(encode(h.holder,'hex'),h.amount::text) FILTER(WHERE h.holder IS NOT NULL),'{}') AS data
-      FROM raw_seal_coins t LEFT JOIN LATERAL(SELECT holder,sum(amount) AS amount FROM (
-        SELECT to_address AS holder,amount FROM raw_history_live_transfers WHERE token=t.coin AND block<t.graduated_block AND kind='Transfer'
-        UNION ALL SELECT from_address,-amount FROM raw_history_live_transfers WHERE token=t.coin AND block<t.graduated_block AND kind='Transfer'
-        UNION ALL SELECT holder,amount FROM transfer_baselines WHERE token=t.coin AND through_block<t.graduated_block
-      ) a GROUP BY holder HAVING sum(amount)>0)h ON true WHERE t.graduated_block<=(SELECT max(block) FROM raw_seal_rows) GROUP BY t.coin
-    )x WHERE l.coin=x.coin AND l.graduation_holdings IS NULL`);
-    if(swaps)await sealSwaps(tx,seal,options);else await sealTransfers(tx);
-    // DETACH/DROP do not fire parent statement triggers. Publish their cache invalidations with the summaries.
-    if(swaps) {
-      await tx.sql.query(`INSERT INTO engine_swap_versions AS v(coin,revision,high_block) SELECT coin,1,max(block) FROM raw_seal_rows GROUP BY coin
-        ON CONFLICT(coin) DO UPDATE SET revision=v.revision+1`);
-      await tx.sql.query(`INSERT INTO engine_window_versions AS v(bucket,revision) SELECT DISTINCT block/10000,1 FROM raw_seal_rows ON CONFLICT(bucket) DO UPDATE SET revision=v.revision+1`);
+  const seal=await sealTx(db,async tx=>(await tx.sql.query<RawSeal>('SELECT * FROM raw_history_seals WHERE name=$1 AND partition_name=$2',[table,partition])).rows[0]!);
+  const swaps=table==='swaps',key=swaps?'coin':'token';
+  for(let time=+new Date(seal.start_ts);time<+new Date(seal.end_ts);) {
+    const day=new Date(time),end=new Date(Math.min(Date.parse(day.toISOString().slice(0,10))+86400000,+new Date(seal.end_ts)));
+    await sealTx(db,async tx=>{
+      await tx.sql.query(`INSERT INTO raw_history_seal_days(name,partition_name,day,end_ts) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,[table,partition,day,end]);
+    });
+    while(true) {
+      const started=performance.now();
+      const progress=await sealTx(db,async tx=>{
+        const cursor=(await tx.sql.query<{last_coin:Uint8Array|null;complete:boolean;coins:string;rows:string}>(`SELECT * FROM raw_history_seal_days WHERE name=$1 AND partition_name=$2 AND day=$3 FOR UPDATE`,[table,partition,day])).rows[0]!;
+        if(cursor.complete)return null;
+        const coins=(await tx.sql.query<{coin:Uint8Array}>(`SELECT ${key} AS coin FROM ${partition}
+          WHERE ts>=$1 AND ts<$2 AND ${key}>coalesce($3::bytea,''::bytea) GROUP BY ${key} ORDER BY ${key} LIMIT $4`,[day,end,cursor.last_coin,batchSize])).rows.map(r=>r.coin);
+        if(!coins.length) {
+          await tx.sql.query('UPDATE raw_history_seal_days SET complete=true WHERE name=$1 AND partition_name=$2 AND day=$3',[table,partition,day]);
+          return null;
+        }
+        // One indexed coin range at a time; never materialize the entire old monthly prefix.
+        await tx.sql.query(`CREATE TEMP TABLE raw_seal_rows ON COMMIT DROP AS SELECT s.* FROM unnest($3::bytea[])k(coin)
+          CROSS JOIN LATERAL(SELECT * FROM ${partition} s WHERE s.${key}=k.coin AND s.ts>=$1 AND s.ts<$2 OFFSET 0)s`,[day,end,coins]);
+        await tx.sql.query(`CREATE INDEX ON raw_seal_rows(${key},block)`);
+        await tx.sql.query('ANALYZE raw_seal_rows');
+        await tx.sql.query(`CREATE TEMP TABLE raw_seal_coins ON COMMIT DROP AS SELECT k.coin,t.first_block,t.graduated_block,t.deployer,
+          coalesce(e.ts,c.ts) AS created,l.opening_holdings,l.graduation_holdings,l.revision,
+          coalesce(l.data,$1::jsonb || CASE WHEN EXISTS(SELECT 1 FROM history_prunes p WHERE p.coin=k.coin AND p.transfers+p.swaps+p.liquidity+p.pons>0)
+            THEN '{"legacyIncomplete":true,"earlyComplete":false,"usdComplete":false}'::jsonb ELSE '{}'::jsonb END) AS data
+          FROM (SELECT DISTINCT ${key} AS coin FROM raw_seal_rows) k LEFT JOIN tokens t ON t.address=k.coin
+          LEFT JOIN engine_block_times e ON e.number=t.first_block LEFT JOIN chain_blocks c ON c.number=t.first_block LEFT JOIN coin_lifetime l ON l.coin=k.coin`,[JSON.stringify(emptyLifetime())]);
+        await tx.sql.query('CREATE UNIQUE INDEX ON raw_seal_coins(coin)');
+        const outOfOrder=(await tx.sql.query(`SELECT 1 FROM raw_seal_coins c WHERE (c.data->'last'->>'block')::bigint >=
+          (SELECT min(block) FROM raw_seal_rows r WHERE r.${key}=c.coin) LIMIT 1`)).rows.length;
+        if(swaps && outOfOrder)throw new Error('Seal raw swap partitions in chronological order');
+        await tx.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source) SELECT b.number,b.ts,b.hash,'head'
+          FROM raw_seal_coins t JOIN chain_blocks b ON b.number=t.first_block WHERE t.deployer IS NOT NULL ON CONFLICT DO NOTHING`);
+        await tx.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source) SELECT DISTINCT b.number,b.ts,b.hash,'head'
+          FROM raw_seal_coins t JOIN engine_block_times c ON c.number=t.first_block CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
+          CROSS JOIN LATERAL(SELECT number,ts,hash FROM chain_blocks WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1)b
+          WHERE t.deployer IS NOT NULL ON CONFLICT DO NOTHING`);
+        await tx.sql.query(`CREATE TEMP TABLE raw_seal_cuts ON COMMIT DROP AS SELECT DISTINCT t.coin,e.number AS block,e.ts,
+          (SELECT number FROM engine_block_times WHERE ts<=e.ts-interval '1 hour' AND number<=e.number ORDER BY ts DESC,number DESC LIMIT 1) AS prior
+          FROM raw_seal_coins t JOIN engine_block_times c ON c.number=t.first_block CROSS JOIN (VALUES(3600),(86400),(604800)) h(sec)
+          CROSS JOIN LATERAL(SELECT number,ts FROM engine_block_times WHERE ts>=c.ts+h.sec*interval '1 second' ORDER BY ts,number LIMIT 1)e WHERE t.deployer IS NOT NULL`);
+        await tx.sql.query(`UPDATE raw_seal_coins l SET opening_holdings=x.data FROM (
+          SELECT t.coin,coalesce(jsonb_object_agg(encode(h.holder,'hex'),h.amount::text) FILTER(WHERE h.holder IS NOT NULL),'{}') AS data
+          FROM raw_seal_coins t LEFT JOIN LATERAL(SELECT holder,sum(amount) AS amount FROM (
+            SELECT to_address AS holder,amount FROM raw_history_live_transfers WHERE token=t.coin AND block<=t.first_block AND kind='Transfer'
+            UNION ALL SELECT from_address,-amount FROM raw_history_live_transfers WHERE token=t.coin AND block<=t.first_block AND kind='Transfer'
+            UNION ALL SELECT holder,amount FROM transfer_baselines WHERE token=t.coin AND through_block<=t.first_block
+          ) a GROUP BY holder HAVING sum(amount)>0)h ON true GROUP BY t.coin
+        )x WHERE l.coin=x.coin AND l.first_block IS NOT NULL AND l.opening_holdings IS NULL`);
+        await tx.sql.query(`UPDATE raw_seal_coins l SET graduation_holdings=x.data FROM (
+          SELECT t.coin,coalesce(jsonb_object_agg(encode(h.holder,'hex'),h.amount::text) FILTER(WHERE h.holder IS NOT NULL),'{}') AS data
+          FROM raw_seal_coins t LEFT JOIN LATERAL(SELECT holder,sum(amount) AS amount FROM (
+            SELECT to_address AS holder,amount FROM raw_history_live_transfers WHERE token=t.coin AND block<t.graduated_block AND kind='Transfer'
+            UNION ALL SELECT from_address,-amount FROM raw_history_live_transfers WHERE token=t.coin AND block<t.graduated_block AND kind='Transfer'
+            UNION ALL SELECT holder,amount FROM transfer_baselines WHERE token=t.coin AND through_block<t.graduated_block
+          ) a GROUP BY holder HAVING sum(amount)>0)h ON true WHERE t.graduated_block<=(SELECT max(block) FROM raw_seal_rows) GROUP BY t.coin
+        )x WHERE l.coin=x.coin AND l.graduation_holdings IS NULL`);
+        // Global trending snapshots must see the whole live day before any coin batch disappears.
+        if(swaps && Number(cursor.coins)===0)await sealRankings(tx,{...seal,end_ts:end});
+        if(swaps)await sealSwaps(tx,{...seal,end_ts:end},options);else await sealTransfers(tx);
+        // DETACH/DROP do not fire parent statement triggers. Publish their cache invalidations with the summaries.
+        if(swaps) {
+          await tx.sql.query(`INSERT INTO engine_swap_versions AS v(coin,revision,high_block) SELECT coin,1,max(block) FROM raw_seal_rows GROUP BY coin
+            ON CONFLICT(coin) DO UPDATE SET revision=v.revision+1`);
+          await tx.sql.query(`INSERT INTO engine_window_versions AS v(bucket,revision) SELECT DISTINCT block/10000,1 FROM raw_seal_rows ON CONFLICT(bucket) DO UPDATE SET revision=v.revision+1`);
+        }
+        await tx.sql.query(`INSERT INTO engine_activity_changes(source,coins,blocks)
+          SELECT $1,array_agg(coin ORDER BY coin),array_agg(block ORDER BY coin) FROM (SELECT ${key} AS coin,min(block) AS block FROM raw_seal_rows GROUP BY ${key})k
+          WHERE EXISTS(SELECT 1 FROM engine_activity_feed WHERE seen_at>now()-interval '1 day') HAVING count(*)>0`,[table]);
+        const totals=(await tx.sql.query<{rows:string;high:string}>('SELECT count(*) AS rows,coalesce(max(block),-1) AS high FROM raw_seal_rows')).rows[0]!;
+        await tx.sql.query(`UPDATE raw_history_seal_days SET last_coin=$4,coins=coins+$5,rows=rows+$6,through_block=greatest(through_block,$7)
+          WHERE name=$1 AND partition_name=$2 AND day=$3`,[table,partition,day,coins.at(-1),coins.length,totals.rows,totals.high]);
+        await tx.sql.query(`UPDATE raw_history_seals SET rows=rows+$3,through_block=greatest(through_block,$4) WHERE name=$1 AND partition_name=$2`,[table,partition,totals.rows,totals.high]);
+        return {day:day.toISOString().slice(0,10),coins:Number(cursor.coins)+coins.length,rows:Number(totals.rows)};
+      });
+      if(!progress)break;
+      options.onProgress?.({...progress,seconds:(performance.now()-started)/1000});
     }
-    await tx.sql.query(`INSERT INTO engine_activity_changes(source,coins,blocks)
-      SELECT $1,array_agg(coin ORDER BY coin),array_agg(block ORDER BY coin) FROM (SELECT ${key} AS coin,min(block) AS block FROM raw_seal_rows GROUP BY ${key})k
-      WHERE EXISTS(SELECT 1 FROM engine_activity_feed WHERE seen_at>now()-interval '1 day') HAVING count(*)>0`,[table]);
-    return (await tx.sql.query<RawSeal>(`UPDATE raw_history_seals SET sealed=true,rows=(SELECT count(*) FROM raw_seal_rows),
-      through_block=coalesce((SELECT max(block) FROM raw_seal_rows),-1) WHERE name=$1 AND partition_name=$2 RETURNING *`,[table,partition])).rows[0]!;
-  });
+    time=+end;
+  }
+  return sealTx(db,async tx=>(await tx.sql.query<RawSeal>('UPDATE raw_history_seals SET sealed=true WHERE name=$1 AND partition_name=$2 RETURNING *',[table,partition])).rows[0]!);
 }
+
 async function sealTransfers(db: ChainDb) {
   await db.sql.query(`INSERT INTO coin_holder_checkpoints(coin,block,data)
     SELECT t.coin,k.block,coalesce(jsonb_object_agg(encode(h.holder,'hex'),jsonb_build_object('amount',h.amount::text,'block',h.block::text)) FILTER(WHERE h.holder IS NOT NULL),'{}')
@@ -124,8 +164,6 @@ async function sealTransfers(db: ChainDb) {
     opening_holdings=coalesce(coin_lifetime.opening_holdings,excluded.opening_holdings),graduation_holdings=coalesce(coin_lifetime.graduation_holdings,excluded.graduation_holdings),revision=coin_lifetime.revision+1`);
 }
 async function sealSwaps(db: ChainDb, seal: RawSeal, options: RawSealOptions) {
-  await db.sql.query(`CREATE TEMP TABLE raw_seal_packed ON COMMIT DROP AS SELECT s.*,${packed('s')} AS packed FROM raw_seal_rows s`);
-  await db.sql.query('CREATE INDEX ON raw_seal_packed(coin,block,log_index,tx_hash)');
   await db.sql.query(`ALTER TABLE raw_seal_coins ADD COLUMN identity jsonb`);
   await db.sql.query(`UPDATE raw_seal_coins c SET identity=jsonb_build_object('deployer',coalesce('0x'||encode(c.deployer,'hex'),''),'firstBlock',coalesce(c.first_block,0),
     'createdSec',coalesce(extract(epoch FROM c.created),0),'firstBlocks',$1::integer,'cohortSec',$2::integer,'pools',coalesce((SELECT jsonb_agg('0x'||encode(p.id,'hex')) FROM pools p WHERE p.currency0=c.coin OR p.currency1=c.coin),'[]')||$3::jsonb)`,[options.firstBlocks ?? 35,options.cohortSec ?? 60,JSON.stringify(options.poolManager?[options.poolManager.toLowerCase()]:[])]);
@@ -147,22 +185,8 @@ async function sealSwaps(db: ChainDb, seal: RawSeal, options: RawSealOptions) {
     FROM raw_seal_cuts c JOIN raw_seal_rows s ON s.coin=c.coin AND s.block<=c.block AND s.ts>c.ts-interval '1 hour' GROUP BY c.coin,c.block
     ON CONFLICT(coin,block) DO UPDATE SET total=coin_outcome_hours.total+excluded.total,missing=coin_outcome_hours.missing+excluded.missing,
     volume=coin_outcome_hours.volume+excluded.volume,missing_volume=coin_outcome_hours.missing_volume+excluded.missing_volume,unknown=coin_outcome_hours.unknown+excluded.unknown`);
-  // Snapshot a cut only once its whole raw prefix is covered. No post-cut facts enter the seed.
-  await db.sql.query(`INSERT INTO coin_lifetime_checkpoints(coin,block,data)
-    SELECT c.coin,c.block,coalesce(a.data,t.data)||jsonb_build_object('checkpointHour',jsonb_build_object('totalCount',coalesce(h.total,0),'unattributedCount',coalesce(h.missing,0),
-      'totalVolumeUsd',coalesce(h.volume,0),'unattributedVolumeUsd',coalesce(h.missing_volume,0),'unknownVolumeCount',coalesce(h.unknown,0)))
-    FROM raw_seal_cuts c JOIN raw_seal_coins t USING(coin) LEFT JOIN coin_outcome_hours h USING(coin,block)
-    LEFT JOIN LATERAL(SELECT raw_history_lifetime(s.packed,t.data,t.identity ORDER BY s.block,s.log_index,s.tx_hash) AS data FROM raw_seal_packed s WHERE s.coin=c.coin AND s.block<=c.block)a ON true
-    WHERE c.ts<$2 AND coalesce((t.data->'last'->>'block')::bigint,-1)<=c.block
-      AND NOT EXISTS(SELECT 1 FROM raw_history_live_swaps s WHERE s.coin=c.coin AND s.block<=c.block AND s.ts>=$1)
-    ON CONFLICT DO NOTHING`,[seal.end_ts,options.checkpointBefore ?? options.tsBefore ?? new Date(+(options.now ?? new Date())-Number(process.env.RETENTION_SWAP_DAYS ?? 7)*86400000)]);
-  await db.sql.query(`INSERT INTO coin_lifetime(coin,data,opening_holdings,graduation_holdings)
-    SELECT t.coin,raw_history_lifetime(s.packed,t.data,t.identity ORDER BY s.block,s.log_index,s.tx_hash),t.opening_holdings,t.graduation_holdings
-    FROM raw_seal_coins t JOIN raw_seal_packed s ON s.coin=t.coin GROUP BY t.coin,t.data,t.identity,t.opening_holdings,t.graduation_holdings
-    ON CONFLICT(coin) DO UPDATE SET data=excluded.data,opening_holdings=coalesce(coin_lifetime.opening_holdings,excluded.opening_holdings),
-    graduation_holdings=coalesce(coin_lifetime.graduation_holdings,excluded.graduation_holdings),revision=coin_lifetime.revision+1`);
+  await foldLifetimeBatch(db,seal,options);
   await sealBars(db);
-  await sealRankings(db,seal);
   await sealGradePrices(db,seal,options.now ?? new Date());
   // Publish hot buyer projections only after all long folds/scans finish. The retained-firsts trigger's
   // maintenance branch avoids one heavyweight advisory lock per coin; atomic earliest-event upserts suffice.
@@ -190,6 +214,38 @@ async function sealSwaps(db: ChainDb, seal: RawSeal, options: RawSealOptions) {
     swaps_through_block=greatest(history_prunes.swaps_through_block,excluded.swaps_through_block),first_trade_ts=least(history_prunes.first_trade_ts,excluded.first_trade_ts),
     last_trade_ts=greatest(history_prunes.last_trade_ts,excluded.last_trade_ts),buyers=excluded.buyers,swaps=history_prunes.swaps+excluded.swaps,buyer_stats_complete=true,updated_at=now()`);
 
+}
+/** The original reducer avoids repeatedly copying growing JSONB state on every event. */
+async function foldLifetimeBatch(db:ChainDb,seal:RawSeal,options:RawSealOptions) {
+  const coins=(await db.sql.query<{coin:Uint8Array;data:Lifetime;identity:Omit<LifetimeIdentity,'pools'>&{pools:string[]}}>('SELECT coin,data,identity FROM raw_seal_coins ORDER BY coin')).rows;
+  const checkpointBefore=options.checkpointBefore ?? options.tsBefore ?? new Date(+(options.now ?? new Date())-Number(process.env.RETENTION_SWAP_DAYS ?? 7)*86400000);
+  const summaries:unknown[]=[];
+  const checkpoints:unknown[]=[];
+  for(const coin of coins) {
+    const cuts=(await db.sql.query<{block:string;hour:Lifetime['checkpointHour']}>(`SELECT c.block::text,jsonb_build_object('totalCount',coalesce(h.total,0),'unattributedCount',coalesce(h.missing,0),
+      'totalVolumeUsd',coalesce(h.volume,0),'unattributedVolumeUsd',coalesce(h.missing_volume,0),'unknownVolumeCount',coalesce(h.unknown,0)) AS hour
+      FROM raw_seal_cuts c LEFT JOIN coin_outcome_hours h USING(coin,block) WHERE c.coin=$1 AND c.ts<$3
+      AND coalesce(($4::jsonb->'last'->>'block')::bigint,-1)<=c.block
+      AND NOT EXISTS(SELECT 1 FROM raw_history_live_swaps s WHERE s.coin=c.coin AND s.block<=c.block AND s.ts>=$2)
+      ORDER BY c.block`,[coin.coin,seal.end_ts,checkpointBefore,JSON.stringify(coin.data)])).rows;
+    const identity={...coin.identity,pools:new Set(coin.identity.pools)};
+    // Read from the indexed batch in key order. Each coin is packed once; checkpoint folds share its prefix.
+    const rows=(await db.sql.query<Record<string,unknown>>('SELECT * FROM raw_seal_rows WHERE coin=$1 ORDER BY block,log_index,tx_hash',[coin.coin])).rows.map(packSwap);
+    let offset=0;
+    for(const cut of cuts) {
+      let end=offset;while(end<rows.length && BigInt(rows[end]!.block)<=BigInt(cut.block))end++;
+      addLifetimeSwaps(coin.data,rows.slice(offset,end),identity);offset=end;
+      checkpoints.push({coin:Buffer.from(coin.coin).toString('hex'),block:cut.block,data:{...structuredClone(coin.data),checkpointHour:cut.hour}});
+    }
+    addLifetimeSwaps(coin.data,rows.slice(offset),identity);
+    summaries.push({coin:Buffer.from(coin.coin).toString('hex'),data:coin.data});
+  }
+  if(checkpoints.length)await db.sql.query(`INSERT INTO coin_lifetime_checkpoints(coin,block,data)
+    SELECT decode(x.coin,'hex'),x.block,x.data FROM jsonb_to_recordset($1::jsonb)x(coin text,block bigint,data jsonb) ON CONFLICT DO NOTHING`,[JSON.stringify(checkpoints)]);
+  await db.sql.query(`INSERT INTO coin_lifetime(coin,data,opening_holdings,graduation_holdings)
+    SELECT t.coin,x.data,t.opening_holdings,t.graduation_holdings FROM jsonb_to_recordset($1::jsonb)x(coin text,data jsonb)
+    JOIN raw_seal_coins t ON t.coin=decode(x.coin,'hex') ON CONFLICT(coin) DO UPDATE SET data=excluded.data,
+    opening_holdings=coalesce(coin_lifetime.opening_holdings,excluded.opening_holdings),graduation_holdings=coalesce(coin_lifetime.graduation_holdings,excluded.graduation_holdings),revision=coin_lifetime.revision+1`,[JSON.stringify(summaries)]);
 }
 async function sealBars(db: ChainDb) {
   await db.sql.query(`CREATE TEMP TABLE raw_seal_bar_rows ON COMMIT DROP AS SELECT s.* FROM

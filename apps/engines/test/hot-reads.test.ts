@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
-import { binary, openDb, migrate, migrateEngines, rebuildBalances, trendingAt, hex, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, rebuildBalances, trendingAt, hex, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { Address } from '@eko/shared';
 import { holdingsAt } from '../src/sources.js';
 import { incrementalSwaps, SWAP_PAGE_SIZE } from '../src/swap-reader.js';

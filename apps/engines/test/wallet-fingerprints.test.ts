@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { recordBuyerStatistics } from '../../../packages/db/src/lifetime.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openDb, migrate, migrateEngines, binary, type ChainDb } from '@eko/db';
+import { migrate, migrateEngines, binary, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { encodeFunctionData, parseAbi, type Address, type Hex } from 'viem';
 import { walletFeatures, sizeBucket, entropy, type FeatureInput, type FingerprintSwap, type WalletFeatures } from '../src/watcher/features.js';
 import { FP_MODEL, likelyAgentScore, resolveFingerprintLabel } from '../src/watcher/score.js';

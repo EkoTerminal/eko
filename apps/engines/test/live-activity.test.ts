@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, ChainDb, migrate, migrateEngines, openDb, rebuildBalances, runRetention } from '@eko/db';
+import { binary, ChainDb, migrate, migrateEngines, rebuildBalances, runRetention } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { Address } from '@eko/shared';
 import { EngineWorker } from '../src/worker.js';
 import { RULES_VERSION } from '@eko/playbooks';

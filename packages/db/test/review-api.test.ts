@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ReviewExportSchema, ReviewCaseInputSchema, type ReviewRole } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
-import { openDb, migrate, type ChainDb } from '../src/client.js';
+import { migrate, type ChainDb } from '../src/client.js';
+import { openDb } from './helpers/historical-db.js';
 import { migrateEngines } from '../src/engines-migrate.js';
 import { ReviewStore, reviewPins, reviewCaseId } from '../src/review-store.js';
 import { reviewFixture, labelFixture, reviewerAccounts as accounts, hash } from './fixtures/review.js';

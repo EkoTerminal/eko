@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { openDb, migrate, hex, type ChainDb } from '@eko/db';
+import { migrate, hex, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry, RpcGuardError } from '@eko/chain';
 import { privateKeyToAccount } from 'viem/accounts';
 import { toHex, type Address, type Hex } from 'viem';

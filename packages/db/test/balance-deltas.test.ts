@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyBalanceDeltas, binary, compactTransfers, hex, migrate, openDb, rebuildBalances, type ChainDb } from '../src/index.js';
+import { applyBalanceDeltas, binary, compactTransfers, hex, migrate, rebuildBalances, type ChainDb } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 
 const epoch = Date.parse('2026-10-01T00:00:00Z');
 const address = (n: number) => `0x${n.toString(16).padStart(40, '0')}` as `0x${string}`;

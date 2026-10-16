@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, chainTables, hex, migrate, openDb, ChainDb } from '@eko/db';
+import { binary, chainTables, hex, migrate, ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { BlockDecoder } from '../src/decode.js';
 import { LogHeadFollower } from '../src/log-head.js';
 import { Metrics } from '../src/types.js';

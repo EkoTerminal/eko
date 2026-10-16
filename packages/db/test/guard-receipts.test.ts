@@ -3,7 +3,8 @@ import { concat, encodeAbiParameters, encodeEventTopics, keccak256, stringToHex 
 import type { Abi, Hex } from 'viem';
 import { GuardReceiptPayloadSchema, GuardAssessmentV2Schema, guardDecisionBody, createGuardReceiptCodec } from '@eko/shared';
 import type { GuardVerdictRevisionInput, GuardAvailabilityManifest } from '@eko/shared';
-import { openDb, migrate, migrateEngines, GuardSourceStore, GuardVerdictStore, GuardReceiptStore, ReceiptOutbox, guardManifestId, guardStorageHash } from '../src/index.js';
+import { migrate, migrateEngines, GuardSourceStore, GuardVerdictStore, GuardReceiptStore, ReceiptOutbox, guardManifestId, guardStorageHash } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 import type { ChainDb, GuardRegistryReader } from '../src/index.js';
 import registryAbi from '../../chain/abi/eko/ReceiptsRegistry.json' with {type:'json'};
 import fixture from '../../shared/test/fixtures/receipts/guard-v2.json' with {type:'json'};

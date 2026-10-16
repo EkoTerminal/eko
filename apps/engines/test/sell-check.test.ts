@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, openDb, migrate, migrateEngines, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { balanceKey, loadRegistry, probeAbi, v4PoolId, v4ProbeAbi, RpcGuardError, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
 import { decodeFunctionData, encodeAbiParameters, encodeFunctionData, getAddress, pad, parseAbi, toHex, zeroAddress, type Hex } from 'viem';

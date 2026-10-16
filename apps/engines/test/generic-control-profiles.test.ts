@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { keccak256, toHex } from 'viem';
-import { openDb, binary, migrate, migrateEngines, GuardSourceStore, GuardMeasurementStore, guardManifestId, guardStorageHash, guardRowsKnownAt } from '@eko/db';
+import { binary, migrate, migrateEngines, GuardSourceStore, GuardMeasurementStore, guardManifestId, guardStorageHash, guardRowsKnownAt } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { ChainDb } from '@eko/db';
 import { GenericControlFork, SerializedMeteredForkLease, inspectGenericControls, referenceDigest } from '@eko/chain';
 import type { ControlProfile } from '@eko/chain';

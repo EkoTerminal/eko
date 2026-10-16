@@ -3,7 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { openDb } from '@eko/db';
+
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { replayFixture } from './replay-fixture.js';
 
 // Startup includes fixture seeding, tsx/PGlite boot and reaching 100 evaluations.

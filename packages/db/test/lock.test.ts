@@ -2,7 +2,8 @@ import { mkdtemp,writeFile,readFile,rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe,it,expect } from 'vitest';
-import { openDb } from '../src/client.js';
+
+import { openDb } from './helpers/historical-db.js';
 describe('PGlite process ownership',()=>{
   it('refuses a second handle, releases ownership on close, and removes dead PID locks',async()=>{
     const directory=await mkdtemp(join(tmpdir(),'eko-db-lock-'));

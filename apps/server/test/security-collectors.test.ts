@@ -1,3 +1,4 @@
+import { provisionHistory } from '../../../packages/db/test/helpers/historical-db.js';
 import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from 'vitest';
 import { encodeAbiParameters, encodeEventTopics, parseAbi, toHex, type Hex } from 'viem';
 import { binary, hex, migrate, type ChainDb } from '@eko/db';
@@ -45,6 +46,7 @@ const event = (eventName: 'OwnershipTransferStarted' | 'OwnershipTransferred' | 
 const snapshot = () => monitor.snapshot();
 async function indexed(n = latest) {
   const b = blocks.get(n)!;
+  await provisionHistory(db,new Date(Number(BigInt(b.timestamp))*1000));
   await db.ensurePartitions(new Date(Number(BigInt(b.timestamp))*1000));
   await db.sql.query('INSERT INTO chain_blocks(number,block,hash,parent_hash,ts) VALUES($1,$1,$2,$3,$4) ON CONFLICT(number) DO UPDATE SET hash=excluded.hash,ts=excluded.ts', [n, binary(b.hash), binary(hash(99 + n)), new Date(Number(BigInt(b.timestamp)) * 1000)]);
   await db.setCursor('head', BigInt(n), b.hash);

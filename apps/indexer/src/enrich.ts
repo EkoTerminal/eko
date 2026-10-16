@@ -99,6 +99,7 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
         for(const table of ['wallets','userops','delegations_7702','wallet_protocol_coverage'] as const)for(const row of rows.get(table))batch.add(table,row);
       })));
       await db.tx(async tx=>{
+        await tx.sql.query("SET LOCAL lock_timeout='5s'");
         await tx.sql.query('LOCK TABLE tokens,pools,swaps,token_transfers IN SHARE ROW EXCLUSIVE MODE');
         await tx.sql.query('LOCK TABLE chain_blocks IN SHARE MODE');
         for(const [number,expected] of hashes){const stored=await tx.blockHash(BigInt(number));if((expected.stored || stored!=null) && stored!==expected.hash)throw new Error('Reorg before sender enrichment commit');}

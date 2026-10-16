@@ -1,7 +1,8 @@
 /** Offline comparison of read-maintenance overhead in the actual indexer write path. */
 import { performance } from 'node:perf_hooks';
 import { readFile,writeFile } from 'node:fs/promises';
-import { binary,migrate,migrateEngines,openDb } from '@eko/db';
+import { binary,migrate,migrateEngines,} from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry } from '@eko/chain';
 import { BlockDecoder } from '@eko/indexer';
 import { ReadStore } from '../src/read/store.js';

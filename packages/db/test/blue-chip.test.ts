@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb } from '../src/index.js';
+import { binary, migrate, migrateEngines, } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 describe('Blue chip engine migration',()=>{
   it('supports additional listing sources and keeps danger observations across rating changes',async()=>{
     const db=await openDb({pgliteDir:':memory:'});

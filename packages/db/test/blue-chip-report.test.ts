@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { migrate, migrateEngines, openDb, type ChainDb } from '../src/index.js';
+import { migrate, migrateEngines, type ChainDb } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 
 async function report(db:ChainDb) {
   const sql=await readFile(new URL('../../../scripts/blue-chip-report.sql',import.meta.url),'utf8');

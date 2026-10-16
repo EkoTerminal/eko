@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as retention from '@eko/db';
-import { migrate, openDb, type ChainDb } from '@eko/db';
+import { migrate, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadConfig } from '../src/config.js';
 import { ChainDb as Database } from '@eko/db';
 import { RetentionWorker } from '../src/retention-worker.js';

@@ -1,5 +1,6 @@
 // Run: pnpm --filter @eko/engines exec node --import tsx test/hot-reads-benchmark.ts
-import { openDb,migrate,migrateEngines,binary,trendingAt } from '@eko/db';
+import { migrate,migrateEngines,binary,trendingAt } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { incrementalSwaps } from '../src/swap-reader.js';
 import { holdingsAt } from '../src/sources.js';
 import type { Address } from '@eko/shared';

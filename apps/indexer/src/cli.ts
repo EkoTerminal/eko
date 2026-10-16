@@ -1,3 +1,4 @@
+import { startPartitionMaintenance } from './partitions.js';
 import { AgentRegistryCollector, type RegistryWalletEventProfile } from './agent-registry.js';
 import { readFile } from 'node:fs/promises';
 import { acquireScanJob } from './scan-jobs.js';
@@ -48,6 +49,7 @@ async function main() {
   const telemetry=launchEmitter(db.sql,()=>log('launch_metrics_unavailable'));
   let worker: HeadFollower | LogHeadFollower | PonsBackfill | undefined;
   let watchdog: ProgressWatchdog | undefined;
+  let stopPartitions:(()=>Promise<void>)|undefined;
   let registryStop:()=>void=()=>{};
   let interrupted = false; let failed = false;
   const stop = (reason: 'shutdown_requested' | 'rpc_session_budget_reached' = 'shutdown_requested') => { interrupted = true; if (reason === 'shutdown_requested') log(reason, { finishing_current_transaction: true }); worker?.stop(); registryStop(); meter.stop(reason); };
@@ -57,6 +59,7 @@ async function main() {
   meter.start();
   try {
     await migrate(db);
+    stopPartitions=startPartitionMaintenance(db);
     if(args[0]!=='backfill' && args[0]!=='enrich')await migrateEngines(db);
     const client = createClients(env, registry, meter, { enrich:args[0]==='enrich', head: args[0] !== 'backfill' && env.INDEX_HEAD_MODE === 'logs' });
     if (await client.chainId() !== 4663) throw new Error('RPC chain ID must be 4663');
@@ -126,7 +129,7 @@ async function main() {
   } catch (error) { failed = true; throw error; } finally {
     process.removeListener('SIGTERM', signalStop); process.removeListener('SIGINT', signalStop);
     // The watchdog outlives cleanup: a shutdown that hangs on the database or RPC is a stall too.
-    try { try { await telemetry.drain();await meter.close(); } finally { await db.close(); } } finally { watchdog?.stop(); }
+    try { try { await stopPartitions?.();await telemetry.drain();await meter.close(); } finally { await db.close(); } } finally { watchdog?.stop(); }
     if (!failed && (meter.stopReason === 'rpc_session_budget_reached' || meter.stopReason === 'shutdown_requested')) reportIndexerError(new RpcGuardError(meter.stopReason), log);
   }
 }

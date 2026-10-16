@@ -1,7 +1,8 @@
 // Synthetic sessions and judgments only. Fastify injection opens no network port.
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { migrate, migrateEngines, openDb, ReviewStore, type ChainDb } from '@eko/db';
+import { migrate, migrateEngines, ReviewStore, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { ReviewExportSchema, ReviewViewSchema } from '@eko/shared';
 import { reviewApiRoutes } from '../src/http/review-api.js';
 import type { Account } from '../src/http/auth.js';

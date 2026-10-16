@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { concat, encodeAbiParameters, keccak256, stringToHex } from 'viem';
 import { canonicalize, createGuardReceiptCodec } from '@eko/shared';
 import type { PublicReceiptPayload } from '@eko/shared';
-import { openDb, migrate, migrateEngines, publishReceipt, publishPrivateReceipt, ReceiptOutbox } from '../src/index.js';
+import { migrate, migrateEngines, publishReceipt, publishPrivateReceipt, ReceiptOutbox } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 import type { ChainDb } from '../src/index.js';
 
 const codec=createGuardReceiptCodec({concat,encodeAbiParameters,keccak256,stringToHex});

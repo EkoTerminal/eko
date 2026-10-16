@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, readMarkers, runRetention } from '@eko/db';
+import { binary, migrate, migrateEngines, readMarkers, runRetention } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { refreshCensus, refreshCoinFlow, FP_MODEL } from '@eko/engines';
 const addr=(n:number)=>`0x${n.toString(16).padStart(40,'0')}` as `0x${string}`;
 const hash=(n:number)=>binary(`0x${n.toString(16).padStart(64,'0')}`);

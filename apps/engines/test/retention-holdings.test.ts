@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, compactTransfers, sealRawPartition, readLifetime, migrate, migrateEngines, openDb, rebuildBalances, type ChainDb } from '@eko/db';
+import { binary, compactTransfers, sealRawPartition, readLifetime, migrate, migrateEngines, rebuildBalances, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { Address } from '@eko/shared';
 import type { Hex } from 'viem';
 import { holdingsAt } from '../src/sources.js';

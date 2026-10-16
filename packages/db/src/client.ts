@@ -10,6 +10,11 @@ import { GuardBusEventSchema } from '@eko/shared';
 export interface SqlClient { query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> }
 export const chainTables = ['chain_blocks', 'tokens', 'pools', 'swaps', 'liquidity_events', 'token_transfers', 'pons_events', 'pons_exemptions', 'wallets', 'pending_pool_events', 'userops', 'delegations_7702', 'wallet_protocol_coverage', 'agent_registry_events', 'agent_registry', 'agent_registry_checkpoints', 'eth_usd_reference_sources'] as const;
 export interface BusMessage { topic: 'chain_block' | 'chain_reorg' | 'swap' | 'pair_created' | 'liquidity' | 'pons_exempt' | 'flow_updated' | 'card_updated' | 'verdict_created' | 'guard_evidence_created' | 'guard_coverage_created' | 'guard_role_created' | 'guard_verdict_created' | 'guard_revision_invalidated'; ids: Record<string, string | number> }
+/** Retriable partition provisioning contention; the short DDL transaction has already rolled back. */
+export class PartitionLockTimeoutError extends Error {
+  readonly code = '55P03';
+  constructor() { super('Partition DDL lock timeout; retry batch later'); this.name = 'PartitionLockTimeoutError'; }
+}
 export class ChainDb {
   constructor(readonly sql: SqlClient, private transaction: <T>(fn: (client: SqlClient) => Promise<T>) => Promise<T>, readonly close: () => Promise<void> = async () => {}, private partitions = new Set<string>(), private pendingPartitions: Set<string> | null = null, readonly bus = new InProcessBus(), private pendingMessages: BusMessage[] | null = null, private sessionProvider?: <T>(work: (db: ChainDb) => Promise<T>) => Promise<T>) {}
   /** Pin one backend across separately committed maintenance transactions. */
@@ -41,7 +46,7 @@ export class ChainDb {
   async insertMany(table: typeof chainTables[number], rows: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
     if (!chainTables.includes(table)) throw new Error('Invalid chain table');
     if (!rows.length) return [];
-    if (table==='swaps' || table==='token_transfers') {
+    if (!this.pendingPartitions && (table==='swaps' || table==='token_transfers')) {
       for(const day of new Set(rows.map(r=>new Date(r.ts as Date).toISOString().slice(0,10)))) await this.ensurePartitions(new Date(`${day}T00:00:00Z`));
     }
     const keys = [...new Set(rows.flatMap(Object.keys))];
@@ -77,6 +82,7 @@ export class ChainDb {
     }
   }
   async deleteAbove(n: bigint) {
+    await this.sql.query("SET LOCAL lock_timeout='5s'");
     await this.sql.query('SELECT pg_advisory_xact_lock(4663,208)');
     await this.sql.query('LOCK TABLE tokens,pools,swaps,token_transfers IN SHARE ROW EXCLUSIVE MODE');
     const compacted=(await this.sql.query('SELECT 1 FROM raw_history_watermarks WHERE through_block>$1 LIMIT 1',[n.toString()])).rows.length;
@@ -93,41 +99,54 @@ export class ChainDb {
     await this.sql.query('UPDATE ingest_cursors SET block=$1,hash=$2 WHERE block > $1', [n.toString(), ancestorHash ? binary(ancestorHash) : null]);
     await this.sql.query("UPDATE ingest_ranges SET status='todo',lease_owner=NULL,lease_until=NULL,attempts=0,last_error=NULL,error_repeats=0 WHERE to_block > $1", [n.toString()]);
   }
-  /** UTC days for raw history; bars retain their existing monthly layout. Legacy months cover days until replaced. */
-  async ensurePartitions(date: Date, options: { daysAhead?: number } = {}) {
+  /** Provision against wall-clock retention, independent of the block being repaired. */
+  async ensurePartitions(date: Date, options: { daysAhead?: number; now?: Date } = {}) {
     const daysAhead = options.daysAhead ?? Number(process.env.DAYS_AHEAD ?? 3);
     if (!Number.isInteger(daysAhead) || daysAhead < 0 || daysAhead > 366 || !Number.isFinite(date.getTime())) throw new Error('Invalid partition date or DAYS_AHEAD');
     const swapDays=Number(process.env.RETENTION_SWAP_DAYS ?? 7),transferDays=Number(process.env.RETENTION_TRANSFER_DAYS ?? 3);
     if(!Number.isInteger(swapDays) || swapDays<7 || swapDays>365 || !Number.isInteger(transferDays) || transferDays<1 || transferDays>365)throw new Error('Invalid raw partition window');
-    const day = date.toISOString().slice(0,10), cacheKey = `${day}:${daysAhead}:${swapDays}:${transferDays}`;
+    const today = (options.now ?? new Date()).toISOString().slice(0,10);
+    const midnight = Date.parse(`${today}T00:00:00Z`), last = midnight + daysAhead*86400000;
+    const month = date.toISOString().slice(0,7), cacheKey = `${today}:${daysAhead}:${swapDays}:${transferDays}:${month}`;
     if (this.partitions.has(cacheKey) || this.pendingPartitions?.has(cacheKey)) return;
-    await this.tx(async tx => {
-      await tx.sql.query('LOCK TABLE swaps,token_transfers,bars_1m IN SHARE UPDATE EXCLUSIVE MODE');
-      const bounds = (await tx.sql.query<{parent:string;bound:string}>(`SELECT p.relname AS parent,pg_get_expr(c.relpartbound,c.oid) AS bound
-        FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid JOIN pg_class p ON p.oid=i.inhparent
-        WHERE i.inhparent IN ('swaps'::regclass,'token_transfers'::regclass)`)).rows;
-      for (let offset=-Math.max(swapDays,transferDays);offset<=daysAhead;offset++) {
-        const start = new Date(Date.parse(`${day}T00:00:00Z`)+offset*86400000), end = new Date(start.getTime()+86400000);
-        const suffix = `d${start.toISOString().slice(0,10).replaceAll('-','_')}`;
-        for (const table of ['swaps','token_transfers']) {
-          if(offset<-(table==='swaps'?swapDays:transferDays))continue;
-          const covered = bounds.some(b => {
-            if(b.parent!==table)return false;
-            const range = [...b.bound.matchAll(/'([^']+)'/g)].map(m=>Date.parse(m[1]!));
-            return range.length===2 && range[0]!<=start.getTime() && range[1]!>=end.getTime();
-          });
-          if (!covered) await tx.sql.query(`CREATE TABLE IF NOT EXISTS ${table}_${suffix} PARTITION OF ${table} FOR VALUES FROM ('${start.toISOString()}') TO ('${end.toISOString()}')`);
+    try {
+      await this.tx(async tx => {
+        await tx.sql.query("SET LOCAL lock_timeout = '2s'");
+        const bounds = (await tx.sql.query<{parent:string;bound:string}>(`SELECT p.relname AS parent,pg_get_expr(c.relpartbound,c.oid) AS bound
+          FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid JOIN pg_class p ON p.oid=i.inhparent
+          WHERE i.inhparent IN ('swaps'::regclass,'token_transfers'::regclass,'bars_1m'::regclass)`)).rows;
+        for (const table of ['swaps','token_transfers'] as const) {
+          const ranges = bounds.filter(b=>b.parent===table).map(b=>[...b.bound.matchAll(/'([^']+)'/g)].map(m=>Date.parse(m[1]!))).filter(r=>r.length===2);
+          // Existing partition starts bound initial history without scanning raw heaps. On a fresh DB use the configured window.
+          const earliest = ranges.length ? Math.min(...ranges.map(r=>r[0]!)) : midnight-(table==='swaps'?swapDays:transferDays)*86400000;
+          // The timestamp-leading primary keys make this a first-row lookup, including across legacy leaves.
+          const firstRow=(await tx.sql.query<{ts:Date}>(`SELECT ts FROM ${table} ORDER BY ts LIMIT 1`)).rows[0];
+          const dataStart=firstRow ? Date.parse(new Date(firstRow.ts).toISOString().slice(0,10)) : earliest;
+          const first = Math.max(earliest,dataStart,midnight-(table==='swaps'?swapDays:transferDays)*86400000);
+          for(let time=first;time<=last;time+=86400000) {
+            const start=new Date(time),end=new Date(time+86400000);
+            if(ranges.some(r=>r[0]!<=time && r[1]!>=+end))continue;
+            const suffix=`d${start.toISOString().slice(0,10).replaceAll('-','_')}`;
+            await tx.sql.query("SET LOCAL lock_timeout = '2s'");
+            await tx.sql.query(`CREATE TABLE IF NOT EXISTS ${table}_${suffix} PARTITION OF ${table} FOR VALUES FROM ('${start.toISOString()}') TO ('${end.toISOString()}')`);
+          }
         }
-      }
-      for (let offset=0;offset<=2;offset++) {
-        const start=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+offset,1));
-        const end=new Date(Date.UTC(start.getUTCFullYear(),start.getUTCMonth()+1,1));
-        const suffix=`${start.getUTCFullYear()}_${String(start.getUTCMonth()+1).padStart(2,'0')}`;
-        await tx.sql.query(`CREATE TABLE IF NOT EXISTS bars_1m_${suffix} PARTITION OF bars_1m FOR VALUES FROM ('${start.toISOString()}') TO ('${end.toISOString()}')`);
-      }
-      tx.pendingPartitions!.add(cacheKey);
-    });
+        for(let offset=0;offset<=2;offset++) {
+          const start=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+offset,1)),end=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+offset+1,1));
+          const suffix=`${start.getUTCFullYear()}_${String(start.getUTCMonth()+1).padStart(2,'0')}`;
+          if(bounds.some(b=>b.parent==='bars_1m' && [...b.bound.matchAll(/'([^']+)'/g)].map(m=>Date.parse(m[1]!)).some((t,i)=>i===0 && t===+start)))continue;
+          await tx.sql.query("SET LOCAL lock_timeout = '2s'");
+          await tx.sql.query(`CREATE TABLE IF NOT EXISTS bars_1m_${suffix} PARTITION OF bars_1m FOR VALUES FROM ('${start.toISOString()}') TO ('${end.toISOString()}')`);
+        }
+        tx.pendingPartitions!.add(cacheKey);
+      });
+    } catch(error) {
+      if((error as {code?:string}).code!=='55P03')throw error;
+      console.warn(JSON.stringify({event:'partition_lock_timeout',retry:true}));
+      throw new PartitionLockTimeoutError();
+    }
   }
+
 }
 export async function openDb(options: { databaseUrl?: string; pgliteDir?: string; poolOptions?: pg.PoolConfig } = {}): Promise<ChainDb> {
   if (process.env.NODE_ENV === 'production' && !options.databaseUrl?.trim()) throw new Error('DATABASE_URL is required in production; PGlite is for local development and tests');
@@ -157,18 +176,19 @@ export async function openDb(options: { databaseUrl?: string; pgliteDir?: string
   } catch (error) { await release(); throw error; }
 }
 export async function migrate(db: ChainDb) {
-  const migrations = await Promise.all(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources', '0181_transfer_baselines', '0184_sparse_parent_links', '0187_drop_holder_transfer_indexes', '0188_block_and_pool_lookups', '0190_chain_block_time_index', '0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history'].map(async id => ({ id, sql: await readFile(new URL(`${import.meta.url.includes('/dist/') ? './chain-drizzle/' : '../drizzle/'}${id}.sql`, import.meta.url), 'utf8') })));
+  const migrations = await Promise.all(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources', '0181_transfer_baselines', '0184_sparse_parent_links', '0187_drop_holder_transfer_indexes', '0188_block_and_pool_lookups', '0190_chain_block_time_index', '0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history', '0211_bounded_raw_seals'].map(async id => ({ id, sql: await readFile(new URL(`${import.meta.url.includes('/dist/') ? './chain-drizzle/' : '../drizzle/'}${id}.sql`, import.meta.url), 'utf8') })));
   await db.sql.query('CREATE TABLE IF NOT EXISTS eko_indexer_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
   await db.tx(async tx => {
+    await tx.sql.query("SET LOCAL lock_timeout='5s'");
     await tx.sql.query('LOCK TABLE eko_indexer_migrations IN EXCLUSIVE MODE');
     for (const migration of migrations) {
       const { rows } = await tx.sql.query('SELECT id FROM eko_indexer_migrations WHERE id=$1', [migration.id]);
       if (!rows.length) {
-        for (const statement of (['0205_chain_read_indexes','0207_raw_history_indexes', '0208_raw_history_progress', '0210_daily_raw_history'].includes(migration.id) ? migration.sql.split('-- statement-breakpoint').flatMap(s=>(s.includes('CREATE FUNCTION') || s.includes('CREATE OR REPLACE FUNCTION') || s.includes('DO $$')) ? [s] : s.split(';')) : migration.id === '0115_guard_sources' ? migration.sql.split('-- statement-breakpoint') : migration.sql.split(';')).map(s => s.trim()).filter(Boolean)) await tx.sql.query(statement);
+        for (const statement of (['0205_chain_read_indexes','0207_raw_history_indexes', '0208_raw_history_progress', '0210_daily_raw_history', '0211_bounded_raw_seals'].includes(migration.id) ? migration.sql.split('-- statement-breakpoint').flatMap(s=>(s.includes('CREATE FUNCTION') || s.includes('CREATE OR REPLACE FUNCTION') || s.includes('DO $$')) ? [s] : s.split(';')) : migration.id === '0115_guard_sources' ? migration.sql.split('-- statement-breakpoint') : migration.sql.split(';')).map(s => s.trim()).filter(Boolean)) await tx.sql.query(statement);
         await tx.sql.query('INSERT INTO eko_indexer_migrations(id) VALUES($1)', [migration.id]);
       }
     }
-    await tx.ensurePartitions(new Date());
   });
+  await db.ensurePartitions(new Date());
 }
 // TODO(spec): Move the heritage server schema into packages/db in the later §2.1 migration task.

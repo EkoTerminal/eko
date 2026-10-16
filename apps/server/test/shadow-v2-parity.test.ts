@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { binary, openDb, migrate, migrateEngines, GuardSourceStore, GuardMeasurementStore, GuardVerdictStore,
+import { binary, migrate, migrateEngines, GuardSourceStore, GuardMeasurementStore, GuardVerdictStore,
   guardManifestId, guardStorageHash, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { keccak256, toHex } from 'viem';
 import type { CoinCard } from '@eko/shared';
 import { EngineWorker } from '../../engines/src/worker.js';

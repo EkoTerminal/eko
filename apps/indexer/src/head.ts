@@ -1,7 +1,7 @@
 import { loadSenderScope } from './sender-scope.js';
 import { rpcStopReason, isTransientRpcUnavailable, backoffDelay } from '@eko/chain';
 import { safeError } from './safe-error.js';
-import { binary, type ChainDb } from '@eko/db';
+import { PartitionLockTimeoutError, binary, type ChainDb } from '@eko/db';
 import type { BlockDecoder, RemoteInputs } from './decode.js';
 import { log, type ChainClient, type Logger, type RpcBlock, type RpcReceipt } from './types.js';
 import { lower } from './clients.js';
@@ -130,8 +130,8 @@ export class HeadFollower {
     if (existing && existing !== lower(block.hash)) return false;
     if (receipts.length !== block.transactions.length || new Set(receipts.map(r => lower(r.transactionHash))).size !== receipts.length || receipts.some(r => lower(r.blockHash) !== lower(block.hash) || BigInt(r.blockNumber) !== n || r.logs.some(l => l.removed || lower(l.blockHash) !== lower(block.hash) || BigInt(l.blockNumber) !== n || lower(l.transactionHash) !== lower(r.transactionHash)))) throw new Error('Inconsistent full block/receipts; retry canonical block');
     const prepared = await this.decoder.prepare(this.db, block, receipts, { remote });
+    await this.db.ensurePartitions(new Date(Number(BigInt(block.timestamp)) * 1000));
     await this.db.tx(async tx => {
-      await tx.ensurePartitions(new Date(Number(BigInt(block.timestamp)) * 1000));
       const inserted = await tx.insert('chain_blocks', { number: n.toString(), block: n.toString(), hash: binary(block.hash), parent_hash: binary(block.parentHash), ts: new Date(Number(BigInt(block.timestamp)) * 1000) });
       await this.decoder.write(tx, block, receipts, prepared, { transfers: true });
       const cursor = await tx.cursor('head');
@@ -232,7 +232,7 @@ export class HeadFollower {
             if (rpcStopReason(error)) { this.stop(); throw error; }
             if (this.stopRequested) break;
             if (this.client.rpcStopped?.()) { this.stop(); throw error; }
-            const outage = isTransientRpcUnavailable(error);
+            const outage = isTransientRpcUnavailable(error) || error instanceof PartitionLockTimeoutError;
             if (error instanceof ReorgDepthError || (attempt >= 3 && !outage)) throw error;
             const delay = outage ? backoffDelay(outages++, this.options.random, 1000, 60_000) : attempt * 250;
             this.logger('block_retry', { n: n.toString(), attempt, backoff_ms: Math.round(delay), error: safeError(error) });

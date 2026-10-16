@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, hex, migrate, migrateEngines, compactLifetimeSwaps, openDb, type ChainDb } from '@eko/db';
+import { binary, hex, migrate, migrateEngines, compactLifetimeSwaps, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry, v3Abi } from '@eko/chain';
 import { encodeAbiParameters, encodeEventTopics, toHex, type AbiEvent, type Address, type Hex } from 'viem';
 import { BlockDecoder, type Prepared } from '../src/decode.js';

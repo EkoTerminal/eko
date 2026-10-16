@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, hex, migrate, migrateEngines, openDb, rebuildBalances, runRetention, ScanJobs, type ChainDb } from '@eko/db';
+import { binary, hex, migrate, migrateEngines, rebuildBalances, runRetention, ScanJobs, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { CoinCardSchema, type Address, type CoinCard } from '@eko/shared';
 import type { Hex } from 'viem';
 import { EngineWorker } from '../src/worker.js';

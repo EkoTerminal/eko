@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, migrate, migrateEngines, openDb, rebuildBalances, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, rebuildBalances, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry } from '@eko/chain';
 import { CoinCardSchema, type Address, type CoinCard, type PlaybookId } from '@eko/shared';
 import { rules } from '@eko/playbooks';

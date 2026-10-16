@@ -1,5 +1,6 @@
 -- Empty legacy siblings only. A populated sibling must remain attached for operator migration.
 DO $$ DECLARE t text; p text; occupied boolean; BEGIN
+ PERFORM set_config('lock_timeout','5s',true);
  FOREACH t IN ARRAY ARRAY['swaps','token_transfers'] LOOP
   FOREACH p IN ARRAY ARRAY['2026_05','2026_06','2026_07','2026_11','2026_12'] LOOP
    IF to_regclass(t||'_'||p) IS NOT NULL THEN

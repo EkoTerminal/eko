@@ -1,3 +1,4 @@
+import { withHistoryFixtures } from '../../../packages/db/test/helpers/historical-db.js';
 import { EventEmitter } from 'node:events';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { binary, InProcessBus } from '@eko/db';
@@ -17,6 +18,7 @@ const coin = sampleAddress(9100);
 beforeAll(async () => {
   built = await buildApp(loadConfig({ NODE_ENV: 'test', PGLITE_DIR: ':memory:', SESSION_SECRET: 'test-only-placeholder'.repeat(2), LEGACY_API: 'false', RUN_WORKER: 'false', MARKET_DATA_SOURCE: 'onchain' }), { startBackground: false });
   built.ctx.reads.store.now = () => now * 1000;
+  withHistoryFixtures(built.ctx.dbh.chain);
   await built.ctx.dbh.chain.ensurePartitions(new Date(epoch * 1000));
   await token(coin);
   await built.ctx.dbh.chain.setCursor('head', 999n, null);

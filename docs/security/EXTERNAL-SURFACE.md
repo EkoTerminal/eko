@@ -216,7 +216,7 @@ Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 | `PonsBackfill.constructor` | constructor | [apps/indexer/src/backfill.ts:125](../../apps/indexer/src/backfill.ts#L125) | Yes |
 | `PonsBackfill.stop` | method | [apps/indexer/src/backfill.ts:132](../../apps/indexer/src/backfill.ts#L132) | Yes |
 | `PonsBackfill.run` | method | [apps/indexer/src/backfill.ts:141](../../apps/indexer/src/backfill.ts#L141) | Yes |
-| `blockAtTime` | function | [apps/indexer/src/backfill.ts:334](../../apps/indexer/src/backfill.ts#L334) | Yes |
+| `blockAtTime` | function | [apps/indexer/src/backfill.ts:339](../../apps/indexer/src/backfill.ts#L339) | Yes |
 | `createClients` | function | [apps/indexer/src/clients.ts:19](../../apps/indexer/src/clients.ts#L19) | Yes |
 | `returned.tokenMetadataBatch` | method | [apps/indexer/src/clients.ts:55](../../apps/indexer/src/clients.ts#L55) | Yes |
 | `returned.rpcStopped` | method | [apps/indexer/src/clients.ts:74](../../apps/indexer/src/clients.ts#L74) | Yes |
@@ -245,12 +245,12 @@ Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 | `HeadFollower.rollback` | method | [apps/indexer/src/head.ts:101](../../apps/indexer/src/head.ts#L101) | Yes |
 | `HeadFollower.ingest` | method | [apps/indexer/src/head.ts:125](../../apps/indexer/src/head.ts#L125) | Yes |
 | `HeadFollower.run` | method | [apps/indexer/src/head.ts:152](../../apps/indexer/src/head.ts#L152) | Yes |
-| `lockContention` | function | [apps/indexer/src/log-head.ts:25](../../apps/indexer/src/log-head.ts#L25) | Yes |
-| `LogHeadFollower.constructor` | constructor | [apps/indexer/src/log-head.ts:108](../../apps/indexer/src/log-head.ts#L108) | Yes |
-| `LogHeadFollower.stop` | method | [apps/indexer/src/log-head.ts:124](../../apps/indexer/src/log-head.ts#L124) | Yes |
-| `LogHeadFollower.rollback` | method | [apps/indexer/src/log-head.ts:144](../../apps/indexer/src/log-head.ts#L144) | Yes |
-| `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:195](../../apps/indexer/src/log-head.ts#L195) | Yes |
-| `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:646](../../apps/indexer/src/log-head.ts#L646) | Yes |
+| `lockContention` | function | [apps/indexer/src/log-head.ts:26](../../apps/indexer/src/log-head.ts#L26) | Yes |
+| `LogHeadFollower.constructor` | constructor | [apps/indexer/src/log-head.ts:109](../../apps/indexer/src/log-head.ts#L109) | Yes |
+| `LogHeadFollower.stop` | method | [apps/indexer/src/log-head.ts:125](../../apps/indexer/src/log-head.ts#L125) | Yes |
+| `LogHeadFollower.rollback` | method | [apps/indexer/src/log-head.ts:145](../../apps/indexer/src/log-head.ts#L145) | Yes |
+| `LogHeadFollower.tick` | method | [apps/indexer/src/log-head.ts:196](../../apps/indexer/src/log-head.ts#L196) | Yes |
+| `LogHeadFollower.run` | method | [apps/indexer/src/log-head.ts:647](../../apps/indexer/src/log-head.ts#L647) | Yes |
 | `acquireScanJob` | function | [apps/indexer/src/scan-jobs.ts:13](../../apps/indexer/src/scan-jobs.ts#L13) | Yes |
 | `buildMcpApp` | function | [apps/mcp/src/app.ts:58](../../apps/mcp/src/app.ts#L58) | Yes |
 | `registerHarnessTools` | function | [apps/mcp/src/harness.ts:10](../../apps/mcp/src/harness.ts#L10) | Yes |

@@ -56,3 +56,17 @@ describe('chain database transaction boundaries', () => {
     expect(query).not.toHaveBeenCalled();
   });
 });
+
+it('rolls back partition contention, logs once and returns a typed retriable timeout without caching the failed work',async()=>{
+ const {PartitionLockTimeoutError}=await import('../src/client.js');
+ const warn=vi.spyOn(console,'warn').mockImplementation(()=>{}),events:string[]=[];
+ let blocked=true;
+ const sql:SqlClient={query:async(text:string)=>{events.push(text);if(blocked && text.includes('PARTITION OF'))throw Object.assign(new Error('lock'),{code:'55P03'});return {rows:[]};}};
+ const db=new ChainDb(sql,async work=>{events.push('BEGIN');try{const result=await work(sql);events.push('COMMIT');return result;}catch(error){events.push('ROLLBACK');throw error;}});
+ try {
+  await expect(db.ensurePartitions(new Date())).rejects.toBeInstanceOf(PartitionLockTimeoutError);
+  expect(events.at(-1)).toBe('ROLLBACK');expect(warn).toHaveBeenCalledOnce();
+  expect(events[events.findIndex(q=>q.includes('PARTITION OF'))-1]).toBe("SET LOCAL lock_timeout = '2s'");
+  blocked=false;await db.ensurePartitions(new Date());expect(events.at(-1)).toBe('COMMIT');
+ }finally{warn.mockRestore();}
+});

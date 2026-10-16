@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { openDb, migrate, migrateEngines, binary, GuardSourceStore, GuardMeasurementStore, guardManifestId, guardRowsKnownAt } from '@eko/db';
+import { migrate, migrateEngines, binary, GuardSourceStore, GuardMeasurementStore, guardManifestId, guardRowsKnownAt } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { GUARD_CAPABILITIES } from '@eko/shared';
 import type { GuardStoredEvidence } from '@eko/shared';
 import { assessPonsControlProfile, controlProfileHash, controlStateFingerprint, controlCardMeasurements, type PonsControlInput, type ReviewedPonsTemplate } from '../src/control-profile.js';

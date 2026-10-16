@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { keccak256,toHex } from 'viem';
-import { binary,openDb,migrate,migrateEngines,GuardSourceStore,GuardMeasurementStore,guardManifestId,guardRowsKnownAt,GuardVerdictStore,guardStorageHash } from '@eko/db';
+import { binary,migrate,migrateEngines,GuardSourceStore,GuardMeasurementStore,guardManifestId,guardRowsKnownAt,GuardVerdictStore,guardStorageHash } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import type { ChainDb } from '@eko/db';
 import { CoinCardSchema, VerdictSchema } from '@eko/shared';
 import type { CoinCard,GuardStoredEvidence,GuardVerdictRevisionInput } from '@eko/shared';

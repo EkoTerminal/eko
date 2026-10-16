@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { binary, openDb, migrate, migrateEngines, guardManifestId, guardStorageHash, GuardSourceStore, type ChainDb } from '@eko/db';
+import { binary, migrate, migrateEngines, guardManifestId, guardStorageHash, GuardSourceStore, type ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { captureLaunchRolesV2 } from '@eko/chain';
 import { CoinCardV2Schema, GuardCursorSchema } from '@eko/shared';
 import { loadLaunchIdentityV2 } from '../src/identity-v2.js';

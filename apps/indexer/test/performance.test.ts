@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { binary, hex, migrate, openDb, ChainDb } from '@eko/db';
+import { binary, hex, migrate, ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { loadRegistry, ponsCurveAbi, decodeResult, createMeteredClients, type FetchFn, type UsageStore } from '@eko/chain';
 import { toEventSelector, toHex, getAddress, type AbiEvent, type Address, type Hex } from 'viem';
 import { HeadFollower } from '../src/head.js';
@@ -163,7 +164,7 @@ describe('batched receipts, metadata and historical pricing', () => {
   it('caches samples within a bucket, never uses a future sample, and invalidates orphaned cached reads', async () => {
     const db=await database(),data=tradeBlocks(2,1799);await seedToken(db,data.token,data.curve);const client=clientFor(data.blocks,data.receipts);
     client.ethUsdRate=vi.fn(async n=>({value:n===1200n?2000:3000,block:n,source:{ address: registry.requireAddress('uniswapV3.quoterV2'), venue: 'uniswap_v3' as const, fee: 3000 }}));const decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);
-    for(const n of [1799n,1800n]){const block=data.blocks.get(n)!,receipts=data.receipts.get(n)!;const prepared=await decoder.prepare(db,block,receipts,{ponsOnly:true});await db.tx(async tx=>{await tx.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await decoder.write(tx,block,receipts,prepared,{ponsOnly:true});});}
+    for(const n of [1799n,1800n]){const block=data.blocks.get(n)!,receipts=data.receipts.get(n)!;const prepared=await decoder.prepare(db,block,receipts,{ponsOnly:true});await db.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await db.tx(async tx=>{await decoder.write(tx,block,receipts,prepared,{ponsOnly:true});});}
     const rows=(await db.sql.query<{block:number;priced_block:number;usd:number;amount_quote:string}>('SELECT * FROM swaps ORDER BY block,log_index')).rows;
     expect(rows.every(r=>BigInt(r.priced_block)<=BigInt(r.block))).toBe(true);
     expect(rows.filter(r=>BigInt(r.block)===1799n).every(r=>BigInt(r.priced_block)===1200n&&Math.abs(r.usd-Number(r.amount_quote)/1e18*2000)<1e-9)).toBe(true);
@@ -175,7 +176,7 @@ describe('batched receipts, metadata and historical pricing', () => {
     const db=await database(),data=tradeBlocks(1);await seedToken(db,data.token,data.curve);const client=clientFor(data.blocks,data.receipts);
     const decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);const block=data.blocks.get(1200n)!,receipts=data.receipts.get(1200n)!;
     const first=await decoder.prepare(db,block,receipts,{ponsOnly:true});first.rate=null;
-    await db.tx(async tx=>{await tx.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await decoder.write(tx,block,receipts,first,{ponsOnly:true});});
+    await db.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await db.tx(async tx=>{await decoder.write(tx,block,receipts,first,{ponsOnly:true});});
     const before=(await db.sql.query<{amount_coin:string;amount_quote:string;trader:Uint8Array;usd:null}>('SELECT * FROM swaps ORDER BY log_index')).rows;
     expect(before.every(r=>r.usd===null)).toBe(true);
     const query=await decoder.prepare(db,block,receipts,{ponsOnly:true});const messages=vi.spyOn(ChainDb.prototype,'notifyMany');
@@ -186,7 +187,7 @@ describe('batched receipts, metadata and historical pricing', () => {
   it('uses the batched metadata API once for all launches in a block, preserving raw strings', async () => {
     const db=await database();const fixture=fixtures.ponsLaunch;const n=BigInt(fixture.block.number);const client=clientFor(new Map([[n,fixture.block]]),new Map([[n,fixture.receipts]]));
     const metadata=vi.spyOn(client,'tokenMetadataBatch');const singles=vi.spyOn(client,'tokenMetadata');const decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);
-    const prepared=await decoder.prepare(db,fixture.block,fixture.receipts,{ponsOnly:true});await db.tx(async tx=>{await tx.ensurePartitions(new Date(Number(BigInt(fixture.block.timestamp))*1000));await decoder.write(tx,fixture.block,fixture.receipts,prepared,{ponsOnly:true});});
+    const prepared=await decoder.prepare(db,fixture.block,fixture.receipts,{ponsOnly:true});await db.ensurePartitions(new Date(Number(BigInt(fixture.block.timestamp))*1000));await db.tx(async tx=>{await decoder.write(tx,fixture.block,fixture.receipts,prepared,{ponsOnly:true});});
     expect(metadata).toHaveBeenCalledOnce();expect(metadata.mock.calls[0][0]).toEqual(['0x7d33D051E0311BcdeF1063EeDf7ba1c83Bae0383']);expect(singles).not.toHaveBeenCalled();
     expect((await db.sql.query<{symbol:string;name:string}>("SELECT * FROM tokens WHERE launchpad='pons'")).rows[0]).toMatchObject({symbol:'<sample>',name:'<sample>'});
   });

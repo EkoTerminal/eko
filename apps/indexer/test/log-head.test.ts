@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { binary, chainTables, hex, migrate, openDb, ChainDb } from '@eko/db';
+import { PartitionLockTimeoutError, binary, chainTables, hex, migrate, ChainDb } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { AddressRegistry, createMeteredClients, decodeResult, loadRegistry, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, RpcGuardError, RpcReplyError, rpcStopReason } from '@eko/chain';
 import { decodeFunctionData, encodeFunctionResult, encodeAbiParameters, encodeEventTopics, parseAbi, toEventSelector, toHex, type AbiEvent, type Address, type Hex } from 'viem';
 import { BlockRows } from '../src/rows.js';
@@ -420,7 +421,7 @@ describe('logs-first head', () => {
     const decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);
     for(const {block,receipts} of [...data.values()].slice(1)){
       const state=await decoder.prepare(truth,block,receipts,{forceSenders:true});
-      await truth.tx(async tx=>{await tx.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await decoder.write(tx,block,receipts,state);});decoder.committed(state);
+      await truth.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await truth.tx(async tx=>{await decoder.write(tx,block,receipts,state);});decoder.committed(state);
     }
     for(const table of ['swaps','liquidity_events','bars_1m','balances'] as const){const query=`SELECT * FROM ${table} ORDER BY ${table==='bars_1m'?'coin,minute':table==='balances'?'token,holder':'block,log_index'}`;expect((await db.sql.query(query)).rows).toEqual((await truth.sql.query(query)).rows);}
     const bars=(await db.sql.query('SELECT open,close,volume_usd,trades FROM bars_1m WHERE coin=$1',[binary(other)])).rows;
@@ -500,7 +501,7 @@ describe('logs-first head', () => {
     const truthDecoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet);
     for(const {block,receipts} of [...data.values()].slice(1)){
       const state=await truthDecoder.prepare(truth,block,receipts,{forceSenders:true});
-      await truth.tx(async tx=>{await tx.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await truthDecoder.write(tx,block,receipts,state);});truthDecoder.committed(state);
+      await truth.ensurePartitions(new Date(Number(BigInt(block.timestamp))*1000));await truth.tx(async tx=>{await truthDecoder.write(tx,block,receipts,state);});truthDecoder.committed(state);
     }
     const before=vi.mocked(client.receipts).mock.calls.length;
     expect(await enrichSenders(db,other,client)).toEqual({enriched:6}); // Three swaps plus three Mint events.
@@ -595,6 +596,19 @@ describe('logs-first head', () => {
     expect(events).toEqual(['database_lock_contention']);
     expect(await db.cursor('head_logs')).toBe(1n);expect(await count(db,'swaps')).toBe(2);
     expect(lockContention(new Error('could not serialize access due to concurrent update'))).toBe(true);expect(lockContention(new Error('relation does not exist'))).toBe(false);
+  });
+
+  it('retries a partition timeout before opening the data transaction, then commits the same batch',async()=>{
+    const db=await database();await seed(db);
+    const data:Data=new Map([[0n,{block:empty(0),receipts:[]}],[1n,trade(1)]]),client=memory(data),events:string[]=[];
+    const live=follower(db,client,{tickMs:1,logger:(event:string)=>events.push(event)});
+    const ensure=db.ensurePartitions.bind(db),tx=db.tx.bind(db);let inTransaction=false,failed=false;
+    db.tx=work=>tx(async handle=>{inTransaction=true;try{return await work(handle);}finally{inTransaction=false;}});
+    db.ensurePartitions=async(date,options)=>{expect(inTransaction).toBe(false);if(!failed){failed=true;throw new PartitionLockTimeoutError();}await ensure(date,options);};
+    const running=live.run();
+    for(let i=0;i<300&&(await db.cursor('head_logs'))!==1n;i++)await new Promise(resolve=>setTimeout(resolve,10));
+    live.stop();await running;
+    expect(events.filter(e=>e==='head_retry')).toHaveLength(1);expect(await db.cursor('head_logs')).toBe(1n);expect(await count(db,'swaps')).toBe(2);
   });
 
   it('does not restore sender rows when their stored block is rolled back during enrichment',async()=>{

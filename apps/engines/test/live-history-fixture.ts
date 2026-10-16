@@ -1,4 +1,5 @@
-import { ChainDb, migrate, migrateEngines, openDb, rebuildBalances, type SqlClient } from '@eko/db';
+import { ChainDb, migrate, migrateEngines, rebuildBalances, type SqlClient } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 
 /**
  * A month of indexed history for live-poll cost checks: `idleCoins` coins that traded for a day or so between days 0

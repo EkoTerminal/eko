@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { ChainDb, migrate, migrateEngines, openDb, rebuildBalances, type SqlClient } from '@eko/db';
+import { ChainDb, migrate, migrateEngines, rebuildBalances, type SqlClient } from '@eko/db';
+import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { refreshClock } from '../src/activity.js';
 import { OUTCOME_LOADS_PER_WRITE, updateOutcomes } from '../src/outcomes.js';
 import { EngineWorker, type EvaluationProgress } from '../src/worker.js';

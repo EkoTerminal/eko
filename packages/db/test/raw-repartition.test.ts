@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, expect, it } from 'vitest';
-import { migrate, migrateEngines, openDb, runRetention, type ChainDb } from '../src/index.js';
+import { migrate, migrateEngines, runRetention, type ChainDb } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 import { sealOctober } from '../src/raw-repartition.js';
 
 let db:ChainDb;

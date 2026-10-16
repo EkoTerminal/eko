@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, FEED_BATCH_ROWS, hex, migrate, migrateEngines, openDb, rebuildBalances, runRetention, type ChainDb } from '../src/index.js';
+import { binary, FEED_BATCH_ROWS, hex, migrate, migrateEngines, rebuildBalances, runRetention, type ChainDb } from '../src/index.js';
+import { openDb } from './helpers/historical-db.js';
 
 const epoch = Date.parse('2026-10-01T00:00:00Z');
 const DAY = 86_400_000;
