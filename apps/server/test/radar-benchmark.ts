@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { writeFile, unlink } from 'node:fs/promises';
+import { ChainDb, binary } from '@eko/db';
+import { refreshLiquidityModels } from '../src/read/liquidity-model.js';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { seedReadFixture } from './read-fixture.js';
@@ -76,6 +78,9 @@ try {
     const selection=s.sql.includes('SELECT coin,tier,volume FROM read_coins');
     if(selection)assert(plan.some(n=>n['Index Name']==='read_coins_volume_rank'));
     else {
+      if(phase==='after')for(const relation of ['tokens','read_coins','read_coin_liquidity','engine_block_times','chain_blocks']) {
+        assert(plan.filter(n=>n['Relation Name']===relation).every(n=>Number(n['Actual Rows'])*Number(n['Actual Loops'])<=100));
+      }
       const cards=plan.filter(n=>n['Relation Name']==='coin_card_latest');
       assert(cards.length>0);assert(cards.every(n=>Number(n['Actual Rows'])*Number(n['Actual Loops'])<=100));
       assert(plan.some(n=>n['Index Name']==='read_coin_liquidity_pkey'));
@@ -84,5 +89,27 @@ try {
   }
   const stats=(values:number[])=>{const sorted=values.toSorted((a,b)=>a-b);return {p50Ms:sorted[Math.floor(sorted.length/2)],p95Ms:sorted[Math.ceil(sorted.length*.95)-1]};};
   assert(!captured.after.some(s=>s.sql.includes('WITH cut AS') || s.sql.includes('GROUP BY tier') || s.sql.includes('life.data') || s.sql.includes('read_pool_positions')));
+
+  // Profile the lock and refresh entry points in the same fixture, after handler timing has finished.
+  await store.close();
+  const lockPlans:unknown[]=[];
+  await db.tx(async tx=>{
+    const keys=[binary(card.identity.address)];
+    const queries:{sql:string;params:unknown[]}[]=[];
+    const traced=new ChainDb({query:async<T>(sql:string,params?:unknown[])=>{
+      queries.push({sql,params:params ?? []});return tx.sql.query<T>(sql,params);
+    }},fn=>fn(tx.sql));
+    await refreshLiquidityModels(traced,[card.identity.address],now);
+    for(const q of [
+      {sql:'SELECT read_lock_coins($1::bytea[])',params:[keys]},
+      {sql:'SELECT coin FROM read_projection_locks WHERE coin=ANY($1::bytea[]) ORDER BY coin FOR UPDATE',params:[keys]},
+      {sql:'SELECT refresh_read_models($1::bytea[],$2::bigint)',params:[keys,Math.floor(now/60000)*60]},
+      ...queries.filter(q=>!q.sql.includes('WITH saved AS')),
+    ]) {
+      const result=(await tx.sql.query<{'QUERY PLAN':{Plan:Record<string,unknown>;'Execution Time':number}[]}>('EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) '+q.sql,q.params)).rows[0]['QUERY PLAN'][0];
+      lockPlans.push({statement:q.sql.trim().split('\n')[0],ms:result['Execution Time'],nodes:nodes(result.Plan).map(n=>({node:n['Node Type'],relation:n['Relation Name'],index:n['Index Name'],rows:n['Actual Rows'],loops:n['Actual Loops'],sort:n['Sort Key']}))});
+    }
+  });
+  console.info('refresh_plans',JSON.stringify(lockPlans));
   console.info('radar_handler_benchmark',JSON.stringify({baselineRevision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),runtime:'PGlite',version:(await original<{v:string}>('SELECT version() v')).rows[0].v,coins:30000,bars:144000,cardBytes:JSON.stringify(card).length,page:100,samples:25,before:stats(times.before),after:stats(times.after),statements:{before:captured.before.length,after:captured.after.length}}));
 } finally {await built.close();await Promise.all(temporary.map(path=>unlink(path)));}

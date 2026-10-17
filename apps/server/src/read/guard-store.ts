@@ -117,7 +117,10 @@ export class GuardReadStore {
     await this.legacy.currentModels();
     const key=decodeCursor(cursor,'guard-coins');
     if(key && (key.length!==1 || typeof key[0]!=='string' || !/^0x[0-9a-f]{40}$/.test(key[0])))throw new InputError('Invalid Guard cursor');
-    const rows=(await this.db.sql.query<{coin:Uint8Array}>(`${liveSource(1)} SELECT coin FROM live ${key?'WHERE coin>$2':''} ORDER BY coin LIMIT 101`,key?[new Date(this.legacy.now()-7*86400000),binary(String(key[0]))]:[new Date(this.legacy.now()-7*86400000)])).rows;
+    // The host computes eligibility with the totals once a minute. Seek the sorted snapshot in logarithmic time.
+    let lo=0,hi=this.live.length;
+    if(key)while(lo<hi) {const mid=(lo+hi)>>>1;if(this.live[mid]<=String(key[0]))lo=mid+1;else hi=mid;}
+    const rows=this.live.slice(lo,lo+101).map(coin=>({coin:binary(coin)}));
     const page=rows.slice(0,100);
     const summaries:CoinSummaryV2[]=[];for(const row of page)summaries.push(await this.summary(hex(row.coin)));
     return GuardListResponseSchema.parse({version:2,rows:summaries,cursor:rows.length>100?encodeCursor('guard-coins',[hex(page.at(-1)!.coin)]):null,totals:await this.totals()});
@@ -129,6 +132,7 @@ export class GuardReadStore {
     const card=rows.length===1?await this.card(hex(rows[0].address)):null;
     return GuardScanResponseSchema.parse({version:2,status:!rows.length?'not_found':rows.length>1?'ambiguous':card?.verdict?'ready':'pending',cards:card?[card]:[],candidates});
   }
+  private live:Address[]=[];
   private header:MinuteSnapshot<GuardTotals>;
   totals():Promise<GuardTotals> {return Promise.resolve(this.header.value);}
   /** Explicit host/test refresh, never called by a request. */
@@ -150,6 +154,8 @@ export class GuardReadStore {
       count(*) FILTER(WHERE level='pending') AS incomplete,
       count(*) FILTER(WHERE bare) AS no_verdict FROM graded`,[cutoff])).rows[0];
     const today=(await this.db.sql.query<{n:string}>(`${liveSource(3)} SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN live r ON r.coin=e.coin WHERE e.sec>=$1 AND e.sec<$2`,[day,day+86400,cutoff])).rows[0];
+    const live=(await this.db.sql.query<{coin:Uint8Array}>(`${liveSource(1)} SELECT coin FROM live ORDER BY coin`,[cutoff])).rows.map(r=>hex(r.coin));
+    this.live=live;
     const n=Number(counts.no_verdict),incomplete=Number(counts.incomplete);
     return GuardTotalsSchema.parse({status:'observed',activeVersion:GUARD_READ_ACTIVE_VERSION,coins:Number(counts.coins),lower:Number(counts.lower),elevated:Number(counts.elevated),high:Number(counts.high),incomplete,noVerdict:n,incompleteCoverage:incomplete,evaluatedToday:Number(today.n),clear:Number(counts.lower),monitor:Number(counts.elevated),danger:Number(counts.high),pending:incomplete+n});
   }

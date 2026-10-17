@@ -121,6 +121,7 @@ describe('035 partial cards and captured read boundary',()=>{
     expect((await built.app.inject(`/v2/coins/${sampleAddress(999999)}`)).statusCode).toBe(404);
   });
   it('negotiates reusable MCP-shaped reads and parses V2 list/scan contracts without RPC',async()=>{
+    await built.ctx.reads.guard.refreshTotals();
     const before=JSON.stringify(built.ctx.chains.meter.usage());
     expect(await built.ctx.reads.guard.negotiatedCard(legacy.identity.address,1)).toEqual({version:1,card:await built.ctx.reads.store.card(legacy.identity.address)});
     expect((await built.ctx.reads.guard.read({address:coin,version:2},'verdict'))?.version).toBe(2);

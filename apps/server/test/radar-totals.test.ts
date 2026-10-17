@@ -1,21 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PairsService } from '../src/read/pairs.js';
 import { RadarService } from '../src/read/radar.js';
 import { GuardReadStore } from '../src/read/guard-store.js';
 import type { ReadStore } from '../src/read/store.js';
 
-// Both header contracts are host-refreshed. Even the first/expired request must schedule no SQL.
-describe.each(['radar','guard'] as const)('%s header snapshots', kind => {
+// All header contracts are host-refreshed. Even the first/expired request must schedule no SQL.
+describe.each(['radar','guard','pairs'] as const)('%s header snapshots', kind => {
   const fixture=()=>{
     const state={clock:Date.parse('2026-10-17T12:00:00Z'),coins:1,fail:false,gate:Promise.resolve()};
     const query=vi.fn(async()=>{
       const coins=state.coins;
       await state.gate;
       if(state.fail)throw new Error('database unavailable');
-      return {rows:[{tier:0,n:String(coins),h:0,coins:String(coins),lower:String(coins),elevated:'0',high:'0',incomplete:'0',no_verdict:'0'}]};
+      return {rows:[{coin:Buffer.alloc(20,1),launches:String(coins),median:null,refused:'0',tier:0,n:String(coins),h:0,coins:String(coins),lower:String(coins),elevated:'0',high:'0',incomplete:'0',no_verdict:'0'}]};
     });
     let refresh!:()=>Promise<void>;
     const store={now:()=>state.clock,sellCheckQuotes:false,currentModels:async()=>{},onSummaryRefresh:(fn:()=>Promise<void>)=>{refresh=fn;},db:{sql:{query}}} as unknown as ReadStore;
-    return {state,query,service:kind==='radar'?new RadarService(store):new GuardReadStore(store),tick:()=>refresh()};
+    const pairs=kind==='pairs'?new PairsService(store):undefined;
+    return {state,query,service:kind==='radar'?new RadarService(store):kind==='guard'?new GuardReadStore(store):{totals:async()=>({coins:(await pairs!.today()).launches})},tick:()=>refresh()};
   };
   it('never queries on first or expired reads and coalesces host refreshes',async()=>{
     const {state,query,service,tick}=fixture();

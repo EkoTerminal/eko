@@ -1,3 +1,4 @@
+import { MinuteSnapshot } from './minute-snapshot.js';
 import { binary, hex, type Hex } from '@eko/db';
 import { InputError } from '../http/v1/helpers.js';
 import type { PairRow } from '@eko/shared';
@@ -28,18 +29,13 @@ function holders(entry:ReadRow):Pick<PairRow,'top10Pct'|'devPct'|'earlyHeldPct'>
   return {...(top10===undefined ? {} : {top10Pct:top10}),devPct:pct(card.supply.devPct),...(meta.missing?.includes('bundlesHeldPct') ? {} : {earlyHeldPct:pct(card.supply.bundlesHeldPct)})};
 }
 export class PairsService {
-  constructor(readonly store:ReadStore) {}
-  private cachedToday?: { at:number; value:Promise<PairsToday>; last?:PairsToday };
-  /** Served from a 60-second cache while the store refreshes in the background; a stale entry is served while its replacement is computed. */
-  today():Promise<PairsToday> {
-    if(!this.store.background)return this.computeToday();
-    const now=this.store.now(),cached=this.cachedToday;
-    if(cached && now-cached.at<60_000)return cached.last ? Promise.resolve(cached.last) : cached.value;
-    const value=this.computeToday(),next:{at:number;value:Promise<PairsToday>;last?:PairsToday}={at:now,value,last:cached?.last};
-    this.cachedToday=next;
-    value.then(v=>{next.last=v;},()=>{ if(this.cachedToday===next)this.cachedToday=cached?.last ? {at:0,value:Promise.resolve(cached.last),last:cached.last} : undefined; });
-    return next.last ? Promise.resolve(next.last) : value;
+  constructor(readonly store:ReadStore) {
+    this.header=new MinuteSnapshot<PairsToday>({launches:0,medianFirstScanSec:null,refused:0},()=>this.computeToday(),()=>store.now());
+    store.onSummaryRefresh(()=>this.header.refresh());
   }
+  private header:MinuteSnapshot<PairsToday>;
+  today():Promise<PairsToday> {return Promise.resolve(this.header.value);}
+  refreshToday() {return this.header.refresh(true);}
   private async computeToday():Promise<PairsToday> {
     const midnight=new Date(Math.floor(this.store.now()/86400000)*86400000);
     // The first block of the UTC day is found once (either block-time table can lack a block), through the (ts,number)

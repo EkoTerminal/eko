@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { binary, hex, ChainDb, type SqlClient } from '@eko/db';
+import { binary, hex, ChainDb, openDb, migrate, migrateEngines, type SqlClient } from '@eko/db';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { readCurveStates, readPoolLiquidity, readPoolMoney } from '../src/read/pool-liquidity.js';
@@ -119,4 +119,56 @@ it('invalidates graduated references on pool deletion and all projections on sou
   await store.refreshModels();
   await db.sql.query('TRUNCATE coin_card_latest');
   expect((await db.sql.query('SELECT coin FROM read_dirty WHERE coin=$1',[binary(coin)])).rows).toHaveLength(1);
+});
+
+it('reuses durable positions for price-only dirty coins, reloads on pool/event revisions and uses the latest pool price beyond a 60-trade tail',async()=>{
+  const db=await openDb({pgliteDir:':memory:'}),coin=sampleAddress(880),id=pool(880),other=pool(881);
+  try {
+  await migrate(db);await migrateEngines(db);
+  await db.insert('tokens',{address:binary(coin),deployer:binary(sampleAddress(900)),first_block:1,block:1,launchpad:'other'});
+  await db.insert('pools',{id:binary(id),currency0:binary(coin),currency1:binary(sampleAddress(0)),venue:'uniswap_v4',fee:3000,tick_spacing:60,created_block:1,block:1});
+  await db.insert('liquidity_events',{block:10,ts:new Date(now-1000),tx_hash:binary(pool(882)),log_index:0,venue:'uniswap_v4',pool_id:binary(id),kind:'ModifyLiquidity',data:JSON.stringify({tickLower:-887200,tickUpper:887200,liquidityDelta:'1000'})});
+  await db.insert('swaps',{ts:new Date(now-1000),block:20,tx_hash:binary(pool(883)),log_index:0,venue:'uniswap_v4',pool_id:binary(id),coin:binary(coin),quote_asset:binary(sampleAddress(0)),side:1,amount_coin:'100',amount_quote:'400',usd:8});
+  const {ReadStore}=await import('../src/read/store.js');
+  await new ReadStore(db,()=>now).refreshModels();
+  const version=async()=>(await db.sql.query('SELECT xmin::text,revision FROM read_liquidity_inputs WHERE coin=$1',[binary(coin)])).rows[0];
+  const before=await version(),statements:string[]=[];
+  const wrap=(sql:SqlClient):SqlClient=>({query:async<T>(text:string,params?:unknown[])=>{statements.push(text);return sql.query<T>(text,params);}});
+  const {refreshLiquidityModels}=await import('../src/read/liquidity-model.js');
+  const refresh=()=>db.tx(tx=>refreshLiquidityModels(new ChainDb(wrap(tx.sql),fn=>fn(wrap(tx.sql))),[coin],now));
+  await db.sql.query('UPDATE swaps SET usd=16 WHERE coin=$1',[binary(coin)]);
+  await refresh();
+  expect(await version()).toEqual(before);
+  expect(statements).toHaveLength(4);expect(statements.some(s=>s.includes('FROM read_pool_positions'))).toBe(false);
+  const value=Number((await db.sql.query<{usd:number}>('SELECT usd FROM read_coin_liquidity WHERE coin=$1',[binary(coin)])).rows[0].usd);
+  expect(value).toBeGreaterThan(0);
+  // A busy second pool must not hide the price of an existing position.
+  await db.sql.query(`INSERT INTO swaps(ts,block,tx_hash,log_index,venue,pool_id,coin,quote_asset,side,amount_coin,amount_quote,usd)
+    SELECT to_timestamp($1),100+n,decode(lpad(to_hex(88000+n),64,'0'),'hex'),0,'uniswap_v4',$2,$3,$3,1,100,400,32 FROM generate_series(1,65) n`,[now/1000,binary(other),binary(coin)]);
+  await refresh();
+  expect(Number((await db.sql.query<{usd:number}>('SELECT usd FROM read_coin_liquidity WHERE coin=$1',[binary(coin)])).rows[0].usd)).toBe(value);
+  statements.length=0;
+  await db.sql.query("UPDATE liquidity_events SET data=jsonb_set(data,'{liquidityDelta}','\"500\"') WHERE pool_id=$1",[binary(id)]);
+  await refresh();
+  expect(statements.some(s=>s.includes('FROM read_pool_positions'))).toBe(true);
+  expect(await version()).not.toEqual(before);
+  expect(Number((await db.sql.query<{usd:number}>('SELECT usd FROM read_coin_liquidity WHERE coin=$1',[binary(coin)])).rows[0].usd)).toBe(value/2);
+  statements.length=0;await db.sql.query('UPDATE pools SET currency0=currency1,currency1=currency0 WHERE id=$1',[binary(id)]);await refresh();
+  expect(statements.some(s=>s.includes('FROM read_pool_positions'))).toBe(true);
+  // Retained prices of secondary pools survive even when the global latest pointer belongs to another pool.
+  await db.insert('pools',{id:binary(other),currency0:binary(coin),currency1:binary(sampleAddress(0)),venue:'uniswap_v4',fee:3000,tick_spacing:60,created_block:1,block:1});
+  await db.insert('liquidity_events',{block:11,ts:new Date(now-1000),tx_hash:binary(pool(884)),log_index:0,venue:'uniswap_v4',pool_id:binary(other),kind:'ModifyLiquidity',data:JSON.stringify({tickLower:-887200,tickUpper:887200,liquidityDelta:'500'})});
+  const kept=[{pool_id:id,block:199,log_index:0,tx_hash:pool(885),amount_coin:'100',amount_quote:'400',usd:32,ts:new Date(now-1000).toISOString()},
+    {pool_id:other,block:200,log_index:0,tx_hash:pool(886),amount_coin:'100',amount_quote:'400',usd:64,ts:new Date(now-1000).toISOString()}];
+  await db.sql.query('INSERT INTO coin_lifetime(coin,data) VALUES($1,$2)',[binary(coin),JSON.stringify({tail:kept,lastPositivePriced:kept[1],liquidity:{}})]);
+  await refresh();const held=await version();
+  statements.length=0;
+  kept[0].usd=64;
+  await db.sql.query('UPDATE coin_lifetime SET data=$2 WHERE coin=$1',[binary(coin),JSON.stringify({tail:kept,lastPositivePriced:kept[1],liquidity:{}})]);
+  await refresh();
+  expect(await version()).toEqual(held);expect(statements).toHaveLength(4);
+  expect(statements.some(s=>s.includes('FROM read_pool_positions'))).toBe(false);
+  expect((await db.sql.query<{prices:Record<string,{usd:number}>}>('SELECT prices FROM read_liquidity_retained WHERE coin=$1',[binary(coin)])).rows[0].prices[id].usd).toBe(64);
+  expect((await readPoolMoney(db,[coin],now,true)).get(coin)).toBe(Number((await db.sql.query<{usd:number}>('SELECT usd FROM read_coin_liquidity WHERE coin=$1',[binary(coin)])).rows[0].usd));
+  } finally {await db.close();}
 });

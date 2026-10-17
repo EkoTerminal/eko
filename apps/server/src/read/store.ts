@@ -147,7 +147,7 @@ export class ReadStore {
     // Candidate ordering is owned by read_coins. Keep payloads out of the multi-use CTE and
     // aggregate bars through indexed per-coin ranges, keeping sorts and intermediate rows bounded.
     const result = await this.db.sql.query<Stored>(`WITH selected AS (
-      SELECT t.*,l.usd AS liquidity_usd,l.unavailable AS liquidity_unavailable,l.curve_pct,r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,(r.coin IS NOT NULL) AS eligible FROM tokens t
+      SELECT t.*,l.usd AS liquidity_usd,l.unavailable AS liquidity_unavailable,l.curve_pct,r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,(r.coin IS NOT NULL) AS eligible FROM ${bounded ? 'unnest($2::bytea[]) k(coin) CROSS JOIN LATERAL (SELECT * FROM tokens WHERE address=k.coin OFFSET 0) t' : 'tokens t'}
       LEFT JOIN read_coins r ON r.coin=t.address ${bounded ? 'AND r.coin=ANY($2::bytea[])' : ''} LEFT JOIN read_coin_liquidity l ON l.coin=t.address ${bounded ? 'AND l.coin=ANY($2::bytea[])' : ''} WHERE ${filter}
     ), market AS (
       SELECT t.address AS coin,last.close AS price,hour.close AS previous1h,day.close AS previous24h,first.minute AS first_minute,
@@ -181,7 +181,8 @@ export class ReadStore {
       b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,coalesce(b.trades,0) AS trades,coalesce(b.prior_volume,0) AS prior_volume,b.first_minute,s.points AS spark
     FROM selected t LEFT JOIN LATERAL (SELECT data FROM coin_card_latest WHERE coin=t.address OFFSET 0) c ON true
     LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
-    LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
+    LEFT JOIN LATERAL (SELECT ts FROM engine_block_times WHERE number=t.first_block OFFSET 0) bt ON true
+    LEFT JOIN LATERAL (SELECT ts FROM chain_blocks WHERE number=t.first_block OFFSET 0) cb ON true`,params);
     const readAddresses=result.rows.map(t=>hex(t.address));
     const [prices,flows,sells]=await Promise.all([
       readRatingPrices(this.db,readAddresses),readFlows(this.db,readAddresses),readSellChecks(this.db,readAddresses,this.now()),

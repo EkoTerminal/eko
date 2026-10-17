@@ -1,14 +1,17 @@
 {
   "scope": "Full /v2/radar handler via Fastify inject, HEAD baseline and working tree alternate on the same in-memory fixture",
-  "limitation": "PGlite/PostgreSQL 18 on the local host, not PostgreSQL 16 at production load",
+  "limitation": "PGlite/PostgreSQL 18 on the local host, not PostgreSQL 16 at production load. Independent-backend concurrency requires EKO_TEST_POSTGRES_URL.",
   "warmupsPerVersion": 1,
   "plans": [
     {
       "phase": "before",
       "query": "selection",
-      "executionMs": 0.185,
+      "executionMs": 0.236,
       "cardRowsRead": 0,
       "largestSortRows": 0,
+      "sourceRows": {
+        "read_coins": 101
+      },
       "indexes": [
         "read_coins_volume_rank"
       ]
@@ -16,9 +19,16 @@
     {
       "phase": "before",
       "query": "details",
-      "executionMs": 297.168,
+      "executionMs": 155.702,
       "cardRowsRead": 100,
-      "largestSortRows": 48100,
+      "largestSortRows": 9700,
+      "sourceRows": {
+        "tokens": 100,
+        "read_coins": 100,
+        "read_coin_liquidity": 100,
+        "engine_block_times": 0,
+        "chain_blocks": 0
+      },
       "indexes": [
         "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
         "bars_1m_2026_11_minute_coin_volume_usd_idx",
@@ -34,9 +44,12 @@
     {
       "phase": "after",
       "query": "selection",
-      "executionMs": 0.138,
+      "executionMs": 0.09,
       "cardRowsRead": 0,
       "largestSortRows": 0,
+      "sourceRows": {
+        "read_coins": 101
+      },
       "indexes": [
         "read_coins_volume_rank"
       ]
@@ -44,9 +57,16 @@
     {
       "phase": "after",
       "query": "details",
-      "executionMs": 129.757,
+      "executionMs": 147.291,
       "cardRowsRead": 100,
       "largestSortRows": 9700,
+      "sourceRows": {
+        "tokens": 100,
+        "read_coins": 100,
+        "read_coin_liquidity": 100,
+        "engine_block_times": 0,
+        "chain_blocks": 0
+      },
       "indexes": [
         "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
         "bars_1m_2026_11_minute_coin_volume_usd_idx",
@@ -60,24 +80,206 @@
       ]
     }
   ],
-  "baselineRevision": "4c0d7c8b8ed645aecd2b2fa7797f1de80d99bbd2",
-  "runtime": "PGlite",
-  "version": "PostgreSQL 18.3 (PGlite 0.5.8) on wasm32-unknown-emscripten, compiled by emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.74 (1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5), 32-bit",
-  "coins": 30000,
-  "bars": 144000,
-  "cardBytes": 11572,
-  "page": 100,
-  "samples": 25,
-  "before": {
-    "p50Ms": 222.24983299999985,
-    "p95Ms": 239.96700000000055
+  "lockPlans": [
+    {
+      "statement": "SELECT read_lock_coins($1::bytea[])",
+      "ms": 0.346,
+      "nodes": [
+        {
+          "node": "Result",
+          "rows": 1,
+          "loops": 1
+        }
+      ]
+    },
+    {
+      "statement": "SELECT coin FROM read_projection_locks WHERE coin=ANY($1::bytea[]) ORDER BY coin FOR UPDATE",
+      "ms": 0.021,
+      "nodes": [
+        {
+          "node": "LockRows",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Index Scan",
+          "relation": "read_projection_locks",
+          "index": "read_projection_locks_pkey",
+          "rows": 1,
+          "loops": 1
+        }
+      ]
+    },
+    {
+      "statement": "SELECT refresh_read_models($1::bytea[],$2::bigint)",
+      "ms": 9.843,
+      "nodes": [
+        {
+          "node": "Result",
+          "rows": 1,
+          "loops": 1
+        }
+      ]
+    },
+    {
+      "statement": "SELECT read_lock_coins($1::bytea[])",
+      "ms": 0.086,
+      "nodes": [
+        {
+          "node": "Result",
+          "rows": 1,
+          "loops": 1
+        }
+      ]
+    },
+    {
+      "statement": "SELECT t.address,t.graduated_block,t.graduated_pool,t.launchpad,t.curve,t.total_supply,",
+      "ms": 0.112,
+      "nodes": [
+        {
+          "node": "Nested Loop",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Nested Loop",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Nested Loop",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Nested Loop",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Nested Loop",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Nested Loop",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Index Scan",
+          "relation": "tokens",
+          "index": "tokens_pkey",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Index Scan",
+          "relation": "read_liquidity_versions",
+          "index": "read_liquidity_versions_pkey",
+          "rows": 0,
+          "loops": 1
+        },
+        {
+          "node": "Index Scan",
+          "relation": "read_liquidity_inputs",
+          "index": "read_liquidity_inputs_pkey",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Index Scan",
+          "relation": "coin_card_latest",
+          "index": "coin_card_latest_pkey",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Index Scan",
+          "relation": "coin_lifetime",
+          "index": "coin_lifetime_pkey",
+          "rows": 0,
+          "loops": 1
+        },
+        {
+          "node": "Index Scan",
+          "relation": "read_liquidity_retained",
+          "index": "read_liquidity_retained_pkey",
+          "rows": 0,
+          "loops": 1
+        },
+        {
+          "node": "Limit",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Sort",
+          "rows": 1,
+          "loops": 1,
+          "sort": [
+            "pons_events.block",
+            "pons_events.log_index"
+          ]
+        },
+        {
+          "node": "Bitmap Heap Scan",
+          "relation": "pons_events",
+          "rows": 1,
+          "loops": 1
+        },
+        {
+          "node": "Bitmap Index Scan",
+          "index": "pons_events_token_block",
+          "rows": 15,
+          "loops": 1
+        }
+      ]
+    }
+  ],
+  "handler": {
+    "baselineRevision": "ab7078e9880569c4ffea0884082acccc03ea26c1",
+    "runtime": "PGlite",
+    "version": "PostgreSQL 18.3 (PGlite 0.5.8) on wasm32-unknown-emscripten, compiled by emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.74 (1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5), 32-bit",
+    "coins": 30000,
+    "bars": 144000,
+    "cardBytes": 11572,
+    "page": 100,
+    "samples": 25,
+    "before": {
+      "p50Ms": 105.41408299999966,
+      "p95Ms": 112.20425000000068
+    },
+    "after": {
+      "p50Ms": 106.03475000000253,
+      "p95Ms": 110.66745900000024
+    },
+    "statements": {
+      "before": 107,
+      "after": 107
+    }
   },
-  "after": {
-    "p50Ms": 95.80704200000037,
-    "p95Ms": 108.70879199999945
-  },
-  "statements": {
-    "before": 107,
-    "after": 107
+  "checks": {
+    "typecheck": "passed",
+    "db": {
+      "passed": 130,
+      "skipped": 3,
+      "total": 133
+    },
+    "server": {
+      "maxWorkers": 2,
+      "passed": 805,
+      "skipped": 1,
+      "total": 806
+    },
+    "web": {
+      "passed": 865,
+      "total": 865
+    },
+    "docSurface": {
+      "documented": 598,
+      "total": 598
+    },
+    "concurrency": "Added independent-backend regression. Not executed without EKO_TEST_POSTGRES_URL."
   }
 }
