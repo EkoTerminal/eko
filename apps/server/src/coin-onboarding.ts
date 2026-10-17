@@ -1,7 +1,7 @@
 import { decodeAbiParameters, hexToString, parseAbi, type Hex, type PublicClient } from 'viem';
 import { binary, hex, type ChainDb } from '@eko/db';
 import { isTransientRpcUnavailable, loadRegistry, rpcStopReason } from '@eko/chain';
-import { rebuildCandles, repricePonsSwaps, pricingAssets, type PricingAssets } from './pricing-repair.js';
+import { rebuildCandles, repricePonsSwaps, pricingAssets, rawMutationBounds, liveRawRows, sealedRawMutation, type RawMutationBounds, type PricingAssets } from './pricing-repair.js';
 
 const ZERO = '0x0000000000000000000000000000000000000000', DEAD = '0x000000000000000000000000000000000000dead';
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', ZERO_TOPIC = `0x${'0'.repeat(64)}`;
@@ -62,7 +62,10 @@ export const AUTOMATED_SENDER_TXS = 1000, SHARED_LAUNCHES = 20;
  * `coins` limits it to those coins; otherwise every coin with a launch wallet that is not a Pons launch. Returns the
  * swaps settled.
  */
-export async function attributeSwaps(db: ChainDb, a: AttributionAddresses, from: Date, to: Date, limit = ATTRIBUTE_BATCH, coins?: Uint8Array[]): Promise<number> {
+export async function attributeSwaps(db: ChainDb, a: AttributionAddresses, from: Date, to: Date, limit = ATTRIBUTE_BATCH, coins?: Uint8Array[], bounds?:RawMutationBounds): Promise<number> {
+  bounds ??= await rawMutationBounds(db);
+  const params:unknown[]=[from, to, limit, binary(a.poolManager), [ZERO, DEAD, a.poolManager].map(binary), ...(coins ? [coins.length === 1 ? coins[0] : coins] : [])];
+  const live=liveRawRows('s',bounds.swaps,params);
   // One coin is matched by equality, so its swaps are read newest first through swaps(coin,block). As coin=ANY(...) the
   // planner walked every coin's swaps backward to find them: 3.3 million rows for a batch 50,000 swaps into one coin's
   // history on a copy of 2026-10-13 (3.2 s, against 78 ms).
@@ -72,7 +75,7 @@ export async function attributeSwaps(db: ChainDb, a: AttributionAddresses, from:
   // once per swap (a 1,000-swap batch took 2.6 s on the same copy, 0.23 s this way).
   return (await db.sql.query(`WITH c AS MATERIALIZED (
       SELECT s.ts,s.tx_hash,s.log_index,s.block,s.coin,s.pool_id,s.side,s.venue,s.recipient FROM swaps s
-      WHERE s.senders_pending AND s.venue<>'pons_curve' AND s.ts>=$1 AND s.ts<$2 AND ${scope} ORDER BY s.block DESC,s.log_index DESC LIMIT $3),
+      WHERE ${live} AND s.senders_pending AND s.venue<>'pons_curve' AND s.ts>=$1 AND s.ts<$2 AND ${scope} ORDER BY s.block DESC,s.log_index DESC LIMIT $3),
     -- No coins moved: nobody took delivery, when the coin's transfers were being stored by then.
     r AS (SELECT c.*,p.addr,p.addr IS NULL AND c.venue='uniswap_v4' AND c.side=1
         AND NOT EXISTS(SELECT 1 FROM token_transfers t WHERE t.token=c.coin AND t.block=c.block AND t.tx_hash=c.tx_hash)
@@ -90,8 +93,8 @@ export async function attributeSwaps(db: ChainDb, a: AttributionAddresses, from:
         ORDER BY k.tier,CASE WHEN k.tier=0 THEN abs(x.net) WHEN c.side=1 THEN x.gin ELSE x.gout END DESC,x.addr LIMIT 1) p ON true)
     UPDATE swaps s SET trader=r.addr,senders_pending=false,
       recipient=CASE WHEN r.side<>1 THEN s.recipient WHEN r.addr IS NOT NULL THEN r.addr WHEN r.undelivered THEN $4 ELSE s.recipient END
-    FROM r WHERE s.ts=r.ts AND s.tx_hash=r.tx_hash AND s.log_index=r.log_index RETURNING 1`,
-    [from, to, limit, binary(a.poolManager), [ZERO, DEAD, a.poolManager].map(binary), ...(coins ? [coins.length === 1 ? coins[0] : coins] : [])])).rows.length;
+    FROM r WHERE ${live} AND s.ts=r.ts AND s.tx_hash=r.tx_hash AND s.log_index=r.log_index RETURNING 1`,
+    params)).rows.length;
 }
 
 /**
@@ -100,7 +103,10 @@ export async function attributeSwaps(db: ChainDb, a: AttributionAddresses, from:
  * through a position manager contract, so the event's own owner says nothing about who controls them; an event with
  * no such wallet keeps the owner or sender it names, or the pool manager or pool. Events of the pools of `coins`.
  */
-export async function attributeLiquidity(db: ChainDb, a: AttributionAddresses, limit: number, coins: Uint8Array[]): Promise<number> {
+export async function attributeLiquidity(db: ChainDb, a: AttributionAddresses, limit: number, coins: Uint8Array[], bounds?:RawMutationBounds): Promise<number> {
+  bounds ??= await rawMutationBounds(db);
+  const params:unknown[]=[limit, binary(a.poolManager), [ZERO, DEAD, a.poolManager].map(binary), coins, a.reference.map(binary)];
+  const live=liveRawRows('e',bounds.liquidity_events,params);
   const where = '(p.currency0=ANY($4::bytea[]) OR p.currency1=ANY($4::bytea[]))';
   const word = (field: string) => `CASE WHEN lower(e.data->>'${field}') ~ '^0x[0-9a-f]{40}$' THEN decode(substr(lower(e.data->>'${field}'),3),'hex') END`;
   return (await db.sql.query(`WITH c AS MATERIALIZED (
@@ -108,7 +114,7 @@ export async function attributeLiquidity(db: ChainDb, a: AttributionAddresses, l
         CASE WHEN e.kind='Mint' OR (e.kind='ModifyLiquidity' AND (e.data->>'liquidityDelta') ~ '^[0-9]+$' AND (e.data->>'liquidityDelta')<>'0') THEN -1
           WHEN e.kind IN ('Burn','Collect') OR (e.kind='ModifyLiquidity' AND (e.data->>'liquidityDelta') ~ '^-[0-9]+$') THEN 1 ELSE 0 END AS way,
         coalesce(${word('owner')},${word('sender')},${word('recipient')},CASE WHEN length(e.pool_id)=20 THEN e.pool_id ELSE $2 END) AS named
-      FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE e.senders_pending AND ${where} ORDER BY e.block DESC LIMIT $1),
+      FROM liquidity_events e JOIN pools p ON p.id=e.pool_id WHERE ${live} AND e.senders_pending AND ${where} ORDER BY e.block DESC LIMIT $1),
     pick AS (SELECT c.tx_hash,c.log_index,(SELECT d.addr FROM (
         SELECT x.addr,sum(x.delta) AS net FROM (
           SELECT t.to_address AS addr,t.amount AS delta FROM token_transfers t WHERE t.token IN (c.currency0,c.currency1) AND NOT t.token=ANY($5::bytea[]) AND t.block=c.block AND t.tx_hash=c.tx_hash AND t.kind='Transfer'
@@ -116,8 +122,8 @@ export async function attributeLiquidity(db: ChainDb, a: AttributionAddresses, l
         WHERE NOT x.addr=ANY($3::bytea[]) AND x.addr<>c.pool_id AND NOT EXISTS(SELECT 1 FROM pools q WHERE q.id=x.addr) GROUP BY x.addr) d
         WHERE c.way<>0 AND d.net*c.way>0 ORDER BY abs(d.net) DESC,d.addr LIMIT 1) AS addr FROM c)
     UPDATE liquidity_events e SET actor=coalesce(pick.addr,c.named),senders_pending=false FROM c JOIN pick USING (tx_hash,log_index)
-    WHERE e.tx_hash=c.tx_hash AND e.log_index=c.log_index RETURNING 1`,
-    [limit, binary(a.poolManager), [ZERO, DEAD, a.poolManager].map(binary), coins, a.reference.map(binary)])).rows.length;
+    WHERE ${live} AND e.tx_hash=c.tx_hash AND e.log_index=c.log_index RETURNING 1`,
+    params)).rows.length;
 }
 
 export interface TokenFacts { decimals: number | null; symbol: string | null; name: string | null; totalSupply: bigint | null }
@@ -398,17 +404,27 @@ export class CoinOnboardingWorker {
    * pass ran out of time first (every step picks up where it stopped). Pricing goes an hour at a time, newest first:
    * each hour reads only that hour's ETH/USD reference swaps.
    */
-  private async settle(coin: Uint8Array, deadline: number): Promise<boolean> {
+  private async settle(coin: Uint8Array, deadline: number, bounds:RawMutationBounds): Promise<boolean> {
+    try { return await this.settleLive(coin,deadline,bounds); }
+    catch(error) {
+      if(!sealedRawMutation(error))throw error;
+      await this.mark(coin,'done',{settlement:'done_with_sealed_history'});
+      this.hours.delete(hex(coin));this.minutes.delete(hex(coin));
+      return true;
+    }
+  }
+  private async settleLive(coin: Uint8Array, deadline: number, bounds:RawMutationBounds): Promise<boolean> {
     const batch = this.options.batch ?? ATTRIBUTE_BATCH, epoch = new Date(0), end = new Date(this.now() + HOUR), floor = new Date(this.now() - 2 * 24 * HOUR), key = hex(coin);
     let hours = this.hours.get(key);
     if (!hours) {
-      hours = (await this.db.sql.query<{ hour: Date }>(`SELECT DISTINCT date_trunc('hour',ts) AS hour FROM swaps WHERE coin=$1 AND usd IS NULL AND amount_coin>0 AND amount_quote>0 ORDER BY 1 DESC`, [coin])).rows.map(row => new Date(row.hour));
+      const params:unknown[]=[coin],live=liveRawRows('s',bounds.swaps,params);
+      hours = (await this.db.sql.query<{ hour: Date }>(`SELECT DISTINCT date_trunc('hour',ts) AS hour FROM swaps s WHERE ${live} AND coin=$1 AND usd IS NULL AND amount_coin>0 AND amount_quote>0 ORDER BY 1 DESC`, params)).rows.map(row => new Date(row.hour));
       this.hours.set(key, hours);
     }
     while (hours.length) {
       if (this.now() >= deadline) return false;
       const from = hours[0];
-      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), ONBOARD_PRICE_BATCH, NO_CANDLES, [coin]) < ONBOARD_PRICE_BATCH) hours.shift();
+      if (await repricePonsSwaps(this.db, this.assets ??= pricingAssets(), from, new Date(from.getTime() + HOUR), ONBOARD_PRICE_BATCH, NO_CANDLES, [coin], bounds) < ONBOARD_PRICE_BATCH) hours.shift();
       this.minutes.delete(key);
     }
     // Candles of the last two days, newest first, CANDLE_MINUTES per transaction.
@@ -425,18 +441,18 @@ export class CoinOnboardingWorker {
     }
     for (;;) {
       if (this.now() >= deadline) return false;
-      if (await attributeSwaps(this.db, this.addresses, epoch, end, batch, [coin]) < batch) break;
+      if (await attributeSwaps(this.db, this.addresses, epoch, end, batch, [coin], bounds) < batch) break;
     }
     for (;;) {
       if (this.now() >= deadline) return false;
-      if (await attributeLiquidity(this.db, this.addresses, batch, [coin]) < batch) break;
+      if (await attributeLiquidity(this.db, this.addresses, batch, [coin], bounds) < batch) break;
     }
     // Settled: the next time this coin has work (rows stored later), its lists are read afresh.
     this.hours.delete(key); this.minutes.delete(key);
     return true;
   }
   /** One coin, through to its launch wallet; 'unfinished' when the pass ran out of time first, 'set_aside' when it cannot be read yet. */
-  private async onboard(candidate: Candidate, deadline: number): Promise<'onboarded' | 'set_aside' | 'unfinished'> {
+  private async onboard(candidate: Candidate, deadline: number, bounds:RawMutationBounds): Promise<'onboarded' | 'set_aside' | 'unfinished'> {
     const coin = candidate.coin, address = hex(coin);
     const token = (await this.db.sql.query<{ decimals: number | null; name: string | null; symbol: string | null; total_supply: string | null; deployer: Uint8Array | null; launchpad: string | null }>(
       'SELECT decimals,name,symbol,total_supply::text,deployer,launchpad FROM tokens WHERE address=$1', [coin])).rows[0];
@@ -461,7 +477,7 @@ export class CoinOnboardingWorker {
       wallet = mint && !shared ? mint.wallet : address;
       await this.mark(coin, 'working', { launchWallet: wallet, ...(mint ? { sender: mint.wallet, senderTo: mint.to, mintBlock: mint.block.toString(), mintTx: mint.tx, mintTo: mint.mintTo } : {}), ...(shared ? { shared } : {}) });
     }
-    if (!await this.settle(coin, deadline)) return 'unfinished';
+    if (!await this.settle(coin, deadline, bounds)) return 'unfinished';
     await this.db.tx(async tx => {
       await tx.sql.query('UPDATE tokens SET deployer=$2 WHERE address=$1 AND deployer IS NULL AND launchpad IS NULL', [coin, binary(wallet!)]);
       await tx.sql.query(`INSERT INTO coin_onboarding(coin,status,attempts,created_at,updated_at) VALUES($1,'done',1,to_timestamp($2::double precision),to_timestamp($2::double precision))
@@ -477,6 +493,7 @@ export class CoinOnboardingWorker {
     if (lagSec > maxLag) { if (started - this.pausedAt >= 300_000) { this.pausedAt = started; this.log('coin_onboarding_paused', { lagSec: Math.round(lagSec), maxLagSec: maxLag }); } return; }
     const budget = this.options.budgetMs ?? 10_000, deadline = started + budget, perTick = this.options.perTick ?? 8;
     // The chain reads of the coins this pass can reach start now and are answered while the database work below runs.
+    const bounds=await rawMutationBounds(this.db);
     await this.candidates(started);
     await this.readAhead([...this.busy.slice(0, 2), ...this.queue.slice(0, perTick)]);
     // Onboarded coins first. The indexer names and prices their new swaps as it stores them; rows it stores without a
@@ -484,13 +501,14 @@ export class CoinOnboardingWorker {
     let settled = 0;
     // The probe is one index read per listed coin (1.2 s a pass with 720 coins listed on 2026-10-13), so the list is kept.
     if (started - this.behindAt >= 120_000) {
+      const params:unknown[]=[],swapLive=liveRawRows('s',bounds.swaps,params),liquidityLive=liveRawRows('e',bounds.liquidity_events,params);
       this.behind = (await this.db.sql.query<{ coin: Uint8Array }>(`SELECT k.address AS coin FROM tokens k WHERE k.deployer IS NOT NULL AND k.launchpad IS NULL
-        AND (EXISTS(SELECT 1 FROM swaps s WHERE s.coin=k.address AND s.senders_pending AND s.venue<>'pons_curve')
-          OR EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id AND e.senders_pending WHERE p.currency0=k.address OR p.currency1=k.address)) LIMIT 20`)).rows.map(row => row.coin);
+        AND (EXISTS(SELECT 1 FROM swaps s WHERE ${swapLive} AND s.coin=k.address AND s.senders_pending AND s.venue<>'pons_curve')
+          OR EXISTS(SELECT 1 FROM pools p JOIN liquidity_events e ON e.pool_id=p.id AND e.senders_pending WHERE ${liquidityLive} AND (p.currency0=k.address OR p.currency1=k.address))) LIMIT 20`,params)).rows.map(row => row.coin);
       this.behindAt = started;
     }
     const behind = this.behind.length, behindUntil = this.now() + (deadline - this.now()) / 3;
-    try { while (this.behind.length) { if (this.now() >= behindUntil || !await this.settle(this.behind[0], behindUntil)) break; this.behind.shift(); settled++; } }
+    try { while (this.behind.length) { if (this.now() >= behindUntil || !await this.settle(this.behind[0], behindUntil, bounds)) break; this.behind.shift(); settled++; } }
     // A statement that lost a deadlock leaves the coin for the next pass; the coins to onboard still get their turn.
     catch (error) { if (!['40P01', '40001'].includes(String((error as { code?: unknown })?.code))) throw error; this.log('coin_onboarding_retry', { coin: hex(this.behind[0]), reason: 'database_lock_contention' }); }
     let onboarded = 0, set = 0, unfinished = 0, tried = 0;
@@ -499,7 +517,7 @@ export class CoinOnboardingWorker {
       for (; list().length && tried < perTick && this.now() < until; tried++) {
         const candidate = list()[0];
         let outcome: 'onboarded' | 'set_aside' | 'unfinished';
-        try { outcome = await this.onboard(candidate, until); }
+        try { outcome = await this.onboard(candidate, until, bounds); }
         catch (error) {
           if (error instanceof OnboardingReadsSpent) throw error;
           for (const key of this.rejected) this.reads.delete(key);

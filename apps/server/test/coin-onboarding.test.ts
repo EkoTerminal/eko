@@ -144,6 +144,51 @@ describe('coin onboarding', () => {
     expect((await db.sql.query<{ usd: number }>('SELECT usd FROM swaps WHERE block=150')).rows[0].usd).toBe(3);
     expect(calls).toHaveLength(3);
   });
+  it.each([300,-1])('settles live rows with a watermark and an open seal through %i, leaving protected rows intact',async through=>{
+    const db=await open(),events:string[]=[];
+    await db.insert('tokens',{address:binary(usdg),decimals:6,first_block:'1',block:'1'});
+    for(const block of [200,300,900]) {
+      await swap(db,block,block,1,'1000000000000000000',{quote_asset:binary(usdg),amount_quote:'5000000'});
+      await transfer(db,block,block,manager,buyer,'1000000000000000000');
+      await db.insert('liquidity_events',{ts:at(block),block:String(block),tx_hash:binary(hash(block+1)),log_index:logIndex++,venue:'uniswap_v4',pool_id:binary(v4pool),kind:'ModifyLiquidity',data:{liquidityDelta:'100'},senders_pending:true});
+    }
+    await db.sql.query("UPDATE raw_history_watermarks SET through_block=250 WHERE name='swaps'");
+    await db.sql.query("INSERT INTO raw_history_watermarks VALUES('liquidity_events',300)");
+    await db.sql.query(`INSERT INTO raw_history_seals(name,partition_name,start_ts,end_ts,rows,through_block)
+      VALUES('swaps','swaps_fixture',$1,$2,2,$3)`,[at(200),at(301),through]);
+    await expect(db.sql.query('UPDATE swaps SET usd=1 WHERE block=300')).rejects.toThrow('sealed raw history');
+    const protectedRows=async()=>({swaps:(await db.sql.query('SELECT * FROM swaps WHERE block<=300 ORDER BY block')).rows,
+      liquidity:(await db.sql.query('SELECT * FROM liquidity_events WHERE block<=300 ORDER BY block')).rows});
+    const before=await protectedRows(),calls:string[]=[];
+    const worker=new CoinOnboardingWorker(db,chain({decimals:18,symbol:'DEMO',name:'Sample token',totalSupply:1000n},null,calls),event=>events.push(event),{now:()=>now,assets,addresses});
+    await worker.tick();await worker.tick();
+    expect(await protectedRows()).toEqual(before);
+    expect((await db.sql.query('SELECT usd,senders_pending FROM swaps WHERE block=900')).rows).toEqual([{usd:5,senders_pending:false}]);
+    expect((await db.sql.query('SELECT senders_pending FROM liquidity_events WHERE block=900')).rows).toEqual([{senders_pending:false}]);
+    expect((await db.sql.query('SELECT status FROM coin_onboarding')).rows).toEqual([{status:'done'}]);
+    expect(events).not.toContain('coin_onboarding_failed');expect(calls.filter(c=>c.startsWith('facts:'))).toHaveLength(1);
+  });
+  it('records done with sealed history when a seal arrives after the pass snapshot',async()=>{
+    const db=await open(),events:string[]=[];
+    await db.insert('tokens',{address:binary(usdg),decimals:6,first_block:'1',block:'1'});
+    await swap(db,900,900,1,'1000000000000000000',{quote_asset:binary(usdg),amount_quote:'5000000'});
+    const source=chain({decimals:18,symbol:'DEMO',name:'Sample token',totalSupply:1000n},null);
+    const facts=source.facts;let fenced=false;
+    source.facts=async token=>{
+      if(!fenced) {
+        fenced=true;
+        await db.sql.query(`INSERT INTO raw_history_seals(name,partition_name,start_ts,end_ts,rows,through_block)
+          VALUES('swaps','swaps_fixture',$1,$2,1,900)`,[at(899),at(901)]);
+      }
+      return facts(token);
+    };
+    const worker=new CoinOnboardingWorker(db,source,event=>events.push(event),{now:()=>now,assets,addresses});
+    await worker.tick();await worker.tick();
+    expect((await db.sql.query('SELECT usd,senders_pending FROM swaps')).rows).toEqual([{usd:null,senders_pending:true}]);
+    expect((await db.sql.query("SELECT status,data->>'settlement' AS settlement FROM coin_onboarding")).rows).toEqual([{status:'done',settlement:'done_with_sealed_history'}]);
+    expect((await db.sql.query('SELECT deployer IS NOT NULL AS listed FROM tokens WHERE address=$1',[binary(coin)])).rows).toEqual([{listed:true}]);
+    expect(events).not.toContain('coin_onboarding_failed');
+  });
   it('sets aside a token it cannot read, and records no deployer wallet when its first mint is not found', async () => {
     const db = await open();
     await swap(db, 900, 40, 1, '1000');

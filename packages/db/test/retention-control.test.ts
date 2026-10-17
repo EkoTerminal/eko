@@ -95,6 +95,21 @@ describe('bounded retention control', () => {
     for(const name of ['receipts','fingerprints','cards','verdicts'])await runRule(name,async timeLeft=>{runs.push(name);expect(timeLeft()).toBe(true);clock+=10;expect(timeLeft()).toBe(false);});
     expect(runs).toEqual(['receipts','fingerprints','cards']);expect(result.finished).toBe(false);
   });
+  it('gives a receipt backlog thirty seconds without increasing other rules or the total pass',async()=>{
+    const {db}=fixture(),result=await runRetention(db,options);
+    let clock=0;const deadlines:number[]=[];
+    const run=retentionRules({...options,now:()=>clock},result,budget=>deadlines.push(budget));
+    await run('receipt_publications',async timeLeft=>{clock=29_999;expect(timeLeft()).toBe(true);clock=30_000;expect(timeLeft()).toBe(false);});
+    await run('wallet_fingerprint_dependencies',async timeLeft=>{clock+=6_000;expect(timeLeft()).toBe(false);});
+    expect(deadlines).toEqual([30_000,6_000]);
+  });
+  it('omits raw_cap only when both raw day windows are managed by partitions',async()=>{
+    for(const configured of [{swapDays:7,transferDays:3},{swapDays:7,transferDays:3,rawPartitions:false},{swapDays:7}]) {
+      const {db}=fixture();
+      const result=await runRetention(db,{...options,rawDays:7,...configured});
+      expect(result.ruleStats?.raw_cap===undefined).toBe(configured.rawPartitions!==false && configured.transferDays!==undefined);
+    }
+  });
   it('walks fingerprint dependencies by the existing primary key before filtering runs',async()=>{
     const {db,statements}=fixture();
     await ratingWindow(db,'wallet_fingerprint_dependencies',['run_id','block'],['text','bigint'],['sample-run','12'],1000);
@@ -114,6 +129,7 @@ describe('bounded retention control', () => {
     expect(windows[1]!.params).toEqual(['sample-retained','2']);
     const selection=statements.find(s=>s.sql.startsWith('SELECT x.run_id,x.block FROM wallet_fingerprint_dependencies'))!.sql;
     expect(selection).not.toContain('JOIN (VALUES');expect(selection).toContain('(x.run_id,x.block) IN (SELECT * FROM unnest(');
+    expect(selection).toContain('(x.run_id,x.block)>=' );expect(selection).toContain('(x.run_id,x.block)<=' );
     expect(selection).toContain('r.id=x.run_id');expect(selection).toContain('FOR UPDATE OF x SKIP LOCKED');
   });
   it('reports committed rating rows and uses a per-coin receipt probe',async()=>{
@@ -135,7 +151,7 @@ describe('bounded retention control', () => {
     expect(result.ratingRows?.guard_shadow_runs).toBe(1);
     expect(result.tables).toContainEqual({table:'guard_shadow_runs',rows:1,estimatedBytes:0});
     const receipt=statements.find(s=>s.sql.startsWith('SELECT p.* FROM receipt_publications'))!.sql;
-    expect(receipt).toContain("n.data->>'coin'=p.data->>'coin'");expect(receipt).toContain('n.publication_sequence>p.publication_sequence LIMIT 1');
+    expect(receipt).toContain("n.data->>'coin'=p.data->>'coin'");expect(receipt).toContain('p.publication_sequence<(SELECT n.publication_sequence');expect(receipt).toContain('ORDER BY n.publication_sequence DESC LIMIT 1');
     expect(receipt).not.toContain('DISTINCT');
   });
   it('drives raw candidates from bounded token identities and indexed existence probes',async()=>{

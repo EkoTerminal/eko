@@ -52,10 +52,10 @@ export function ratingSelections() {
   ];
   return selections;
 }
-const receiptSelection = `SELECT p.* FROM receipt_publications p WHERE p.recorded_at<$1 AND p.data IS NOT NULL AND p.kind='verdict'
+export const receiptSelection = `SELECT p.* FROM receipt_publications p WHERE p.recorded_at<$1 AND p.data IS NOT NULL AND p.kind='verdict'
   AND p.producer='engines' AND p.chain_id=4663
-  AND EXISTS(SELECT 1 FROM receipt_publications n WHERE n.producer='engines' AND n.kind='verdict' AND n.chain_id=4663
-    AND n.data IS NOT NULL AND n.data->>'coin'=p.data->>'coin' AND n.publication_sequence>p.publication_sequence LIMIT 1)
+  AND p.publication_sequence<(SELECT n.publication_sequence FROM receipt_publications n WHERE n.producer='engines' AND n.kind='verdict' AND n.chain_id=4663
+    AND n.data IS NOT NULL AND n.data->>'coin'=p.data->>'coin' ORDER BY n.publication_sequence DESC LIMIT 1)
   AND NOT EXISTS(SELECT 1 FROM coin_card_latest c WHERE c.coin=decode(substring(p.data->>'coin' FROM 3),'hex') AND c.data->'verdict'->'receipt'->>'id'=p.id)`;
 
 /** Fetch a bounded key window before testing eligibility, even if none of its rows can be removed. */
@@ -68,7 +68,10 @@ export async function ratingWindow(db: ChainDb, table: string, columns: string[]
 function windowPredicate(rows: Record<string, unknown>[], columns: string[], types: string[], values: unknown[]) {
   const arrays = columns.map((c,i) => { values.push(rows.map(row=>row[c])); return `$${values.length}::${types[i]}[]`; });
   if (columns.length === 1) return `x.${columns[0]}=ANY(${arrays[0]})`;
-  return `(${columns.map(c=>`x.${c}`).join(',')}) IN (SELECT * FROM unnest(${arrays.join(',')}))`;
+  // 2026-10-17: a tuple-IN join can walk all 3.9M dependencies. Bound both delete inputs by key.
+  const keys=`(${columns.map(c=>`x.${c}`).join(',')})`;
+  const edge=(row:Record<string,unknown>)=>`(${columns.map((c,i)=>{values.push(row[c]);return `$${values.length}::${types[i]}`;}).join(',')})`;
+  return `${keys}>=${edge(rows[0]!)} AND ${keys}<=${edge(rows.at(-1)!)} AND ${keys} IN (SELECT * FROM unnest(${arrays.join(',')}))`;
 }
 export async function ratingRetention(db: ChainDb, options: RetentionOptions, result: RetentionResult, nowMs: number,
   runRule: RetentionRuleRunner, cursors: Map<string, unknown[]>) {
@@ -102,7 +105,7 @@ export async function ratingRetention(db: ChainDb, options: RetentionOptions, re
               CROSS JOIN LATERAL (${gradeProbe}) g)
             ${bounded.replace(gradeException,'NOT EXISTS(SELECT 1 FROM grade_boundaries g WHERE g.id=x.id)')}`;
         }
-        const rows=(await tx.sql.query<Record<string,unknown>>(`${bounded} FOR UPDATE OF x SKIP LOCKED`,params)).rows;
+        const rows=(await tx.sql.query<Record<string,unknown>>(`${bounded}${columns.length>1 ? ` ORDER BY ${columns.map(c=>`x.${c}`).join(',')}` : ''} FOR UPDATE OF x SKIP LOCKED`,params)).rows;
         const after=columns.map(c=>window.at(-1)![c]);
         if(!rows.length)return {moved:0,after};
         const values:unknown[]=[];
@@ -116,7 +119,8 @@ export async function ratingRetention(db: ChainDb, options: RetentionOptions, re
           INSERT INTO coin_match_lifetime SELECT coin,rules_version,playbook_id,data->>'level',min(valid_from_block) FROM picked GROUP BY coin,rules_version,playbook_id,data->>'level'
           ON CONFLICT(coin,rules_version,playbook_id,level) DO UPDATE SET first_block=least(coin_match_lifetime.first_block,excluded.first_block)`,values);
         if(rule.table==='verdicts')await tx.sql.query(`WITH picked AS (${picked}) DELETE FROM verdict_events e USING picked p WHERE e.verdict_id=p.id`,values);
-        const moved=Number((await tx.sql.query<{n:string}>(`WITH picked AS (${picked}),gone AS (${rule.remove} RETURNING 1) SELECT count(*)::text AS n FROM gone`,values)).rows[0]?.n ?? 0);
+        const remove=rule.table==='wallet_fingerprint_dependencies' ? rule.remove.replace('WHERE ',`WHERE ${filter} AND `) : rule.remove;
+        const moved=Number((await tx.sql.query<{n:string}>(`WITH picked AS (${picked}),gone AS (${remove} RETURNING 1) SELECT count(*)::text AS n FROM gone`,values)).rows[0]?.n ?? 0);
         return {moved,after};
       },options.pauseMs);
       addReport(result,{table:rule.table,rows:batch.moved,estimatedBytes:0});
@@ -132,17 +136,20 @@ async function receiptRetention(db:ChainDb,options:RetentionOptions,result:Reten
     return;
   }
   while(timeLeft()) {
+    const after=cursors.get('receipt_publications');
+    // 2026-10-17: large TOAST payloads must be validated without holding publication row locks.
+    const window=(await db.sql.query<{id:string;recorded_at:Date}>(`SELECT id,recorded_at FROM receipt_publications
+      WHERE recorded_at<$1 AND data IS NOT NULL AND kind='verdict' AND producer='engines' AND chain_id=4663
+      ${after ? 'AND (recorded_at,id)>($2::timestamptz,$3::text)' : ''}
+      ORDER BY recorded_at,id LIMIT ${limit}`,[cutoff,...(after ?? [])])).rows;
+    if(!window.length) {cursors.delete('receipt_publications');break;}
+    const next=[window.at(-1)!.recorded_at,window.at(-1)!.id];
+    const candidates=(await db.sql.query<Publication>(`${receiptSelection} AND p.id=ANY($2::text[])`,[cutoff,window.map(r=>r.id)])).rows;
+    for(const row of candidates)validateReceiptPublication(row);
     const n=await retentionBatch(db,async tx=>{
-      const after=cursors.get('receipt_publications');
-      const window=(await tx.sql.query<{id:string;recorded_at:Date}>(`SELECT id,recorded_at FROM receipt_publications
-        WHERE recorded_at<$1 AND data IS NOT NULL AND kind='verdict' AND producer='engines' AND chain_id=4663
-        ${after ? 'AND (recorded_at,id)>($2::timestamptz,$3::text)' : ''}
-        ORDER BY recorded_at,id LIMIT ${limit}`,[cutoff,...(after ?? [])])).rows;
-      if(!window.length)return {publications:0,items:0,after:undefined};
-      const next=[window.at(-1)!.recorded_at,window.at(-1)!.id];
-      const rows=(await tx.sql.query<Publication>(`${receiptSelection} AND p.id=ANY($2::text[]) FOR UPDATE OF p SKIP LOCKED`,[cutoff,window.map(r=>r.id)])).rows;
+      // Payloads are append-only. Recheck eligibility under lock after validation; another stripper may have won.
+      const rows=(await tx.sql.query<{id:string}>(`${receiptSelection.replace('SELECT p.*','SELECT p.id')} AND p.id=ANY($2::text[]) FOR UPDATE OF p SKIP LOCKED`,[cutoff,candidates.map(r=>r.id)])).rows;
       if(!rows.length)return {publications:0,items:0,after:next};
-      for(const row of rows)validateReceiptPublication(row);
       const ids=rows.map(r=>r.id);
       await tx.sql.query(`UPDATE receipt_publications SET summary=jsonb_build_object('coin',data->'coin','supersedes',data->'supersedes','reorgOf',data->'reorgOf',
         'recordedAt',data->'recordedAt','rulesVersion',data->'rulesVersion','revisionId',data->'revisionId','receiptId',data->'receiptId','window',data->'window',

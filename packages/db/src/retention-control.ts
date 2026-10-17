@@ -42,11 +42,12 @@ export function retentionRules(options: RetentionOptions, result: RetentionResul
   sizes = new Map<string, RetentionBatchState>()): RetentionRuleRunner {
   const now = options.now ?? Date.now, passStarted = now();
   const passBudget = Math.min(options.passBudgetMs ?? 115_000, 115_000);
-  const ceiling = Math.max(1, Math.min(options.batchRows ?? 1000, 5000)), floor = Math.min(32, ceiling);
+  const maxBatchRows = Math.max(1, Math.min(options.batchRows ?? 1000, 5000));
   return async (name, work) => {
     const started = now(), before = removedRows(result);
+    const ceiling = name === 'receipt_publications' ? Math.min(maxBatchRows,64) : maxBatchRows, floor = Math.min(32,ceiling);
     // Initial immutable per-coin snapshots and hourly rankings are aggregates, not LIMIT-sized deletes.
-    const budget = options.budgetMs ?? 6_000;
+    const budget = options.budgetMs ?? (name === 'receipt_publications' ? 30_000 : 6_000);
     const timeLeft = () => { const current = now(); return current - started < budget && current - passStarted < passBudget; };
     const state = sizes.get(name) ?? { rows: ceiling, successes: 0 };
     if (state.ceiling !== undefined && state.ceiling !== ceiling) { state.rows = ceiling; state.successes = 0; }
