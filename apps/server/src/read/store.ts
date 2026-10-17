@@ -1,7 +1,7 @@
 import { BlueChipReader } from './blue-chip.js';
 import { binary, hex, readFlows, readRatingPrices, liveRating, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
-import { readCurveStates, readPoolLiquidity, readPoolMoney } from './pool-liquidity.js';
+import { refreshLiquidityModels } from './liquidity-model.js';
 import { CoinCardSchema, VerdictSchema, findingsFirst, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
@@ -11,6 +11,7 @@ export const REFRESH_BATCH=25;
 export const REFRESH_REST_MS=3000;
 
 interface Stored {
+  liquidity_usd:number|null;liquidity_unavailable:boolean|null;curve_pct:number|null;
   buyers_pending:boolean;pricing_pending:boolean;eligible:boolean;address: Uint8Array; name: string | null; symbol: string | null; launchpad: string | null;
   curve: Uint8Array | null; graduated_block: string | null; total_supply: string | null; decimals: number | null;
   first_block:string; created_at: Date | null; activity: Date | null; data: unknown | null; verdict: unknown | null;
@@ -86,6 +87,7 @@ export class ReadStore {
         await this.db.tx(async tx=>{
           // The SQL function serializes only coins in this batch.
           await tx.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[pending.map(r=>r.coin),Math.floor(this.now()/60000)*60]);
+          await refreshLiquidityModels(tx,pending.map(r=>hex(r.coin)),this.now());
           // The indexer marks coins dirty from its swap trigger in its own row order; waiting on one of those rows here
           // deadlocked its block writes (5-9 an hour on 2026-10-11). A row it is changing gets a new revision anyway, so
           // it is skipped and refreshed next time.
@@ -134,8 +136,8 @@ export class ReadStore {
     const filter=bounded ? 't.address=ANY($2::bytea[])' : 'r.coin IS NOT NULL';
     if(bounded)params.push(bounded.map(binary));
     const result = await this.db.sql.query<Stored>(`WITH selected AS (
-      SELECT t.*,c.data,r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address ${bounded ? 'AND c.coin=ANY($2::bytea[])' : ''}
-      LEFT JOIN read_coins r ON r.coin=t.address ${bounded ? 'AND r.coin=ANY($2::bytea[])' : ''} WHERE ${filter}
+      SELECT t.*,c.data,l.usd AS liquidity_usd,l.unavailable AS liquidity_unavailable,l.curve_pct,r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address ${bounded ? 'AND c.coin=ANY($2::bytea[])' : ''}
+      LEFT JOIN read_coins r ON r.coin=t.address ${bounded ? 'AND r.coin=ANY($2::bytea[])' : ''} LEFT JOIN read_coin_liquidity l ON l.coin=t.address ${bounded ? 'AND l.coin=ANY($2::bytea[])' : ''} WHERE ${filter}
     ), recent AS MATERIALIZED (
       SELECT b.* FROM selected t JOIN bars_1m b ON b.coin=t.address WHERE b.minute>=to_timestamp($1::double precision-86400)
     ), market AS (
@@ -167,15 +169,9 @@ export class ReadStore {
     FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
     LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
     const readAddresses=result.rows.map(t=>hex(t.address));
-    const [prices,flows,sells,pools,curves,money]=await Promise.all([
+    const [prices,flows,sells]=await Promise.all([
       readRatingPrices(this.db,readAddresses),readFlows(this.db,readAddresses),readSellChecks(this.db,readAddresses,this.now()),
-      readPoolLiquidity(this.db,result.rows.filter(t=>t.graduated_block!=null).map(t=>hex(t.address))),
-      readCurveStates(this.db,result.rows.filter(t=>t.graduated_block==null && t.launchpad==='pons').map(t=>hex(t.address))),
-      readPoolMoney(this.db,result.rows.filter(t=>t.graduated_block==null && t.curve==null && t.launchpad!=='pons').map(t=>hex(t.address)),this.now()),
     ]);
-    for(const [coin,state] of curves)pools.set(coin,state.usd);
-    // A coin that never had a curve (it launched in a Uniswap pool) shows the ETH, WETH or USDG in its pools.
-    for(const [coin,usd] of money)pools.set(coin,usd);
     // A coin with only a few minutes of bars gets its series from its trades instead (the latest 96 priced ones), so a
     // launch shows a line from its second trade on.
     const thin=result.rows.filter(t=>!t.pricing_pending && (t.spark?.length ?? 0)<6).map(t=>t.address);
@@ -187,7 +183,7 @@ export class ReadStore {
       WHERE t.address=ANY($1::bytea[]) GROUP BY t.address,t.decimals`,[thin,now])).rows)trades.set(hex(row.coin),row.points.map(Number));
     const memberships = await this.blueChip?.members(result.rows.map(t=>hex(t.address)));
     return result.rows.map(t => {
-      const sell=sells.get(hex(t.address)),pool=pools.get(hex(t.address)),traded=trades.get(hex(t.address));
+      const sell=sells.get(hex(t.address)),traded=trades.get(hex(t.address));
       const spark=traded && traded.length>(t.spark?.length ?? 0) ? traded : t.spark;
       const card = t.data ? withSellCheck(CoinCardSchema.parse(t.data),sell) : null;
       const verdict = t.verdict ? liveRating(VerdictSchema.parse(t.verdict),prices.get(hex(t.address))) : null;
@@ -200,7 +196,7 @@ export class ReadStore {
       if(flow.meta?.unavailable)unavailable.push('flow');
       // Depth is structural in current engine cards, even when LP ownership is known. A graduated coin's row shows its
       // pool's value (both sides of the graduation position) instead, read from indexed events.
-      if (pool == null && (!card || card.meta?.liquidity?.unavailable || card.meta?.liquidity?.missing?.includes('depthUsd'))) unavailable.push('liquidity');
+      if (t.liquidity_unavailable ?? true) unavailable.push('liquidity');
       if (!card?.signal) unavailable.push('signal');
       if(t.buyers_pending)unavailable.push('buyers');
       if(t.pricing_pending)unavailable.push('volume','spark');
@@ -215,10 +211,10 @@ export class ReadStore {
         // A Pons coin is on its curve until its graduation is indexed. Its token row exists a moment before its curve
         // address does; reading that gap as graduated sent brand-new launches to Migrated and tagged them "Pons → pool".
         stage: t.graduated_block != null ? 'graduated' : card?.identity.stage ?? (t.curve || t.launchpad === 'pons' ? 'curve' : 'graduated'),
-        curvePct: curves.has(hex(t.address)) ? Math.round(curves.get(hex(t.address))!.curvePct*100)/100 : card?.identity.curvePct, priceUsd: t.pricing_pending ? 0 : t.price ?? 0, priceUnavailable: t.pricing_pending || t.price == null,
+        curvePct: t.curve_pct ?? card?.identity.curvePct, priceUsd: t.pricing_pending ? 0 : t.price ?? 0, priceUnavailable: t.pricing_pending || t.price == null,
         change1hPct: !t.pricing_pending && t.price != null && t.previous1h ? 100 * (t.price/t.previous1h-1) : 0,
         change24hPct: !t.pricing_pending && t.price != null && t.previous24h ? 100 * (t.price/t.previous24h-1) : undefined,
-        liquidityUsd: pool ?? (unavailable.includes('liquidity') ? 0 : card!.liquidity.depthUsd.pct2),
+        liquidityUsd: t.liquidity_usd ?? 0,
         marketCapUsd: !t.pricing_pending && supply != null && t.price != null ? t.price*supply : undefined,
         verdict: verdict?.level ?? 'pending', verdictPending: !verdict,
         lastChecked:verdict?.lastChecked, priceMove:verdict?.priceMove,

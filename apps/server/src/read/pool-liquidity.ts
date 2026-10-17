@@ -136,7 +136,7 @@ async function loadPositions(db: ChainDb, cache: Map<string, PoolPositions>, ids
  * trade's amounts include the pool fee, which moves the result by about half the fee. Zero when every position has
  * been taken out. Absent for a coin with no priced trade or no liquidity event on record.
  */
-export async function readPoolMoney(db: ChainDb, coins: Address[], now = Date.now()): Promise<Map<Address, number>> {
+export async function readPoolMoney(db: ChainDb, coins: Address[], now = Date.now(), fresh = false): Promise<Map<Address, number>> {
   const found = new Map<Address, number>();
   if (!coins.length) return found;
   const pools = (await db.sql.query<{ coin: Uint8Array; pool_id: Uint8Array; coin_first: boolean; coin_amount: number; quote_amount: number; usd: number }>(`
@@ -148,7 +148,7 @@ export async function readPoolMoney(db: ChainDb, coins: Address[], now = Date.no
     WHERE t.address=ANY($1::bytea[]) AND t.curve IS NULL AND t.graduated_block IS NULL`, [coins.map(binary)])).rows;
   if (!pools.length) return found;
   const handle = db.sql as object;
-  let cache = positionCache.get(handle);
+  let cache = fresh ? new Map<string, PoolPositions>() : positionCache.get(handle);
   if (!cache) { cache = new Map(); positionCache.set(handle, cache); }
   const held = cache, ids = [...new Set(pools.map(row => hex(row.pool_id)))], age = (id: string) => { const hit = held.get(id); return hit ? now - hit.at : Infinity; };
   const due = ids.filter(id => age(id) >= POSITIONS_STALE_MS), aging = ids.filter(id => age(id) >= POSITIONS_TTL_MS && age(id) < POSITIONS_STALE_MS);
