@@ -1,0 +1,83 @@
+{
+  "scope": "Full /v2/radar handler via Fastify inject, HEAD baseline and working tree alternate on the same in-memory fixture",
+  "limitation": "PGlite/PostgreSQL 18 on the local host, not PostgreSQL 16 at production load",
+  "warmupsPerVersion": 1,
+  "plans": [
+    {
+      "phase": "before",
+      "query": "selection",
+      "executionMs": 0.185,
+      "cardRowsRead": 0,
+      "largestSortRows": 0,
+      "indexes": [
+        "read_coins_volume_rank"
+      ]
+    },
+    {
+      "phase": "before",
+      "query": "details",
+      "executionMs": 297.168,
+      "cardRowsRead": 100,
+      "largestSortRows": 48100,
+      "indexes": [
+        "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+        "bars_1m_2026_11_minute_coin_volume_usd_idx",
+        "bars_1m_2026_12_minute_coin_volume_usd_idx",
+        "chain_blocks_pkey",
+        "coin_card_latest_pkey",
+        "engine_block_times_pkey",
+        "read_coin_liquidity_pkey",
+        "read_coins_pkey",
+        "tokens_pkey"
+      ]
+    },
+    {
+      "phase": "after",
+      "query": "selection",
+      "executionMs": 0.138,
+      "cardRowsRead": 0,
+      "largestSortRows": 0,
+      "indexes": [
+        "read_coins_volume_rank"
+      ]
+    },
+    {
+      "phase": "after",
+      "query": "details",
+      "executionMs": 129.757,
+      "cardRowsRead": 100,
+      "largestSortRows": 9700,
+      "indexes": [
+        "bars_1m_2026_10_coin_minute_close_volume_usd_idx",
+        "bars_1m_2026_11_minute_coin_volume_usd_idx",
+        "bars_1m_2026_12_minute_coin_volume_usd_idx",
+        "chain_blocks_pkey",
+        "coin_card_latest_pkey",
+        "engine_block_times_pkey",
+        "read_coin_liquidity_pkey",
+        "read_coins_pkey",
+        "tokens_pkey"
+      ]
+    }
+  ],
+  "baselineRevision": "4c0d7c8b8ed645aecd2b2fa7797f1de80d99bbd2",
+  "runtime": "PGlite",
+  "version": "PostgreSQL 18.3 (PGlite 0.5.8) on wasm32-unknown-emscripten, compiled by emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.74 (1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5), 32-bit",
+  "coins": 30000,
+  "bars": 144000,
+  "cardBytes": 11572,
+  "page": 100,
+  "samples": 25,
+  "before": {
+    "p50Ms": 222.24983299999985,
+    "p95Ms": 239.96700000000055
+  },
+  "after": {
+    "p50Ms": 95.80704200000037,
+    "p95Ms": 108.70879199999945
+  },
+  "statements": {
+    "before": 107,
+    "after": 107
+  }
+}

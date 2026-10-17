@@ -52,12 +52,21 @@ export class ReadStore {
   onRefreshed(listener:(coins:Address[])=>void) {this.listeners.add(listener);return ()=>{this.listeners.delete(listener);};}
   private modelTimer?:ReturnType<typeof setInterval>;
   private rankTimer?:ReturnType<typeof setInterval>;
+  private summaryRefresh?:Promise<void>;
+  private summaries=new Set<()=>Promise<void>>();
+  onSummaryRefresh(refresh:()=>Promise<void>) {this.summaries.add(refresh);}
+  refreshSummaries() {
+    return this.summaryRefresh ??= Promise.all([...this.summaries].map(refresh=>refresh())).then(()=>{}).finally(()=>{this.summaryRefresh=undefined;});
+  }
   /** Background refreshers: projections every 250 ms, the per-minute volume ranks every `rankMs` (production). */
   start(rankMs=5000) {
     this.modelTimer=setInterval(()=>{void this.refreshModels().catch(error=>reportError(error,{where:'read model refresh'}));},250);this.modelTimer.unref();
-    this.rankTimer=setInterval(()=>{void this.refreshRanks().catch(error=>reportError(error,{where:'read rank refresh'}));},rankMs);this.rankTimer.unref();
+    this.rankTimer=setInterval(()=>{
+      void this.refreshRanks().catch(error=>reportError(error,{where:'read rank refresh'}));
+      void this.refreshSummaries().catch(error=>reportError(error,{where:'read header refresh'}));
+    },rankMs);this.rankTimer.unref();
   }
-  async close() {clearInterval(this.modelTimer);clearInterval(this.rankTimer);await this.modelRefresh;await this.rankRefresh;}
+  async close() {clearInterval(this.modelTimer);clearInterval(this.rankTimer);await this.modelRefresh;await this.rankRefresh;await this.summaryRefresh;}
   /**
    * Requests read the current projection. With the background refresher running (every 250 ms) they never wait on its
    * backlog: during the 2026-10-09 scanner catch-up a radar request waited 40+ s behind refresh batches contending for
@@ -135,11 +144,11 @@ export class ReadStore {
     const bounded=address ? [address] : addresses;
     const filter=bounded ? 't.address=ANY($2::bytea[])' : 'r.coin IS NOT NULL';
     if(bounded)params.push(bounded.map(binary));
+    // Candidate ordering is owned by read_coins. Keep payloads out of the multi-use CTE and
+    // aggregate bars through indexed per-coin ranges, keeping sorts and intermediate rows bounded.
     const result = await this.db.sql.query<Stored>(`WITH selected AS (
-      SELECT t.*,c.data,l.usd AS liquidity_usd,l.unavailable AS liquidity_unavailable,l.curve_pct,r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,(r.coin IS NOT NULL) AS eligible FROM tokens t LEFT JOIN coin_card_latest c ON c.coin=t.address ${bounded ? 'AND c.coin=ANY($2::bytea[])' : ''}
+      SELECT t.*,l.usd AS liquidity_usd,l.unavailable AS liquidity_unavailable,l.curve_pct,r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,(r.coin IS NOT NULL) AS eligible FROM tokens t
       LEFT JOIN read_coins r ON r.coin=t.address ${bounded ? 'AND r.coin=ANY($2::bytea[])' : ''} LEFT JOIN read_coin_liquidity l ON l.coin=t.address ${bounded ? 'AND l.coin=ANY($2::bytea[])' : ''} WHERE ${filter}
-    ), recent AS MATERIALIZED (
-      SELECT b.* FROM selected t JOIN bars_1m b ON b.coin=t.address WHERE b.minute>=to_timestamp($1::double precision-86400)
     ), market AS (
       SELECT t.address AS coin,last.close AS price,hour.close AS previous1h,day.close AS previous24h,first.minute AS first_minute,
         coalesce(v.volume,0) AS volume,coalesce(v.trades,0) AS trades,coalesce(v.prior_volume,0) AS prior_volume
@@ -148,25 +157,30 @@ export class ReadStore {
       LEFT JOIN LATERAL (SELECT close FROM bars_1m WHERE coin=t.address AND minute<=to_timestamp($1::double precision-3600) ORDER BY minute DESC LIMIT 1) hour ON true
       LEFT JOIN LATERAL (SELECT close FROM bars_1m WHERE coin=t.address AND minute<=to_timestamp($1::double precision-86400) ORDER BY minute DESC LIMIT 1) day ON true
       LEFT JOIN LATERAL (SELECT minute FROM bars_1m WHERE coin=t.address ORDER BY minute LIMIT 1) first ON true
-      LEFT JOIN (SELECT coin,sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)) AS volume,
+      LEFT JOIN LATERAL (SELECT sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)) AS volume,
         sum(trades) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)) AS trades,
-        sum(volume_usd) FILTER(WHERE minute<to_timestamp($1::double precision-3600)) AS prior_volume FROM recent GROUP BY coin) v ON v.coin=t.address
-    ), span AS (
-      -- Each coin's first bar in the last eight hours: the series starts there, not at a fixed clock bucket.
-      SELECT b.coin,min(minute) AS first FROM recent b
-      WHERE ${bounded ? 'b.coin=ANY($2::bytea[]) AND' : ''} minute>=to_timestamp($1::double precision-28800) AND minute<=to_timestamp($1::double precision) GROUP BY b.coin
+        sum(volume_usd) FILTER(WHERE minute<to_timestamp($1::double precision-3600)) AS prior_volume FROM bars_1m
+        WHERE coin=t.address AND minute>=to_timestamp($1::double precision-86400)) v ON true
+    ), span AS MATERIALIZED (
+      -- One indexed first-minute probe and bucket-width calculation per page coin.
+      SELECT t.address AS coin,b.minute AS first,
+        60*greatest(1,ceil(extract(epoch FROM to_timestamp($1::double precision)-b.minute)/5760.0)) AS width
+      FROM selected t CROSS JOIN LATERAL (SELECT minute FROM bars_1m WHERE coin=t.address
+        AND minute>=to_timestamp($1::double precision-28800) AND minute<=to_timestamp($1::double precision)
+        ORDER BY minute LIMIT 1) b
     ), buckets AS (
-      -- Up to about 96 points per coin at the finest whole-minute width that covers its span: one-minute closes for a
-      -- coin under 96 minutes old, five-minute closes over the full eight hours. Ten-minute buckets gave a coin
-      -- under twenty minutes old fewer than two points, which draws nothing.
-      SELECT b.coin,floor(extract(epoch FROM b.minute-s.first)/(60*greatest(1,ceil(extract(epoch FROM to_timestamp($1::double precision)-s.first)/5760.0)))) AS bucket,
-        (array_agg(b.close ORDER BY b.minute DESC))[1] AS close
-      FROM recent b JOIN span s ON s.coin=b.coin
-      WHERE ${bounded ? 'b.coin=ANY($2::bytea[]) AND' : ''} b.minute>=to_timestamp($1::double precision-28800) AND b.minute<=to_timestamp($1::double precision) GROUP BY b.coin,bucket
+      -- Sort at most eight hours of one coin at a time, instead of spilling the entire page's bar window.
+      -- The last close of each bucket preserves the series and its original first-minute anchor.
+      SELECT s.coin,b.bucket,b.close FROM span s CROSS JOIN LATERAL (
+        SELECT DISTINCT ON (bucket) floor(extract(epoch FROM b.minute-s.first)/s.width) AS bucket,b.close
+        FROM bars_1m b WHERE b.coin=s.coin
+          AND b.minute>=to_timestamp($1::double precision-28800) AND b.minute<=to_timestamp($1::double precision)
+        ORDER BY bucket,b.minute DESC) b
     ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)
-    SELECT t.*,t.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,
+    SELECT t.*,c.data,c.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,
       b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,coalesce(b.trades,0) AS trades,coalesce(b.prior_volume,0) AS prior_volume,b.first_minute,s.points AS spark
-    FROM selected t LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
+    FROM selected t LEFT JOIN LATERAL (SELECT data FROM coin_card_latest WHERE coin=t.address OFFSET 0) c ON true
+    LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
     LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block`,params);
     const readAddresses=result.rows.map(t=>hex(t.address));
     const [prices,flows,sells]=await Promise.all([

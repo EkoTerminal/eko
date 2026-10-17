@@ -1,3 +1,4 @@
+import { MinuteSnapshot } from './minute-snapshot.js';
 import { binary, hex, guardRowsKnownAt, GuardReceiptStore, type ChainDb, type GuardStoredRow } from '@eko/db';
 import { keccak256, toHex } from 'viem';
 import {
@@ -30,7 +31,10 @@ const liveSource=(n:number)=>`WITH cut AS (SELECT least((SELECT min(number) FROM
     ELSE EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.ts>$${n}) OR t.first_block>=cut.block END
 )`;
 export class GuardReadStore {
-  constructor(readonly legacy: ReadStore) {}
+  constructor(readonly legacy: ReadStore) {
+    this.header=new MinuteSnapshot<GuardTotals>({status:'unavailable',activeVersion:GUARD_READ_ACTIVE_VERSION,failureCode:'missing'},()=>this.computeTotals(),()=>legacy.now());
+    legacy.onSummaryRefresh(()=>this.header.refresh());
+  }
   get db():ChainDb {return this.legacy.db;}
   private async manifest():Promise<GuardAvailabilityManifest|null> {
     const rows=(await this.db.sql.query<{data:unknown}>(`SELECT m.data FROM guard_availability m
@@ -125,20 +129,10 @@ export class GuardReadStore {
     const card=rows.length===1?await this.card(hex(rows[0].address)):null;
     return GuardScanResponseSchema.parse({version:2,status:!rows.length?'not_found':rows.length>1?'ambiguous':card?.verdict?'ready':'pending',cards:card?[card]:[],candidates});
   }
-  private cachedTotals?: { at: number; value: Promise<GuardTotals>; last?: GuardTotals };
-  /**
-   * Header counts change slowly. While the store refreshes in the background they come from a 30-second cache, and a
-   * stale entry is served while its replacement is computed, so no request waits on the counts after the first.
-   */
-  totals():Promise<GuardTotals> {
-    if(!this.legacy.background)return this.computeTotals();
-    const now=this.legacy.now(),cached=this.cachedTotals;
-    if(cached && now-cached.at<30_000)return cached.last ? Promise.resolve(cached.last) : cached.value;
-    const value=this.computeTotals(),next:{at:number;value:Promise<GuardTotals>;last?:GuardTotals}={at:now,value,last:cached?.last};
-    this.cachedTotals=next;
-    value.then(v=>{next.last=v;},()=>{ if(this.cachedTotals===next)this.cachedTotals=cached?.last ? {at:0,value:Promise.resolve(cached.last),last:cached.last} : undefined; });
-    return next.last ? Promise.resolve(next.last) : value;
-  }
+  private header:MinuteSnapshot<GuardTotals>;
+  totals():Promise<GuardTotals> {return Promise.resolve(this.header.value);}
+  /** Explicit host/test refresh, never called by a request. */
+  refreshTotals() {return this.header.refresh(true);}
   private async computeTotals():Promise<GuardTotals> {
     await this.legacy.currentModels();
     const cutoff=new Date(this.legacy.now()-7*86400000),day=Math.floor(this.legacy.now()/86400000)*86400;

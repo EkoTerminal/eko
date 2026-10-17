@@ -392,6 +392,8 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     if (cfg.LEGACY_API && (cfg.RUN_WORKER || cfg.LIVE_TRADING_ENABLED)) void chains.checkHealth().then(pushHealth);
   }
 
+  // Prime before accepting traffic. Timers own projection backlogs, so startup totals need not drain them.
+  await reads.store.refreshSummaries();
   return {
     app,
     ctx,

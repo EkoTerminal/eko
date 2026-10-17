@@ -1,3 +1,4 @@
+import { MinuteSnapshot } from './minute-snapshot.js';
 import { hex } from '@eko/db';
 import { sellRefusalTotals } from '@eko/engines';
 import { InputError } from '../http/v1/helpers.js';
@@ -19,7 +20,10 @@ export function rankRadar(rows: ReadRow[]): RadarRow[] {
   return rows.sort((a,b) => b.volume-a.volume || a.row.address.localeCompare(b.row.address)).map((r,i)=>({...r.row,rank:i+1}));
 }
 export class RadarService {
-  constructor(readonly store: ReadStore) {}
+  constructor(readonly store: ReadStore) {
+    this.header=new MinuteSnapshot({coins:0,clear:0,monitor:0,pending:0,danger:0,evaluatedToday:0,evaluatedByHour:Array(24).fill(0),dangerByHour:Array(24).fill(0)},()=>this.computeTotals(),()=>store.now());
+    store.onSummaryRefresh(()=>this.header.refresh());
+  }
   async order() {await this.store.currentRanks();return (await this.store.db.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE activity>$1 ORDER BY -volume,coin',[new Date(this.store.now()-7*86400000)])).rows.map(r=>hex(r.coin));}
   async list(cursor?:string,blueChipOnly=false) {
     await this.store.currentRanks();
@@ -28,7 +32,7 @@ export class RadarService {
     const cutoff=new Date(this.store.now()-7*86400000),params:unknown[]=[cutoff];
     // The cursor keeps its four fields (tier, volume, coin, rank); the tier no longer orders the page.
     if(key)params.push(-Number(key[1]),Buffer.from(String(key[2]).slice(2),'hex'));
-    const category=blueChipOnly && this.store.blueChip?.config.enabled ? `AND ${this.store.blueChip.predicate('read_coins.coin',params)}` : '';
+    const category=blueChipOnly && this.store.blueChip?.config.enabled ? `AND ${this.store.blueChip.predicate('read_coins.coin',params,'read_coins.tier')}` : '';
     const selected=await this.store.db.sql.query<{coin:Uint8Array;tier:number;volume:number}>(`SELECT coin,tier,volume FROM read_coins
       WHERE activity>$1 ${key ? 'AND (-volume,coin)>($2,$3)' : ''} ${category} ORDER BY -volume,coin LIMIT 101`,params);
     const page=selected.rows.slice(0,100);
@@ -38,24 +42,10 @@ export class RadarService {
     const last=page.at(-1);
     return {rows,cursor:selected.rows.length>100 && last ? encodeCursor('radar',[last.tier,last.volume,hex(last.coin),(key ? Number(key[3]) : 0)+page.length]) : null,delayedSec:0,totals};
   }
-  private cachedTotals?: { at: number; value: ReturnType<RadarService['computeTotals']> };
-  private refreshingTotals=false;
-  /**
-   * Header counts change slowly. With the background refresher running, a request gets the last computed counts at
-   * once; when they are 30 seconds old a recompute starts and replaces them when it is done, so no request waits for
-   * it (the request that found them expired did: 3.4 to 7.5 s on 2026-10-13, against 0.9 s for the next). Only the
-   * first request after start waits, and a failed recompute leaves the counts it had.
-   */
-  totals() {
-    if(!this.store.background)return this.computeTotals();
-    const now=this.store.now(),cached=this.cachedTotals;
-    if(cached && (now-cached.at<30_000 || this.refreshingTotals))return cached.value;
-    const value=this.computeTotals();
-    this.refreshingTotals=true;
-    if(!cached)this.cachedTotals={at:now,value};
-    value.then(()=>{ this.cachedTotals={at:now,value}; },()=>{ if(this.cachedTotals?.value===value)this.cachedTotals=undefined; }).finally(()=>{ this.refreshingTotals=false; });
-    return cached?.value ?? value;
-  }
+  private header:MinuteSnapshot<Awaited<ReturnType<RadarService['computeTotals']>>>;
+  totals() {return Promise.resolve(this.header.value);}
+  /** Explicit host/test refresh, never called by a request. */
+  refreshTotals() {return this.header.refresh(true);}
   private async computeTotals() {
     const result=await this.store.db.sql.query<{tier:number;n:string}>('SELECT tier,count(*) AS n FROM read_coins WHERE activity>$1 GROUP BY tier',[new Date(this.store.now()-7*86400000)]);
     const midnight=Math.floor(this.store.now()/86400000)*86400;

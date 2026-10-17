@@ -81,3 +81,42 @@ it('refreshes card fallback depth and availability when only card metadata chang
   await db.sql.query("UPDATE coin_card_latest SET data=jsonb_set(data,'{meta,liquidity,missing}','[\"depthUsd\"]') WHERE coin=$1",[card.coin]);
   row=(await store.rows(coin))[0].row;expect(row.liquidityUsd).toBe(0);expect(row.unavailable).toContain('liquidity');
 });
+
+it('matches several curve progress levels and preserves absence without a priced trade',async()=>{
+  const db=built.ctx.dbh.chain,store=built.ctx.reads.store;
+  const levels=[0,10,50,99,100];
+  const addresses=Array.from({length:6},(_,i)=>sampleAddress(810+i));
+  for(const [i,coin] of addresses.entries()) {
+    await db.insert('tokens',{address:binary(coin),deployer:binary(sampleAddress(900)),name:'Curve fixture',symbol:'CURVE',first_block:1,block:1,total_supply:'1000',decimals:0,launchpad:'pons',curve:binary(sampleAddress(910+i))});
+    const reserve=(levels[i] ?? 50)/10,quote=(reserve+4)**2/40;
+    const trade={pool_id:pool(810+i),block:20,log_index:0,tx_hash:pool(910+i),amount_coin:'100',amount_quote:String(quote),usd:i===5?null:quote*2,ts:new Date(now-1000).toISOString()};
+    await db.sql.query('INSERT INTO coin_lifetime(coin,data) VALUES($1,$2)',[binary(coin),JSON.stringify({curve:{launchThreshold:'10'},tail:[trade],...(i===5?{}:{lastPositivePriced:trade})})]);
+  }
+  const expected=await readCurveStates(db,addresses),rows=await store.rows(undefined,addresses);
+  for(const [i,coin] of addresses.entries()) {
+    const row=rows.find(r=>r.row.address===coin)!.row;
+    if(i===5) {expect(expected.has(coin)).toBe(false);expect(row.curvePct).toBeUndefined();expect(row.unavailable).toContain('liquidity');}
+    else {expect(row.curvePct).toBe(levels[i]);expect(row.liquidityUsd).toBe(expected.get(coin)!.usd);expect(row.unavailable).not.toContain('liquidity');}
+  }
+  // A retained launch threshold repair alone must invalidate both reserve money and progress.
+  await db.sql.query("UPDATE coin_lifetime SET data=jsonb_set(data,'{curve,launchThreshold}','\"20\"') WHERE coin=$1",[binary(addresses[2])]);
+  const changed=(await readCurveStates(db,[addresses[2]])).get(addresses[2])!;
+  const row=(await store.rows(addresses[2]))[0].row;
+  expect(row.curvePct).toBe(Math.round(changed.curvePct*100)/100);expect(row.liquidityUsd).toBe(changed.usd);
+});
+
+it('invalidates graduated references on pool deletion and all projections on source truncation',async()=>{
+  const db=built.ctx.dbh.chain,store=built.ctx.reads.store,coin=sampleAddress(850),id=pool(850);
+  await db.insert('tokens',{address:binary(coin),deployer:binary(sampleAddress(900)),name:'Graduated fixture',symbol:'GRAD',first_block:1,block:1,launchpad:'pons',graduated_block:10,graduated_pool:binary(id)});
+  // A graduated reference need not be either currency after an indexed pool correction.
+  await db.insert('pools',{id:binary(id),currency0:binary(sampleAddress(851)),currency1:binary(sampleAddress(852)),venue:'uniswap_v4',fee:3000,tick_spacing:60,created_block:1,block:1});
+  await store.refreshModels();
+  await db.sql.query('DELETE FROM pools WHERE id=$1',[binary(id)]);
+  expect((await db.sql.query('SELECT coin FROM read_dirty WHERE coin=$1',[binary(coin)])).rows).toHaveLength(1);
+  await store.refreshModels();
+  await db.sql.query('TRUNCATE pons_events');
+  expect((await db.sql.query('SELECT coin FROM read_dirty WHERE coin=$1',[binary(coin)])).rows).toHaveLength(1);
+  await store.refreshModels();
+  await db.sql.query('TRUNCATE coin_card_latest');
+  expect((await db.sql.query('SELECT coin FROM read_dirty WHERE coin=$1',[binary(coin)])).rows).toHaveLength(1);
+});

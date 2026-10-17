@@ -133,6 +133,7 @@ describe('035 partial cards and captured read boundary',()=>{
   it('uses whole-source totals across pages and excludes the next UTC day in the actual SQL path',async()=>{
     await db().sql.query(`INSERT INTO tokens(address,first_block,block,name,symbol,launchpad)
       SELECT decode(lpad(to_hex(n),40,'0'),'hex'),$1,$1,'Partial token','PAGE','other' FROM generate_series(70000,70101) n`,[cursor.blockNumber]);
+    await built.ctx.reads.guard.refreshTotals();
     const first=GuardListResponseSchema.parse((await built.app.inject('/v2/coins')).json());
     expect(first.rows).toHaveLength(100);expect(first.cursor).not.toBeNull();
     expect(first.totals.status).toBe('observed');if(first.totals.status!=='observed')throw new Error('Missing source totals');
@@ -143,6 +144,7 @@ describe('035 partial cards and captured read boundary',()=>{
     // The existing engine run is earlier than the next day. Move the request clock
     // to its preceding UTC day: the upper boundary must exclude every future run.
     built.ctx.reads.store.now=()=>(day-1)*1000;
+    await built.ctx.reads.guard.refreshTotals();
     const totals=await built.ctx.reads.guard.totals();expect(totals).toMatchObject({evaluatedToday:0});
     built.ctx.reads.store.now=original;
   });

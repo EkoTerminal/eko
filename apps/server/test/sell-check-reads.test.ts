@@ -20,6 +20,7 @@ const coin = () => card.identity.address;
 const check = (status: SellCheckResult['status'], exit100: number | null, exit1k: number | null): SellCheckResult => ({
   coin: coin(), block: card.verdict.asOfBlock, status, route: { venue: 'pons_curve', coin: coin(), curve: sampleAddress(77) }, ethUsd: 2000, probes: [], requests: 2, exit100, exit1k });
 const radarRow = async () => {
+  await built.ctx.reads.store.currentModels();await built.ctx.reads.radar.refreshTotals();
   const body = RadarResponseSchema.parse((await built.app.inject('/v1/radar')).json());
   return { row: body.rows.find(r => r.address === coin())!, totals: body.totals! };
 };

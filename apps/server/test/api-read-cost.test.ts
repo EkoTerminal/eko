@@ -40,16 +40,19 @@ it('matches whole-history market values, including sparse prices, first minute, 
   let sql='',params:unknown[]=[];
   const store=new ReadStore(traced(db,(text,values)=>{if(text.startsWith('WITH selected AS')){sql=text;params=values;}}),()=>now);
   await store.rows(undefined,[coin,sparse]);
-  const begin=sql.indexOf('    ), market AS ('),end=sql.indexOf('    ), span AS (');
+  const begin=sql.indexOf('    ), market AS ('),end=sql.indexOf('    ), span AS ');
   const legacy=sql.slice(0,begin)+legacyMarket+sql.slice(end);
   expect((await db.sql.query(sql,params)).rows).toEqual((await db.sql.query(legacy,params)).rows);
   const explain=async(text:string)=>(await db.sql.query<{ 'QUERY PLAN':{ 'Execution Time':number;Plan:unknown }[] }>('EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) '+text,params)).rows[0]['QUERY PLAN'][0];
   const before=await explain(legacy),after=await explain(sql);
   console.info('market benchmark',JSON.stringify({historyBars:40005,windowBars:1444,beforeMs:before['Execution Time'],afterMs:after['Execution Time']}));
-  // Inspect the actual materialized window rather than asserting a host-dependent wall-clock threshold.
+  // Each market scan reads only the bounded day for one selected coin. Spark sorts are per coin.
   const nodes=(node:unknown):Record<string,unknown>[]=>{const n=node as Record<string,unknown>;return [n,...((n.Plans ?? []) as unknown[]).flatMap(nodes)];};
-  const window=nodes(after.Plan).find(n=>n['Subplan Name']==='CTE recent');
-  expect(window).toBeDefined();expect(Number(window!['Actual Rows'])).toBeLessThanOrEqual(1445);
+  const scans=nodes(after.Plan).filter(n=>String(n['Relation Name']).startsWith('bars_1m_'));
+  expect(scans.length).toBeGreaterThan(0);
+  expect(scans.every(n=>Number(n['Actual Rows'])<=1445)).toBe(true);
+  const sorts=nodes(after.Plan).filter(n=>n['Node Type']==='Sort');
+  expect(sorts.every(n=>Number(n['Actual Rows'])<=481)).toBe(true);
 });
 it('matches complete hourly rank recomputation on minute rolls, corrections, gaps and a backwards clock',async()=>{
   const db=await fixture();let clock=now;

@@ -10,12 +10,12 @@ export class BlueChipReader {
   constructor(readonly db: ChainDb, readonly config: BlueChipConfig, readonly now: () => number = Date.now) {}
   get criteria(): BlueChipCriteria { const { enabled: _enabled, ...criteria } = this.config; return criteria; }
   /** Parameters are appended so callers retain their existing cursor bindings and ordering. */
-  predicate(coin: string, params: unknown[]) {
+  predicate(coin: string, params: unknown[], tier?: string) {
     const start = params.length;
     params.push(new Date(this.now()-this.config.minAgeDays*86400000),this.config.minLiquidityUsd,this.config.minHolders);
     return `(EXISTS(SELECT 1 FROM coin_listings l WHERE l.coin=${coin} AND l.source='coingecko' AND l.active) OR
       EXISTS(SELECT 1 FROM read_blue_chip b JOIN coin_card_latest c ON c.coin=b.coin AND c.as_of_block=b.as_of_block
-      WHERE b.coin=${coin} AND c.data->'verdict'->>'level'='clear' AND b.real_pool
+      WHERE b.coin=${coin} AND ${tier ? `${tier}=0` : `c.data->'verdict'->>'level'='clear'`} AND b.real_pool
       AND NOT EXISTS(SELECT 1 FROM read_blue_chip_danger d WHERE d.coin=b.coin)
       AND b.created_at<=$${start+1} AND b.liquidity_usd>=$${start+2} AND b.holders>=$${start+3}))`;
   }

@@ -103,6 +103,7 @@ describe('v1 indexed read routes',()=>{
     await db.sql.query('UPDATE tokens SET graduated_block=$2 WHERE address=$1',[binary(sampleAddress(1001)),card.verdict.asOfBlock+10]);
     await db.sql.query('UPDATE tokens SET graduated_block=$2 WHERE address=$1',[binary(sampleAddress(1005)),card.verdict.asOfBlock+20]);
     expect((await built.app.inject('/v1/pairs?stage=migrated')).json().rows.map((r:{address:string})=>r.address)).toEqual([sampleAddress(1005),sampleAddress(1001)]);
+    await built.ctx.reads.store.currentModels();await built.ctx.reads.radar.refreshTotals();
     const global=(await built.app.inject('/v1/radar')).json().totals;expect(global.coins).toBe(105);expect(global.danger).toBe(26);expect(global.pending).toBe(27);
     // A run counts when its card was written (created_at, 0191), not at its block time: the fixture's run is for a block
     // two hours ago but was written now, so it is "scanned today" and lands in the newest of the 24 hourly buckets.
@@ -112,6 +113,7 @@ describe('v1 indexed read routes',()=>{
     expect(global.evaluatedByHour.indexOf(1)).toBe(23);expect(global.evaluatedByHour.reduce((a:number,b:number)=>a+b,0)).toBe(1);
     // Rows written before 0191 have no created_at and count by their block time: two hours ago is the 22nd bucket.
     await db.sql.query('UPDATE engine_runs SET created_at=NULL');
+    await built.ctx.reads.radar.refreshTotals();
     const legacy=(await built.app.inject('/v1/radar')).json().totals;
     expect(legacy.evaluatedToday).toBe(now%86400000>=7200000 ? 1 : 0);expect(legacy.evaluatedByHour.indexOf(1)).toBe(21);
     const first=envelope(RadarRowSchema).parse((await built.app.inject('/v1/radar')).json());expect(first.rows).toHaveLength(100);expect(first.rows[0].address).toBe(sampleAddress(1004));expect(first.rows[1].address).toBe(sampleAddress(1000));expect(first.cursor).not.toBeNull();
