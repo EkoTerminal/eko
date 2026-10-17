@@ -6,7 +6,8 @@ import { loadRegistry, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } fr
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';
 import { decodeEventLog, type Hex } from 'viem';
-import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, staleRatings, tradedSinceCard, unscannedCoins, type LivePlan } from '../src/worker.js';
+import { CLEAR_RULES_AT, EngineWorker, retryAfterBlocks, reserveFirstScans, FIRST_SCAN_SLOTS, staleRatings, tradedSinceCard, unscannedCoins, type LivePlan } from '../src/worker.js';
+import { logThroughput } from '../src/throughput.js';
 import { ReplayCache } from '../src/replay-cache.js';
 import { assembleCard, cardHash, evaluatedPlaybooks } from '../src/card.js';
 import { OutcomeDifferences, ratingOutcome } from '../src/rating-outcome.js';
@@ -34,6 +35,33 @@ async function latest(db:ChainDb,c=coin):Promise<CoinCard>{const r=(await db.sql
 const match=(card:CoinCard,id:PlaybookId)=>card.playbooks.find(m=>m.id===id);
 async function count(db:ChainDb,table:string){return Number((await db.sql.query<{n:string}>(`SELECT count(*) AS n FROM ${table}`)).rows[0].n);}
 async function setup(pons=true){const db=await database();await block(db,1);await token(db,coin,1,pons);return db;}
+
+describe('reserved scheduling',()=>{
+ it('reserves half of every ordinary cycle for pending launches despite a large rated queue and urgent crashes',()=>{
+  const pending=Array.from({length:200},(_,i)=>address(1000+i));
+  const routine=Array.from({length:200},(_,i)=>({coin:address(2000+i),card:`rated-${i}`}));
+  const moved=[routine[150],routine[180]];
+  const ordinary=reserveFirstScans(pending,routine,moved);
+  const work=[...moved,...ordinary];
+  expect(work.slice(0,2)).toEqual(moved);
+  expect(ordinary.slice(0,FIRST_SCAN_SLOTS)).toEqual(pending.slice(0,FIRST_SCAN_SLOTS).map(coin=>({coin})));
+  expect(ordinary).toHaveLength(FIRST_SCAN_SLOTS*2);
+  expect(ordinary.filter(entry=>!entry.card)).toHaveLength(FIRST_SCAN_SLOTS);
+  expect(new Set(work.map(entry=>entry.coin)).size).toBe(work.length);
+  expect(reserveFirstScans([],routine,[])).toHaveLength(FIRST_SCAN_SLOTS*2);
+ });
+ it('selects oldest launches globally, including siblings, despite inverse activity order and failure backoff',async()=>{
+  const db=await database(),pending=Array.from({length:40},(_,i)=>address(3000+i));
+  for(let i=0;i<pending.length;i++) {
+   await block(db,i+1,i+1);await token(db,pending[i],i+1,false,'Sample token',address(4000+Math.floor(i/2)));
+  }
+  await db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[pending.map(binary),epoch+60]);
+  for(let i=0;i<pending.length;i++)await db.sql.query('UPDATE read_coins SET activity=to_timestamp($2) WHERE coin=$1',[binary(pending[i]),epoch+100+i]);
+  await db.sql.query("INSERT INTO engine_card_failures VALUES($1,10,40,'missing_launch_identity')",[binary(pending[0])]);
+  expect(await unscannedCoins(db,epoch-1,40,FIRST_SCAN_SLOTS)).toEqual(pending.slice(1,FIRST_SCAN_SLOTS+1));
+  expect(await unscannedCoins(db,epoch-1,40+retryAfterBlocks(10),2)).toEqual(pending.slice(0,2));
+ });
+});
 
 describe('engines: fixture-backed and synthetic indexed rows',()=>{
  it('emits queue completion for durable live output, including incomplete output, but excludes replay',async()=>{
@@ -121,6 +149,22 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   const worker=new EngineWorker(db);await worker.processBlock(1);
   expect((await db.sql.query('SELECT attempts,last_block,reason FROM engine_card_failures WHERE coin=$1',[binary(coin)])).rows[0]).toMatchObject({attempts:1,last_block:1,reason:'missing_launch_identity'});
   expect(worker.telemetry().cardFailures).toBe(1);expect(await count(db,'coin_cards')).toBe(0);
+  await worker.processBlock(1,true); // Source failures remain observable even for an explicit retry/replay.
+  await db.sql.query("UPDATE tokens SET name='Sample token'");
+  const live=new EngineWorker(db,{now:()=>epoch+10});await live.poll();
+  // Changed evidence at the same block causes a fresh evaluation, while engine_runs still holds one row.
+  await exemption(db,coin,actor,1);await live.poll();
+  const counters=(await db.sql.query('SELECT outcome,first_rating,sum(count)::text AS count FROM engine_evaluation_counts GROUP BY outcome,first_rating')).rows;
+  expect(counters).toEqual(expect.arrayContaining([
+   {outcome:'failed',first_rating:true,count:'1'},
+   {outcome:'retry_failed',first_rating:true,count:'1'},
+   {outcome:'completed',first_rating:true,count:'1'},
+   {outcome:'completed',first_rating:false,count:'1'},
+  ]));
+  expect(await count(db,'engine_runs')).toBe(1);
+  const logged=vi.spyOn(console,'log').mockImplementation(()=>{});
+  try {await logThroughput(db);expect(logged).toHaveBeenCalledTimes(1);expect(JSON.parse(logged.mock.calls[0][0])).toMatchObject({event:'engine_throughput',intervalSec:60,pending:[],ratedPending:expect.any(Array)});}
+  finally {logged.mockRestore();}
  });
  it('retries a coin without loadable sources after a growing delay, not on every poll or restart',async()=>{
   const db=await setup(false);await db.sql.query('UPDATE tokens SET name=NULL');await transfer(db,1,actor,100);
@@ -409,12 +453,12 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
    const sibling=address(36);await token(db,sibling,2,true,'Sibling token',deployer);
    await transfer(db,2,address(136),100000,sibling);await transfer(db,2,actor,1000,sibling,address(136));await swap(db,2,1,100,10,actor,sibling,60);
    await db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[[binary(coin),binary(sibling)],epoch+120]);
-   expect(await unscannedCoins(db,epoch-86400,2,10)).toEqual([coin]);
+   expect(await unscannedCoins(db,epoch-86400,2,10)).toEqual([coin,sibling]);
    const scans:number[][]=[];
    const worker=new EngineWorker(db,{client:client(),now:()=>epoch+120,rerate:true,rerateIdleMs:10,onRerate:(n,first)=>scans.push([n,first])});
-   worker.poll=async()=>{if(scans.length>=2)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
+   worker.poll=async()=>{if(scans.length>=1)worker.stop();await new Promise(resolve=>setTimeout(resolve,10));return 0;};
    await worker.run();
-   expect(scans.slice(0,2)).toEqual([[1,1],[1,1]]);
+   expect(scans).toEqual([[2,2]]);
    for(const c of [coin,sibling]){expect((await latest(db,c)).verdict.asOfBlock).toBe(2);expect((await latest(db,c)).verdict.lastChecked?.block).toBe(2);}
    expect(await unscannedCoins(db,epoch-86400,2,10)).toEqual([]);
   });
@@ -545,18 +589,19 @@ describe('engines: fixture-backed and synthetic indexed rows',()=>{
   expect(await priceMovedCoins(db,16)).toHaveLength(1);await worker.processBlock(6);
   expect(await count(db,'verdicts')).toBe(recorded[0]+1);
  });
- it('runs a price-move re-check ahead of a routine traded re-check in the live queue',async()=>{
+ it('runs a price-move re-check ahead of first scans and a routine traded re-check in the live queue',async()=>{
   const db=await setup(false),other=address(6),otherPool=address(7);await token(db,other,1,false);
   await pair(db,150001);await pair(db,150001,other,1,otherPool);
   await swap(db,1,1,100,100);await swap(db,1,1,100,100,actor,other,1,'uniswap_v3',1,otherPool);
   await new EngineWorker(db,{now:()=>epoch+10}).processBlock(1);
-  await block(db,2,601);await swap(db,2,1,100,100,actor,other,601,'uniswap_v3',1,otherPool);
+  await block(db,2,601);const pending=address(8);await token(db,pending,2,false,'Sample token',address(9));
+  await swap(db,2,1,100,100,actor,other,601,'uniswap_v3',1,otherPool);
   await swap(db,2,1,100,50,actor,coin,601);
-  await db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[[binary(coin),binary(other)],epoch+2000]);
+  await db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[[binary(coin),binary(other),binary(pending)],epoch+2000]);
   const order:string[]=[],off=await db.bus.subscribe(m=>{if(m.topic==='card_updated')order.push(String(m.ids.coin));});
   const worker=new EngineWorker(db,{now:()=>epoch+2000,rerate:true,rerateIdleMs:10,onRerate:()=>worker.stop()});
   worker.poll=async()=>{await new Promise(resolve=>setTimeout(resolve,10));return 0;};
-  await worker.run();await off();expect(order.slice(0,2)).toEqual([coin,other]);
+  await worker.run();await off();expect(order.slice(0,3)).toEqual([coin,pending,other]);
   expect((await latest(db)).verdict.priceMove?.downSinceRatedPct).toBe(50);
  });
  it('versioning is idempotent, emits superseded events, and hashes ignore only stamps',async()=>{
@@ -843,7 +888,7 @@ describe('engines: live catch-up when the worker lags behind head',()=>{
   const quiet=new EngineWorker(lagging,{now:()=>epoch+9000,liveBacklogSec:900,onLivePlanned:p=>planned.push(p)});
   expect(await quiet.poll()).toBe(2);expect((await latest(lagging)).verdict.lastChecked?.block).toBe(42);expect((await latest(lagging,address(30))).verdict.asOfBlock).toBe(42);
  },60000);
- it('runs first scans before refreshes of scanned coins, newest launch first across deployers',async()=>{
+ it('runs first scans before refreshes of scanned coins, oldest launch first across deployers',async()=>{
   const db=await database();await traded(db,coin,1,1,10,60);
   const worker=new EngineWorker(db,{now:()=>epoch+3600});expect(await worker.poll()).toBeGreaterThan(0);
   for(let i=10;i<20;i++)await swap(db,1+i,i%2?-1:1,100,10,actor,coin,1+i*60,'pons_curve',i%2?1:1.2);
@@ -853,7 +898,7 @@ describe('engines: live catch-up when the worker lags behind head',()=>{
   const next=new EngineWorker(db,{now:()=>epoch+3600,liveBacklogSec:604800,onLivePlanned:p=>{plan=p;}});
   expect(await next.poll()).toBeGreaterThan(2);expect(plan).toMatchObject({firstScans:2,coalescedCheckpoints:0});
   const firsts=order.filter((c,i)=>order.indexOf(c)===i);
-  expect(firsts.slice(0,2)).toEqual([newer,older]);if(firsts.includes(coin))expect(firsts.indexOf(coin)).toBe(2);
+  expect(firsts.slice(0,2)).toEqual([older,newer]);if(firsts.includes(coin))expect(firsts.indexOf(coin)).toBe(2);
  },60000);
  it('yields a long poll to a launch that arrived during it and resumes the unfinished coins next poll',async()=>{
   const db=await database();await traded(db,coin,1,1,10,60);

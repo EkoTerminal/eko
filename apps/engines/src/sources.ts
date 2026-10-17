@@ -1,3 +1,5 @@
+import { isRpcUnavailable, rpcStopReason } from '@eko/chain';
+import { countEvaluations, recordFirstPlans } from './throughput.js';
 import { incrementalSwaps } from './swap-reader.js';
 import { gapFromTotals, attributionGap } from './attribution-coverage.js';
 import { loadReferenceInputs } from './reference-simulation.js';
@@ -141,12 +143,12 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
     else if(savedLifetime.liquidity && (savedLifetime.liquidityThrough==null || savedLifetime.liquidityThrough>block)
       || savedLifetime.curve.launchSeen && (savedLifetime.ponsThrough==null || savedLifetime.ponsThrough>block))savedLifetime.legacyIncomplete=true;
   }
-  if(prune && (block<=prune.watermark && !checkpoint || !(savedLifetime && retrospective) && !(await revivedBy(db,coin,prune,block))))return unavailable(db,coin,block,'history_pruned');
+  if(prune && (block<=prune.watermark && !checkpoint || !(savedLifetime && retrospective) && !(await revivedBy(db,coin,prune,block))))return unavailable(db,coin,block,'history_pruned',retrospective);
   const token = cache ? cache.tokens.get(coin) : (await db.sql.query<TokenRow>('SELECT * FROM tokens WHERE address=$1 AND first_block<=$2', [binary(coin), block])).rows[0];
-  if(token && Number(token.first_block)>block)return unavailable(db,coin,block,'launch_after_checkpoint');
-  if (!token?.deployer || token.name == null || token.symbol == null) return unavailable(db,coin,block,'missing_launch_identity');
+  if(token && Number(token.first_block)>block)return unavailable(db,coin,block,'launch_after_checkpoint',retrospective);
+  if (!token?.deployer || token.name == null || token.symbol == null) return unavailable(db,coin,block,'missing_launch_identity',retrospective);
   const [now,created]=await Promise.all([resolveClock(db,block,undefined,clock),resolveClock(db,Number(token.first_block),undefined,clock)]);
-  if (!now || !created) return unavailable(db,coin,block,'missing_block_clock');
+  if (!now || !created) return unavailable(db,coin,block,'missing_block_clock',retrospective);
   const asOfSec = seconds(now.ts), createdAtSec = seconds(created.ts);
   const cachedRows=cache ? await cache.coinRows(coin) : undefined;
   const swaps = cachedRows ? cachedRows.swaps : await incrementalSwaps(db,coin,block);
@@ -520,9 +522,11 @@ async function readSources(db: ChainDb, coin: Address, block: number, client?: P
   return s;
 }
 
-async function unavailable(db:ChainDb,coin:Address,block:number,reason:string):Promise<null> {
-  await db.sql.query(`INSERT INTO engine_card_failures(coin,attempts,last_block,reason) VALUES($1,1,$2,$3)
-    ON CONFLICT(coin) DO UPDATE SET attempts=engine_card_failures.attempts+1,last_block=excluded.last_block,reason=excluded.reason`,[binary(coin),block,reason]);
+async function unavailable(db:ChainDb,coin:Address,block:number,reason:string,retrospective=false):Promise<null> {
+  const failure=(await db.sql.query<{attempts:string}>(`INSERT INTO engine_card_failures(coin,attempts,last_block,reason) VALUES($1,1,$2,$3)
+    ON CONFLICT(coin) DO UPDATE SET attempts=engine_card_failures.attempts+1,last_block=excluded.last_block,reason=excluded.reason RETURNING attempts::text`,[binary(coin),block,reason])).rows[0];
+  const firstRating=!(await db.sql.query('SELECT 1 FROM coin_card_latest WHERE coin=$1',[binary(coin)])).rows.length;
+  await countEvaluations(db,[{path:retrospective?'replay':'sources',outcome:Number(failure.attempts)>1?'retry_failed':'failed',reason,firstRating,count:1}]);
   return null;
 }
 /** One hourly priced-swap read per (block, time) per poll, instead of one per evaluated coin. */
@@ -535,12 +539,20 @@ function sharedRanks(db:ChainDb,memo:SourceMemo,block:number,sec:number) {
 }
 export async function loadSources(db:ChainDb,coin:Address,block:number,client?:PonsProfileClient,clock?:ClockCache,cache?:ReplayCache,retrospective=false,memo?:SourceMemo) {
   try {
+    if(!retrospective) {
+      await recordFirstPlans(db,[coin],block,'sources');
+      await db.sql.query(`UPDATE engine_first_scan_plans SET started_at=clock_timestamp(),sources_ready_at=NULL
+        WHERE coin=$1 AND NOT EXISTS(SELECT 1 FROM coin_card_latest WHERE coin=$1)`,[binary(coin)]);
+    }
     const revision=async()=> (await db.sql.query<{revision:string}>('SELECT revision::text FROM coin_lifetime WHERE coin=$1',[binary(coin)])).rows[0]?.revision ?? 'absent';
     for(let attempt=0;attempt<2;attempt++) {
       const before=await revision(),sources=await readSources(db,coin,block,client,clock,cache,retrospective,memo);
-      if(before===await revision())return sources;
+      if(before===await revision()) {
+        if(sources && !retrospective)await db.sql.query('UPDATE engine_first_scan_plans SET sources_ready_at=clock_timestamp() WHERE coin=$1 AND started_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM coin_card_latest WHERE coin=$1)',[binary(coin)]);
+        return sources;
+      }
     }
-    return unavailable(db,coin,block,'retention_in_progress');
+    return unavailable(db,coin,block,'retention_in_progress',retrospective);
   }
-  catch(error){await unavailable(db,coin,block,'source_load_failed');throw error;}
+  catch(error){await unavailable(db,coin,block,rpcStopReason(error) ?? (isRpcUnavailable(error)?'rpc_unavailable':'source_load_failed'),retrospective);throw error;}
 }
