@@ -1,3 +1,4 @@
+import type { loopHealth } from '../../loop-health.js';
 import type { RpcMeter } from '@eko/chain';
 import type { PublicClient } from 'viem';
 import type { FastifyInstance } from 'fastify';
@@ -35,7 +36,7 @@ import { oauthConsentRoutes, type OAuthConsentServices } from './oauth.js';
  * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
  * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
  */
-export async function registerV1(app: FastifyInstance, cfg: Config, flags: FlagService, rpcUsage: () => ReturnType<RpcMeter['usage']>, reads?: ReadServices, account?: AccountServices, rpc?: PublicClient, agents?: AgentServices, journal?: JournalServices, receipts?: ReceiptApiStore, watches?: WatchServices, telemetry?: LatencyStore, exec?: ExecutionService, oauth?: OAuthConsentServices, telegram?: TelegramServices) {
+export async function registerV1(app: FastifyInstance, cfg: Config, flags: FlagService, rpcUsage: () => ReturnType<RpcMeter['usage']>, reads?: ReadServices, account?: AccountServices, rpc?: PublicClient, agents?: AgentServices, journal?: JournalServices, receipts?: ReceiptApiStore, watches?: WatchServices, telemetry?: LatencyStore, exec?: ExecutionService, oauth?: OAuthConsentServices, telegram?: TelegramServices, health?: () => ReturnType<typeof loopHealth>) {
   const access = account ? TradeAccessService.fromDb(cfg, flags, account.db) : new TradeAccessService(cfg, flags, async () => undefined);
   await app.register(async (v1) => {
     v1.setNotFoundHandler((_req, reply) => notFound(reply));
@@ -62,7 +63,7 @@ export async function registerV1(app: FastifyInstance, cfg: Config, flags: FlagS
     if (account && exec) await v1.register(async area => tradeRoutes(area, account, exec));
     if (account) await v1.register(async area => tradeAdminRoutes(area, cfg, account));
     if (rpc) await v1.register(async area => rpcRoutes(area, rpc));
-    await v1.register(async area => healthRoutes(area, rpcUsage, cfg));
+    await v1.register(async area => healthRoutes(area, rpcUsage, cfg, () => reads ? reads.store.db.sql.query('SELECT 1') : Promise.reject(new Error('Database unavailable')), health));
     await v1.register(async area => packRoutes(area, cfg.MCP_PUBLIC_URL));
     await v1.register(async (area) => configRoutes(area, cfg, flags, access, account));
     await v1.register(async (area) => demoRoutes(area, cfg));

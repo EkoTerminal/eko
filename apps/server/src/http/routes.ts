@@ -94,14 +94,16 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
 
   /** Readiness: market data backfilled and (if this process runs it) the worker is running. */
   app.get('/api/health/ready', async (_req, reply) => {
-    const ready = ctx.market.ready;
+    const ready = ctx.market.ready && ctx.loopHealth().ok;
     return reply.status(ready ? 200 : 503).send({ ready, marketData: ctx.market.health().status });
   });
 
-  app.get('/api/health', async () => {
+  app.get('/api/health', async (_req, reply) => {
     const h = ctx.health();
-    const ok = h.marketData.status === 'live';
-    return { ok, service: 'eko', version: VERSION, ...h, uptimeSec: Math.round(process.uptime()), db: ctx.dbh.driver };
+    const status = ctx.loopHealth();
+    const ok = h.marketData.status === 'live' && status.ok;
+    reply.code(ok ? 200 : 503);
+    return { loops: status.loops, ok, service: 'eko', version: VERSION, ...h, uptimeSec: Math.round(process.uptime()), db: ctx.dbh.driver };
   });
 
   app.get('/api/metrics', async () => ({ metrics: (await import('../obs/metrics.js')).metrics.summary(), counters: (await import('../obs/metrics.js')).metrics.counters(), at: Date.now() }));

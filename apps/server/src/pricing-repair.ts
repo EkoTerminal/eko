@@ -1,3 +1,4 @@
+import { LoopHeartbeat } from './loop-health.js';
 import { parseAbi, type PublicClient } from 'viem';
 import { binary, hex, refreshBars, type ChainDb } from '@eko/db';
 import { isTransientRpcUnavailable, loadRegistry, rpcStopReason } from '@eko/chain';
@@ -212,6 +213,7 @@ const HOUR = 3_600_000;
  * priced cost one indexed range read each.
  */
 export class PricingRepairWorker {
+  readonly heartbeat: LoopHeartbeat;
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
   private cursor?: number;
@@ -226,12 +228,12 @@ export class PricingRepairWorker {
   private pairCursor?: number;
   constructor(private readonly db: ChainDb, private readonly log: (event: string, fields: Record<string, unknown>) => void,
     private readonly now = () => Date.now(), private readonly intervalMs = 30_000, private readonly budgetMs = 28_000, private assets?: PricingAssets, private readonly batch = REPRICE_BATCH,
-    private readonly spot?: TokenSpot, private readonly meta?: TokenMetaReader) {}
-  start() { if (this.timer) return; void this.tick(); this.timer = setInterval(() => void this.tick(), this.intervalMs); this.timer.unref(); }
+    private readonly spot?: TokenSpot, private readonly meta?: TokenMetaReader) { this.heartbeat = new LoopHeartbeat(intervalMs, now); }
+  start() { if (this.timer) return; this.heartbeat.start(); void this.tick(); this.timer = setInterval(() => void this.tick(), this.intervalMs); this.timer.unref(); }
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
     if (this.running) return this.running;
-    this.running = this.pass().catch(() => this.log('pricing_repair_failed', {})).finally(() => { this.running = undefined; });
+    this.running = this.pass().then(() => this.heartbeat.complete()).catch(() => this.log('pricing_repair_failed', {})).finally(() => { this.running = undefined; });
     return this.running;
   }
   /** Price one hour until done (`done`) or out of budget, so an unfinished hour is resumed rather than skipped. */

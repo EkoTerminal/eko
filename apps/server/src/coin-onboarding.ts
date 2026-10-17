@@ -1,3 +1,4 @@
+import { LoopHeartbeat } from './loop-health.js';
 import { decodeAbiParameters, hexToString, parseAbi, type Hex, type PublicClient } from 'viem';
 import { binary, hex, type ChainDb } from '@eko/db';
 import { isTransientRpcUnavailable, loadRegistry, rpcStopReason } from '@eko/chain';
@@ -266,6 +267,7 @@ const HOUR = 3_600_000;
  * reached: 30 coins had 90% of the unlisted swaps).
  */
 export class CoinOnboardingWorker {
+  readonly heartbeat: LoopHeartbeat;
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
   private queue: Candidate[] = [];
@@ -300,6 +302,7 @@ export class CoinOnboardingWorker {
   constructor(private readonly db: ChainDb, chain: OnboardingChain, private readonly log: (event: string, fields: Record<string, unknown>) => void,
     private readonly options: OnboardingOptions = {}) {
     this.now = options.now ?? (() => Date.now());
+    this.heartbeat = new LoopHeartbeat(options.intervalMs ?? 30_000, this.now);
     this.addresses = options.addresses ?? attributionAddresses();
     this.assets = options.assets;
     this.chain = {
@@ -336,13 +339,13 @@ export class CoinOnboardingWorker {
       void Promise.all(reads).catch(() => undefined);
     }
   }
-  start() { if (this.timer) return; void this.tick(); this.timer = setInterval(() => void this.tick(), this.options.intervalMs ?? 30_000); this.timer.unref(); }
+  start() { if (this.timer) return; this.heartbeat.start(); void this.tick(); this.timer = setInterval(() => void this.tick(), this.options.intervalMs ?? 30_000); this.timer.unref(); }
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
     if (this.running) return this.running;
-    this.running = this.pass().catch(error => {
+    this.running = this.pass().then(() => this.heartbeat.complete()).catch(error => {
       // Spent reads are a pause, said once every five minutes; anything else is a failed pass.
-      if (error instanceof OnboardingReadsSpent) { if (this.now() - this.pausedAt >= 300_000) { this.pausedAt = this.now(); this.log('coin_onboarding_paused', { reason: 'daily_reads_spent' }); } return; }
+      if (error instanceof OnboardingReadsSpent) { this.heartbeat.complete(); if (this.now() - this.pausedAt >= 300_000) { this.pausedAt = this.now(); this.log('coin_onboarding_paused', { reason: 'daily_reads_spent' }); } return; }
       this.log('coin_onboarding_failed', { error: String((error as Error)?.message ?? error).slice(0, 200) });
     }).finally(() => { this.running = undefined; });
     return this.running;

@@ -56,7 +56,8 @@ describe.each([false, true])('assembled API proxy trust (one trusted hop: %s; of
     for (let i = 0; i < 605; i++) {
       const response = await built.app.inject({ url: '/v1/health', remoteAddress: '192.0.2.60',
         headers: { 'x-forwarded-for': forwarded(i, trusted).replace(client, '203.0.113.60') } });
-      expect(response.statusCode).toBe(i < 600 ? 200 : 429);
+      expect(response.statusCode).toBe(i < 600 ? 200 : 429); // Liveness remains available with disabled loops.
+      if (i === 0) expect(response.json().loops.refresher).toEqual({ name: 'refresher', stale: true, periodSec: 0.25, lastCycleAt: null });
     }
   });
 
@@ -78,6 +79,7 @@ describe.each([false, true])('assembled API proxy trust (one trusted hop: %s; of
     for (let i = 4; i < 1805; i++) {
       const response = await built.app.inject({ url: '/v1/health', ...at(70), headers: { ...at(70).headers, cookie: cookies[i % 4]! } });
       expect(response.statusCode).toBe(i < ADDRESS_REQUESTS_PER_MINUTE ? 200 : 429);
+      if (i === 4) expect(response.json().ok).toBe(true);
     }
     // A failed signature can fall back to an on-chain check: 60 attempts per address, whatever the session.
     const signers = await mint(71, 4);

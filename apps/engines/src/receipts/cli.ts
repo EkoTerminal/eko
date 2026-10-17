@@ -60,4 +60,4 @@ async function main() {
     console.log(JSON.stringify({event:'receipts_stopped'}));
   } finally {process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);await telemetry.drain();await rpc.meter.close();await db.close();}
 }
-main().catch(() => {console.error('Receipts halted: check role, committer secret, registry, metered RPC and database.');process.exitCode=1;});
+main().catch(() => {console.error('Receipts halted: check role, committer secret, registry, metered RPC and database.');process.exit(1);});

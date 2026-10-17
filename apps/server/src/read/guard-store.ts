@@ -138,7 +138,7 @@ export class GuardReadStore {
   /** Explicit host/test refresh, never called by a request. */
   refreshTotals() {return this.header.refresh(true);}
   private async computeTotals():Promise<GuardTotals> {
-    await this.legacy.currentModels();
+    await this.legacy.currentModels({ snapshot: true });
     const cutoff=new Date(this.legacy.now()-7*86400000),day=Math.floor(this.legacy.now()/86400000)*86400;
     const source=(await this.db.sql.query('SELECT 1 FROM chain_blocks LIMIT 1')).rows.length;
     if(!source)return GuardTotalsSchema.parse({status:'unavailable',activeVersion:GUARD_READ_ACTIVE_VERSION,failureCode:'missing'});

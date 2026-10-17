@@ -285,8 +285,8 @@ Measured: **599/599 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.drain` | method | [apps/server/src/ai/swarm-worker.ts:109](../../apps/server/src/ai/swarm-worker.ts#L109) | Yes |
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
-| `buildApp` | function | [apps/server/src/app.ts:121](../../apps/server/src/app.ts#L121) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:408](../../apps/server/src/app.ts#L408) | Yes |
+| `buildApp` | function | [apps/server/src/app.ts:123](../../apps/server/src/app.ts#L123) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:428](../../apps/server/src/app.ts#L428) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |
@@ -506,8 +506,8 @@ Measured: **599/599 (100.00%)** documented. Minimum: **90%**.
 | `guardDemoWrite` | function | [apps/server/src/http/v1/demo.ts:74](../../apps/server/src/http/v1/demo.ts#L74) | Yes |
 | `installDemoGuard` | function | [apps/server/src/http/v1/demo.ts:87](../../apps/server/src/http/v1/demo.ts#L87) | Yes |
 | `demoRoutes` | function | [apps/server/src/http/v1/demo.ts:103](../../apps/server/src/http/v1/demo.ts#L103) | Yes |
-| `healthRoutes` | function | [apps/server/src/http/v1/health.ts:14](../../apps/server/src/http/v1/health.ts#L14) | Yes |
-| `registerV1` | function | [apps/server/src/http/v1/index.ts:38](../../apps/server/src/http/v1/index.ts#L38) | Yes |
+| `healthRoutes` | function | [apps/server/src/http/v1/health.ts:16](../../apps/server/src/http/v1/health.ts#L16) | Yes |
+| `registerV1` | function | [apps/server/src/http/v1/index.ts:39](../../apps/server/src/http/v1/index.ts#L39) | Yes |
 | `journalRoutes` | function | [apps/server/src/http/v1/journal.ts:20](../../apps/server/src/http/v1/journal.ts#L20) | Yes |
 | `oauthConsentRoutes` | function | [apps/server/src/http/v1/oauth.ts:19](../../apps/server/src/http/v1/oauth.ts#L19) | Yes |
 | `packRoutes` | function | [apps/server/src/http/v1/packs.ts:13](../../apps/server/src/http/v1/packs.ts#L13) | Yes |

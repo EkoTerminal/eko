@@ -1,3 +1,4 @@
+import { loopHealth, type LoopHeartbeat } from './loop-health.js';
 import { installRateLimitObservations, pluginRejectionObserver } from './obs/rate-limits.js';
 import { BlueChipListingWorker } from './blue-chip-listings.js';
 import { BlueChipReader, blueChipConfig } from './read/blue-chip.js';
@@ -104,6 +105,7 @@ export interface Ctx {
   monitoring: LaunchMonitor;
   incidents: IncidentService;
   health(): SystemHealth;
+  loopHealth(): ReturnType<typeof loopHealth>;
 }
 
 /** Requests per minute from one client address across all of its sessions (each session keeps 600). */
@@ -265,7 +267,22 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     },
   );
   const quant = new QuantService(market);
-  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, pricingRepair, coinOnboarding, blueChipListings, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, monitoring, incidents };
+  const roleLoopHealth = () => {
+    const loops: Record<string, LoopHeartbeat> = {};
+    if (cfg.APP_ROLE !== 'worker') {
+      loops.refresher = reads.store.heartbeat;
+      loops.ranks = reads.store.rankHeartbeat;
+      loops.summaries = reads.store.summaryHeartbeat;
+    }
+    if (cfg.APP_ROLE === 'worker' || cfg.APP_ROLE === 'dev' && cfg.RUN_WORKER) {
+      if (retentionWorker.enabled) loops.retention = retentionWorker.heartbeat;
+      if (retentionWorker.partitionsEnabled) loops.partitions = retentionWorker.partitionHeartbeat;
+      loops.pricingRepair = pricingRepair.heartbeat;
+      if (cfg.APP_ROLE === 'worker') loops.onboarding = coinOnboarding.heartbeat;
+    }
+    return loopHealth(loops);
+  };
+  const ctx: Ctx = { cfg, flags, tradeAccess, sanctions, sanctionsWorker, retentionWorker, pricingRepair, coinOnboarding, blueChipListings, dbh, reads, hub, market, providers, budget, chains, exec, portfolio, quant, auth, harness, journal, points, receipts, alerts, telegram, demoFeed, health, loopHealth: roleLoopHealth, monitoring, incidents };
 
   // Market data → WebSocket, throttled to ~4 Hz per stream (closed bars always go out immediately).
   const pendingCandles = new Map<string, Extract<ServerMessage, { type: 'candle' }>>();
@@ -324,13 +341,12 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   });
   installDemoGuard(app, cfg);
   // OAuth consent is prepared but omitted until 099 and the connector acceptance gate.
-  await registerV1(app, cfg, flags, () => chains.meter.usage(), reads, { auth, db, client: chains.get('robinhood-mainnet') }, chains.get('robinhood-mainnet'), { auth, harness }, { auth, journal }, receipts, { auth, alerts }, latencyStore, exec, undefined, { auth, telegram });
+  await registerV1(app, cfg, flags, () => chains.meter.usage(), reads, { auth, db, client: chains.get('robinhood-mainnet') }, chains.get('robinhood-mainnet'), { auth, harness }, { auth, journal }, receipts, { auth, alerts }, latencyStore, exec, undefined, { auth, telegram }, roleLoopHealth);
   await fixtureRoutes(app, cfg, flags, cfg.JOURNAL_KEK && cfg.JOURNAL_KEK_ID && cfg.JOURNAL_TOMBSTONE_PATH
     ? { journal: journalFixtureProducer(journal) } : {}, auth);
   const live = new ReadLive(reads, hub);
-  // The worker serves no sockets. Without the background refresher, each bus message's live upsert refreshed the whole
+  // The worker serves only loopback health. Without the background refresher, each bus message's live upsert refreshed the whole
   // read-model backlog inline there, under the locks every scanner card write needs (2026-10-09: about 7 cards a minute).
-  if (cfg.APP_ROLE !== 'worker') await live.start(cfg.DATABASE_URL ? new PostgresBus(cfg.DATABASE_URL) : dbh.chain.bus);
   await alerts.start(cfg.DATABASE_URL ? new PostgresBus(cfg.DATABASE_URL) : dbh.chain.bus, opts.startBackground !== false);
   await guardReadRoutes(app,reads.guard,reads);
   await reviewApiRoutes(app, new ReviewStore(dbh.chain), auth);
@@ -380,6 +396,9 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     return serveSpa(req.url, reply, cfg, shares);
   });
 
+  // Boot reads committed snapshots before projection writer timers are started.
+  await reads.store.refreshSummaries();
+
   if (opts.startBackground !== false) {
     reads.store.start();
     reads.scoreboard.start();
@@ -392,8 +411,9 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
     if (cfg.LEGACY_API && (cfg.RUN_WORKER || cfg.LIVE_TRADING_ENABLED)) void chains.checkHealth().then(pushHealth);
   }
 
-  // Prime before accepting traffic. Timers own projection backlogs, so startup totals need not drain them.
-  await reads.store.refreshSummaries();
+  // Subscribe after priming and starting projection timers so boot events cannot refresh inline.
+  if (cfg.APP_ROLE !== 'worker') await live.start(cfg.DATABASE_URL ? new PostgresBus(cfg.DATABASE_URL) : dbh.chain.bus);
+
   return {
     app,
     ctx,

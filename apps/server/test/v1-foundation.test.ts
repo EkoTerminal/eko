@@ -213,7 +213,12 @@ describe('v1 config and demo sessions against migrated storage', () => {
 
   it('returns a schema-valid config, health, cache headers, and no dev-wallet destination', async () => {
     const health = await built.app.inject('/v1/health');
-    expect(health.json()).toEqual({ ok: true, rpc: { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), today: [], paidOpen: true, budgetLeft: 200000, sessionUnits: 0 } });
+    expect(health.statusCode).toBe(200); // Disabled loops do not block deployment liveness.
+    expect(health.json()).toEqual({ ok: true, loops: {
+      refresher: { name: 'refresher', stale: true, periodSec: 0.25, lastCycleAt: null },
+      ranks: { name: 'ranks', stale: true, periodSec: 5, lastCycleAt: null },
+      summaries: { name: 'summaries', stale: true, periodSec: 5, lastCycleAt: null },
+    }, rpc: { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), today: [], paidOpen: true, budgetLeft: 200000, sessionUnits: 0 } });
     const result = await built.app.inject('/v1/config');
     expect(result.statusCode).toBe(200);
     expect(result.headers['cache-control']).toBe('public, max-age=10');
@@ -302,7 +307,17 @@ describe('legacy registration switches', () => {
   ])('LEGACY_API=%s / LEGACY_SIGNALS=%s keeps observability and v1 available', async (LEGACY_API, LEGACY_SIGNALS) => {
     const built = await buildApp(loadConfig({ ...base, LEGACY_API, LEGACY_SIGNALS, ENABLE_DEV_ROUTES: 'true' }), { startBackground: false });
     try {
-      for (const url of ['/api/health', '/api/health/live', '/api/metrics', '/v1/health', '/v1/config']) expect((await built.app.inject(url)).statusCode, url).toBe(200);
+      for (const url of ['/api/health/live', '/api/metrics', '/v1/config', '/v1/health']) expect((await built.app.inject(url)).statusCode, url).toBe(200);
+      for (const url of ['/api/health']) {
+        const response = await built.app.inject(url);
+        expect(response.statusCode, url).toBe(503);
+        expect(response.json().ok).toBe(false);
+        expect(response.json().loops.refresher).toEqual({ ok: false, periodMs: 250, lastCycleAt: null });
+      }
+      const loops = await built.app.inject('/v1/health/loops');
+      expect(loops.statusCode).toBe(503);
+      expect(loops.json().ok).toBe(true);
+      expect(loops.json().loops.refresher).toEqual({ name: 'refresher', stale: true, periodSec: 0.25, lastCycleAt: null });
       expect((await built.app.inject('/api/health/ready')).statusCode).toBe(503); // Registered but not backfilled.
       expect((await built.app.inject({ method: 'POST', url: '/api/telemetry', payload: {} })).statusCode).toBe(200);
       for (const url of ['/api/config', '/api/session', '/api/tickers']) expect((await built.app.inject(url)).statusCode, url).toBe(LEGACY_API === 'true' ? 200 : 404);

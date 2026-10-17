@@ -39,6 +39,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
   vi.stubEnv('APP_ROLE', 'receipts');
   vi.stubEnv('RPC_HTTP_URL', 'https://rpc.example');
   vi.stubEnv('RECEIPTS_COMMITTER_KEY', generatePrivateKey());
@@ -62,8 +63,10 @@ describe('receipt role signer (synthetic keys, injected RPC/database, no network
     for (const [key, file] of [['', ''], ['invalid', ''], [generatePrivateKey(), 'fixture-key-file']] as const) {
       vi.stubEnv('RECEIPTS_COMMITTER_KEY', key); vi.stubEnv('RECEIPTS_COMMITTER_KEY_FILE', file);
       vi.resetModules();
+      const exits = vi.mocked(process.exit).mock.calls.length;
       await import('../src/receipts/cli.js');
-      await vi.waitFor(() => expect(process.exitCode).toBe(1));
+      await vi.waitFor(() => expect(process.exit).toHaveBeenCalledTimes(exits + 1));
+      expect(process.exit).toHaveBeenLastCalledWith(1);
       expect(fixture.closed).not.toHaveBeenCalled(); expect(fixture.chain).toBeUndefined();
       expect(console.error).toHaveBeenLastCalledWith('Receipts halted: check role, committer secret, registry, metered RPC and database.');
       process.exitCode = exitCode;

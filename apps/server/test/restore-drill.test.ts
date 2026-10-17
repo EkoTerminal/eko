@@ -103,7 +103,13 @@ it('restores an encrypted pre-deletion fixture into a fresh DB and reconnects re
     const damaged = structuredClone(before); damaged.samples.coin_cards!.sha256 = 'changed';
     expect(compareInventories(before, damaged).find(check => check.assertion === 'samples')!.status).toBe('fail');
     await target.close(); target = await buildApp(loadConfig({ ...fixtureEnv, PGLITE_DIR: targetPath }), { startBackground: false });
-    expect((await target.app.inject('/v1/health')).statusCode).toBe(200);
+    const health = await target.app.inject('/v1/health');
+    expect(health.statusCode).toBe(200); // Restored storage is reachable even with role loops disabled.
+    expect(health.json().loops.refresher).toEqual({ name: 'refresher', stale: true, periodSec: 0.25, lastCycleAt: null });
+    const loopHealth = await target.app.inject('/v1/health/loops');
+    expect(loopHealth.statusCode).toBe(503);
+    expect(loopHealth.json()).toEqual(health.json());
+    expect((await target.app.inject('/api/health/live')).statusCode).toBe(200);
     expect((await target.app.inject('/v1/config')).json().trading.liveEnabled).toBe(false);
     const session = await target.ctx.auth.createSession(owners[0]!.account);
     const cookie = `eko_sid=${encodeURIComponent(target.app.signCookie(session))}`;

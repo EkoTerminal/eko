@@ -1,19 +1,34 @@
+import { loopHealth } from '../../loop-health.js';
 import type { RpcMeter } from '@eko/chain';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { Config } from '../../config.js';
 import { runtimeIdentity } from '../../build-identity.js';
 
 /**
- * Register public liveness plus metered RPC usage reporting. No wallet auth or chain probe is
- * required; usage callback failure rejects the request. The additive /build route
+ * Register database liveness and separate loop readiness with the same status body. Stale cycles
+ * only make /health/loops return HTTP 503; database failures make both return 503. No wallet auth
+ * or chain probe is required; provider error details are withheld. The additive /build route
  * returns only baked bundle metadata, role and an allowlisted config digest;
  * invalid production image identity prevents route registration.
  * @see {@link ../../../../../SECURITY.md#privileged-powers | Privileged powers}
  * @see {@link ../../../../../docs/security/INVARIANTS.md | Implemented core invariants}
  */
-export async function healthRoutes(app: FastifyInstance, rpcUsage: () => ReturnType<RpcMeter['usage']>, cfg: Config) {
+export async function healthRoutes(app: FastifyInstance, rpcUsage: () => ReturnType<RpcMeter['usage']>, cfg: Config, databaseProbe: () => Promise<unknown>, health = () => loopHealth({})) {
   const identity = runtimeIdentity(cfg);
-  app.get('/health', async () => ({ ok: true, rpc: await rpcUsage() }));
-  // Deployment-only additive endpoint; liveness/RPC health keeps its contract.
+  const respond = (requireLoops: boolean) => async (_request: unknown, reply: FastifyReply) => {
+    const status = health();
+    const loops = Object.fromEntries(Object.entries(status.loops).map(([name, cycle]) => [name, {
+      name, lastCycleAt: cycle.lastCycleAt, periodSec: cycle.periodMs / 1000, stale: !cycle.ok,
+    }]));
+    let ok = true;
+    let rpc: Awaited<ReturnType<typeof rpcUsage>> | null = null;
+    try { await databaseProbe(); } catch { ok = false; }
+    // Usage is diagnostic data; its collection must not turn database liveness into a failure.
+    if (ok) { try { rpc = await rpcUsage(); } catch { /* Keep liveness independent of telemetry. */ } }
+    return reply.header('Cache-Control', 'no-store').code(ok && (!requireLoops || status.ok) ? 200 : 503).send({ ok, loops, rpc });
+  };
+  app.get('/health', respond(false));
+  app.get('/health/loops', respond(true));
+  // Deployment-only additive identity endpoint.
   app.get('/build', async (_request, reply) => reply.header('Cache-Control', 'no-store').send(identity));
 }

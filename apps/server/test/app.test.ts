@@ -54,7 +54,11 @@ async function call<T = Record<string, unknown>>(cookie: string, method: string,
 describe('sessions & persistence', () => {
   it('serves EKO identity and sets only the renamed session cookie', async () => {
     const health = await app.inject({ method: 'GET', url: '/api/health' });
-    expect(health.statusCode).toBe(200);
+    await vi.waitFor(async () => {
+      const ready = await app.inject('/api/health');
+      expect(ready.statusCode).toBe(200);
+      expect(ready.json().loops.refresher).toMatchObject({ ok: true, lastCycleAt: expect.any(Number) });
+    }, { timeout: 10_000, interval: 50 });
     expect(health.json()).toMatchObject({ service: 'eko', marketData: { source: 'EKO simulator', simulated: true } });
     expect(health.headers).not.toHaveProperty('x-powered-by');
     const session = await app.inject({ method: 'GET', url: '/api/session' });

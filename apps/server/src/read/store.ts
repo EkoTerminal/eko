@@ -1,3 +1,4 @@
+import { LoopHeartbeat } from '../loop-health.js';
 import { BlueChipReader } from './blue-chip.js';
 import { binary, hex, readFlows, readRatingPrices, liveRating, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
@@ -10,6 +11,7 @@ import { reportError } from '../obs/errors.js';
 export const REFRESH_BATCH=25;
 /** Coalesce active coins at the existing three-second refresh interval. */
 export const REFRESH_REST_MS=3000;
+export const REFRESH_POLL_MS=250;
 
 interface Stored {
   liquidity_usd:number|null;liquidity_unavailable:boolean|null;curve_pct:number|null;
@@ -42,6 +44,9 @@ export function withSellCheck(card:CoinCard,sell:SellCheckReading|undefined):Coi
     meta:{...card.meta,tradeability:{confidence:0.5,asOfBlock:sell.block,unavailable:false,missing:[...missing],flags:[...new Set([...(prior?.flags ?? []),`sell_check_${sell.status}`])]}}};
 }
 export class ReadStore {
+  readonly heartbeat = new LoopHeartbeat(REFRESH_POLL_MS, () => this.now());
+  rankHeartbeat = new LoopHeartbeat(5000, () => this.now());
+  summaryHeartbeat = new LoopHeartbeat(5000, () => this.now());
   private refreshWidth=REFRESH_BATCH;
   private probeWidth:number;
   private retryAt=new Map<string,number>();
@@ -67,20 +72,24 @@ export class ReadStore {
   }
   /** Background refreshers: projections every 250 ms, the per-minute volume ranks every `rankMs` (production). */
   start(rankMs=5000) {
-    this.modelTimer=setInterval(()=>{void this.refreshModels().catch(error=>reportError(error,{where:'read model refresh'}));},250);this.modelTimer.unref();
+    this.rankHeartbeat = new LoopHeartbeat(rankMs, () => this.now());
+    this.summaryHeartbeat = new LoopHeartbeat(rankMs, () => this.now());
+    this.heartbeat.start(); this.rankHeartbeat.start(); this.summaryHeartbeat.start();
+    this.modelTimer=setInterval(()=>{void this.refreshModels().then(()=>this.heartbeat.complete()).catch(error=>reportError(error,{where:'read model refresh'}));},REFRESH_POLL_MS);this.modelTimer.unref();
     this.rankTimer=setInterval(()=>{
-      void this.refreshRanks().catch(error=>reportError(error,{where:'read rank refresh'}));
-      void this.refreshSummaries().catch(error=>reportError(error,{where:'read header refresh'}));
+      void this.refreshRanks().then(()=>this.rankHeartbeat.complete()).catch(error=>reportError(error,{where:'read rank refresh'}));
+      void this.refreshSummaries().then(()=>this.summaryHeartbeat.complete()).catch(error=>reportError(error,{where:'read header refresh'}));
     },rankMs);this.rankTimer.unref();
   }
   async close() {clearInterval(this.modelTimer);clearInterval(this.rankTimer);await this.modelRefresh;await this.rankRefresh;await this.summaryRefresh;}
   /**
    * Requests read the current projection. With the background refresher running (every 250 ms) they never wait on its
    * backlog: during the 2026-10-09 scanner catch-up a radar request waited 40+ s behind refresh batches contending for
-   * the read_feed lock, and pairs, feed, scan and Guard reads did the same. Without the refresher (tests, one-off tools,
-   * the worker role) a request still refreshes first.
+   * the read_feed lock, and pairs, feed, scan and Guard reads did the same. Without the refresher (tests and one-off
+   * tools) a request still refreshes first. Boot aggregates explicitly request the last committed snapshot.
    */
-  async currentModels() {
+  async currentModels(options: { snapshot?: boolean } = {}) {
+    if (options.snapshot) return;
     if(!this.modelTimer) {
       const running=this.modelRefresh;
       await this.refreshModels();

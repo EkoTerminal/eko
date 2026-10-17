@@ -102,4 +102,4 @@ async function main() {
     } finally { process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);await telemetry.drain(); }
   } finally { try { await rpc?.meter.close();await db.close(); } finally { watchdog?.stop(); } }
 }
-main().catch(error=>{ console.error(error instanceof Error && /^Missing (launch|activity) timestamp at block [0-9]+; provide RPC_HTTP_URL for archive headers$/.test(error.message) ? error.message : 'Engines halted: check environment, indexed range and database.');process.exitCode=1; });
+main().catch(error=>{ console.error(error instanceof Error && /^Missing (launch|activity) timestamp at block [0-9]+; provide RPC_HTTP_URL for archive headers$/.test(error.message) ? error.message : 'Engines halted: check environment, indexed range and database.');process.exit(1); });

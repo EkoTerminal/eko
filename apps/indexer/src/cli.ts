@@ -133,4 +133,4 @@ async function main() {
     if (!failed && (meter.stopReason === 'rpc_session_budget_reached' || meter.stopReason === 'shutdown_requested')) reportIndexerError(new RpcGuardError(meter.stopReason), log);
   }
 }
-main().catch(error => { process.exitCode = reportIndexerError(error, log); });
+main().catch(error => { process.exit(reportIndexerError(error, log)); });

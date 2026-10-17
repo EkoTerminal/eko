@@ -52,7 +52,7 @@ it('never hashes secrets, credential URLs, cookie settings, paths or unknown env
   expect(expectedConfigDigest({ ...env, ...secrets }, caps)).toBe(identity.configDigest);
   const app = Fastify();
   try {
-    await healthRoutes(app, async () => ({ day: '2026-10-03', today: [], paidOpen: true, budgetLeft: 200000, sessionUnits: 0 }), cfg);
+    await healthRoutes(app, async () => ({ day: '2026-10-03', today: [], paidOpen: true, budgetLeft: 200000, sessionUnits: 0 }), cfg, async () => {});
     const response = await app.inject('/build');
     expect(response.statusCode).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');

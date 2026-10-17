@@ -53,8 +53,12 @@ it('rehearses isolated config rollback without reversing migrations or losing re
     expect(await ledgers()).toEqual(before);
     expect((await running.ctx.dbh.chain.sql.query('SELECT * FROM receipt_items')).rows).toEqual(receiptBefore);
     const health = await running.app.inject('/v1/health');
-    expect(health.statusCode).toBe(200);
-    expect(health.json()).toMatchObject({ ok: true, rpc: { sessionUnits: 0 } });
+    expect(health.statusCode).toBe(200); // Deployment liveness does not wait for role loops.
+    expect(health.json()).toMatchObject({ ok: true, loops: { refresher: { name: 'refresher', stale: true, periodSec: 0.25, lastCycleAt: null } }, rpc: { sessionUnits: 0 } });
+    const loopHealth = await running.app.inject('/v1/health/loops');
+    expect(loopHealth.statusCode).toBe(503);
+    expect(loopHealth.json()).toEqual(health.json());
+    expect((await running.app.inject('/api/health/live')).statusCode).toBe(200);
     const identity = await running.app.inject('/v1/build');
     expect(identity.statusCode).toBe(200);
     expect(identity.json()).toEqual(runtimeIdentity(running.ctx.cfg));
