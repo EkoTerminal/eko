@@ -1,3 +1,4 @@
+import { HEADER_TODAY_SQL, HEADER_HOURS_SQL } from './header-totals.js';
 import { MinuteSnapshot } from './minute-snapshot.js';
 import { hex } from '@eko/db';
 import { sellRefusalTotals } from '@eko/engines';
@@ -6,10 +7,6 @@ import type { RadarRow } from '@eko/shared';
 import type { ReadRow, ReadStore } from './store.js';
 import { decodeCursor, encodeCursor } from './pagination.js';
 // TODO(spec): Pending tier is unspecified; place it between Monitor and Danger (task 023).
-/** When a run was written: its created_at (0191), or its block time for rows written before that column existed. */
-const at='coalesce(extract(epoch from e.created_at),e.sec)';
-/** Index-friendly window on that time: `from` (and optionally `to`) are epoch-second parameters. */
-const written=(from:string,to?:string)=>`((e.created_at>=to_timestamp(${from})${to ? ` AND e.created_at<to_timestamp(${to})` : ''}) OR (e.created_at IS NULL AND e.sec>=${from}${to ? ` AND e.sec<${to}` : ''}))`;
 /**
  * Radar rank: the most traded coins of the last hour first, whatever their grade. Ranking by grade first (no match, then
  * Monitor, pending, Danger) filled the first 124 pages with quiet coins once "no match" became the largest grade: on
@@ -49,19 +46,15 @@ export class RadarService {
   private async computeTotals() {
     const result=await this.store.db.sql.query<{tier:number;n:string}>('SELECT tier,count(*) AS n FROM read_coins WHERE activity>$1 GROUP BY tier',[new Date(this.store.now()-7*86400000)]);
     const midnight=Math.floor(this.store.now()/86400000)*86400;
-    const today=await this.store.db.sql.query<{n:string}>(`SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN read_coins r ON r.coin=e.coin
-      WHERE ${written('$1','$2')} AND r.activity>$3`,[midnight,midnight+86400,new Date(this.store.now()-7*86400000)]);
+    const live=new Date(this.store.now()-7*86400000);
+    const today=await this.store.db.sql.query<{n:string}>(HEADER_TODAY_SQL,[midnight,midnight+86400,live]);
     const count=(tier:number)=>Number(result.rows.find(r=>r.tier===tier)?.n ?? 0);
-    const from=Math.floor(this.store.now()/3600000)*3600-23*3600,live=new Date(this.store.now()-7*86400000);
-    const [scanned,danger]=await Promise.all([
-      this.store.db.sql.query<{h:number;n:string}>(`SELECT floor((${at}-$1)/3600)::int AS h,count(DISTINCT e.coin) AS n FROM engine_runs e JOIN read_coins r ON r.coin=e.coin WHERE ${written('$1')} AND r.activity>$2 GROUP BY 1`,[from,live]),
-      this.store.db.sql.query<{h:number;n:string}>(`SELECT floor((${at}-$1)/3600)::int AS h,count(DISTINCT v.coin) AS n FROM verdicts v JOIN engine_runs e ON e.coin=v.coin AND e.block=v.valid_from_block
-        WHERE ${written('$1')} AND v.data->>'level'='danger' GROUP BY 1`,[from]),
-    ]);
-    const hourly=(rows:{h:number;n:string}[])=>Array.from({length:24},(_,i)=>Number(rows.find(r=>Number(r.h)===i)?.n ?? 0));
+    const from=Math.floor(this.store.now()/3600000)*3600-23*3600;
+    const hours=await this.store.db.sql.query<{h:number;n:string;danger:string}>(HEADER_HOURS_SQL,[from,live]);
+    const hourly=(field:'n'|'danger')=>Array.from({length:24},(_,i)=>Number(hours.rows.find(r=>Number(r.h)===i)?.[field] ?? 0));
     // Refusals exist only while buy quotes run the sell check; otherwise the stat has no source and is omitted (CA-36).
     const refused=this.store.sellCheckQuotes ? await sellRefusalTotals(this.store.db,this.store.now()) : null;
     return {coins:result.rows.reduce((n,r)=>n+Number(r.n),0),clear:count(0),monitor:count(1),pending:count(2),danger:count(3),evaluatedToday:Number(today.rows[0].n),
-      evaluatedByHour:hourly(scanned.rows),dangerByHour:hourly(danger.rows),...(refused ? {honeypotsRefused:refused.today,refusedByHour:refused.byHour} : {})};
+      evaluatedByHour:hourly('n'),dangerByHour:hourly('danger'),...(refused ? {honeypotsRefused:refused.today,refusedByHour:refused.byHour} : {})};
   }
 }

@@ -1,3 +1,4 @@
+import { HEADER_COUNTS_SQL, GUARD_HEADER_TODAY_SQL, GUARD_LIVE_COINS_SQL } from './header-totals.js';
 import { MinuteSnapshot } from './minute-snapshot.js';
 import { binary, hex, guardRowsKnownAt, GuardReceiptStore, type ChainDb, type GuardStoredRow } from '@eko/db';
 import { keccak256, toHex } from 'viem';
@@ -18,18 +19,6 @@ import { InputError } from '../http/v1/helpers.js';
 /** §7.2: a candidate read path never changes the active 1.0.x manifest. */
 export const GUARD_READ_ACTIVE_VERSION = 'verdict-1' as const;
 // V2 includes indexed partial non-Pons identity. V1 eligibility remains unchanged.
-/**
- * Coins live since the cutoff bound as `$n`: the read model's activity when it has one; otherwise a trade since the
- * cutoff (one index probe) or a first block at or after the lowest block past the cutoff (found once, in whichever
- * block-time table has it lower: either can lack a block). Grouping every swap and reading two block-time rows per token
- * on each request took 20-26 seconds on 58,000 tokens and 11.8 million swaps (2026-10-12) and held the Radar on its
- * placeholder; this shape took one to two seconds for the same counts.
- */
-const liveSource=(n:number)=>`WITH cut AS (SELECT least((SELECT min(number) FROM engine_block_times WHERE ts>$${n}),(SELECT min(number) FROM chain_blocks WHERE ts>$${n})) AS block), live AS (
-  SELECT t.address AS coin FROM tokens t LEFT JOIN read_coins r ON r.coin=t.address CROSS JOIN cut
-  WHERE CASE WHEN r.activity IS NOT NULL THEN r.activity>$${n}
-    ELSE EXISTS(SELECT 1 FROM swaps s WHERE s.coin=t.address AND s.ts>$${n}) OR t.first_block>=cut.block END
-)`;
 export class GuardReadStore {
   constructor(readonly legacy: ReadStore) {
     this.header=new MinuteSnapshot<GuardTotals>({status:'unavailable',activeVersion:GUARD_READ_ACTIVE_VERSION,failureCode:'missing'},()=>this.computeTotals(),()=>legacy.now());
@@ -142,19 +131,9 @@ export class GuardReadStore {
     const cutoff=new Date(this.legacy.now()-7*86400000),day=Math.floor(this.legacy.now()/86400000)*86400;
     const source=(await this.db.sql.query('SELECT 1 FROM chain_blocks LIMIT 1')).rows.length;
     if(!source)return GuardTotalsSchema.parse({status:'unavailable',activeVersion:GUARD_READ_ACTIVE_VERSION,failureCode:'missing'});
-    // The level comes from the read model's tier (0 clear, 1 monitor, 2 pending, 3 danger), which the card trigger keeps;
-    // the card's own JSON (8 kB on average on 2026-10-12) is read only for a coin the read model does not have yet.
-    const level=`CASE WHEN c.coin IS NULL THEN NULL WHEN rc.tier IS NOT NULL THEN (ARRAY['clear','monitor','pending','danger'])[rc.tier+1] ELSE c.data->'verdict'->>'level' END`;
-    const counts=(await this.db.sql.query<{coins:string;lower:string;elevated:string;high:string;incomplete:string;no_verdict:string}>(`${liveSource(1)}, graded AS (
-        SELECT ${level} AS level,c.coin IS NULL AS bare FROM live r LEFT JOIN coin_card_latest c ON c.coin=r.coin LEFT JOIN read_coins rc ON rc.coin=r.coin)
-      SELECT count(*) AS coins,
-      count(*) FILTER(WHERE level='clear') AS lower,
-      count(*) FILTER(WHERE level='monitor') AS elevated,
-      count(*) FILTER(WHERE level='danger') AS high,
-      count(*) FILTER(WHERE level='pending') AS incomplete,
-      count(*) FILTER(WHERE bare) AS no_verdict FROM graded`,[cutoff])).rows[0];
-    const today=(await this.db.sql.query<{n:string}>(`${liveSource(3)} SELECT count(DISTINCT e.coin) AS n FROM engine_runs e JOIN live r ON r.coin=e.coin WHERE e.sec>=$1 AND e.sec<$2`,[day,day+86400,cutoff])).rows[0];
-    const live=(await this.db.sql.query<{coin:Uint8Array}>(`${liveSource(1)} SELECT coin FROM live ORDER BY coin`,[cutoff])).rows.map(r=>hex(r.coin));
+    const counts=(await this.db.sql.query<{coins:string;lower:string;elevated:string;high:string;incomplete:string;no_verdict:string}>(HEADER_COUNTS_SQL,[cutoff])).rows[0];
+    const today=(await this.db.sql.query<{n:string}>(GUARD_HEADER_TODAY_SQL,[day,day+86400,cutoff])).rows[0];
+    const live=(await this.db.sql.query<{coin:Uint8Array}>(GUARD_LIVE_COINS_SQL,[cutoff])).rows.map(r=>hex(r.coin));
     this.live=live;
     const n=Number(counts.no_verdict),incomplete=Number(counts.incomplete);
     return GuardTotalsSchema.parse({status:'observed',activeVersion:GUARD_READ_ACTIVE_VERSION,coins:Number(counts.coins),lower:Number(counts.lower),elevated:Number(counts.elevated),high:Number(counts.high),incomplete,noVerdict:n,incompleteCoverage:incomplete,evaluatedToday:Number(today.n),clear:Number(counts.lower),monitor:Number(counts.elevated),danger:Number(counts.high),pending:incomplete+n});

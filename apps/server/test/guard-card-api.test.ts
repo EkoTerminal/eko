@@ -126,21 +126,38 @@ describe('035 partial cards and captured read boundary',()=>{
     expect(await built.ctx.reads.guard.negotiatedCard(legacy.identity.address,1)).toEqual({version:1,card:await built.ctx.reads.store.card(legacy.identity.address)});
     expect((await built.ctx.reads.guard.read({address:coin,version:2},'verdict'))?.version).toBe(2);
     await expect(built.ctx.reads.guard.read({address:coin,version:3},'card')).rejects.toThrow();
-    const list=GuardListResponseSchema.parse((await built.app.inject('/v2/coins')).json());expect(list.rows.some(r=>r.address===coin && r.level==='high')).toBe(true);
+    // Identity-only tokens remain available to direct reads/scan, but are not in the refreshed header/list snapshot.
+    const list=GuardListResponseSchema.parse((await built.app.inject('/v2/coins')).json());expect(list.rows.some(r=>r.address===coin)).toBe(false);
+    expect((await built.ctx.reads.guard.summary(coin)).level).toBe('high');
     expect(GuardScanResponseSchema.safeParse((await built.app.inject(`/v2/scan?q=${coin}`)).json()).success).toBe(true);
     expect(GuardTotalsSchema.parse((await built.app.inject('/v2/radar/totals')).json()).activeVersion).toBe('verdict-1');
     expect(JSON.stringify(built.ctx.chains.meter.usage())).toBe(before);
   });
-  it('uses whole-source totals across pages and excludes the next UTC day in the actual SQL path',async()=>{
-    await db().sql.query(`INSERT INTO tokens(address,first_block,block,name,symbol,launchpad)
-      SELECT decode(lpad(to_hex(n),40,'0'),'hex'),$1,$1,'Partial token','PAGE','other' FROM generate_series(70000,70101) n`,[cursor.blockNumber]);
+  it('uses card-or-projection totals across pages and excludes the next UTC day in the actual SQL path',async()=>{
+    await db().sql.query(`INSERT INTO tokens(address,deployer,first_block,block,name,symbol,launchpad)
+      SELECT decode(lpad(to_hex(n),40,'0'),'hex'),$2,$1,$1,'Partial token','PAGE','other' FROM generate_series(70000,70102) n`,[cursor.blockNumber,binary(sampleAddress(999999))]);
+    await db().insert('tokens',{address:binary(sampleAddress(70103)),first_block:cursor.blockNumber,block:cursor.blockNumber,symbol:'UNREFRESHED',launchpad:'other'});
+    // Current cards are available before the dirty-coin refresher publishes the corresponding projections.
+    await db().sql.query(`INSERT INTO coin_cards(id,coin,valid_from_block,hash,data)
+      SELECT 'pending-card-'||encode(address,'hex'),address,$1,'pending-hash',
+        jsonb_set(jsonb_set($2::jsonb,'{identity,address}',to_jsonb('0x'||encode(address,'hex'))),'{verdict,level}','"pending"')
+      FROM tokens WHERE symbol='PAGE'`,[cursor.blockNumber,JSON.stringify(legacy)]);
+    await db().sql.query(`INSERT INTO coin_card_latest(coin,card_id,as_of_block,data)
+      SELECT coin,id,valid_from_block,data FROM coin_cards WHERE id LIKE 'pending-card-%'`);
+    await db().sql.query("DELETE FROM read_coins WHERE coin IN (SELECT address FROM tokens WHERE symbol='PAGE')");
+    expect((await db().sql.query("SELECT coin FROM read_coins WHERE coin IN (SELECT address FROM tokens WHERE symbol='PAGE')")).rows).toHaveLength(0);
     await built.ctx.reads.guard.refreshTotals();
     const first=GuardListResponseSchema.parse((await built.app.inject('/v2/coins')).json());
     expect(first.rows).toHaveLength(100);expect(first.cursor).not.toBeNull();
     expect(first.totals.status).toBe('observed');if(first.totals.status!=='observed')throw new Error('Missing source totals');
-    expect(first.totals.coins).toBeGreaterThan(100);expect(first.totals.noVerdict).toBeGreaterThanOrEqual(103);
+    expect(first.totals.coins).toBeGreaterThan(100);expect(first.totals.incomplete).toBeGreaterThanOrEqual(103);
     const second=GuardListResponseSchema.parse((await built.app.inject(`/v2/coins?cursor=${first.cursor}`)).json());
     expect(second.totals).toEqual(first.totals);expect(second.rows).not.toHaveLength(first.rows.length);
+    expect([...first.rows,...second.rows].some(r=>r.address===sampleAddress(70103))).toBe(false);
+    const eligible=(await db().sql.query<{n:number}>(`SELECT count(*)::int AS n FROM (
+      SELECT coin FROM read_coins WHERE activity>$1 UNION
+      SELECT c.coin FROM coin_card_latest c LEFT JOIN read_coins r ON r.coin=c.coin WHERE r.coin IS NULL) live`,[new Date(now-7*86400000)])).rows[0].n;
+    expect(first.totals.coins).toBe(eligible);
     const original=built.ctx.reads.store.now,day=Math.floor(now/86400000)*86400;
     // The existing engine run is earlier than the next day. Move the request clock
     // to its preceding UTC day: the upper boundary must exclude every future run.

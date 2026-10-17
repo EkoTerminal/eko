@@ -12,18 +12,29 @@ interface InputRow {
   inputs:PoolInput[]|null;threshold:string|null;retained:Trade|null;retained_prices:Record<string,Trade>|null;
 }
 export const LIQUIDITY_PROBE_KEYS=100;
-/** Preserve the raw index order behind an optimization barrier, then stop at the first matching pool. */
+/** Pool prices are primary-key reads. Empty pool_id is the maintained coin-wide curve price.
+ * A missing key examines at most the newest 200 positive trades, including the pool filter before LIMIT 1.
+ */
 export const LIQUIDITY_PRICE_SQL=`WITH keys AS (
   SELECT k->>'coin' AS coin,k->>'pool' AS pool,decode(substring(k->>'coin' FROM 3),'hex') AS coin_key,
     decode(substring(k->>'pool' FROM 3),'hex') AS pool_key FROM jsonb_array_elements($1::jsonb) k
 )
-SELECT k.coin,k.pool,to_jsonb(s) AS trade FROM keys k LEFT JOIN LATERAL (
-  SELECT '0x'||encode(r.pool_id,'hex') AS pool_id,r.amount_coin::text,r.amount_quote::text,r.usd,
-    r.block::text AS block,r.log_index,'0x'||encode(r.tx_hash,'hex') AS tx_hash
-  FROM (SELECT s.pool_id,s.amount_coin,s.amount_quote,s.usd,s.block,s.log_index,s.tx_hash FROM swaps s
-    WHERE s.coin=k.coin_key AND s.usd>0 AND s.amount_coin>0 AND s.amount_quote>0
-    ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC OFFSET 0) r
-  WHERE k.pool_key IS NULL OR r.pool_id=k.pool_key LIMIT 1
+SELECT k.coin,k.pool,to_jsonb(s) AS trade FROM keys k
+LEFT JOIN coin_pool_prices p ON p.coin=k.coin_key AND p.pool_id=coalesce(k.pool_key,''::bytea) AND p.valid
+LEFT JOIN LATERAL (
+  SELECT r.* FROM (
+    SELECT s.pool_id,s.amount_coin,s.amount_quote,s.usd,s.block,s.log_index,s.tx_hash FROM swaps s
+    WHERE p.coin IS NULL AND s.coin=k.coin_key AND s.usd>0 AND s.amount_coin>0 AND s.amount_quote>0
+    ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC LIMIT 200
+  ) r WHERE k.pool_key IS NULL OR r.pool_id=k.pool_key
+  ORDER BY r.block DESC,r.log_index DESC,r.tx_hash DESC LIMIT 1
+) f ON true
+LEFT JOIN LATERAL (
+  SELECT '0x'||encode(coalesce(p.trade_pool_id,f.pool_id),'hex') AS pool_id,
+    coalesce(p.amount_coin,f.amount_coin)::text AS amount_coin,coalesce(p.amount_quote,f.amount_quote)::text AS amount_quote,
+    coalesce(p.usd,f.usd) AS usd,coalesce(p.block,f.block)::text AS block,coalesce(p.log_index,f.log_index) AS log_index,
+    '0x'||encode(coalesce(p.tx_hash,f.tx_hash),'hex') AS tx_hash
+  WHERE p.coin IS NOT NULL OR f.block IS NOT NULL
 ) s ON true`;
 
 /** Read and value every source before acquiring any projection mutex. */
