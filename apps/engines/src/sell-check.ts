@@ -1,5 +1,5 @@
 import { binary, hex, type ChainDb } from '@eko/db';
-import { balanceSlot, loadRegistry, poolSpotUsd, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
+import { balanceSlot, loadRegistry, poolSpotUsd, RpcGuardError, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
 import { getAddress, zeroAddress, type Hex } from 'viem';
 
@@ -8,11 +8,14 @@ import { getAddress, zeroAddress, type Hex } from 'viem';
  * Readings are measurements at one block and route; anything not measured stays unavailable, never zero.
  */
 export const SELL_CHECK_SIZES_USD = [100, 1000] as const;
+export type SellCheckClass = 'first_live' | 'crash' | 'first_unlisted' | 'routine';
 export type SellCheckStatus = 'sellable' | 'refused' | 'buy_failed' | 'unavailable' | 'unsupported';
 export interface SellCheckResult {
   coin: Address; block: number; status: SellCheckStatus; route: SellRoute | null; ethUsd: number | null;
   /** On a token-paired Pons curve: the pair token's USD price the sizes used (probe amounts are in its units). */
   pairUsd?: number;
+  /** Scheduler-only stop, after persisting any requests already dispatched. */
+  stopReason?: ReturnType<typeof rpcStopReason>;
   /** Where that price came from: USDG at par, the pair's indexed swaps, or its Uniswap v3 USDG pool at the block. */
   pairUsdSource?: 'par' | 'swaps' | 'pool';
   probes: (SellProbe & { sizeUsd: number })[]; requests: number;
@@ -126,14 +129,31 @@ export class SellChecker {
   private get registry() { return this.options.registry ??= loadRegistry(); }
   now() { return this.options.now?.() ?? Date.now(); }
   ethUsd() { return indexedEthUsd(this.db, this.now(), this.registry); }
-  async check(coin: Address, block: number, sizesUsd: readonly number[], ethUsd?: number | null): Promise<SellCheckResult> {
+  async check(coin: Address, block: number, sizesUsd: readonly number[], ethUsd?: number | null, admit?: () => boolean): Promise<SellCheckResult> {
+    let requests = 0, limited = false;
+    let stopReason: ReturnType<typeof rpcStopReason>;
+    // Admission is at the actual request boundary: pair pricing and balance discovery can cost far more than four.
+    const rpc: SellRpc = { request: async input => {
+      if (stopReason || (admit && !admit())) { limited = true; throw new Error('Sell-check request allowance exhausted'); }
+      requests++;
+      try { return await this.rpc.request(input); }
+      catch (error) {
+        if (admit && rpcStopReason(error)) { stopReason = rpcStopReason(error); throw new Error('Sell-check RPC stopped'); }
+        throw error;
+      }
+    } };
+    const result = await this.checkWithRpc(coin, block, sizesUsd, ethUsd, rpc);
+    return limited || stopReason ? { ...result, status: 'unavailable', probes: [], exit100: null, exit1k: null, requests, ...(stopReason ? { stopReason } : {}) }
+      : { ...result, requests };
+  }
+  private async checkWithRpc(coin: Address, block: number, sizesUsd: readonly number[], ethUsd: number | null | undefined, rpc: SellRpc): Promise<SellCheckResult> {
     const base: SellCheckResult = { coin, block, status: 'unavailable', route: null, ethUsd: null, probes: [], requests: 0, exit100: null, exit1k: null };
     const route = await sellRoute(this.db, coin, block, this.registry);
     if (!route) return { ...base, status: 'unsupported' };
-    if (route.venue === 'pons_curve' && route.pair) return this.checkPair(base, { ...route, pair: route.pair }, block, sizesUsd);
+    if (route.venue === 'pons_curve' && route.pair) return this.checkPair(base, { ...route, pair: route.pair }, block, sizesUsd, rpc);
     const price = ethUsd === undefined ? await this.ethUsd() : ethUsd;
     if (price == null) return { ...base, route };
-    const probes = await Promise.all(sizesUsd.map(async sizeUsd => ({ ...await runSellProbe(this.rpc, route, usdToWei(sizeUsd, price), BigInt(block), { nowSec: () => this.now() / 1000 }), sizeUsd })));
+    const probes = await Promise.all(sizesUsd.map(async sizeUsd => ({ ...await runSellProbe(rpc, route, usdToWei(sizeUsd, price), BigInt(block), { nowSec: () => this.now() / 1000 }), sizeUsd })));
     const exit = (size: number) => { const p = probes.find(p => p.sizeUsd === size); return p && (p.status === 'sellable' || p.status === 'sell_failed') ? p.exitCostPct : null; };
     return { ...base, route, ethUsd: price, probes, requests: probes.reduce((n, p) => n + p.requests, 0), status: combineSellProbes(probes), exit100: exit(100), exit1k: exit(1000) };
   }
@@ -143,14 +163,14 @@ export class SellChecker {
    * its units. Without a price or a found slot the route is unsupported.
    */
   private async checkPair(base: SellCheckResult, route: Extract<SellRoute, { venue: 'pons_curve' }> & { pair: NonNullable<Extract<SellRoute, { venue: 'pons_curve' }>['pair']> },
-    block: number, sizesUsd: readonly number[]): Promise<SellCheckResult> {
+    block: number, sizesUsd: readonly number[], rpc: SellRpc): Promise<SellCheckResult> {
     let requests = 0, source: SellCheckResult['pairUsdSource'] = same(route.pair.token, this.registry.requireAddress('tokens.USDG')) ? 'par' : 'swaps';
     let quote = await pairUsd(this.db, route.pair.token, block, this.now(), this.registry);
     if (!quote) {
       const decimals = (await this.db.sql.query<{ decimals: number | null }>('SELECT decimals FROM tokens WHERE address=$1', [binary(route.pair.token)])).rows[0]?.decimals;
       if (decimals != null) {
         const key = route.pair.token.toLowerCase(), cached = this.spots.get(key), fresh = cached && this.now() - cached.at < 600_000;
-        const value = fresh ? cached.value : poolSpotUsd(this.rpc, route.pair.token, Number(decimals), block, this.registry);
+        const value = fresh ? cached.value : poolSpotUsd(rpc, route.pair.token, Number(decimals), block, this.registry);
         if (!fresh) { this.spots.set(key, { at: this.now(), value }); value.catch(() => this.spots.delete(key)); }
         const spot = await value;
         if (!fresh) requests += spot.requests;
@@ -163,7 +183,7 @@ export class SellChecker {
     const key = route.pair.token.toLowerCase();
     let found = this.balances.get(key);
     if (!found) {
-      found = balanceSlot(this.rpc, route.pair.token, BigInt(block));
+      found = balanceSlot(rpc, route.pair.token, BigInt(block));
       this.balances.set(key, found);
       // A stop or a failed read is looked up again; only a token with no matching layout stays unsupported.
       found.then(result => { if (result.failed) this.balances.delete(key); }, () => this.balances.delete(key));
@@ -173,32 +193,45 @@ export class SellChecker {
     if (failed) return { ...base, route, status: 'unavailable', requests };
     if (!balance) return { ...base, route, status: 'unsupported', requests };
     const priced = { ...route, pair: { token: route.pair.token, balance } };
-    const probes = await Promise.all(sizes.map(async ({ sizeUsd, units }) => ({ ...await runSellProbe(this.rpc, priced, units!, BigInt(block), { nowSec: () => this.now() / 1000 }), sizeUsd })));
+    const probes = await Promise.all(sizes.map(async ({ sizeUsd, units }) => ({ ...await runSellProbe(rpc, priced, units!, BigInt(block), { nowSec: () => this.now() / 1000 }), sizeUsd })));
     const exit = (size: number) => { const p = probes.find(p => p.sizeUsd === size); return p && (p.status === 'sellable' || p.status === 'sell_failed') ? p.exitCostPct : null; };
     return { ...base, route: priced, pairUsd: quote.usd, pairUsdSource: source, probes, requests: requests + probes.reduce((n, p) => n + p.requests, 0), status: combineSellProbes(probes), exit100: exit(100), exit1k: exit(1000) };
   }
 }
 
+/** Indexed route topology, without paid reads. Changes to a curve, pair or pool invalidate a cooldown. */
+const routeStateSql = (block: string) => `jsonb_build_object(
+  'curve',encode(t.curve,'hex'),'graduated_pool',CASE WHEN t.graduated_block<=${block} THEN encode(t.graduated_pool,'hex') END,
+  'graduated',coalesce(t.graduated_block<=${block},false),
+  'pair',(SELECT lower(data->>'pairToken') FROM pons_events WHERE token=t.address AND kind='launch' AND block<=${block} ORDER BY block LIMIT 1),
+  'pools',coalesce((SELECT jsonb_agg(jsonb_build_array(encode(p.id,'hex'),p.venue,encode(p.currency0,'hex'),encode(p.currency1,'hex'),p.fee,p.tick_spacing,encode(p.hooks,'hex')) ORDER BY p.id)
+    FROM pools p WHERE (p.currency0=t.address OR p.currency1=t.address) AND p.created_block<=${block} AND p.venue IN ('uniswap_v3','uniswap_v4')),'[]'::jsonb))`;
+
 const MEASURED = new Set<SellCheckStatus>(['sellable', 'refused', 'buy_failed']);
 /** Store one check: every run as evidence, and the current reading. A transient failure keeps the earlier reading of
  * the same route; a new route or a lost route replaces it, so a closed curve's reading never outlives graduation. */
-export async function persistSellCheck(db: ChainDb, result: SellCheckResult, at: Date, activityAt: Date | null) {
+export async function persistSellCheck(db: ChainDb, result: SellCheckResult, at: Date, activityAt: Date | null, scheduleClass?: SellCheckClass) {
   const routeId = result.route ? sellRouteId(result.route) : null;
   const data = { ethUsd: result.ethUsd, ...(result.pairUsd !== undefined ? { pairUsd: result.pairUsd, pairUsdSource: result.pairUsdSource } : {}), route: result.route, probes: result.probes.map(({ requests: _requests, ...p }) => p) };
   await db.tx(async tx => {
-    await tx.sql.query('INSERT INTO sell_check_runs(coin,block,checked_at,status,requests,data) VALUES($1,$2,$3,$4,$5,$6)',
-      [binary(result.coin), result.block, at, result.status, result.requests, JSON.stringify(data)]);
-    const prior = (await tx.sql.query<{ route_id: string | null; status: SellCheckStatus }>('SELECT route_id,status FROM sell_check_latest WHERE coin=$1 FOR UPDATE', [binary(result.coin)])).rows[0];
+    await tx.sql.query('INSERT INTO sell_check_runs(coin,block,checked_at,status,requests,data,schedule_class) VALUES($1,$2,$3,$4,$5,$6,$7)',
+      [binary(result.coin), result.block, at, result.status, result.requests, JSON.stringify(data), scheduleClass ?? null]);
+    const prior = (await tx.sql.query<{ route_id: string | null; status: SellCheckStatus; buy_failures: number }>('SELECT route_id,status,buy_failures FROM sell_check_latest WHERE coin=$1 FOR UPDATE', [binary(result.coin)])).rows[0];
+    const state = (await tx.sql.query<{ route_state: unknown; price: number | null; peak_crash: boolean }>(`SELECT ${routeStateSql('$2')} AS route_state,p.price,
+      coalesce(p.price<=p.peak*0.2,false) AS peak_crash FROM tokens t LEFT JOIN coin_rating_prices p ON p.coin=t.address AND p.block<=$2 WHERE t.address=$1`,
+      [binary(result.coin), result.block])).rows[0];
     if (result.status === 'unavailable' && prior && MEASURED.has(prior.status) && prior.route_id === routeId) {
-      await tx.sql.query('UPDATE sell_check_latest SET attempted_at=$2,attempt_status=$3 WHERE coin=$1', [binary(result.coin), at, result.status]);
+      await tx.sql.query('UPDATE sell_check_latest SET attempted_at=$2,attempt_status=$3,price=$4,peak_crash=$5,route_state=$6 WHERE coin=$1', [binary(result.coin), at, result.status, state?.price ?? null, state?.peak_crash ?? false, JSON.stringify(state?.route_state ?? null)]);
       return;
     }
-    await tx.sql.query(`INSERT INTO sell_check_latest(coin,block,checked_at,activity_at,venue,route_id,status,exit_cost_100_pct,exit_cost_1k_pct,method_version,data,attempted_at,attempt_status)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$3,$7) ON CONFLICT(coin) DO UPDATE SET block=excluded.block,checked_at=excluded.checked_at,activity_at=excluded.activity_at,
+    await tx.sql.query(`INSERT INTO sell_check_latest(coin,block,checked_at,activity_at,venue,route_id,status,exit_cost_100_pct,exit_cost_1k_pct,method_version,data,attempted_at,attempt_status,buy_failures,route_state,price,peak_crash)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$3,$7,$12,$13,$14,$15) ON CONFLICT(coin) DO UPDATE SET block=excluded.block,checked_at=excluded.checked_at,activity_at=excluded.activity_at,
       venue=excluded.venue,route_id=excluded.route_id,status=excluded.status,exit_cost_100_pct=excluded.exit_cost_100_pct,exit_cost_1k_pct=excluded.exit_cost_1k_pct,
-      method_version=excluded.method_version,data=excluded.data,attempted_at=excluded.attempted_at,attempt_status=excluded.attempt_status`,
+      method_version=excluded.method_version,data=excluded.data,attempted_at=excluded.attempted_at,attempt_status=excluded.attempt_status,
+      buy_failures=excluded.buy_failures,route_state=excluded.route_state,price=excluded.price,peak_crash=excluded.peak_crash`,
       [binary(result.coin), result.block, at, activityAt, result.route?.venue ?? null, routeId, result.status,
-        MEASURED.has(result.status) ? result.exit100 : null, MEASURED.has(result.status) ? result.exit1k : null, SELL_CHECK_METHOD, JSON.stringify(data)]);
+        MEASURED.has(result.status) ? result.exit100 : null, MEASURED.has(result.status) ? result.exit1k : null, SELL_CHECK_METHOD, JSON.stringify(data), result.status === 'buy_failed' ? (prior?.status === 'buy_failed' && prior.route_id === routeId ? prior.buy_failures : 0) + 1 : 0,
+        JSON.stringify(state?.route_state ?? null), state?.price ?? null, state?.peak_crash ?? false]);
   });
 }
 
@@ -229,39 +262,25 @@ export async function sellRefusalTotals(db: ChainDb, nowMs: number) {
 }
 
 export interface SellCheckSchedule {
-  /** Coins checked per tick, and how many run at once. */
-  batch?: number; parallel?: number;
-  /** No check before a coin is this old (Pons anti-snipe windows are seconds long). */
-  minAgeSec?: number;
-  /** New activity re-checks a coin at most this often. */
-  minIntervalSec?: number;
-  /** A measured coin with no new activity is re-checked after this long. */
-  maxAgeSec?: number;
-  /** Retry after a provider failure or missing price, and after no supported route. */
-  retrySec?: number; unsupportedRetrySec?: number;
-  /** Paid requests the scheduler may spend per UTC day; the process-wide RPC budget still applies. */
+  batch?: number; parallel?: number; minAgeSec?: number; minIntervalSec?: number;
+  /** Routine refused-reading refresh and provider-failure retry. */
+  maxAgeSec?: number; retrySec?: number;
+  unsupportedDays?: number; buyFailedHours?: number; sellableHours?: number; reservePct?: number;
   dailyRequests?: number;
 }
-// An unsupported route is checked again hourly: a token-paired curve becomes checkable when its pair token gains
-// metadata or a USD price (the pricing repair fills both), and the check costs no probe while it stays unsupported.
-const DEFAULTS: Required<SellCheckSchedule> = { batch: 8, parallel: 4, minAgeSec: 30, minIntervalSec: 600, maxAgeSec: 86400, retrySec: 900, unsupportedRetrySec: 3600, dailyRequests: 60_000 };
-/**
- * Picks live Radar coins that need a reading (never checked, new activity since the last one, idle past the
- * refresh age, a provider failure to retry, or a graduated curve) and checks them at the indexed head.
- */
+const DEFAULTS: Required<SellCheckSchedule> = {
+  batch: 8, parallel: 4, minAgeSec: 30, minIntervalSec: 600, maxAgeSec: 86400, retrySec: 900,
+  unsupportedDays: 7, buyFailedHours: 24, sellableHours: 24, reservePct: 20, dailyRequests: 60_000,
+};
+/** Oldest launches first within each budget class. Cooldowns survive process restarts. */
 export class SellCheckScheduler {
   private readonly cfg: Required<SellCheckSchedule>;
   private stopped = false; private wake?: () => void;
-  private day = ''; private spent = 0; private pausedUntil = 0; private prunedAt = 0;
-  /**
-   * Unsupported and failed-buy readings older than this process are due once: earlier code may not have had a route this
-   * code has (token-paired Pons curves before 2026-10-11 bought with ETH and failed, then had no route).
-   */
-  private readonly startedAt: number;
+  private pausedUntil = 0; private prunedAt = 0;
   constructor(readonly db: ChainDb, readonly checker: SellChecker, schedule: SellCheckSchedule = {}, readonly log: (event: string, fields: Record<string, unknown>) => void = () => {}) {
-    this.startedAt = checker.now();
     this.cfg = { ...DEFAULTS, ...Object.fromEntries(Object.entries(schedule).filter(([, v]) => v !== undefined)) };
     for (const [key, value] of Object.entries(this.cfg)) if (!Number.isSafeInteger(value) || value < 0 || (['batch', 'parallel'].includes(key) && value < 1)) throw new Error(`Invalid sell-check ${key}`);
+    if (this.cfg.reservePct > 100) throw new Error('Invalid sell-check reservePct');
   }
   stop() { this.stopped = true; this.wake?.(); }
   async run(pollMs: number) {
@@ -275,8 +294,6 @@ export class SellCheckScheduler {
         else this.log('sell_check_failed', {});
       }
       if (this.stopped) return;
-      // A full batch means more coins are due: the next pass starts at once (one batch then a pause held checks to about
-      // 32 a minute on 2026-10-11, with 2,300 radar coins due a re-check after a restart).
       if (attempted >= this.cfg.batch) continue;
       await new Promise<void>(resolve => { const timer = setTimeout(resolve, pollMs); timer.unref?.(); this.wake = () => { clearTimeout(timer); resolve(); }; });
     }
@@ -285,53 +302,79 @@ export class SellCheckScheduler {
     const row = (await this.db.sql.query<{ block: string | null }>(`SELECT coalesce((SELECT block FROM ingest_cursors WHERE stream='head'),(SELECT max(number) FROM chain_blocks)) AS block`)).rows[0];
     return row?.block == null ? null : Number(row.block);
   }
+  /** Actual stored requests, including other writers, rather than a restart-local estimate. */
   private async budget(now: number) {
-    const day = new Date(now).toISOString().slice(0, 10);
-    if (day !== this.day) {
-      this.day = day;
-      this.spent = Number((await this.db.sql.query<{ n: string }>('SELECT coalesce(sum(requests),0) AS n FROM sell_check_runs WHERE checked_at>=to_timestamp($1::double precision)',
-        [Math.floor(now / 86400000) * 86400])).rows[0]!.n);
-    }
-    return this.cfg.dailyRequests - this.spent;
+    const spent = Number((await this.db.sql.query<{ n: string }>(`SELECT coalesce(sum(requests),0) AS n FROM sell_check_runs
+      WHERE checked_at>=to_timestamp($1::double precision) AND checked_at<to_timestamp($2::double precision)`,
+      [Math.floor(now / 86400000) * 86400, (Math.floor(now / 86400000) + 1) * 86400])).rows[0]!.n);
+    return Math.max(0, this.cfg.dailyRequests - spent);
   }
-  /** Coins due for a check, newest launches first, then the most recently active. */
-  async due(now: number) {
-    const s = now / 1000, c = this.cfg;
-    return (await this.db.sql.query<{ coin: Uint8Array; activity: Date }>(`SELECT r.coin,r.activity FROM read_coins r JOIN tokens t ON t.address=r.coin
-      LEFT JOIN sell_check_latest l ON l.coin=r.coin LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block
-      WHERE r.activity>to_timestamp($1::double precision-604800) AND coalesce(bt.ts,cb.ts,r.activity)<=to_timestamp($1::double precision-$2) AND (
-        l.coin IS NULL
-        OR (l.attempt_status='unavailable' AND l.attempted_at<=to_timestamp($1::double precision-$5))
-        OR (l.attempt_status='unsupported' AND l.attempted_at<=to_timestamp($1::double precision-$6))
-        OR (l.attempt_status IN ('sellable','refused','buy_failed') AND r.activity>coalesce(l.activity_at,'-infinity'::timestamptz) AND l.attempted_at<=to_timestamp($1::double precision-$3))
-        OR (l.attempt_status IN ('sellable','refused','buy_failed') AND l.attempted_at<=to_timestamp($1::double precision-$4))
-        OR (l.venue='pons_curve' AND t.graduated_block IS NOT NULL AND l.attempt_status<>'unavailable')
-        OR (l.attempt_status IN ('unsupported','buy_failed') AND l.attempted_at<to_timestamp($8::double precision)))
-      ORDER BY (l.coin IS NULL) DESC,(l.attempt_status IN ('unsupported','buy_failed') AND l.attempted_at<to_timestamp($8::double precision)) DESC,r.activity DESC,r.coin LIMIT $7`, [s, c.minAgeSec, c.minIntervalSec, c.maxAgeSec, c.retrySec, c.unsupportedRetrySec, c.batch, this.startedAt / 1000])).rows
-      .map(r => ({ coin: hex(r.coin), activity: new Date(r.activity) }));
+  /** First live, crash rechecks, first unlisted, routine; a batch cannot starve an older launch in its class. */
+  async due(now: number, head?: number) {
+    const block = head ?? await this.head();
+    if (block == null) return [];
+    const c = this.cfg;
+    return (await this.db.sql.query<{ coin: Uint8Array; activity: Date | null; class: SellCheckClass }>(`WITH candidates AS (
+      SELECT t.address AS coin,r.activity,t.first_block,l.coin IS NULL AS first,
+        l.status,l.attempt_status,l.attempted_at,l.checked_at,l.block AS checked_block,l.buy_failures,
+        coalesce(v.high_block>l.block,false) AS new_trades,
+        -- Same price-crash thresholds as ratingPriceMove; the sell-check baseline is independent of card rewrites.
+        coalesce(p.block>l.block AND p.block<=$2 AND
+          (p.price<=coalesce(l.price,rc.full_price)*0.5 OR (p.price<=p.peak*0.2 AND NOT l.peak_crash)),false) AS crash,
+        CASE WHEN l.route_state IS NOT NULL THEN l.route_state IS DISTINCT FROM ${routeStateSql('$2')}
+          ELSE (l.venue='pons_curve' AND t.graduated_block<= $2)
+            OR EXISTS(SELECT 1 FROM pools p WHERE (p.currency0=t.address OR p.currency1=t.address) AND p.created_block>l.block AND p.created_block<=$2)
+            OR (l.data->'route'->>'curve' IS NOT NULL AND lower(l.data->'route'->>'curve') IS DISTINCT FROM '0x'||encode(t.curve,'hex')) END AS route_changed
+      FROM tokens t LEFT JOIN read_coins r ON r.coin=t.address LEFT JOIN sell_check_latest l ON l.coin=t.address
+      LEFT JOIN engine_block_times bt ON bt.number=t.first_block LEFT JOIN chain_blocks cb ON cb.number=t.first_block
+      LEFT JOIN engine_swap_versions v ON v.coin=t.address LEFT JOIN coin_rating_prices p ON p.coin=t.address
+      LEFT JOIN coin_rating_checks rc ON rc.coin=t.address
+      WHERE t.first_block<=$2 AND coalesce(bt.ts,cb.ts,r.activity)<=to_timestamp($1::double precision-$3)
+        AND (l.coin IS NULL OR greatest(r.activity,p.ts,bt.ts,cb.ts)>to_timestamp($1::double precision-604800))
+    ), due AS (
+      SELECT *,CASE WHEN first AND activity>to_timestamp($1::double precision-86400) THEN 'first_live'
+        WHEN NOT first AND crash THEN 'crash' WHEN first THEN 'first_unlisted' ELSE 'routine' END AS class
+      FROM candidates WHERE first OR crash OR route_changed
+        OR (attempt_status='unavailable' AND attempted_at<=to_timestamp($1::double precision-$4))
+        OR (attempt_status<>'unavailable' AND CASE status
+          WHEN 'unsupported' THEN attempted_at<=to_timestamp($1::double precision-$5)
+          WHEN 'buy_failed' THEN attempted_at<=to_timestamp($1::double precision-least(604800,$6::double precision*power(2,least(20,greatest(0,buy_failures-1)))))
+          WHEN 'sellable' THEN (new_trades AND attempted_at<=to_timestamp($1::double precision-$7)) OR checked_at<=to_timestamp($1::double precision-$8)
+          ELSE (new_trades AND attempted_at<=to_timestamp($1::double precision-$7)) OR attempted_at<=to_timestamp($1::double precision-$9) END)
+    ) SELECT coin,activity,class FROM due
+      ORDER BY CASE class WHEN 'first_live' THEN 0 WHEN 'crash' THEN 1 WHEN 'first_unlisted' THEN 2 ELSE 3 END,first_block,coin LIMIT $10`,
+      [now / 1000, block, c.minAgeSec, c.retrySec, c.unsupportedDays * 86400, c.buyFailedHours * 3600, c.minIntervalSec, c.sellableHours * 3600, c.maxAgeSec, c.batch])).rows
+      .map(r => ({ coin: hex(r.coin), activity: r.activity ? new Date(r.activity) : null, class: r.class }));
   }
-  /** One bounded pass. Returns the number of coins attempted. */
+  /** One bounded pass; reserve admission covers every RPC, including token-pair discovery. */
   async tick() {
     const now = this.checker.now();
     if (now < this.pausedUntil) return 0;
-    if (now - this.prunedAt >= 3600_000) { await this.db.sql.query("DELETE FROM sell_check_runs WHERE checked_at<to_timestamp($1::double precision)", [now / 1000 - 30 * 86400]); this.prunedAt = now; }
+    if (now - this.prunedAt >= 3600_000) { await this.db.sql.query('DELETE FROM sell_check_runs WHERE checked_at<to_timestamp($1::double precision)', [now / 1000 - 30 * 86400]); this.prunedAt = now; }
     const block = await this.head();
     if (block == null) return 0;
-    const coins = await this.due(now);
+    const coins = await this.due(now, block);
     if (!coins.length) return 0;
     const ethUsd = await this.checker.ethUsd();
     if (ethUsd == null) { this.log('sell_check_waiting', { reason: 'eth_usd_unavailable' }); return 0; }
     let attempted = 0;
-    for (let i = 0; i < coins.length && !this.stopped; i += this.cfg.parallel) {
-      // Worst case per coin: one call per size plus one Pons capacity re-read per failed size.
-      const group = coins.slice(i, i + this.cfg.parallel), worst = SELL_CHECK_SIZES_USD.length * 2;
-      if (await this.budget(now) < group.length * worst) { this.log('sell_check_daily_cap', { cap: this.cfg.dailyRequests }); break; }
-      const results = await Promise.all(group.map(({ coin }) => this.checker.check(coin, block, SELL_CHECK_SIZES_USD, ethUsd)));
+    for (let i = 0; i < coins.length && !this.stopped;) {
+      const kind = coins[i]!.class, urgent = kind === 'first_live' || kind === 'crash';
+      const reserve = urgent ? 0 : Math.ceil(this.cfg.dailyRequests * this.cfg.reservePct / 100);
+      let allowance = Math.max(0, await this.budget(this.checker.now()) - reserve);
+      if (allowance < SELL_CHECK_SIZES_USD.length * 2) {
+        this.log(reserve ? 'sell_check_reserve' : 'sell_check_daily_cap', { cap: this.cfg.dailyRequests, remaining: allowance + reserve }); break;
+      }
+      const group = coins.slice(i, i + Math.min(this.cfg.parallel, Math.floor(allowance / 4))).filter(c => c.class === kind);
+      const results = await Promise.all(group.map(({ coin }) => this.checker.check(coin, block, SELL_CHECK_SIZES_USD, ethUsd,
+        () => { if (allowance <= 0) return false; allowance--; return true; })));
       for (let j = 0; j < results.length; j++) {
-        this.spent += results[j]!.requests;
-        await persistSellCheck(this.db, results[j]!, new Date(now), group[j]!.activity);
+        await persistSellCheck(this.db, results[j]!, new Date(this.checker.now()), group[j]!.activity, kind);
         attempted++;
       }
+      const stop = results.find(r => r.stopReason)?.stopReason;
+      if (stop) throw new RpcGuardError(stop);
+      i += group.length;
     }
     return attempted;
   }

@@ -221,14 +221,14 @@ describe('live sell checks (indexed routes, synthetic probe outputs)', () => {
     expect((await checker.check(poolCoin, 1000, [100], 2000)).requests).toBe(1);
     expect(usdToUnits(100, 250, 18)).toBe(4n * 10n ** 17n); expect(usdToUnits(100, 0, 18)).toBeNull();
   });
-  it('checks readings that earlier code left unsupported or failed at the buy once after a restart', async () => {
+  it('keeps old unsupported readings in cooldown across a restart', async () => {
     const db = await seed(); await ethSwap(db, 3500);
     const now = epoch + 3600_000;
     await db.sql.query("INSERT INTO sell_check_latest(coin,block,checked_at,activity_at,venue,route_id,status,method_version,data,attempted_at,attempt_status) VALUES($1,1000,$2,$2,NULL,NULL,'unsupported','sell-check-1','{}',$2,'unsupported')",
       [binary(usdgCoin), new Date(now - 60_000)]);
     const scheduler = new SellCheckScheduler(db, new SellChecker(db, chain({}), { now: () => now }));
-    expect((await scheduler.due(now)).map(d => d.coin)).toContain(usdgCoin);
-    // A reading this process made is not due again before the retry interval.
+    expect((await scheduler.due(now)).map(d => d.coin)).not.toContain(usdgCoin);
+    // Restarting must not bypass the unsupported cooldown.
     await db.sql.query('UPDATE sell_check_latest SET attempted_at=$1 WHERE coin=$2', [new Date(now), binary(usdgCoin)]);
     expect((await scheduler.due(now)).map(d => d.coin)).not.toContain(usdgCoin);
   });

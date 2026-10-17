@@ -67,6 +67,7 @@ import { verdictReceipt } from './receipt.js';
 import { historyPrune, historyPrunes, revivedBy } from './history-prunes.js';
 
 export interface WorkerOptions {
+  sellCheckBudget?: { dailyRequests: number; reservePct: number };
   fingerprints?:FingerprintOptions;
   flow?:FlowOptions;
   /** Explicit configured normalizer acquisition; never called for retrospective replay. */
@@ -558,7 +559,7 @@ export class EngineWorker {
     let unsubscribe: (()=>Promise<void>) | undefined;
     try { unsubscribe=await (this.options.bus ?? this.db.bus).subscribe(message => { if (!['card_updated','verdict_created'].includes(message.topic)) this.wake?.(); }); }
     catch { /* A disconnected bus does not disable the durable cursor poll. */ }
-    const throughput=setInterval(()=>{void logThroughput(this.db).catch(error=>this.options.onRerateError?.(error));},60_000);
+    const throughput=setInterval(()=>{void logThroughput(this.db,this.options.sellCheckBudget).catch(error=>this.options.onRerateError?.(error));},60_000);
     throughput.unref();
     const differences=setInterval(()=>this.outcomeDifferences.flush(),60_000);
     differences.unref();
@@ -777,6 +778,7 @@ export class EngineWorker {
     // CA-34: Clear needs every check that has an input source (UNSOURCED_PLAYBOOKS has none yet and is named instead).
     const notRun=(Object.keys(rules) as PlaybookId[]).filter(id=>!evaluated.includes(id)),blocking=notRun.filter(id=>!UNSOURCED_PLAYBOOKS.includes(id));
     if (assembled.level==='clear' && (blocking.length>0 || incomplete.length>0)) assembled.level='pending';
+    if (assembled.level==='pending' && blocking.includes('honeypot')) assembled.reasons.unshift('Waiting on a sell check: the buy-then-sell simulation has not completed.');
     if (assembled.level==='clear' && notRun.length)assembled.reasons.push(`Not checked yet: ${notRun.map(id=>id.replaceAll('_',' ')).join(', ')} (no data source yet)`);
     // Rated Danger when retention pruned its history: the checks behind that rating cannot be re-run on what is left,
     // so a revived coin is never published as less severe than Danger.

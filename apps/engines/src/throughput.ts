@@ -14,13 +14,21 @@ export async function countEvaluations(db:ChainDb,counts:readonly EvaluationCoun
 }
 
 /** Minute log summaries share the durable report counters; no per-coin payload or provider errors are logged. */
-export async function logThroughput(db:ChainDb) {
+export async function logThroughput(db:ChainDb,budget?:{dailyRequests:number;reservePct:number}) {
   const rows=(await db.sql.query(`SELECT path,outcome,reason,first_rating,sum(count)::text AS count
     FROM engine_evaluation_counts WHERE minute>=date_trunc('minute',now())-interval '1 minute'
       AND minute<date_trunc('minute',now()) GROUP BY path,outcome,reason,first_rating ORDER BY path,outcome,reason,first_rating`)).rows;
   const pending=(await db.sql.query(pendingSnapshotSql)).rows;
   const ratedPending=(await db.sql.query(ratingGapSnapshotSql)).rows;
-  console.log(JSON.stringify({event:'engine_throughput',intervalSec:60,counts:rows,pending,ratedPending}));
+  const classes=(await db.sql.query(`SELECT schedule_class AS class,count(*) AS checks,coalesce(sum(requests),0) AS requests
+    FROM sell_check_runs WHERE checked_at>=date_trunc('minute',now())-interval '1 minute'
+    AND checked_at<date_trunc('minute',now()) GROUP BY schedule_class ORDER BY schedule_class`)).rows;
+  const spent=Number((await db.sql.query(`SELECT coalesce(sum(requests),0) AS n FROM sell_check_runs
+    WHERE checked_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AND checked_at<=now()`)).rows[0]!.n);
+  const remaining=budget ? Math.max(0,budget.dailyRequests-spent) : null;
+  const sellCheck={enabled:!!budget,classes,spentRequests:spent,remainingRequests:remaining,
+    routineRemainingRequests:budget ? Math.max(0,remaining!-Math.ceil(budget.dailyRequests*budget.reservePct/100)) : null};
+  console.log(JSON.stringify({event:'engine_throughput',intervalSec:60,counts:rows,pending,ratedPending,sellCheck}));
 }
 
 /** Current blockers overlap: missing prices/senders/sell checks can still produce a first card. No raw-history scan. */

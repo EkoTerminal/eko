@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRadarCard, createRadarRows } from '../../mocks/demo/radar';
 import { createPairRows } from '../../mocks/demo/pairs';
 import { exitMeasured, sellCheckOf } from '../../lib/sellCheck';
-import { CoinOverview } from './CoinCard';
+import { CoinOverview, CoinVerdict } from './CoinCard';
 import { RadarRowView } from './RadarParts';
 import { PairView } from './Pairs';
 vi.mock('../../lib/useMedia', () => ({ useMedia: () => false }));
@@ -30,6 +30,15 @@ describe('live sell check readings on the web', () => {
     expect(html).not.toContain('Fixed tax of 5% or less');
     expect(html).not.toContain('None active');
     expect(html).not.toContain('$0');
+  });
+  it('explains a pending sell check on the coin page using the existing verdict contract', () => {
+    const card = checkedCard('sell_check_sellable');
+    card.verdict = { ...card.verdict, level: 'pending', evaluatedPlaybooks: ['tax_trap'], reasons: [] };
+    const html = render(<CoinVerdict verdict={card.verdict} />);
+    expect(html).toContain('Waiting on a sell check: the buy-then-sell simulation has not completed.');
+    expect(render(<CoinVerdict verdict={{ ...card.verdict, evaluatedPlaybooks: ['honeypot'] }} />)).not.toContain('Waiting on a sell check');
+    const reason = 'Waiting on a sell check: the buy-then-sell simulation has not completed.';
+    expect(render(<CoinVerdict verdict={{ ...card.verdict, reasons: [reason] }} />).split(reason)).toHaveLength(2);
   });
   it('marks a failed sell on the coin card, the Radar row and the Pairs row', () => {
     const card = checkedCard('sell_check_refused', ['exitCostPct.usd1k']);
