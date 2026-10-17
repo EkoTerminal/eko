@@ -83,6 +83,8 @@ describe('retention worker', () => {
     const db=new Database(sql,work=>work(sql)),report=vi.fn();
     await new RetentionWorker(db,{ratingDays:7,dryRun:false},report).tick();
     expect(report).toHaveBeenCalledWith(expect.objectContaining({quoteRows:0,feedRows:0,finished:false,skippedRules:['wallet_fingerprint_dependencies'],ratingRows:{receipt_publications:0,receipt_items:0,wallet_fingerprint_dependencies:0,guard_shadow_runs:0,coin_cards:0,playbook_matches:0,verdicts:0}}));
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ruleStats:expect.objectContaining({receipt_publications:expect.objectContaining({examined:0,eligible:0})})}));
   });
   it('does nothing unless configured, and reports each bounded pass without row data', async () => {
     const db = await openDb({ pgliteDir: ':memory:' }); handles.push(db); await migrate(db);

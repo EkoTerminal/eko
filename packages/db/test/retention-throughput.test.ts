@@ -32,7 +32,7 @@ describe('retention batch plans and throughput',()=>{
       await db.sql.query("INSERT INTO coin_cards VALUES('sample-card',$1,1,'fixture','{}','1.0.0')",[binary(coin)]);
       await db.sql.query("INSERT INTO coin_card_latest VALUES($1,'sample-card',1,$2)",[binary(coin),{verdict:{receipt:{id:'sample-0000'}}}]);
       await db.sql.query('ANALYZE receipt_publications');
-      const plan=await retentionDb(db).sql.query(`EXPLAIN ${receiptSelection} AND p.id=ANY($2::text[])`,[new Date(now-7*86400000),backlog.slice(0,64).map(r=>r.id)]);
+      const plan=await retentionDb(db).sql.query(`EXPLAIN ${receiptSelection.replace('SELECT p.*','SELECT p.id')} AND p.id=ANY($2::text[])`,[new Date(now-7*86400000),backlog.slice(0,64).map(r=>r.id)]);
       const text=JSON.stringify(plan.rows);
       expect(text).toContain('receipt_publications_live_coin_sequence');expect(text).toContain('Index Cond:');expect(text).not.toContain('Seq Scan');
       const started=performance.now();
@@ -43,6 +43,33 @@ describe('retention batch plans and throughput',()=>{
       const kept=(await db.sql.query<{id:string}>('SELECT id FROM receipt_publications WHERE data IS NOT NULL ORDER BY id')).rows.map(r=>r.id);
       expect(kept).toEqual(['sample-0000','sample-forecast','sample-other','sample-producer','sample-recent']);
       expect((await db.sql.query("SELECT canonical_payload,summary->>'coin' AS coin FROM receipt_publications WHERE id='sample-0001'")).rows).toEqual([{canonical_payload:null,coin}]);
+    }finally{await db.close();}
+  });
+  it('walks retained windows using IDs and fetches payloads only for eligible publications',async()=>{
+    const db=await openDb({pgliteDir:':memory:'});
+    try {
+      await migrate(db);await migrateEngines(db);
+      const retained=Array.from({length:128},(_,n)=>({...publication(`sample-${n.toString().padStart(4,'0')}`,`0x${(n+1).toString(16).padStart(40,'0')}`),canonical_payload:'{}'}));
+      const eligible=['sample-superseded-a','sample-superseded-b'];
+      await insert(db,[...eligible.map(id=>publication(id,retained[0]!.data.coin)),...retained]);
+      const payloadReads:unknown[][]=[],selections:string[][]=[];
+      const wrap=(sql:SqlClient):SqlClient=>({query:async <T>(text:string,params?:unknown[])=>{
+        if(text.startsWith('SELECT p.* FROM receipt_publications')) {
+          expect(selections.length).toBe(3);
+          payloadReads.push(params!);
+        }
+        if(text.startsWith('SELECT p.id FROM receipt_publications') && !text.includes('FOR UPDATE'))selections.push(params![1] as string[]);
+        return sql.query<T>(text,params);
+      }});
+      const traced=new ChainDb(wrap(db.sql),work=>db.tx(tx=>work(wrap(tx.sql))));
+      const result=await runRetention(traced,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,now:()=>now});
+      expect(selections.map(ids=>ids.length)).toEqual([64,64,2]);
+      expect(payloadReads).toHaveLength(1);
+      expect((payloadReads[0]![0] as string[]).sort()).toEqual(eligible);
+      expect(result.ratingRows?.receipt_publications).toBe(2);
+      expect(result.ruleStats?.receipt_publications).toMatchObject({rows:2,examined:130,eligible:2});
+      expect(result.tables?.find(r=>r.table==='receipt_publications')).toMatchObject({rows:2,examined:130,eligible:2});
+      expect((await db.sql.query('SELECT count(*)::integer AS n FROM receipt_publications WHERE data IS NOT NULL')).rows).toEqual([{n:128}]);
     }finally{await db.close();}
   });
   it('refuses corrupt payloads before stripping',async()=>{

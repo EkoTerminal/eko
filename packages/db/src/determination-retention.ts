@@ -8,7 +8,7 @@ import { compactTransfers, quietCoins, retentionHorizon, SWAP_EVIDENCE_DAYS } fr
 import { preserveGradePrices } from './rating-retention.js';
 import { snapshotTrending } from './trending.js';
 
-export interface RetentionTableReport { table: string; rows: number; estimatedBytes: number; estimateSkipped?: boolean }
+export interface RetentionTableReport { table: string; rows: number; estimatedBytes: number; estimateSkipped?: boolean; examined?: number; eligible?: number }
 /** Eligibility estimates are deliberately skipped: counting payloads scans the very backlog being pruned. */
 export async function reportRows(_db: ChainDb, table: string, _selection: string, _params: unknown[]): Promise<RetentionTableReport> {
   return { table, rows: 0, estimatedBytes: 0, estimateSkipped: true };
@@ -214,6 +214,11 @@ export function addReport(result: RetentionResult, r: RetentionTableReport) {
   const rows = result.tables ??= [];
   const prior = rows.find(x => x.table === r.table);
   if (prior) { prior.rows += r.rows; prior.estimatedBytes += r.estimatedBytes; if (r.estimateSkipped) prior.estimateSkipped = true; } else rows.push(r);
+  for (const key of ['examined','eligible'] as const) if (r[key] !== undefined) {
+    if (prior) prior[key] = (prior[key] ?? 0) + r[key];
+    const stats = result.ruleStats?.[r.table];
+    if (stats) stats[key] = (stats[key] ?? 0) + r[key];
+  }
 }
 
 export async function compactUnratedTransfers(db:ChainDb,coin:Uint8Array,through:bigint,limit:number) {

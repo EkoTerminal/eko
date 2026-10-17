@@ -65,7 +65,7 @@ export interface RetentionResult {
   finished: boolean;
   skippedRules: string[];
   ratingRows?: Record<string, number>;
-  ruleStats?: Record<string, { rows: number; skipped: number; timeouts: number; batchRows: number }>;
+  ruleStats?: Record<string, { rows: number; skipped: number; timeouts: number; batchRows: number; examined?: number; eligible?: number }>;
   dryRun?: boolean;
   tables?: RetentionTableReport[];
   partitions?: {table:string;partition:string;rows:number;seconds:number}[];
@@ -402,7 +402,7 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
   if (modern) {
     for (const rule of ['settled', 'raw_cap'] as const) {
       if (rule === 'settled' ? options.settleHours === undefined : options.rawDays === undefined) continue;
-      if (rule === 'raw_cap' && options.rawPartitions !== false && options.swapDays !== undefined && options.transferDays !== undefined) continue;
+      if (rule === 'raw_cap' && options.swapDays !== undefined && options.transferDays !== undefined) continue;
       await runRule(rule, async timeLeft => {
         if (options.dryRun) { for (const table of ['token_transfers','liquidity_events','pons_events','swaps']) await report(table); return; }
         await determinationPass(db, { ...options, batchRows: limit }, result, quote, started, rule, timeLeft);

@@ -135,6 +135,7 @@ async function receiptRetention(db:ChainDb,options:RetentionOptions,result:Reten
     for(const table of ['receipt_publications','receipt_items'])addReport(result,await reportRows(db,table,'',[]));
     return;
   }
+  addReport(result,{table:'receipt_publications',rows:0,estimatedBytes:0,examined:0,eligible:0});
   while(timeLeft()) {
     const after=cursors.get('receipt_publications');
     // 2026-10-17: large TOAST payloads must be validated without holding publication row locks.
@@ -144,7 +145,12 @@ async function receiptRetention(db:ChainDb,options:RetentionOptions,result:Reten
       ORDER BY recorded_at,id LIMIT ${limit}`,[cutoff,...(after ?? [])])).rows;
     if(!window.length) {cursors.delete('receipt_publications');break;}
     const next=[window.at(-1)!.recorded_at,window.at(-1)!.id];
-    const candidates=(await db.sql.query<Publication>(`${receiptSelection} AND p.id=ANY($2::text[])`,[cutoff,window.map(r=>r.id)])).rows;
+    addReport(result,{table:'receipt_publications',rows:0,estimatedBytes:0,examined:window.length});
+    const eligible=(await db.sql.query<{id:string}>(`${receiptSelection.replace('SELECT p.*','SELECT p.id')} AND p.id=ANY($2::text[])`,[cutoff,window.map(r=>r.id)])).rows;
+    addReport(result,{table:'receipt_publications',rows:0,estimatedBytes:0,eligible:eligible.length});
+    if(!eligible.length) {cursors.set('receipt_publications',next);continue;}
+    // Fetch large payloads only for eligible IDs; a concurrent stripper may already have cleared them.
+    const candidates=(await db.sql.query<Publication>('SELECT p.* FROM receipt_publications p WHERE p.id=ANY($1::text[]) AND p.data IS NOT NULL',[eligible.map(r=>r.id)])).rows;
     for(const row of candidates)validateReceiptPublication(row);
     const n=await retentionBatch(db,async tx=>{
       // Payloads are append-only. Recheck eligibility under lock after validation; another stripper may have won.

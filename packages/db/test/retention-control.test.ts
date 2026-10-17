@@ -104,10 +104,10 @@ describe('bounded retention control', () => {
     expect(deadlines).toEqual([30_000,6_000]);
   });
   it('omits raw_cap only when both raw day windows are managed by partitions',async()=>{
-    for(const configured of [{swapDays:7,transferDays:3},{swapDays:7,transferDays:3,rawPartitions:false},{swapDays:7}]) {
+    for(const configured of [{swapDays:7,transferDays:3},{swapDays:7,transferDays:3,rawPartitions:true},{swapDays:7,transferDays:3,rawPartitions:false},{swapDays:7},{transferDays:3},{}]) {
       const {db}=fixture();
       const result=await runRetention(db,{...options,rawDays:7,...configured});
-      expect(result.ruleStats?.raw_cap===undefined).toBe(configured.rawPartitions!==false && configured.transferDays!==undefined);
+      expect(result.ruleStats?.raw_cap===undefined).toBe(configured.swapDays!==undefined && configured.transferDays!==undefined);
     }
   });
   it('walks fingerprint dependencies by the existing primary key before filtering runs',async()=>{
@@ -146,11 +146,13 @@ describe('bounded retention control', () => {
     // Avoid an endless fake receipt backlog by timing just that rule out after the selection.
     let clock=0;
     const query=db.sql.query.bind(db.sql);
-    db.sql.query=(async (sql:string,params?:unknown[])=>{const r=await query(sql,params);if(sql.startsWith('SELECT p.* FROM receipt_publications'))clock+=6;return r;}) as typeof db.sql.query;
+    db.sql.query=(async (sql:string,params?:unknown[])=>{const r=await query(sql,params);if(sql.startsWith('SELECT p.id FROM receipt_publications'))clock+=6;return r;}) as typeof db.sql.query;
     const result=await runRetention(db,{...options,budgetMs:5,now:()=>clock});
     expect(result.ratingRows?.guard_shadow_runs).toBe(1);
     expect(result.tables).toContainEqual({table:'guard_shadow_runs',rows:1,estimatedBytes:0});
-    const receipt=statements.find(s=>s.sql.startsWith('SELECT p.* FROM receipt_publications'))!.sql;
+    expect(result.ruleStats?.receipt_publications).toMatchObject({examined:1,eligible:0});
+    expect(statements.some(s=>s.sql.startsWith('SELECT p.* FROM receipt_publications'))).toBe(false);
+    const receipt=statements.find(s=>s.sql.startsWith('SELECT p.id FROM receipt_publications'))!.sql;
     expect(receipt).toContain("n.data->>'coin'=p.data->>'coin'");expect(receipt).toContain('p.publication_sequence<(SELECT n.publication_sequence');expect(receipt).toContain('ORDER BY n.publication_sequence DESC LIMIT 1');
     expect(receipt).not.toContain('DISTINCT');
   });
