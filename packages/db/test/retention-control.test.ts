@@ -153,7 +153,9 @@ describe('bounded retention control', () => {
     expect(result.ruleStats?.receipt_publications).toMatchObject({examined:1,eligible:0});
     expect(statements.some(s=>s.sql.startsWith('SELECT p.* FROM receipt_publications'))).toBe(false);
     const receipt=statements.find(s=>s.sql.startsWith('SELECT p.id FROM receipt_publications'))!.sql;
-    expect(receipt).toContain("n.data->>'coin'=p.data->>'coin'");expect(receipt).toContain('p.publication_sequence<(SELECT n.publication_sequence');expect(receipt).toContain('ORDER BY n.publication_sequence DESC LIMIT 1');
+    expect(receipt).toContain('NOT EXISTS(SELECT 1 FROM coin_card_latest');
+    expect(receipt).toContain("c.data->'verdict'->'receipt'->>'id'=p.id");
+    expect(receipt).not.toContain('publication_sequence');
     expect(receipt).not.toContain('DISTINCT');
   });
   it('drives raw candidates from bounded token identities and indexed existence probes',async()=>{

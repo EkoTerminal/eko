@@ -25,6 +25,8 @@ export interface RetentionOptions {
   swapDays?: number;
   transferDays?: number;
   ratingDays?: number;
+  /** Verdict payload window; defaults to the rating window for compatibility callers. */
+  receiptHours?: number;
   /** Worker runs partition maintenance at start and hourly; other rules retain their cadence. */
   rawPartitions?: boolean;
   /** Compatibility rawDays callers retain their other transfer rules. */

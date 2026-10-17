@@ -198,7 +198,7 @@ Measured: **598/598 (100.00%)** documented. Minimum: **90%**.
 | `EngineWorker.processBlock` | method | [apps/engines/src/worker.ts:667](../../apps/engines/src/worker.ts#L667) | Yes |
 | `tradedSinceCard` | function | [apps/engines/src/worker.ts:871](../../apps/engines/src/worker.ts#L871) | Yes |
 | `unscannedCoins` | function | [apps/engines/src/worker.ts:885](../../apps/engines/src/worker.ts#L885) | Yes |
-| `staleRatings` | function | [apps/engines/src/worker.ts:904](../../apps/engines/src/worker.ts#L904) | Yes |
+| `staleRatings` | function | [apps/engines/src/worker.ts:905](../../apps/engines/src/worker.ts#L905) | Yes |
 | `validateWalletEventProfile` | function | [apps/indexer/src/agent-registry.ts:27](../../apps/indexer/src/agent-registry.ts#L27) | Yes |
 | `AgentRegistryCollector.constructor` | constructor | [apps/indexer/src/agent-registry.ts:46](../../apps/indexer/src/agent-registry.ts#L46) | Yes |
 | `AgentRegistryCollector.stop` | method | [apps/indexer/src/agent-registry.ts:56](../../apps/indexer/src/agent-registry.ts#L56) | Yes |

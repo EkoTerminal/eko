@@ -15,8 +15,9 @@ onboarding and scan jobs. It does not add another scheduler or an automatic chai
 | `RETENTION_SETTLE_HOURS` | `24` | A current card plus no swap or transfer for this long settles a coin, regardless of launchpad or verdict. |
 | `RETENTION_RAW_DAYS` | `7` | Compact older rated-coin history even when the coin remains active. Also compact unrated/quote transfers. Reader exceptions below remain. |
 | `RETENTION_RATING_DAYS` | `7` | Keep recent rating records and the latest versions, plus the reader/FK boundaries below. |
+| `RETENTION_RECEIPT_HOURS` | `48` | Keep engines-verdict receipt payloads for 48 hours, plus the current card’s receipt. Integer range: 1–8760 hours. |
 
-All five are part of the build identity. Deployment with defaults changes no existing row data. Migration
+All six are part of the build identity. Deployment with defaults changes no existing row data. Migration
 `0201_determination_retention` belongs to `eko_engine_migrations` and adds summaries, nullable receipt payloads,
 retention-specific trigger guards and lookup indexes. The worker runs backlogged passes with a 100 ms pause between passes, then waits ten minutes after catching up. Existing optional
 quote-transfer, idle-token, Feed, unknown-pool, Danger and quiet settings remain recognized. Modern settlement/raw
@@ -38,7 +39,7 @@ cleanup, commit or deployment was performed as part of this change.
 | `verdicts`, `verdict_events` | Latest canonical per rules version, receipt-sequence-selected current versions, first verdict, first grade at each rules cut, correction/orphaned verdicts, surviving shadow FK targets and legacy verdicts without a publication | Obsolete published verdicts and their created/superseded events deleted after publication payload compaction | `apps/engines/src/worker.ts`, `apps/server/src/read/store.ts`, `pairs.ts`, `grade-outcomes.ts`, `alerts/service.ts`, `packages/db/src/receipt-outbox.ts` legacy references |
 | `playbook_matches` | Latest block per coin and seven days | Old detail deleted after retaining first occurrence of each `(coin, rules version, playbook, level)` in `coin_match_lifetime` | `apps/engines/src/outcomes.ts` strongest historical matches and honeypot outcomes, `replay-cache.ts` |
 | `guard_shadow_runs` | Latest per coin and seven days | Older shadow detail deleted | `apps/engines/src/shadow-v2.ts` writes this journal, surviving `legacy_verdict_id` references protect their verdict |
-| `receipt_publications` | Every identifier, publication sequence, producer, kind, chain, revision, hash, time and compact supersession/call/cohort metadata; latest/current-card payload and seven days | Older engines-verdict `data` and `canonical_payload` become null | `packages/db/src/receipt-outbox.ts` publication/recovery, `receipt-api.ts` proofs, `apps/server/src/read/scoreboard.ts` calls and historical cohorts |
+| `receipt_publications` | Every identifier, publication sequence, producer, kind, chain, revision, hash, time and compact supersession/call/cohort metadata; current-card payload and 48 hours | Older engines-verdict `data` and `canonical_payload` become null | `packages/db/src/receipt-outbox.ts` publication/recovery, `receipt-api.ts` proofs, `apps/server/src/read/scoreboard.ts` calls and historical cohorts |
 | `receipt_items` | Every immutable leaf/header and all batch/proof/anchor relationships | The matching obsolete engines-verdict payload copy is also dropped | `packages/db/src/receipt-api.ts`, `receipt-outbox.ts`, `receipt-committer.ts` |
 | `coin_buyer_firsts`, `coin_unknown_buys` | Original first-buy provenance and per-block unresolved counts | Nothing | `apps/engines/src/watcher/store.ts` exact historical first-buy/rank inputs |
 | Forecast/Guard/private receipts and their journals | Original payloads/commitments | Nothing | `apps/server/src/swarm/runner.ts` reads forecast envelopes, `packages/db/src/ghost-reports.ts` and `guard-receipts.ts` read original Guard evidence, MCP uses these readers |
@@ -108,6 +109,11 @@ swap/transfer insertion produces activity above `history_prunes`' watermark. Liv
 the revived coin, combining lifetime statistics with the new suffix. Uniswap onboarding still uses its existing
 per-coin, bounded, metered metadata/first-mint acquisition in `apps/server/src/coin-onboarding.ts`.
 
+The 2026-10-17 owner decision separates receipt payload retention from the seven-day rating window. A coin’s only
+verdict publication is eligible after 48 hours unless it is the current card’s receipt; no successor is required.
+Direct database callers that omit `receiptHours` retain the rating-window cutoff. Forecast, Guard and private receipts
+keep their existing policy.
+
 Receipt payloads are schema/canonical/hash/snapshot-validated before removal. Corruption rejects the batch. Enqueue
 and compaction coordinate with a publication row lock, so recovery cannot reintroduce a full payload after its drop.
 
@@ -151,8 +157,9 @@ still match full-history planning, without per-row invalidation work. Append-onl
 all immutable identity fields unchanged. Private/Guard payload mutation stays disallowed.
 
 Historical estimate, superseded by [raw-history.md](raw-history.md): if swaps cover the same nine-day interval as the supplied transfer observations, 7.3 GB implies roughly **22.7 GB** for the required 28-day window.
-Seven days of transfers is at most **7.5 GB** before settlement savings, plus holder baselines. Recent publication
-payloads are roughly **4.5 GB** at that rate, plus latest payloads, receipt-item copies and permanent small headers.
+Seven days of transfers is at most **7.5 GB** before settlement savings, plus holder baselines. The former seven-day
+publication payload estimate is superseded by the 48-hour window; current-card payloads, receipt-item copies and
+permanent small headers add storage.
 Cards/shadows/Feed are approximately 1.2/1.1/0.9 GB before latest-version and first-row exceptions. The supplied total
 leaves about 20 GB in other relations, whose age distribution and removable share are unknown.
 
@@ -183,7 +190,7 @@ by indexed existence probes. Windows containing only retained rows still advance
 | Cards | ID PK window, new `(coin,rules_version,valid_from_block,id)`, latest `card_id` index | Bounded candidates, cold I/O can still time out |
 | Matches | `(coin,valid_from_block,rules_version,playbook_id)` PK window and per-coin newer-block seek | Bounded candidates, cold I/O can still time out |
 | Verdicts | ID PK window, new coin/rules/block/ID successor index, coin/block index, event verdict/kind and shadow FK indexes, receipt ID PK | Many orphan versions or cold I/O can still time out |
-| Receipt archival | Existing partial `(recorded_at,id)` live-payload index, ID PK, new partial payload-coin/sequence index | Bounded candidates, payload validation and cold I/O can still time out |
+| Receipt archival | Existing partial `(recorded_at,id)` live-payload index, ID PK, current-card coin PK | Bounded candidates, payload validation and cold I/O can still time out |
 | Receipt items and verdict events | ID PK and `(verdict_id,kind)` | Bounded publication/verdict IDs, cold I/O can still time out |
 | Quiet/settled/capped coins | Token address PK, coin/token block indexes, pending partial indexes, pool currency indexes, outcome/card PKs | Many token probes or cold I/O can still time out |
 | Transfer compaction | `(token,block)` range, bounded selected tuple IDs | Bounded rows, triggers/holder contention can still time out |

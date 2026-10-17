@@ -13,15 +13,17 @@ const handles: ChainDb[] = [];
 afterEach(async () => { await Promise.all(handles.splice(0).map(db => db.close())); });
 
 describe('chain retention settings', () => {
-  it('defaults to report-only settlement, a seven-day cap and seven-day rating history',()=>{
-    const c=loadConfig(base);expect(c.RETENTION_ENABLED).toBe(true);expect(loadConfig({...base,RETENTION_ENABLED:'false'}).RETENTION_ENABLED).toBe(false);expect([c.RETENTION_DRY_RUN,c.RETENTION_SETTLE_HOURS,c.RETENTION_RAW_DAYS,c.RETENTION_RATING_DAYS]).toEqual([true,24,7,7]);
+  it('defaults to report-only settlement, a seven-day cap, seven-day rating history and 48-hour receipt payloads',()=>{
+    const c=loadConfig(base);expect(c.RETENTION_ENABLED).toBe(true);expect(loadConfig({...base,RETENTION_ENABLED:'false'}).RETENTION_ENABLED).toBe(false);expect([c.RETENTION_DRY_RUN,c.RETENTION_SETTLE_HOURS,c.RETENTION_RAW_DAYS,c.RETENTION_RATING_DAYS,c.RETENTION_RECEIPT_HOURS]).toEqual([true,24,7,7,48]);
     expect(loadConfig({...base,RETENTION_DRY_RUN:'false'}).RETENTION_DRY_RUN).toBe(false);
     expect([c.RETENTION_SWAP_DAYS,c.RETENTION_TRANSFER_DAYS,c.FINGERPRINT_LOOKBACK_DAYS,c.FINGERPRINT_REFRESH_DAYS]).toEqual([7,3,3,3]);
     expect(loadConfig({...base,RETENTION_SWAP_DAYS:'10',RETENTION_TRANSFER_DAYS:'2',FINGERPRINT_LOOKBACK_DAYS:'6',FINGERPRINT_REFRESH_DAYS:'4'}).RETENTION_SWAP_DAYS).toBe(10);
     for(const key of ['RETENTION_TRANSFER_DAYS','FINGERPRINT_LOOKBACK_DAYS','FINGERPRINT_REFRESH_DAYS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
     expect(()=>loadConfig({...base,RETENTION_SWAP_DAYS:'6'})).toThrow('RETENTION_SWAP_DAYS');
     expect(()=>loadConfig({...base,FINGERPRINT_LOOKBACK_DAYS:'5'})).toThrow('must fit');
-    for(const key of ['RETENTION_SETTLE_HOURS','RETENTION_RAW_DAYS','RETENTION_RATING_DAYS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
+    for(const key of ['RETENTION_SETTLE_HOURS','RETENTION_RAW_DAYS','RETENTION_RATING_DAYS','RETENTION_RECEIPT_HOURS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
+    for(const value of ['1','8760'])expect(loadConfig({...base,RETENTION_RECEIPT_HOURS:value}).RETENTION_RECEIPT_HOURS).toBe(Number(value));
+    for(const value of ['1.5','8761'])expect(()=>loadConfig({...base,RETENTION_RECEIPT_HOURS:value})).toThrow('RETENTION_RECEIPT_HOURS');
     expect(()=>loadConfig({...base,RETENTION_DRY_RUN:'false',SECURITY_COLLECTORS:walletCollectors})).toThrow('wallet outflow collectors');
     expect(loadConfig({...base,RETENTION_ENABLED:'false',RETENTION_DRY_RUN:'false',SECURITY_COLLECTORS:walletCollectors}).RETENTION_ENABLED).toBe(false);
   });
@@ -53,9 +55,10 @@ describe('retention worker', () => {
     vi.useFakeTimers();
     const result={quoteRows:0,idleTokens:0,idleRows:0,pendingRows:0,feedRows:0,dangerCoins:0,quietCoins:0,historyTransfers:0,historyLiquidity:0,historyPons:0,historySwaps:0,trendingSnapshots:0,skippedRules:[],finished:false};
     const run=vi.spyOn(retention,'runRetention').mockResolvedValueOnce(result).mockResolvedValue({...result,finished:true});
-    const worker=new RetentionWorker({} as ChainDb,{ratingDays:7,dryRun:false},vi.fn());
+    const worker=new RetentionWorker({} as ChainDb,{ratingDays:7,receiptHours:48,dryRun:false},vi.fn());
     try {
       worker.start();await worker.tick();expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({ratingDays:7,receiptHours:48}));
       await vi.advanceTimersByTimeAsync(99);expect(run).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);expect(run).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(599999);expect(run).toHaveBeenCalledTimes(2);

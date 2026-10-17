@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalize, createGuardReceiptCodec } from '@eko/shared';
 import { concat, encodeAbiParameters, keccak256, stringToHex } from 'viem';
-import { binary, ChainDb, migrate, migrateEngines, runRetention, type SqlClient } from '../src/index.js';
+import { binary, ReceiptOutbox, ChainDb, migrate, migrateEngines, runRetention, type SqlClient } from '../src/index.js';
 import { receiptSelection, ratingRetention } from '../src/rating-retention.js';
 import { retentionDb } from '../src/retention-control.js';
 import { openDb } from './helpers/historical-db.js';
@@ -22,7 +22,7 @@ async function insert(db:ChainDb,rows:ReturnType<typeof publication>[]) {
     FROM jsonb_populate_recordset(NULL::receipt_publications,$1::jsonb)`,[JSON.stringify(rows)]);
 }
 describe('retention batch plans and throughput',()=>{
-  it('strips thousands in one pass with indexed newest-sequence probes and unchanged eligibility',async()=>{
+  it('strips thousands in one pass using bounded indexed candidates, including a coin’s only verdict',async()=>{
     const db=await openDb({pgliteDir:':memory:'});
     try {
       await migrate(db);await migrateEngines(db);
@@ -34,14 +34,14 @@ describe('retention batch plans and throughput',()=>{
       await db.sql.query('ANALYZE receipt_publications');
       const plan=await retentionDb(db).sql.query(`EXPLAIN ${receiptSelection.replace('SELECT p.*','SELECT p.id')} AND p.id=ANY($2::text[])`,[new Date(now-7*86400000),backlog.slice(0,64).map(r=>r.id)]);
       const text=JSON.stringify(plan.rows);
-      expect(text).toContain('receipt_publications_live_coin_sequence');expect(text).toContain('Index Cond:');expect(text).not.toContain('Seq Scan');
+      expect(text).toContain('receipt_publications_pkey');expect(text).toContain('Index Cond:');expect(text).not.toContain('Seq Scan');
       const started=performance.now();
       const result=await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,now:()=>now+performance.now()-started});
       console.info('receipt stripping fixture',{rows:result.ratingRows?.receipt_publications,elapsedMs:Math.round(performance.now()-started)});
-      expect(result.ratingRows?.receipt_publications).toBe(2048);
+      expect(result.ratingRows?.receipt_publications).toBe(2049);
       expect(result.skippedRules).toEqual([]);
       const kept=(await db.sql.query<{id:string}>('SELECT id FROM receipt_publications WHERE data IS NOT NULL ORDER BY id')).rows.map(r=>r.id);
-      expect(kept).toEqual(['sample-0000','sample-forecast','sample-other','sample-producer','sample-recent']);
+      expect(kept).toEqual(['sample-0000','sample-forecast','sample-producer','sample-recent']);
       expect((await db.sql.query("SELECT canonical_payload,summary->>'coin' AS coin FROM receipt_publications WHERE id='sample-0001'")).rows).toEqual([{canonical_payload:null,coin}]);
     }finally{await db.close();}
   });
@@ -52,6 +52,9 @@ describe('retention batch plans and throughput',()=>{
       const retained=Array.from({length:128},(_,n)=>({...publication(`sample-${n.toString().padStart(4,'0')}`,`0x${(n+1).toString(16).padStart(40,'0')}`),canonical_payload:'{}'}));
       const eligible=['sample-superseded-a','sample-superseded-b'];
       await insert(db,[...eligible.map(id=>publication(id,retained[0]!.data.coin)),...retained]);
+      await db.sql.query(`INSERT INTO coin_cards SELECT id,decode(substring(data->>'coin' FROM 3),'hex'),1,'fixture','{}','1.0.0'
+        FROM receipt_publications WHERE id=ANY($1::text[])`,[retained.map(r=>r.id)]);
+      await db.sql.query(`INSERT INTO coin_card_latest SELECT coin,id,1,jsonb_build_object('verdict',jsonb_build_object('receipt',jsonb_build_object('id',id))) FROM coin_cards`);
       const payloadReads:unknown[][]=[],selections:string[][]=[];
       const wrap=(sql:SqlClient):SqlClient=>({query:async <T>(text:string,params?:unknown[])=>{
         if(text.startsWith('SELECT p.* FROM receipt_publications')) {
@@ -72,6 +75,30 @@ describe('retention batch plans and throughput',()=>{
       expect((await db.sql.query('SELECT count(*)::integer AS n FROM receipt_publications WHERE data IS NOT NULL')).rows).toEqual([{n:128}]);
     }finally{await db.close();}
   });
+  it.each([{hours:47,current:false,stripped:false},{hours:49,current:false,stripped:true},{hours:49,current:true,stripped:false}])(
+    'at $hours hours with current card receipt=$current, stripped=$stripped',async({hours,current,stripped})=>{
+      const db=await openDb({pgliteDir:':memory:'});
+      try {
+        await migrate(db);await migrateEngines(db);
+        const row=publication('sample-boundary',coin,new Date(now-hours*3600000));
+        await insert(db,[row]);
+        await new ReceiptOutbox(db).enqueue(row.id);
+        if(current) {
+          await db.sql.query("INSERT INTO coin_cards VALUES('sample-card',$1,1,'fixture','{}','1.0.0')",[binary(coin)]);
+          await db.sql.query("INSERT INTO coin_card_latest VALUES($1,'sample-card',1,$2)",[binary(coin),{verdict:{receipt:{id:row.id}}}]);
+        }
+        const result=await runRetention(db,{quoteTokens:[],ratingDays:7,receiptHours:48,dryRun:false,pauseMs:0,now:()=>now});
+        expect(result.ratingRows?.receipt_publications).toBe(stripped ? 1 : 0);
+        expect(result.ratingRows?.receipt_items).toBe(stripped ? 1 : 0);
+        for(const table of ['receipt_publications','receipt_items']) {
+          const stored=(await db.sql.query(`SELECT data,canonical_payload FROM ${table} WHERE id=$1`,[row.id])).rows;
+          expect(stored).toEqual([{data:stripped ? null : row.data,canonical_payload:stripped ? null : row.canonical_payload}]);
+        }
+        expect(result.ruleStats?.receipt_publications).toMatchObject({examined:hours<48 ? 0 : 1,eligible:stripped ? 1 : 0});
+        if(stripped)expect((await db.sql.query('SELECT summary FROM receipt_publications WHERE id=$1',[row.id])).rows).toEqual([
+          {summary:expect.objectContaining({coin,receiptId:row.id,recordedAt:row.data.recordedAt,level:'clear'})}]);
+      }finally{await db.close();}
+    });
   it('refuses corrupt payloads before stripping',async()=>{
     const db=await openDb({pgliteDir:':memory:'});
     try {

@@ -892,6 +892,7 @@ export async function unscannedCoins(db:ChainDb,since:number,block:number,limit:
     ORDER BY x.activity DESC NULLS LAST,x.coin LIMIT $3`,[since,block,limit,skip.map(binary)])).rows.map(row=>hex(row.coin) as Address);
 }
 
+const staleRatingCaches=new WeakMap<ChainDb,Map<Address,{version:string;stale:boolean}>>();
 /**
  * Cards earlier code rated without the bundle, holder-concentration, deployer or run-up checks (any level: Clear looked
  * at none of them before 2026-10-12), without the owner-power read on a Pons token, or with a bundle or run-up reason in earlier wording,
@@ -903,28 +904,42 @@ export async function unscannedCoins(db:ChainDb,since:number,block:number,limit:
  */
 export async function staleRatings(db:ChainDb,coins:Address[],limit:number,skip:ReadonlyMap<Address,string>=new Map(),rulesAt=CLEAR_RULES_AT,otherRulesAt=NO_OTHER_RERATE):Promise<{coin:Address;card:string}[]> {
   if(!coins.length || limit<=0)return [];
-  return db.tx(async tx=>{
+  const cache=staleRatingCaches.get(db) ?? new Map<Address,{version:string;stale:boolean}>();
+  const updates=new Map<Address,{version:string;stale:boolean}>(),skipped=new Set(skip.values());
+  const result=await db.tx(async tx=>{
     await tx.sql.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     const found:{coin:Address;card:string}[]=[];
-    const ordered=(await tx.sql.query<{coin:Uint8Array}>('SELECT coin FROM read_coins WHERE coin=ANY($1::bytea[]) ORDER BY activity DESC NULLS LAST,coin',[coins.map(binary)])).rows;
-    // Examine at most 128 wide cards in a statement, stopping as soon as the ordered limit is filled.
+    // Only compact keys/generations are visited on an unchanged poll. Card flags are maintained at write time.
+    const ordered=(await tx.sql.query<{coin:Uint8Array;card:string;version:string}>(`SELECT r.coin,l.card_id AS card,
+      coalesce(v.revision,0)::text||':'||coalesce(s.revision,0)::text||':'||coalesce(s.high_block,-1)::text AS version
+      FROM read_coins r JOIN engine_rating_candidates l ON l.coin=r.coin
+      LEFT JOIN engine_rating_versions v ON v.coin=r.coin LEFT JOIN engine_swap_versions s ON s.coin=r.coin
+      WHERE r.coin=ANY($1::bytea[]) ORDER BY r.activity DESC NULLS LAST,r.coin`,[coins.map(binary)])).rows;
+    const version=(row:typeof ordered[number])=>`${row.card}:${row.version}:${rulesAt}:${otherRulesAt}`;
     for(let offset=0;offset<ordered.length && found.length<limit;offset+=128) {
-      for(const row of (await tx.sql.query<{coin:Uint8Array;card:string}>(`SELECT l.coin,l.card_id AS card FROM unnest($1::bytea[]) candidate(coin)
-      CROSS JOIN LATERAL (SELECT coin,activity FROM read_coins WHERE coin=candidate.coin OFFSET 0) r
-      CROSS JOIN LATERAL (SELECT * FROM coin_card_latest WHERE coin=candidate.coin OFFSET 0) l
-      JOIN tokens t ON t.address=l.coin LEFT JOIN LATERAL (SELECT created_at,sec FROM engine_runs WHERE coin=l.coin AND block=l.as_of_block AND rules_version=$4 OFFSET 0) e ON true
-      WHERE true AND NOT l.card_id=ANY($5::text[]) AND ((NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ?& ARRAY['bundle_dump','holder_concentration','dev_dump','run_up']
-          OR l.data->'meta'->'control'->>'unavailable'='true' AND t.launchpad='pons'
-          OR coalesce(l.data->'playbooks','[]'::jsonb) @> '[{"id":"bundle_dump"}]' OR coalesce(l.data->'playbooks','[]'::jsonb) @> '[{"id":"run_up"}]') AND coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
-        OR l.data->'verdict'->>'level'='pending' AND (coalesce(e.created_at,to_timestamp(e.sec))<$3::timestamptz
-        OR (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'honeypot'
-          AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused')))
-        OR (t.launchpad='pons' AND (NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'wash_to_trend' OR NOT coalesce(l.data->'verdict'->'evaluatedPlaybooks','[]'::jsonb) ? 'stuck_at_bonding')
-          AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin) AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL LIMIT 1)))
-        OR (t.launchpad IS DISTINCT FROM 'pons' AND coalesce(e.created_at,to_timestamp(e.sec))<$6::timestamptz))
-      ORDER BY r.activity DESC NULLS LAST,l.coin LIMIT $2`,[ordered.slice(offset,offset+128).map(row=>row.coin),limit-found.length,rulesAt,RULES_VERSION,[...skip.values()],otherRulesAt])).rows)
-        found.push({coin:hex(row.coin) as Address,card:row.card});
+      const page=ordered.slice(offset,offset+128).filter(row=>!skipped.has(row.card));
+      const changed=page.filter(row=>cache.get(hex(row.coin))?.version!==version(row));
+      if(changed.length) {
+        const stale=new Set((await tx.sql.query<{coin:Uint8Array}>(`SELECT l.coin FROM unnest($1::bytea[]) candidate(coin)
+          CROSS JOIN LATERAL (SELECT * FROM engine_rating_candidates WHERE coin=candidate.coin OFFSET 0) l
+          CROSS JOIN LATERAL (SELECT launchpad FROM tokens WHERE address=l.coin OFFSET 0) t
+          LEFT JOIN LATERAL (SELECT created_at,sec FROM engine_runs WHERE coin=l.coin AND block=l.as_of_block AND rules_version=$3 OFFSET 0) e ON true
+          WHERE ((l.legacy OR l.control_unavailable AND t.launchpad='pons') AND coalesce(e.created_at,to_timestamp(e.sec))<$2::timestamptz
+          OR l.pending AND (coalesce(e.created_at,to_timestamp(e.sec))<$2::timestamptz
+            OR l.missing_honeypot AND EXISTS(SELECT 1 FROM sell_check_runs s WHERE s.coin=l.coin AND s.block>l.as_of_block AND s.status IN ('sellable','refused'))
+            OR t.launchpad='pons' AND l.missing_pricing AND EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin)
+              AND NOT EXISTS(SELECT 1 FROM swaps s WHERE s.coin=l.coin AND s.usd IS NULL))
+          OR t.launchpad IS DISTINCT FROM 'pons' AND coalesce(e.created_at,to_timestamp(e.sec))<$4::timestamptz)`,
+        [changed.map(row=>row.coin),rulesAt,RULES_VERSION,otherRulesAt])).rows.map(row=>hex(row.coin)));
+        for(const row of changed)updates.set(hex(row.coin),{version:version(row),stale:stale.has(hex(row.coin))});
+      }
+      for(const row of page)if((updates.get(hex(row.coin)) ?? cache.get(hex(row.coin)))?.stale && found.length<limit)
+        found.push({coin:hex(row.coin),card:row.card});
     }
     return found;
   });
+  for(const [coin,entry] of updates){cache.delete(coin);cache.set(coin,entry);}
+  while(cache.size>20000)cache.delete(cache.keys().next().value!);
+  staleRatingCaches.set(db,cache);
+  return result;
 }

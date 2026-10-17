@@ -115,10 +115,10 @@ describe('rating retention receipt tombstones',()=>{
     expect(report.tables?.find(t=>t.table==='receipt_publications')).toMatchObject({rows:0,estimatedBytes:0,estimateSkipped:true});
     expect(retentionLog(true,{table:'swaps',rows:10,estimatedBytes:1000})).toBe('retention dry_run=true table=swaps rows=10 estimated_bytes=1000');
     const real=await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,batchRows:1,now:()=>Date.parse('2026-11-01T00:00:00Z')});
-    expect(real.ratingRows?.receipt_publications).toBe(2);
+    expect(real.ratingRows?.receipt_publications).toBe(3);
     expect(await headers()).toEqual(original);
     const archived=(await db.sql.query<{id:string;data:unknown;canonical_payload:string|null;summary:{supersedes:string|null}}>('SELECT id,data,canonical_payload,summary FROM receipt_publications WHERE id=ANY($1::text[]) ORDER BY id',[[a.receiptId,b.receiptId,c.receiptId]])).rows;
-    expect(archived[0]).toMatchObject({data:null,canonical_payload:null});expect(archived[1]).toMatchObject({data:null,summary:{supersedes:a.receiptId}});expect(archived[2]!.data).toEqual(c);
+    expect(archived[0]).toMatchObject({data:null,canonical_payload:null});expect(archived[1]).toMatchObject({data:null,summary:{supersedes:a.receiptId}});expect(archived[2]).toMatchObject({data:null,canonical_payload:null,summary:{supersedes:b.receiptId}});
     // A producer crash left b unconsumed. Recovery can build its original leaf from the retained hash.
     const itemB=await outbox.enqueue(b.receiptId),itemC=await outbox.enqueue(c.receiptId);
     expect(await outbox.getItem(a.receiptId,'verdict')).toEqual(itemA);

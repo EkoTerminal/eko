@@ -144,33 +144,70 @@ function activitySql(scope?:ActivityScope) {
 }
 const scopeParams=(to:number,scope?:ActivityScope):unknown[]=>!scope ? [to] : 'ranges' in scope ? [scope.ranges.coins.map(binary),scope.ranges.from,scope.ranges.to]
   : [to,scope.after,scope.since,scope.transfers.map(binary)];
-/** At most 256 distinct event blocks per indexed source read, including sparse old histories. */
+/** One newest indexed row per source (and per pool), without materializing distinct block sets. */
 async function nextActivityBlock(db:ChainDb,coin:Address,after:number,to:number) {
-  return Number((await db.sql.query<{block:string | null}>(`SELECT max(block)::text AS block FROM (SELECT DISTINCT block FROM (
-    (SELECT DISTINCT block FROM raw_history_live_swaps WHERE coin=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
-    UNION ALL (SELECT DISTINCT block FROM raw_history_live_transfers WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
-    UNION ALL (SELECT DISTINCT e.block FROM (SELECT id FROM pools WHERE currency0=$1 UNION SELECT id FROM pools WHERE currency1=$1) p
-      CROSS JOIN LATERAL (SELECT DISTINCT block FROM liquidity_events WHERE pool_id=p.id AND block>$2 AND block<=$3 ORDER BY block LIMIT 256) e ORDER BY e.block LIMIT 256)
-    UNION ALL (SELECT DISTINCT block FROM pons_events WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
-    UNION ALL (SELECT DISTINCT block FROM pons_exemptions WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block LIMIT 256)
-    UNION ALL (SELECT DISTINCT created_block FROM pools WHERE (currency0=$1 OR currency1=$1) AND created_block>$2 AND created_block<=$3 ORDER BY created_block LIMIT 256)
-  ) e ORDER BY block LIMIT 256) page`,[binary(coin),after,to])).rows[0]?.block ?? to);
+  return Number((await db.sql.query<{block:string | null}>(`SELECT greatest(
+    (SELECT block FROM raw_history_live_swaps WHERE coin=$1 AND block>$2 AND block<=$3 ORDER BY block DESC LIMIT 1),
+    (SELECT block FROM raw_history_live_transfers WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block DESC LIMIT 1),
+    (SELECT e.block FROM (SELECT id FROM pools WHERE currency0=$1 UNION SELECT id FROM pools WHERE currency1=$1) p
+      CROSS JOIN LATERAL (SELECT block FROM liquidity_events WHERE pool_id=p.id AND block>$2 AND block<=$3 ORDER BY block DESC LIMIT 1) e ORDER BY e.block DESC LIMIT 1),
+    (SELECT block FROM pons_events WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block DESC LIMIT 1),
+    (SELECT block FROM pons_exemptions WHERE token=$1 AND block>$2 AND block<=$3 ORDER BY block DESC LIMIT 1),
+    (SELECT created_block FROM pools WHERE currency0=$1 AND created_block>$2 AND created_block<=$3 ORDER BY created_block DESC LIMIT 1),
+    (SELECT created_block FROM pools WHERE currency1=$1 AND created_block>$2 AND created_block<=$3 ORDER BY created_block DESC LIMIT 1)
+  )::text AS block`,[binary(coin),after,to])).rows[0]?.block ?? after);
+}
+interface CachedActivity { from:number;to:number;revision:string;rows:ActivityRow[] }
+const activityCaches=new WeakMap<ChainDb,Map<Address,CachedActivity>>();
+/** Reuse exact block aggregates; generations identify only blocks changed by append, repair, reorg or sealing. */
+async function cachedActivityRows(db:ChainDb,ranges:CoinRanges) {
+  const cache=activityCaches.get(db) ?? new Map<Address,CachedActivity>(),updates=new Map<Address,CachedActivity>();
+  const rows=await db.tx(async tx=>{
+    await tx.sql.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    const result:ActivityRow[]=[];
+    for(let i=0;i<ranges.coins.length;i++) {
+      const coin=ranges.coins[i],from=ranges.from[i],to=ranges.to[i];
+      if(from>=to)continue;
+      const revision=(await tx.sql.query<{revision:string}>('SELECT revision::text FROM engine_activity_versions WHERE coin=$1',[binary(coin)])).rows[0]?.revision ?? '0';
+      const existing=updates.get(coin) ?? cache.get(coin);
+      // Another reader may have published a newer snapshot while this transaction was reading other coins.
+      const prior=existing && BigInt(existing.revision)<=BigInt(revision) ? existing : undefined;
+      const dirty=prior && revision!==prior.revision ? (await tx.sql.query<{block:string}>(`SELECT block::text FROM engine_activity_block_versions
+        WHERE coin=$1 AND revision>$2 AND block>$3 AND block<=$4 ORDER BY revision,block`,[binary(coin),prior.revision,prior.from,prior.to])).rows.map(row=>Number(row.block)) : [];
+      const changed=new Set(dirty),kept=prior?.rows.filter(row=>!changed.has(Number(row.block))) ?? [];
+      const read=async(lo:number,hi:number)=> {
+        if(lo>=hi)return;
+        const upper=await nextActivityBlock(tx,coin,lo,hi);
+        // Empty ranges need no aggregation. A nonempty cold range is read once, not once per DISTINCT page.
+        if(upper<=lo)return;
+        const scope={ranges:{coins:[coin],from:[lo],to:[upper]}};
+        for(const row of (await tx.sql.query<ActivityRow>(`${activitySql(scope)} SELECT * FROM activity ORDER BY coin,block,kind`,scopeParams(upper,scope))).rows)kept.push(row);
+      };
+      if(!prior)await read(from,to);
+      else {
+        await read(from,prior.from);
+        await read(prior.to,to);
+        for(let offset=0;offset<dirty.length;offset+=128) {
+          const blocks=dirty.slice(offset,offset+128),scope={ranges:{coins:blocks.map(()=>coin),from:blocks.map(b=>b-1),to:blocks}};
+          for(const row of (await tx.sql.query<ActivityRow>(`${activitySql(scope)} SELECT * FROM activity ORDER BY coin,block,kind`,scopeParams(0,scope))).rows)kept.push(row);
+        }
+      }
+      kept.sort((a,b)=>Number(a.block)-Number(b.block) || a.kind.localeCompare(b.kind));
+      updates.set(coin,{from:Math.min(from,prior?.from ?? from),to:Math.max(to,prior?.to ?? to),revision,rows:kept});
+      for(const row of kept)if(Number(row.block)>from && Number(row.block)<=to)result.push(row);
+    }
+    return result.sort((a,b)=>hex(a.coin).localeCompare(hex(b.coin)) || Number(a.block)-Number(b.block) || a.kind.localeCompare(b.kind));
+  });
+  // Publish cache entries only after the read transaction succeeds; concurrent older snapshots cannot poison newer ones.
+  for(const [coin,entry] of updates)if(BigInt(entry.revision)>=BigInt(cache.get(coin)?.revision ?? '-1')){cache.delete(coin);cache.set(coin,entry);}
+  let size=0;for(const entry of cache.values())size+=entry.rows.length;
+  while(cache.size>10000 || size>200000){const coin=cache.keys().next().value!;size-=cache.get(coin)!.rows.length;cache.delete(coin);}
+  activityCaches.set(db,cache);
+  return rows;
 }
 /** Activity rows through `to` or coin ranges, in coin/block/kind order. */
 export async function activityRows(db:ChainDb,to:number,scope?:ActivityScope) {
-  if(scope && 'ranges' in scope) {
-    const rows:ActivityRow[]=[];
-    for(let i=0;i<scope.ranges.coins.length;i++) {
-      const coin=scope.ranges.coins[i],end=scope.ranges.to[i];let after=scope.ranges.from[i];
-      while(after<end) {
-        const upper=await nextActivityBlock(db,coin,after,end);
-        const page={ranges:{coins:[coin],from:[after],to:[upper]}};
-        rows.push(...(await db.sql.query<ActivityRow>(`${activitySql(page)} SELECT * FROM activity ORDER BY coin,block,kind`,scopeParams(upper,page))).rows);
-        after=upper;
-      }
-    }
-    return rows.sort((a,b)=>hex(a.coin).localeCompare(hex(b.coin)) || Number(a.block)-Number(b.block) || a.kind.localeCompare(b.kind));
-  }
+  if(scope && 'ranges' in scope)return cachedActivityRows(db,scope.ranges);
   return (await db.sql.query<ActivityRow>(`${activitySql(scope)} SELECT * FROM activity ORDER BY coin,block,kind`,scopeParams(to,scope))).rows;
 }
 /** An activity row as a checkpoint event, and its part of the coin's revision. */

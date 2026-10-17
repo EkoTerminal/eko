@@ -54,8 +54,6 @@ export function ratingSelections() {
 }
 export const receiptSelection = `SELECT p.* FROM receipt_publications p WHERE p.recorded_at<$1 AND p.data IS NOT NULL AND p.kind='verdict'
   AND p.producer='engines' AND p.chain_id=4663
-  AND p.publication_sequence<(SELECT n.publication_sequence FROM receipt_publications n WHERE n.producer='engines' AND n.kind='verdict' AND n.chain_id=4663
-    AND n.data IS NOT NULL AND n.data->>'coin'=p.data->>'coin' ORDER BY n.publication_sequence DESC LIMIT 1)
   AND NOT EXISTS(SELECT 1 FROM coin_card_latest c WHERE c.coin=decode(substring(p.data->>'coin' FROM 3),'hex') AND c.data->'verdict'->'receipt'->>'id'=p.id)`;
 
 /** Fetch a bounded key window before testing eligibility, even if none of its rows can be removed. */
@@ -77,7 +75,8 @@ export async function ratingRetention(db: ChainDb, options: RetentionOptions, re
   runRule: RetentionRuleRunner, cursors: Map<string, unknown[]>) {
   const cutoff = new Date(nowMs-(options.ratingDays ?? 7)*86400000);
   result.ratingRows = Object.fromEntries(['receipt_publications','receipt_items',...ratingSelections().map(r=>r.table)].map(t=>[t,0]));
-  await runRule('receipt_publications', (timeLeft,limit) => receiptRetention(db,options,result,cutoff,limit,timeLeft,cursors));
+  const receiptCutoff = options.receiptHours === undefined ? cutoff : new Date(nowMs-options.receiptHours*3600000);
+  await runRule('receipt_publications', (timeLeft,limit) => receiptRetention(db,options,result,receiptCutoff,limit,timeLeft,cursors));
   for (const rule of ratingSelections()) await runRule(rule.table, async (timeLeft,limit) => {
     if (options.dryRun) {
       addReport(result,await reportRows(db,rule.table,'',[]));
