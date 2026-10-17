@@ -125,7 +125,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   await migrate(dbh.chain);
   await migrateEngines(dbh.chain);
   const points = new PointsService(dbh.chain,cfg.POINTS_RATES,cfg.POINTS_ACTIVE_FROM);
-  const reads = readServices(new ReadStore(dbh.chain),points,()=>phaseAt(cfg,Date.now()));
+  const reads = readServices(new ReadStore(dbh.chain,Date.now,{liquidityProbeKeys:cfg.READ_LIQUIDITY_PROBE_KEYS}),points,()=>phaseAt(cfg,Date.now()));
   reads.store.blueChip = new BlueChipReader(dbh.chain,blueChipConfig(cfg));
   const blueChipListings = new BlueChipListingWorker(dbh.chain,cfg.BLUE_CHIP_ENABLED,undefined,Date.now,success=>logger[success ? 'info' : 'warn']({success},'Blue chip listing refresh'));
   reads.store.sellCheckQuotes = cfg.SELL_CHECK_ENABLED;

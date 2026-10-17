@@ -139,7 +139,7 @@ it('reuses durable positions for price-only dirty coins, reloads on pool/event r
   await db.sql.query('UPDATE swaps SET usd=16 WHERE coin=$1',[binary(coin)]);
   await refresh();
   expect(await version()).toEqual(before);
-  expect(statements).toHaveLength(4);expect(statements.some(s=>s.includes('FROM read_pool_positions'))).toBe(false);
+  expect(statements).toHaveLength(7);expect(statements.some(s=>s.includes('FROM read_pool_positions'))).toBe(false);
   const value=Number((await db.sql.query<{usd:number}>('SELECT usd FROM read_coin_liquidity WHERE coin=$1',[binary(coin)])).rows[0].usd);
   expect(value).toBeGreaterThan(0);
   // A busy second pool must not hide the price of an existing position.
@@ -166,7 +166,7 @@ it('reuses durable positions for price-only dirty coins, reloads on pool/event r
   kept[0].usd=64;
   await db.sql.query('UPDATE coin_lifetime SET data=$2 WHERE coin=$1',[binary(coin),JSON.stringify({tail:kept,lastPositivePriced:kept[1],liquidity:{}})]);
   await refresh();
-  expect(await version()).toEqual(held);expect(statements).toHaveLength(4);
+  expect(await version()).toEqual(held);expect(statements).toHaveLength(7);
   expect(statements.some(s=>s.includes('FROM read_pool_positions'))).toBe(false);
   expect((await db.sql.query<{prices:Record<string,{usd:number}>}>('SELECT prices FROM read_liquidity_retained WHERE coin=$1',[binary(coin)])).rows[0].prices[id].usd).toBe(64);
   expect((await readPoolMoney(db,[coin],now,true)).get(coin)).toBe(Number((await db.sql.query<{usd:number}>('SELECT usd FROM read_coin_liquidity WHERE coin=$1',[binary(coin)])).rows[0].usd));

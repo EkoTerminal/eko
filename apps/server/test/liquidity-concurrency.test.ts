@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { expect, it } from 'vitest';
 import { ChainDb, migrate, migrateEngines, openDb, hex } from '@eko/db';
-import { refreshLiquidityModels } from '../src/read/liquidity-model.js';
+import { prepareLiquidityModels, writeLiquidityModels, refreshLiquidityModels } from '../src/read/liquidity-model.js';
 
 // Independent PostgreSQL backends are required to observe tuple-lock waits and detect real deadlocks.
 const databaseUrl=process.env.EKO_TEST_POSTGRES_URL;
@@ -27,11 +27,20 @@ it.skipIf(!databaseUrl)('serializes overlapping model and liquidity refreshes, i
     const pids=await Promise.all([one,two].map(async c=>(await c.query<{pid:number}>('SELECT pg_backend_pid() pid')).rows[0].pid));
     for(const standalone of [false,true]) {
       for(const c of [one,two]){await c.query("SET statement_timeout='5s'");await c.query('BEGIN');}
+      const prepare=async(client:pg.PoolClient,keys:Buffer[])=>({
+        models:(await client.query<{data:unknown}>('SELECT prepare_read_models($1::bytea[],0) data',[keys])).rows[0].data,
+        liquidity:await prepareLiquidityModels(new ChainDb(client,fn=>fn(client)),keys.map(hex),now),
+      });
+      const firstPayload=await prepare(one,[coins[0],coins[1]]),secondPayload=standalone ? null : await prepare(two,[coins[2],coins[1],coins[0]]);
       // Hold the lowest mutex before launching the reversed overlap. The observer must see an actual wait.
       await one.query('SELECT read_lock_coins($1::bytea[])',[[coins[0],coins[1]]]);
       const second=(async()=>{
-        if(!standalone)await two.query('SELECT refresh_read_models($1::bytea[],0)',[[coins[2],coins[1],coins[0]]]);
-        await refreshLiquidityModels(handle(two),[coins[2],coins[1],coins[0]].map(hex),now);
+        if(standalone)await refreshLiquidityModels(new ChainDb(two,fn=>fn(two)),[coins[2],coins[1],coins[0]].map(hex),now);
+        else {
+          await two.query('SELECT read_lock_coins($1::bytea[])',[[coins[2],coins[1],coins[0]]]);
+          await two.query('SELECT refresh_read_models($1::bytea[],0,$2::jsonb)',[[coins[2],coins[1],coins[0]],JSON.stringify(secondPayload!.models)]);
+          await writeLiquidityModels(new ChainDb(two,fn=>fn(two)),secondPayload!.liquidity);
+        }
         await two.query('COMMIT');
       })();
       void second.catch(()=>{});
@@ -42,18 +51,20 @@ it.skipIf(!databaseUrl)('serializes overlapping model and liquidity refreshes, i
         await new Promise(resolve=>setTimeout(resolve,10));
       }
       expect(waiting).toBe(true);
-      await one.query('SELECT refresh_read_models($1::bytea[],0)',[[coins[1],coins[0]]]);
-      await refreshLiquidityModels(handle(one),[coins[1],coins[0]].map(hex),now);
+      await one.query('SELECT refresh_read_models($1::bytea[],0,$2::jsonb)',[[coins[1],coins[0]],JSON.stringify(firstPayload.models)]);
+      await writeLiquidityModels(new ChainDb(one,fn=>fn(one)),firstPayload.liquidity);
       await one.query('COMMIT');await second;
       expect((await observer.query('SELECT coin FROM read_coin_liquidity')).rows).toHaveLength(3);
     }
     await one.query('BEGIN');await two.query('BEGIN');
+    const models=(await one.query<{data:unknown}>('SELECT prepare_read_models($1::bytea[],0) data',[coins])).rows[0].data;
+    const liquidity=await prepareLiquidityModels(new ChainDb(one,fn=>fn(one)),coins.map(hex),now);
     await one.query('SELECT read_lock_coins($1::bytea[])',[coins]);
     // Contended source writes skip synchronous projection and enqueue work without waiting for mutexes.
     await two.query("SET LOCAL lock_timeout='200ms'");
     await two.query("INSERT INTO coin_card_latest SELECT c,'sample-'||encode(c,'hex'),1,'{}' FROM unnest($1::bytea[]) c",[[...coins].reverse()]);
-    await one.query('SELECT refresh_read_models($1::bytea[],0)',[coins]);
-    await refreshLiquidityModels(handle(one),coins.map(hex),now);
+    await one.query('SELECT refresh_read_models($1::bytea[],0,$2::jsonb)',[coins,JSON.stringify(models)]);
+    await writeLiquidityModels(new ChainDb(one,fn=>fn(one)),liquidity);
     await one.query('COMMIT');await two.query('COMMIT');
     // With the mutex available, a card edit immediately updates the compact projection used by engines.
     await two.query("UPDATE coin_card_latest SET data='{\"verdict\":{\"level\":\"clear\"}}'");

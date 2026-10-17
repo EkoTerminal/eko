@@ -1,7 +1,8 @@
 import { BlueChipReader } from './blue-chip.js';
 import { binary, hex, readFlows, readRatingPrices, liveRating, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
-import { refreshLiquidityModels } from './liquidity-model.js';
+import { limitRefresh, refreshTimedOut } from './refresh-limits.js';
+import { LIQUIDITY_PROBE_KEYS, prepareLiquidityModels, writeLiquidityModels } from './liquidity-model.js';
 import { CoinCardSchema, VerdictSchema, findingsFirst, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { reportError } from '../obs/errors.js';
@@ -41,7 +42,13 @@ export function withSellCheck(card:CoinCard,sell:SellCheckReading|undefined):Coi
     meta:{...card.meta,tradeability:{confidence:0.5,asOfBlock:sell.block,unavailable:false,missing:[...missing],flags:[...new Set([...(prior?.flags ?? []),`sell_check_${sell.status}`])]}}};
 }
 export class ReadStore {
-  constructor(readonly db: ChainDb, public now: () => number = Date.now) {}
+  private refreshWidth=REFRESH_BATCH;
+  private probeWidth:number;
+  private retryAt=new Map<string,number>();
+  private retryNotBefore=0;
+  constructor(readonly db: ChainDb, public now: () => number = Date.now,options:{liquidityProbeKeys?:number}={}) {
+    this.probeWidth=options.liquidityProbeKeys ?? LIQUIDITY_PROBE_KEYS;
+  }
   /** True when buy quotes run the live sell check, so refusals are being counted (Radar's "Honeypots refused"). */
   sellCheckQuotes=false;
   blueChip?: BlueChipReader;
@@ -73,7 +80,14 @@ export class ReadStore {
    * the read_feed lock, and pairs, feed, scan and Guard reads did the same. Without the refresher (tests, one-off tools,
    * the worker role) a request still refreshes first.
    */
-  async currentModels() { if (!this.modelTimer) await this.refreshModels(); }
+  async currentModels() {
+    if(!this.modelTimer) {
+      const running=this.modelRefresh;
+      await this.refreshModels();
+      // A tool/read that joined an older snapshot must also pick up source revisions committed while it waited.
+      if(running)await this.refreshModels();
+    }
+  }
   /**
    * Requests read current ranks. The background timer owns minute rolls, so requests do not wait on projection
    * writers. Without the timer a request refreshes first.
@@ -85,28 +99,52 @@ export class ReadStore {
   async refreshModels() {
     if(this.modelRefresh)return this.modelRefresh;
     this.modelRefresh=(async()=>{
-      const cutoff=(await this.db.sql.query<{revision:string|null}>('SELECT max(revision) AS revision FROM read_dirty')).rows[0].revision;
-      if(cutoff==null)return;
-      for(;;) {
-        const started=this.now();
-        for(const [coin,at] of this.refreshedAt)if(started-at>=REFRESH_REST_MS || started<at)this.refreshedAt.delete(coin);
-        const resting=this.modelTimer ? [...this.refreshedAt.keys()].map(coin=>binary(coin as Address)) : [];
-        const pending=(await this.db.sql.query<{coin:Uint8Array;revision:string}>('SELECT coin,revision FROM read_dirty WHERE revision<=$1 AND NOT coin=ANY($3::bytea[]) ORDER BY revision LIMIT $2',[cutoff,REFRESH_BATCH,resting])).rows;
-        if(!pending.length)return;
-        await this.db.tx(async tx=>{
-          // The SQL function serializes only coins in this batch.
-          await tx.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[pending.map(r=>r.coin),Math.floor(this.now()/60000)*60]);
-          await refreshLiquidityModels(tx,pending.map(r=>hex(r.coin)),this.now());
-          // The indexer marks coins dirty from its swap trigger in its own row order; waiting on one of those rows here
-          // deadlocked its block writes (5-9 an hour on 2026-10-11). A row it is changing gets a new revision anyway, so
-          // it is skipped and refreshed next time.
-          await tx.sql.query(`DELETE FROM read_dirty d USING (SELECT x.coin FROM read_dirty x JOIN unnest($1::bytea[],$2::bigint[]) p(coin,revision)
-            ON x.coin=p.coin AND x.revision=p.revision
-            WHERE NOT EXISTS(SELECT 1 FROM read_buyer_dirty b JOIN tokens t ON t.address=b.coin AND t.deployer IS NOT NULL WHERE b.coin=x.coin)
-            FOR UPDATE OF x SKIP LOCKED) s WHERE d.coin=s.coin`,[pending.map(r=>r.coin),pending.map(r=>r.revision)]);
+      if(this.now()<this.retryNotBefore)return;
+      let pending:{coin:Uint8Array;revision:string}[]=[];
+      try {
+        const cutoff=await this.db.tx(async tx=>{
+          await limitRefresh(tx);
+          return (await tx.sql.query<{revision:string|null}>('SELECT max(revision) AS revision FROM read_dirty')).rows[0].revision;
         });
-        if(this.modelTimer)for(const r of pending)this.refreshedAt.set(hex(r.coin),started);
-        for(const listener of this.listeners)listener(pending.map(r=>hex(r.coin)));
+        if(cutoff==null)return;
+        for(;;) {
+          const started=this.now();
+          for(const [coin,at] of this.refreshedAt)if(started-at>=REFRESH_REST_MS || started<at)this.refreshedAt.delete(coin);
+          for(const [coin,at] of this.retryAt)if(started>=at)this.retryAt.delete(coin);
+          const resting=[...new Set([...(this.modelTimer ? this.refreshedAt.keys() : []),...this.retryAt.keys()])].map(coin=>binary(coin as Address));
+          const prepared=await this.db.tx(async tx=>{
+            await limitRefresh(tx);
+            await tx.sql.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            pending=(await tx.sql.query<{coin:Uint8Array;revision:string}>('SELECT coin,revision FROM read_dirty WHERE revision<=$1 AND NOT coin=ANY($3::bytea[]) ORDER BY revision LIMIT $2',[cutoff,this.refreshWidth,resting])).rows;
+            if(!pending.length)return null;
+            const keys=pending.map(r=>r.coin),window=Math.floor(this.now()/60000)*60;
+            const models=(await tx.sql.query<{prepared:unknown}>('SELECT prepare_read_models($1::bytea[],$2::bigint) AS prepared',[keys,window])).rows[0].prepared;
+            const liquidity=await prepareLiquidityModels(tx,pending.map(r=>hex(r.coin)),this.now(),this.probeWidth);
+            return {keys,window,models,liquidity};
+          });
+          if(!prepared)return;
+          const active=await this.db.tx(async tx=>{
+            await limitRefresh(tx);
+            await tx.sql.query('SELECT read_lock_coins($1::bytea[])',[prepared.keys]);
+            const active=(await tx.sql.query<{coins:Uint8Array[]}>('SELECT refresh_read_models($1::bytea[],$2::bigint,$3::jsonb) AS coins',[prepared.keys,prepared.window,JSON.stringify(prepared.models)])).rows[0].coins;
+            await writeLiquidityModels(tx,prepared.liquidity,active);
+            // A source write gets a new durable revision. Never wait on or acknowledge its in-flight dirty row.
+            await tx.sql.query(`DELETE FROM read_dirty d USING (SELECT x.coin FROM read_dirty x JOIN unnest($1::bytea[],$2::bigint[]) p(coin,revision)
+              ON x.coin=p.coin AND x.revision=p.revision WHERE x.coin=ANY($4::bytea[])
+              AND NOT EXISTS(SELECT 1 FROM read_buyer_dirty b WHERE b.coin=x.coin AND x.coin NOT IN(SELECT value::bytea FROM jsonb_array_elements_text($3::jsonb->'unlisted')))
+              FOR UPDATE OF x SKIP LOCKED) s WHERE d.coin=s.coin`,[pending.map(r=>r.coin),pending.map(r=>r.revision),JSON.stringify(prepared.models),active]);
+            return active;
+          });
+          if(this.modelTimer)for(const r of pending)this.refreshedAt.set(hex(r.coin),started);
+          for(const listener of this.listeners)listener(active.map(hex));
+        }
+      } catch(error) {
+        if(!refreshTimedOut(error))throw error;
+        // Rollback releases every mutex. Keep the durable queue intact and retry fewer coins/keys on a later tick.
+        this.refreshWidth=Math.max(1,Math.floor(this.refreshWidth/2));
+        this.probeWidth=Math.max(1,Math.floor(this.probeWidth/2));
+        if(pending.length)for(const r of pending)this.retryAt.set(hex(r.coin),this.now()+REFRESH_REST_MS);
+        else this.retryNotBefore=this.now()+REFRESH_REST_MS;
       }
     })().finally(()=>{this.modelRefresh=undefined;});
     return this.modelRefresh;
@@ -117,6 +155,7 @@ export class ReadStore {
     if(this.rankRefresh)return this.rankRefresh;
     const window=Math.floor(this.now()/60000)*60;
     this.rankRefresh=this.db.tx(async tx=>{
+      await limitRefresh(tx);
       const clock=await tx.sql.query<{window_sec:string}>('SELECT window_sec FROM read_rank_clock WHERE singleton=true FOR UPDATE');
       if(Number(clock.rows[0].window_sec)===window)return;
       const previous=Number(clock.rows[0].window_sec);
@@ -127,12 +166,14 @@ export class ReadStore {
           WHERE minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision)`}
 
         ) candidates`,forward ? [window,previous] : [window])).rows[0]!.coins;
-      // Models, single-coin card refreshes, retention buyer writes and ranks acquire the same complete key set first.
+      const volumes=(await tx.sql.query<{coin:Uint8Array;volume:number}>(`SELECT k.coin,coalesce(b.volume,0) AS volume FROM unnest($2::bytea[]) k(coin)
+        LEFT JOIN LATERAL (SELECT sum(volume_usd) AS volume FROM bars_1m WHERE coin=k.coin
+          AND minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision)) b ON true`,[window,affected])).rows;
       await tx.sql.query('SELECT read_lock_coins($1::bytea[])',[affected]);
-      await tx.sql.query(`WITH affected AS (SELECT unnest($2::bytea[]) AS coin), fresh AS (SELECT r.coin,CASE WHEN r.pricing_pending THEN 0 ELSE coalesce(b.volume,0) END AS volume
-          FROM affected a JOIN read_coins r ON r.coin=a.coin LEFT JOIN LATERAL (SELECT sum(volume_usd) AS volume FROM bars_1m
-            WHERE coin=a.coin AND minute>=to_timestamp($1::double precision-3540) AND minute<=to_timestamp($1::double precision)) b ON true)
-        UPDATE read_coins r SET volume=f.volume FROM fresh f WHERE r.coin=f.coin AND r.volume IS DISTINCT FROM f.volume`,[window,affected]);
+      await tx.sql.query(`UPDATE read_coins r SET volume=CASE WHEN r.pricing_pending THEN 0 ELSE f.volume END
+        FROM jsonb_to_recordset($1::jsonb) f(coin bytea,volume float8) WHERE r.coin=f.coin
+        AND r.volume IS DISTINCT FROM CASE WHEN r.pricing_pending THEN 0 ELSE f.volume END`,
+      [JSON.stringify(volumes.map(v=>({...v,coin:'\\x'+hex(v.coin).slice(2)})))]);
       await tx.sql.query('UPDATE read_rank_clock SET window_sec=$1 WHERE singleton=true',[window]);
     }).finally(()=>{this.rankRefresh=undefined;});
     return this.rankRefresh;

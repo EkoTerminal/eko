@@ -1,20 +1,38 @@
 import { binary, hex, type ChainDb } from '@eko/db';
 import { CoinCardSchema, type Address } from '@eko/shared';
+import { limitRefresh } from './refresh-limits.js';
 import { curveState, poolValueUsd, positionQuote } from './pool-liquidity.js';
 
 const LiquidityCardSchema=CoinCardSchema.pick({liquidity:true,meta:true}).partial();
-interface Trade {pool_id:string;amount_coin:string;amount_quote:string;usd:number;block:number;log_index:number;tx_hash:string}
+interface Trade {pool_id:string;amount_coin:string;amount_quote:string;usd:number;block:number|string;log_index:number;tx_hash:string}
 interface PoolInput {id:string;coinFirst:boolean;full:number|null;seen:boolean;positions:{lower:number;upper:number;liquidity:number}[]}
 interface InputRow {
   address:Uint8Array;graduated_block:string|null;graduated_pool:Uint8Array|null;launchpad:string|null;curve:Uint8Array|null;
   total_supply:string|null;data:unknown;revision:string;signature:string;saved_revision:string|null;saved_signature:string|null;
   inputs:PoolInput[]|null;threshold:string|null;retained:Trade|null;retained_prices:Record<string,Trade>|null;
 }
-/** Caller owns a transaction. Acquire the complete sorted set before either projection, including standalone callers. */
-export async function refreshLiquidityModels(db: ChainDb, coins: Address[], _now: number) {
-  if(!coins.length)return;
+export const LIQUIDITY_PROBE_KEYS=100;
+/** Preserve the raw index order behind an optimization barrier, then stop at the first matching pool. */
+export const LIQUIDITY_PRICE_SQL=`WITH keys AS (
+  SELECT k->>'coin' AS coin,k->>'pool' AS pool,decode(substring(k->>'coin' FROM 3),'hex') AS coin_key,
+    decode(substring(k->>'pool' FROM 3),'hex') AS pool_key FROM jsonb_array_elements($1::jsonb) k
+)
+SELECT k.coin,k.pool,to_jsonb(s) AS trade FROM keys k LEFT JOIN LATERAL (
+  SELECT '0x'||encode(r.pool_id,'hex') AS pool_id,r.amount_coin::text,r.amount_quote::text,r.usd,
+    r.block::text AS block,r.log_index,'0x'||encode(r.tx_hash,'hex') AS tx_hash
+  FROM (SELECT s.pool_id,s.amount_coin,s.amount_quote,s.usd,s.block,s.log_index,s.tx_hash FROM swaps s
+    WHERE s.coin=k.coin_key AND s.usd>0 AND s.amount_coin>0 AND s.amount_quote>0
+    ORDER BY s.block DESC,s.log_index DESC,s.tx_hash DESC OFFSET 0) r
+  WHERE k.pool_key IS NULL OR r.pool_id=k.pool_key LIMIT 1
+) s ON true`;
+
+/** Read and value every source before acquiring any projection mutex. */
+export async function prepareLiquidityModels(db:ChainDb,coins:Address[],_now:number,probeKeys=LIQUIDITY_PROBE_KEYS) {
+  if(!Number.isInteger(probeKeys) || probeKeys<1 || probeKeys>1000)throw new Error('Liquidity probe key limit must be between 1 and 1000');
   const keys=coins.map(binary);
-  await db.sql.query('SELECT read_lock_coins($1::bytea[])',[keys]);
+  const revisions=(await db.sql.query<{coin:Uint8Array;revision:string|null}>(`SELECT k.coin,d.revision::text AS revision
+    FROM unnest($1::bytea[]) k(coin) LEFT JOIN read_dirty d ON d.coin=k.coin`,[keys])).rows
+    .map(r=>({coin:'\\x'+hex(r.coin).slice(2),revision:r.revision}));
   const rows=(await db.sql.query<InputRow>(`
     SELECT t.address,t.graduated_block,t.graduated_pool,t.launchpad,t.curve,t.total_supply,
       c.data AS data,
@@ -59,17 +77,11 @@ export async function refreshLiquidityModels(db: ChainDb, coins: Address[], _now
   // One indexed latest priced probe per known pool, or per curve. No 50/60-row merge or lifetime tail expansion.
   const probes=rows.flatMap<{coin:Address;pool:string|null}>(t=>t.graduated_block==null && t.launchpad==='pons' ? [{coin:hex(t.address),pool:null}] :
     (t.inputs ?? []).filter(p=>t.graduated_block==null || p.id===(t.graduated_pool ? hex(t.graduated_pool) : '')).map(p=>({coin:hex(t.address),pool:p.id})));
-  const prices=(await db.sql.query<{coin:string;pool:string|null;trade:Trade|null}>(`
-    SELECT k->>'coin' AS coin,k->>'pool' AS pool,to_jsonb(s) AS trade FROM jsonb_array_elements($1::jsonb) k
-    LEFT JOIN LATERAL (
-      (SELECT '0x'||encode(pool_id,'hex') AS pool_id,amount_coin::text,amount_quote::text,usd,block::float8,log_index,'0x'||encode(tx_hash,'hex') AS tx_hash FROM swaps
-        WHERE k->>'pool' IS NOT NULL AND pool_id=decode(substring(k->>'pool' FROM 3),'hex') AND coin=decode(substring(k->>'coin' FROM 3),'hex')
-          AND usd>0 AND amount_coin>0 AND amount_quote>0 ORDER BY block DESC,log_index DESC,tx_hash DESC LIMIT 1)
-      UNION ALL
-      (SELECT '0x'||encode(pool_id,'hex') AS pool_id,amount_coin::text,amount_quote::text,usd,block::float8,log_index,'0x'||encode(tx_hash,'hex') AS tx_hash FROM swaps
-        WHERE k->>'pool' IS NULL AND coin=decode(substring(k->>'coin' FROM 3),'hex')
-          AND usd>0 AND amount_coin>0 AND amount_quote>0 ORDER BY block DESC,log_index DESC,tx_hash DESC LIMIT 1)
-    ) s ON true`,[JSON.stringify(probes)])).rows;
+  const prices:{coin:string;pool:string|null;trade:Trade|null}[]=[];
+  const unique=[...new Map(probes.map(p=>[`${p.coin}:${p.pool ?? ''}`,p])).values()];
+  for(let offset=0;offset<unique.length;offset+=probeKeys) {
+    prices.push(...(await db.sql.query<{coin:string;pool:string|null;trade:Trade|null}>(LIQUIDITY_PRICE_SQL,[JSON.stringify(unique.slice(offset,offset+probeKeys))])).rows);
+  }
   const latest=new Map(prices.map(p=>[`${p.coin}:${p.pool ?? ''}`,p.trade]));
   const newer=(a:Trade|null|undefined,b:Trade|null|undefined)=>!a ? b : !b ? a :
     Number(a.block)!==Number(b.block) ? Number(a.block)>Number(b.block)?a:b : a.log_index!==b.log_index ? a.log_index>b.log_index?a:b : a.tx_hash>=b.tx_hash?a:b;
@@ -97,20 +109,46 @@ export async function refreshLiquidityModels(db: ChainDb, coins: Address[], _now
     const unavailable=usd==null && (!card?.liquidity || !!card?.meta?.liquidity?.unavailable || !!card?.meta?.liquidity?.missing?.includes('depthUsd'));
     return {coin,usd:usd ?? (unavailable?0:card!.liquidity!.depthUsd.pct2),unavailable,curve_pct:curvePct};
   });
-  await db.sql.query(`WITH saved AS (
+  const present=new Set(rows.map(t=>hex(t.address)));
+  return {keys,values,revisions,inputs:due.map(t=>({coin:hex(t.address).slice(2),revision:t.revision,signature:t.signature,inputs:t.inputs})),
+    missing:keys.filter(c=>!present.has(hex(c)))};
+}
+export type PreparedLiquidity=Awaited<ReturnType<typeof prepareLiquidityModels>>;
+
+/** Only projection DML and payload decoding run under the mutex. No source-table lookups or triggers are used. */
+export async function writeLiquidityModels(db:ChainDb,prepared:PreparedLiquidity,active:readonly Uint8Array[]=prepared.keys) {
+  const allowed=new Set(active.map(hex));
+  const values=prepared.values.filter(v=>allowed.has(v.coin));
+  const inputs=prepared.inputs.filter(v=>allowed.has(`0x${v.coin}`));
+  const missing=prepared.missing.filter(c=>allowed.has(hex(c)));
+  await db.sql.query(`WITH eligible AS MATERIALIZED (
+    SELECT r.coin FROM jsonb_to_recordset($4::jsonb) r(coin bytea,revision bigint) LEFT JOIN read_dirty d ON d.coin=r.coin
+    WHERE r.revision IS NOT DISTINCT FROM d.revision
+  ), saved AS (
     INSERT INTO read_liquidity_inputs(coin,revision,signature,data)
     SELECT decode(v->>'coin','hex'),(v->>'revision')::bigint,v->>'signature',v->'inputs' FROM jsonb_array_elements($2::jsonb) v
-    WHERE EXISTS(SELECT 1 FROM tokens t WHERE t.address=decode(v->>'coin','hex')) ORDER BY v->>'coin'
+    WHERE decode(v->>'coin','hex') IN(SELECT coin FROM eligible) ORDER BY v->>'coin'
     ON CONFLICT(coin) DO UPDATE SET revision=excluded.revision,signature=excluded.signature,data=excluded.data
   ), gone_inputs AS (
-    DELETE FROM read_liquidity_inputs r WHERE r.coin=ANY($3::bytea[]) AND NOT EXISTS(SELECT 1 FROM tokens t WHERE t.address=r.coin)
+    DELETE FROM read_liquidity_inputs r WHERE r.coin=ANY($3::bytea[]) AND r.coin IN(SELECT coin FROM eligible)
   ), gone AS (
-    DELETE FROM read_coin_liquidity r WHERE r.coin=ANY($3::bytea[]) AND NOT EXISTS(SELECT 1 FROM tokens t WHERE t.address=r.coin)
+    DELETE FROM read_coin_liquidity r WHERE r.coin=ANY($3::bytea[]) AND r.coin IN(SELECT coin FROM eligible)
   ) INSERT INTO read_coin_liquidity(coin,usd,unavailable,curve_pct)
     SELECT decode(substring(v->>'coin' FROM 3),'hex'),(v->>'usd')::float8,(v->>'unavailable')::boolean,(v->>'curve_pct')::float8
     FROM jsonb_array_elements($1::jsonb) v
-    WHERE EXISTS(SELECT 1 FROM tokens t WHERE t.address=decode(substring(v->>'coin' FROM 3),'hex')) ORDER BY v->>'coin'
+    WHERE decode(substring(v->>'coin' FROM 3),'hex') IN(SELECT coin FROM eligible) ORDER BY v->>'coin'
     ON CONFLICT(coin) DO UPDATE SET usd=excluded.usd,unavailable=excluded.unavailable,curve_pct=excluded.curve_pct
     WHERE (read_coin_liquidity.usd,read_coin_liquidity.unavailable,read_coin_liquidity.curve_pct)
-      IS DISTINCT FROM (excluded.usd,excluded.unavailable,excluded.curve_pct)`,[JSON.stringify(values),JSON.stringify(due.map(t=>({coin:hex(t.address).slice(2),revision:t.revision,signature:t.signature,inputs:t.inputs}))),keys]);
+      IS DISTINCT FROM (excluded.usd,excluded.unavailable,excluded.curve_pct)`,[JSON.stringify(values),JSON.stringify(inputs),missing,JSON.stringify(prepared.revisions.filter(r=>allowed.has(`0x${r.coin.slice(2)}`)))]);
+}
+
+/** Standalone maintenance entry point. Preparation precedes the mutex, with deadlines on the entire transaction. */
+export async function refreshLiquidityModels(db:ChainDb,coins:Address[],now:number,probeKeys=LIQUIDITY_PROBE_KEYS) {
+  if(!coins.length)return;
+  await db.tx(async tx=>{
+    await limitRefresh(tx);
+    const prepared=await prepareLiquidityModels(tx,coins,now,probeKeys);
+    await tx.sql.query('SELECT read_lock_coins($1::bytea[])',[prepared.keys]);
+    await writeLiquidityModels(tx,prepared);
+  });
 }

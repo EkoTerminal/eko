@@ -1,0 +1,133 @@
+{
+  "runtime": "PGlite",
+  "coins": 30000,
+  "swaps": 100000,
+  "keys": 200,
+  "defaultStatements": [
+    100,
+    100
+  ],
+  "executionMs": 67.096,
+  "nodes": [
+    {
+      "node": "Nested Loop",
+      "rows": 200,
+      "loops": 1
+    },
+    {
+      "node": "Function Scan",
+      "rows": 200,
+      "loops": 1
+    },
+    {
+      "node": "Subquery Scan",
+      "rows": 1,
+      "loops": 200
+    },
+    {
+      "node": "Limit",
+      "rows": 1,
+      "loops": 200
+    },
+    {
+      "node": "Subquery Scan",
+      "rows": 1,
+      "loops": 200,
+      "removed": 250
+    },
+    {
+      "node": "Merge Append",
+      "rows": 251,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_10",
+      "index": "swaps_d2026_10_10_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_11",
+      "index": "swaps_d2026_10_11_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_12",
+      "index": "swaps_d2026_10_12_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_13",
+      "index": "swaps_d2026_10_13_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_14",
+      "index": "swaps_d2026_10_14_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_15",
+      "index": "swaps_d2026_10_15_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_16",
+      "index": "swaps_d2026_10_16_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Scan",
+      "relation": "swaps_d2026_10_17",
+      "index": "swaps_d2026_10_17_coin_block_log_index_tx_hash_ts_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 251,
+      "loops": 200,
+      "removed": 0
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_18",
+      "index": "swaps_d2026_10_18_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_19",
+      "index": "swaps_d2026_10_19_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    },
+    {
+      "node": "Index Only Scan",
+      "relation": "swaps_d2026_10_20",
+      "index": "swaps_d2026_10_20_coin_block_log_index_tx_hash_pool_id_amou_idx",
+      "condition": "(coin = decode(SUBSTRING((k.value ->> 'coin'::text) FROM 3), 'hex'::text))",
+      "rows": 0,
+      "loops": 200
+    }
+  ]
+}
