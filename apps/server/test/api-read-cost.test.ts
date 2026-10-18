@@ -5,6 +5,7 @@ import { ReadStore } from '../src/read/store.js';
 import { FeedService } from '../src/read/feed.js';
 import { RadarService } from '../src/read/radar.js';
 import { sampleAddress } from './read-fixture.js';
+import { BaselineRows } from './radar-row-baseline.js';
 
 const now=Date.parse('2026-10-14T12:00:00Z'),sec=now/1000;
 const coin=sampleAddress(100),sparse=sampleAddress(101);
@@ -37,23 +38,26 @@ it('matches whole-history market values, including sparse prices, first minute, 
   await db.sql.query(`INSERT INTO bars_1m SELECT $1,to_timestamp($2::double precision-n*60),n,n,n,n,n,1,n,n FROM generate_series(0,40000) n`,[binary(coin),sec]);
   await db.sql.query(`INSERT INTO bars_1m SELECT $1,to_timestamp($2::double precision+d),p,p,p,p,5,2,1,1 FROM (VALUES(-300000,2),(-100000,3),(-60,4),(60,5)) v(d,p)`,[binary(sparse),sec]);
   await db.sql.query('ANALYZE bars_1m');
-  let sql='',params:unknown[]=[];
-  const store=new ReadStore(traced(db,(text,values)=>{if(text.startsWith('WITH selected AS')){sql=text;params=values;}}),()=>now);
-  await store.rows(undefined,[coin,sparse]);
-  const begin=sql.indexOf('    ), market AS ('),end=sql.indexOf('    ), span AS ');
-  const legacy=sql.slice(0,begin)+legacyMarket+sql.slice(end);
-  expect((await db.sql.query(sql,params)).rows).toEqual((await db.sql.query(legacy,params)).rows);
-  const explain=async(text:string)=>(await db.sql.query<{ 'QUERY PLAN':{ 'Execution Time':number;Plan:unknown }[] }>('EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) '+text,params)).rows[0]['QUERY PLAN'][0];
-  const before=await explain(legacy),after=await explain(sql);
+  let sql='',params:unknown[]=[],oldSql='',oldParams:unknown[]=[];
+  const store=new ReadStore(traced(db,(text,values)=>{if(text.startsWith('SELECT t.*,coalesce(v.revision')){sql=text;params=values;}}),()=>now);
+  const baseline=new BaselineRows(traced(db,(text,values)=>{if(text.startsWith('WITH selected AS')){oldSql=text;oldParams=values;}}),()=>now);
+  const actual=await store.rows(undefined,[coin,sparse]),expected=await baseline.rows(undefined,[coin,sparse]);
+  expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+  const begin=oldSql.indexOf('    ), market AS ('),end=oldSql.indexOf('    ), span AS ');
+  const legacy=oldSql.slice(0,begin)+legacyMarket+oldSql.slice(end);
+  expect((await db.sql.query(oldSql,oldParams)).rows).toEqual((await db.sql.query(legacy,oldParams)).rows);
+  const marketKeys=['address','price','previous1h','previous24h','volume','trades','prior_volume','first_minute','spark'];
+  const market=(rows:Record<string,unknown>[])=>rows.map(r=>Object.fromEntries(marketKeys.map(k=>[k,r[k]])));
+  expect(market((await db.sql.query(sql,params)).rows)).toEqual(market((await db.sql.query(legacy,oldParams)).rows));
+  const explain=async(text:string,values:unknown[])=>(await db.sql.query<{ 'QUERY PLAN':{ 'Execution Time':number;Plan:unknown }[] }>('EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) '+text,values)).rows[0]['QUERY PLAN'][0];
+  const before=await explain(legacy,oldParams),after=await explain(sql,params);
   console.info('market benchmark',JSON.stringify({historyBars:40005,windowBars:1444,beforeMs:before['Execution Time'],afterMs:after['Execution Time']}));
-  // Each market scan reads only the bounded day for one selected coin. Spark sorts are per coin.
+  // Warm row reads use the maintained projection, including sparse, old and future prices, with zero bar scans/sorts.
   const nodes=(node:unknown):Record<string,unknown>[]=>{const n=node as Record<string,unknown>;return [n,...((n.Plans ?? []) as unknown[]).flatMap(nodes)];};
-  const scans=nodes(after.Plan).filter(n=>String(n['Relation Name']).startsWith('bars_1m_'));
-  expect(scans.length).toBeGreaterThan(0);
-  expect(scans.every(n=>Number(n['Actual Rows'])<=1445)).toBe(true);
-  const sorts=nodes(after.Plan).filter(n=>n['Node Type']==='Sort');
-  expect(sorts.every(n=>Number(n['Actual Rows'])<=481)).toBe(true);
+  expect(nodes(after.Plan).filter(n=>String(n['Relation Name']).startsWith('bars_1m_'))).toEqual([]);
+  expect(nodes(after.Plan).filter(n=>n['Node Type']==='Sort')).toEqual([]);
 });
+
 it('matches complete hourly rank recomputation on minute rolls, corrections, gaps and a backwards clock',async()=>{
   const db=await fixture();let clock=now;
   const store=new ReadStore(db,()=>clock);

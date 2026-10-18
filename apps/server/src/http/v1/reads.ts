@@ -1,3 +1,4 @@
+import { serializeRadarResponse } from '../../read/row-cache.js';
 import { recordRouteRejection } from '../../obs/rate-limits.js';
 import { readCensus } from '@eko/db';
 import { z } from 'zod';
@@ -37,7 +38,7 @@ export async function readRoutes(app:FastifyInstance,services:ReadServices,auth?
   app.get('/scoreboard/grades',async()=>services.grades.read());
   app.get('/scoreboard',async req=>{const q=parse(z.strictObject({kind:ScoreboardKindSchema.default('calls'),cursor,limit:z.coerce.number().int().min(1).max(100).default(50)}),req.query);return services.scoreboard.list(q.kind,q.cursor,q.limit);});
   app.get('/census',async()=>readCensus(services.store.db,services.store.now()));
-  app.get('/radar',async req=>{const q=parse(z.object({cursor,blueChip,mode:z.enum(['safe','degen']).optional(),lens:z.string().max(64).optional()}),req.query);return radar.list(q.cursor,q.blueChip);});
+  app.get('/radar',async(req,reply)=>{reply.serializer(serializeRadarResponse);const q=parse(z.object({cursor,blueChip,mode:z.enum(['safe','degen']).optional(),lens:z.string().max(64).optional()}),req.query);return radar.list(q.cursor,q.blueChip);});
   app.get('/pairs',async req=>{const q=parse(z.object({stage:z.enum(['new','near_grad','migrated']).default('new'),cursor,blueChip}),req.query);return pairs.list(q.stage,q.cursor,q.blueChip);});
   app.get('/feed',async req=>{const q=parse(z.object({cursor,kinds:z.string().max(200).optional()}),req.query);const kinds=q.kinds ? parse(z.array(FeedItemSchema.shape.kind),q.kinds.split(',')) : undefined;return feed.list(kinds,q.cursor);});
   const address=(params:unknown)=>parse(z.object({address:AddressSchema}),params).address;

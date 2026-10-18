@@ -1,3 +1,4 @@
+import { serializeRadarRow } from '../read/row-cache.js';
 import type { WebSocket } from 'ws';
 import type { Agent, Alert, ClientMessage, ServerMessage, Timeframe } from '@eko/shared';
 import { TradeOrderSchema, type TradeOrder, GuardWsClientSchema, GuardWsEventSchema, type GuardWsEvent, type CoinCardV2, type Address, WsClientSchema, WsChannelSchema, type WsChannel, type WsChannelKind, type WsEventMap } from '@eko/shared';
@@ -242,7 +243,8 @@ export class Hub {
     // Private channel events must always pass through account-scoped publication.
     if (['agents', 'alerts', 'approvals', 'orders'].includes(ch)) return;
     const seq = (this.seq.get(ch) ?? 0) + 1; this.seq.set(ch, seq);
-    const payload = JSON.stringify({ t: 'ev', ch, seq, ts: Date.now(), kind, data });
+    const header={ t:'ev',ch,seq,ts:Date.now(),kind };
+    const payload=ch==='radar' && kind==='row_upsert' ? JSON.stringify(header).slice(0,-1)+',\"data\":'+serializeRadarRow(data as object)+'}' : JSON.stringify({...header,data});
     for (const client of this.v1.values()) if (client.channels.has(ch)) this.reply(client, payload, ch);
   }
   publishAlert(accountId: string, seq: number, alert: Alert): number {

@@ -1,3 +1,4 @@
+import { serializeRadarResponse } from '../read/row-cache.js';
 import { GuardConsumerReads } from '../read/guard-consumers.js';
 import type { ReadServices } from './v1/reads.js';
 import type { FastifyInstance } from 'fastify';
@@ -24,7 +25,7 @@ export async function guardReadRoutes(app:FastifyInstance,store:GuardReadStore, 
     if (services) {
       const consumers = new GuardConsumerReads(services);
       const cursor = z.string().max(1024).optional();
-      v2.get('/radar', async req => {const q=parse(z.strictObject({cursor,blueChip:z.enum(['true','false']).optional()}),req.query);return consumers.radar(q.cursor,q.blueChip==='true');});
+      v2.get('/radar', async (req,reply) => {reply.serializer(serializeRadarResponse);const q=parse(z.strictObject({cursor,blueChip:z.enum(['true','false']).optional()}),req.query);return consumers.radar(q.cursor,q.blueChip==='true');});
       v2.get('/pairs', async req => { const q = parse(z.strictObject({stage:z.enum(['new','near_grad','migrated']).default('new'),cursor,blueChip:z.enum(['true','false']).optional()}),req.query); return consumers.pairs(q.stage,q.cursor,q.blueChip==='true'); });
       v2.get('/feed', async req => { const q = parse(z.strictObject({cursor,kinds:z.string().max(200).optional()}),req.query); return consumers.feed(q.kinds ? parse(z.array(FeedItemSchema.shape.kind),q.kinds.split(',')) : undefined,q.cursor); });
     }

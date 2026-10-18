@@ -1,11 +1,11 @@
+import { RowProjectionCache, rowMissingChecks, type RowProjection } from './row-cache.js';
 import { LoopHeartbeat } from '../loop-health.js';
 import { BlueChipReader } from './blue-chip.js';
 import { binary, hex, readFlows, readRatingPrices, liveRating, unavailableFlow, type ChainDb } from '@eko/db';
 import { readSellChecks, type SellCheckReading } from '@eko/engines';
 import { limitRefresh, refreshTimedOut } from './refresh-limits.js';
 import { LIQUIDITY_PROBE_KEYS, prepareLiquidityModels, writeLiquidityModels } from './liquidity-model.js';
-import { CoinCardSchema, VerdictSchema, findingsFirst, isHardDanger, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
-import { toUntrusted } from '@eko/untrusted';
+import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type RadarRow, type Verdict } from '@eko/shared';
 import { reportError } from '../obs/errors.js';
 /** Coins per read-model refresh transaction (see refreshModels). */
 export const REFRESH_BATCH=25;
@@ -14,6 +14,7 @@ export const REFRESH_REST_MS=3000;
 export const REFRESH_POLL_MS=250;
 
 interface Stored {
+  card_revision:string;series_revision:string;
   liquidity_usd:number|null;liquidity_unavailable:boolean|null;curve_pct:number|null;
   buyers_pending:boolean;pricing_pending:boolean;eligible:boolean;address: Uint8Array; name: string | null; symbol: string | null; launchpad: string | null;
   curve: Uint8Array | null; graduated_block: string | null; total_supply: string | null; decimals: number | null;
@@ -51,6 +52,10 @@ export class ReadStore {
   private probeWidth:number;
   private retryAt=new Map<string,number>();
   private retryNotBefore=0;
+  readonly rowCache=new RowProjectionCache();
+  private rowClock?:Promise<void>;
+  private rowClockReady=false;
+  private thinSeries=new Map<string,{revision:string;points:number[]}>();
   constructor(readonly db: ChainDb, public now: () => number = Date.now,options:{liquidityProbeKeys?:number}={}) {
     this.probeWidth=options.liquidityProbeKeys ?? LIQUIDITY_PROBE_KEYS;
   }
@@ -81,7 +86,7 @@ export class ReadStore {
       void this.refreshSummaries().then(()=>this.summaryHeartbeat.complete()).catch(error=>reportError(error,{where:'read header refresh'}));
     },rankMs);this.rankTimer.unref();
   }
-  async close() {clearInterval(this.modelTimer);clearInterval(this.rankTimer);await this.modelRefresh;await this.rankRefresh;await this.summaryRefresh;}
+  async close() {clearInterval(this.modelTimer);clearInterval(this.rankTimer);await this.modelRefresh;await this.rowClock;await this.rankRefresh;await this.summaryRefresh;}
   /**
    * Requests read the current projection. With the background refresher running (every 250 ms) they never wait on its
    * backlog: during the 2026-10-09 scanner catch-up a radar request waited 40+ s behind refresh batches contending for
@@ -95,7 +100,18 @@ export class ReadStore {
       await this.refreshModels();
       // A tool/read that joined an older snapshot must also pick up source revisions committed while it waited.
       if(running)await this.refreshModels();
+      await this.refreshRowClock();
     }
+  }
+  /** Clock expiry is maintenance: bar writes own source reads, minute rolls use stored day arrays. */
+  refreshRowClock() {
+    return this.rowClock ??= (async()=>{
+      const now=this.now()/1000;
+      const due=(await this.db.sql.query<{coin:Uint8Array}>(`SELECT coin FROM read_row_series
+        WHERE next_at<=$1 OR window_sec>$1 ORDER BY coin`,[now])).rows.map(r=>r.coin);
+      for(let i=0;i<due.length;i+=100)await this.db.sql.query('SELECT refresh_read_row_series($1::bytea[],$2::double precision,false)',[due.slice(i,i+100),now]);
+      this.rowClockReady=true;
+    })().finally(()=>{this.rowClock=undefined;});
   }
   /**
    * Requests read current ranks. The background timer owns minute rolls, so requests do not wait on projection
@@ -108,6 +124,7 @@ export class ReadStore {
   async refreshModels() {
     if(this.modelRefresh)return this.modelRefresh;
     this.modelRefresh=(async()=>{
+      if(!this.rowClockReady)await this.refreshRowClock();
       if(this.now()<this.retryNotBefore)return;
       let pending:{coin:Uint8Array;revision:string}[]=[];
       try {
@@ -161,6 +178,7 @@ export class ReadStore {
   // Only API-owned projections change here; source chain/engine tables stay read-only.
   async refreshRanks() {
     await this.currentModels();
+    await this.refreshRowClock();
     if(this.rankRefresh)return this.rankRefresh;
     const window=Math.floor(this.now()/60000)*60;
     this.rankRefresh=this.db.tx(async tx=>{
@@ -194,64 +212,72 @@ export class ReadStore {
     const bounded=address ? [address] : addresses;
     const filter=bounded ? 't.address=ANY($2::bytea[])' : 'r.coin IS NOT NULL';
     if(bounded)params.push(bounded.map(binary));
-    // Candidate ordering is owned by read_coins. Keep payloads out of the multi-use CTE and
-    // aggregate bars through indexed per-coin ranges, keeping sorts and intermediate rows bounded.
-    const result = await this.db.sql.query<Stored>(`WITH selected AS (
-      SELECT t.*,l.usd AS liquidity_usd,l.unavailable AS liquidity_unavailable,l.curve_pct,r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,(r.coin IS NOT NULL) AS eligible FROM ${bounded ? 'unnest($2::bytea[]) k(coin) CROSS JOIN LATERAL (SELECT * FROM tokens WHERE address=k.coin OFFSET 0) t' : 'tokens t'}
-      LEFT JOIN read_coins r ON r.coin=t.address ${bounded ? 'AND r.coin=ANY($2::bytea[])' : ''} LEFT JOIN read_coin_liquidity l ON l.coin=t.address ${bounded ? 'AND l.coin=ANY($2::bytea[])' : ''} WHERE ${filter}
-    ), market AS (
-      SELECT t.address AS coin,last.close AS price,hour.close AS previous1h,day.close AS previous24h,first.minute AS first_minute,
-        coalesce(v.volume,0) AS volume,coalesce(v.trades,0) AS trades,coalesce(v.prior_volume,0) AS prior_volume
-      FROM selected t
-      LEFT JOIN LATERAL (SELECT close FROM bars_1m WHERE coin=t.address ORDER BY minute DESC LIMIT 1) last ON true
-      LEFT JOIN LATERAL (SELECT close FROM bars_1m WHERE coin=t.address AND minute<=to_timestamp($1::double precision-3600) ORDER BY minute DESC LIMIT 1) hour ON true
-      LEFT JOIN LATERAL (SELECT close FROM bars_1m WHERE coin=t.address AND minute<=to_timestamp($1::double precision-86400) ORDER BY minute DESC LIMIT 1) day ON true
-      LEFT JOIN LATERAL (SELECT minute FROM bars_1m WHERE coin=t.address ORDER BY minute LIMIT 1) first ON true
-      LEFT JOIN LATERAL (SELECT sum(volume_usd) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)) AS volume,
-        sum(trades) FILTER(WHERE minute>=to_timestamp($1::double precision-3600)) AS trades,
-        sum(volume_usd) FILTER(WHERE minute<to_timestamp($1::double precision-3600)) AS prior_volume FROM bars_1m
-        WHERE coin=t.address AND minute>=to_timestamp($1::double precision-86400)) v ON true
-    ), span AS MATERIALIZED (
-      -- One indexed first-minute probe and bucket-width calculation per page coin.
-      SELECT t.address AS coin,b.minute AS first,
-        60*greatest(1,ceil(extract(epoch FROM to_timestamp($1::double precision)-b.minute)/5760.0)) AS width
-      FROM selected t CROSS JOIN LATERAL (SELECT minute FROM bars_1m WHERE coin=t.address
-        AND minute>=to_timestamp($1::double precision-28800) AND minute<=to_timestamp($1::double precision)
-        ORDER BY minute LIMIT 1) b
-    ), buckets AS (
-      -- Sort at most eight hours of one coin at a time, instead of spilling the entire page's bar window.
-      -- The last close of each bucket preserves the series and its original first-minute anchor.
-      SELECT s.coin,b.bucket,b.close FROM span s CROSS JOIN LATERAL (
-        SELECT DISTINCT ON (bucket) floor(extract(epoch FROM b.minute-s.first)/s.width) AS bucket,b.close
-        FROM bars_1m b WHERE b.coin=s.coin
-          AND b.minute>=to_timestamp($1::double precision-28800) AND b.minute<=to_timestamp($1::double precision)
-        ORDER BY bucket,b.minute DESC) b
-    ), sparks AS (SELECT coin,array_agg(close ORDER BY bucket) AS points FROM buckets GROUP BY coin)
-    SELECT t.*,c.data,c.data->'verdict' AS verdict,coalesce(bt.ts,cb.ts) AS created_at,
-      b.price,b.previous1h,b.previous24h,coalesce(b.volume,0) AS volume,coalesce(b.trades,0) AS trades,coalesce(b.prior_volume,0) AS prior_volume,b.first_minute,s.points AS spark
-    FROM selected t LEFT JOIN LATERAL (SELECT data FROM coin_card_latest WHERE coin=t.address OFFSET 0) c ON true
-    LEFT JOIN market b ON b.coin=t.address LEFT JOIN sparks s ON s.coin=t.address
-    LEFT JOIN LATERAL (SELECT ts FROM engine_block_times WHERE number=t.first_block OFFSET 0) bt ON true
-    LEFT JOIN LATERAL (SELECT ts FROM chain_blocks WHERE number=t.first_block OFFSET 0) cb ON true`,params);
+    // Only compact projections are read on a warm page. Card JSON is fetched separately on revision misses.
+    const result = await this.db.sql.query<Stored>(`SELECT t.*,coalesce(v.revision,0)::text AS card_revision,
+      coalesce(s.revision,0)::text||':'||coalesce(e.revision,0)::text||':'||coalesce(v.revision,0)::text||':'||floor($1::double precision/60)::text AS series_revision,l.usd AS liquidity_usd,l.unavailable AS liquidity_unavailable,l.curve_pct,
+      r.activity,coalesce(r.buyers_pending,false) AS buyers_pending,coalesce(r.pricing_pending,false) AS pricing_pending,
+      (r.coin IS NOT NULL) AS eligible,coalesce(bt.ts,cb.ts) AS created_at,
+      CASE WHEN r.coin IS NULL THEN s.price ELSE r.row_price END AS price,
+      CASE WHEN r.coin IS NULL THEN s.previous1h ELSE r.row_previous1h END AS previous1h,
+      CASE WHEN r.coin IS NULL THEN s.previous24h ELSE r.row_previous24h END AS previous24h,
+      coalesce(r.row_volume,s.volume,0) AS volume,coalesce(r.row_trades,s.trades,0) AS trades,
+      coalesce(r.row_prior_volume,s.prior_volume,0) AS prior_volume,coalesce(r.row_first_minute,s.first_minute) AS first_minute,s.points AS spark
+      FROM ${bounded ? 'unnest($2::bytea[]) k(coin) CROSS JOIN LATERAL (SELECT * FROM tokens WHERE address=k.coin OFFSET 0) t' : 'tokens t'}
+      LEFT JOIN LATERAL (SELECT * FROM read_coins WHERE coin=t.address OFFSET 0) r ON true
+      LEFT JOIN LATERAL (SELECT * FROM read_row_series WHERE coin=t.address OFFSET 0) s ON true
+      LEFT JOIN LATERAL (SELECT revision FROM read_row_cards WHERE coin=t.address OFFSET 0) v ON true
+      LEFT JOIN LATERAL (SELECT revision FROM engine_activity_versions WHERE coin=t.address AND coalesce(cardinality(s.points),0)<6 OFFSET 0) e ON true
+      LEFT JOIN read_coin_liquidity l ON l.coin=t.address ${bounded ? 'AND l.coin=ANY($2::bytea[])' : ''}
+      LEFT JOIN LATERAL (SELECT ts FROM engine_block_times WHERE number=t.first_block OFFSET 0) bt ON true
+      LEFT JOIN LATERAL (SELECT ts FROM chain_blocks WHERE number=t.first_block OFFSET 0) cb ON true
+      WHERE ${filter} AND $1::double precision IS NOT NULL`,params);
+    const projections=new Map<string,RowProjection>();
+    const misses=result.rows.filter(t=>{
+      const coin=hex(t.address),cached=this.rowCache.get(coin,t.card_revision);
+      if(cached)projections.set(coin,cached);
+      return !cached;
+    });
+    if(misses.length) {
+      const cards=(await this.db.sql.query<{coin:Uint8Array;revision:string;data:unknown;name:string|null;symbol:string|null}>(`SELECT t.address AS coin,
+        coalesce(v.revision,0)::text AS revision,c.data,t.name,t.symbol FROM unnest($1::bytea[]) k(coin)
+        JOIN tokens t ON t.address=k.coin LEFT JOIN read_row_cards v ON v.coin=t.address
+        LEFT JOIN coin_card_latest c ON c.coin=t.address`,[misses.map(t=>t.address)])).rows;
+      for(const c of cards)projections.set(hex(c.coin),this.rowCache.set(hex(c.coin),c.revision,c.data,c.name,c.symbol));
+    }
     const readAddresses=result.rows.map(t=>hex(t.address));
     const [prices,flows,sells]=await Promise.all([
       readRatingPrices(this.db,readAddresses),readFlows(this.db,readAddresses),readSellChecks(this.db,readAddresses,this.now()),
     ]);
+    // TODO(spec): CA-31 says 48 points. Keep the existing 96/97-point rule for the requested byte equivalence.
     // A coin with only a few minutes of bars gets its series from its trades instead (the latest 96 priced ones), so a
     // launch shows a line from its second trade on.
-    const thin=result.rows.filter(t=>!t.pricing_pending && (t.spark?.length ?? 0)<6).map(t=>t.address);
     const trades=new Map<string,number[]>();
+    const thinRows=result.rows.filter(t=>!t.pricing_pending && (t.spark?.length ?? 0)<6);
+    const thin=thinRows.filter(t=>{
+      const cached=this.thinSeries.get(hex(t.address));
+      if(cached?.revision===t.series_revision){this.thinSeries.delete(hex(t.address));this.thinSeries.set(hex(t.address),cached);trades.set(hex(t.address),cached.points);return false;}
+      return true;
+    }).map(t=>t.address);
     if(thin.length)for(const row of (await this.db.sql.query<{coin:Uint8Array;points:number[]}>(`SELECT t.address AS coin,array_agg(s.usd/(s.amount_coin::double precision/power(10,coalesce(t.decimals,18))) ORDER BY s.block,s.log_index) AS points
       FROM tokens t CROSS JOIN LATERAL (WITH candidates AS MATERIALIZED (SELECT block,log_index,usd,amount_coin FROM swaps s
         WHERE s.coin=t.address AND s.ts>to_timestamp($2::double precision-28800) AND s.ts<=to_timestamp($2::double precision)
           AND s.usd>0 AND s.amount_coin>0) SELECT * FROM candidates ORDER BY block DESC,log_index DESC LIMIT 96) s
       WHERE t.address=ANY($1::bytea[]) GROUP BY t.address,t.decimals`,[thin,now])).rows)trades.set(hex(row.coin),row.points.map(Number));
+    const thinKeys=new Set(thin.map(hex));
+    for(const t of thinRows)if(thinKeys.has(hex(t.address))) {
+      const coin=hex(t.address),points=trades.get(coin) ?? [];
+      this.thinSeries.delete(coin);this.thinSeries.set(coin,{revision:t.series_revision,points});
+      while(this.thinSeries.size>2048)this.thinSeries.delete(this.thinSeries.keys().next().value!);
+    }
     const memberships = await this.blueChip?.members(result.rows.map(t=>hex(t.address)));
     return result.rows.map(t => {
       const sell=sells.get(hex(t.address)),traded=trades.get(hex(t.address));
       const spark=traded && traded.length>(t.spark?.length ?? 0) ? traded : t.spark;
-      const card = t.data ? withSellCheck(CoinCardSchema.parse(t.data),sell) : null;
-      const verdict = t.verdict ? liveRating(VerdictSchema.parse(t.verdict),prices.get(hex(t.address))) : null;
+      const projection=projections.get(hex(t.address))!;
+      // Overlay live fields on copies, never mutate a cached card or its nested freshness/meta objects.
+      const base=projection.card;
+      const card=base ? withSellCheck({...base,freshness:{...base.freshness},meta:{...base.meta}},sell) : null;
+      const verdict=base ? liveRating(base.verdict,prices.get(hex(t.address))) : null;
       if(card && verdict) {card.verdict=verdict;if(verdict.lastChecked)card.freshness.ageSec=Math.max(0,Math.floor(now-Date.parse(verdict.lastChecked.at)/1000));}
       const flow=flows.get(hex(t.address))??unavailableFlow('1h');
       const {meta:flowMeta,...flowValues}=flow;
@@ -271,7 +297,7 @@ export class ReadStore {
       // TODO(spec): CoinSummary requires priceUsd even before the first priced swap; priceUnavailable masks it.
       // TODO(spec): CA-31 circulating supply is not indexed; cap uses observed total supply, as market.ts does.
       const row: RadarRow = {
-        address: hex(t.address), name: toUntrusted(t.name ?? '',120), symbol: toUntrusted(t.symbol ?? '',32),
+        address: hex(t.address), name: projection.name, symbol: projection.symbol,
         launchpad: t.launchpad === 'pons' ? 'pons' : 'other',
         // A Pons coin is on its curve until its graduation is indexed. Its token row exists a moment before its curve
         // address does; reading that gap as graduated sent brand-new launches to Migrated and tagged them "Pons → pool".
@@ -284,10 +310,10 @@ export class ReadStore {
         verdict: verdict?.level ?? 'pending', verdictPending: !verdict,
         lastChecked:verdict?.lastChecked, priceMove:verdict?.priceMove,
         ratingAgeSec:verdict?.lastChecked ? Math.max(0,Math.floor(now-Date.parse(verdict.lastChecked.at)/1000)) : undefined,
-        ...(verdict?.playbooks.some(m => m.level === 'danger' && isHardDanger(m.id)) ? { hardDanger: true } : {}),
+        ...(projection.hardDanger ? { hardDanger: true } : {}),
         evaluatedPlaybooks: verdict?.evaluatedPlaybooks,
-        missingChecks: [...new Set(Object.values(card?.meta ?? {}).flatMap(m => m.missing ?? []))],
-        topPlaybook: verdict ? findingsFirst(verdict.playbooks)[0]?.id : undefined, ageSec: Math.max(0,now-(t.created_at ? new Date(t.created_at).getTime()/1000 : now)),
+        missingChecks: rowMissingChecks(projection,card),
+        topPlaybook: projection.topPlaybook, ageSec: Math.max(0,now-(t.created_at ? new Date(t.created_at).getTime()/1000 : now)),
         flow:flowValues, exitCost1kPct:sell?.exit1k ?? 0,
         ...(sell ? {sellCheck:{status:sell.status,asOfBlock:sell.block,checkedAt:sell.checkedAt.toISOString()}} : {}),
         rank:0, signal:card?.signal, spark8h:t.pricing_pending ? undefined : spark ?? [], beta:verdict?.beta, unavailable,

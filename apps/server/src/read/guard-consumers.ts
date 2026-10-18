@@ -12,7 +12,14 @@ export class GuardConsumerReads {
   async radar(cursor?: string,blueChipOnly=false) {
     const page = await this.services.radar.list(cursor,blueChipOnly);
     const rows = await Promise.all(page.rows.map(row => this.row(row)));
-    return RadarResponseSchema.parse({ ...page, rows, guardTotals: await this.services.guard.totals() });
+    const result=RadarResponseSchema.parse({ ...page, rows, guardTotals: await this.services.guard.totals() });
+    // Validation clones nested objects. Retain the already validated static projection for fragment serialization.
+    result.rows.forEach((row,i)=>{
+      const source=page.rows[i]!;
+      row.name=source.name;row.symbol=source.symbol;row.missingChecks=source.missingChecks;
+      row.evaluatedPlaybooks=source.evaluatedPlaybooks;row.signal=source.signal;row.beta=source.beta;
+    });
+    return result;
   }
   async pairs(stage: 'new' | 'near_grad' | 'migrated', cursor?: string,blueChipOnly=false) {
     const page = await this.services.pairs.list(stage, cursor,blueChipOnly);

@@ -511,7 +511,7 @@ Measured: **599/599 (100.00%)** documented. Minimum: **90%**.
 | `journalRoutes` | function | [apps/server/src/http/v1/journal.ts:20](../../apps/server/src/http/v1/journal.ts#L20) | Yes |
 | `oauthConsentRoutes` | function | [apps/server/src/http/v1/oauth.ts:19](../../apps/server/src/http/v1/oauth.ts#L19) | Yes |
 | `packRoutes` | function | [apps/server/src/http/v1/packs.ts:13](../../apps/server/src/http/v1/packs.ts#L13) | Yes |
-| `readRoutes` | function | [apps/server/src/http/v1/reads.ts:35](../../apps/server/src/http/v1/reads.ts#L35) | Yes |
+| `readRoutes` | function | [apps/server/src/http/v1/reads.ts:36](../../apps/server/src/http/v1/reads.ts#L36) | Yes |
 | `receiptRoutes` | function | [apps/server/src/http/v1/receipts.ts:14](../../apps/server/src/http/v1/receipts.ts#L14) | Yes |
 | `rpcRoutes` | function | [apps/server/src/http/v1/rpc.ts:59](../../apps/server/src/http/v1/rpc.ts#L59) | Yes |
 | `telegramRoutes` | function | [apps/server/src/http/v1/telegram.ts:13](../../apps/server/src/http/v1/telegram.ts#L13) | Yes |
@@ -520,7 +520,7 @@ Measured: **599/599 (100.00%)** documented. Minimum: **90%**.
 | `tradeAdminRoutes` | function | [apps/server/src/http/v1/trade-admin.ts:19](../../apps/server/src/http/v1/trade-admin.ts#L19) | Yes |
 | `tradeRoutes` | function | [apps/server/src/http/v1/trade.ts:14](../../apps/server/src/http/v1/trade.ts#L14) | Yes |
 | `watchRoutes` | function | [apps/server/src/http/v1/watch.ts:17](../../apps/server/src/http/v1/watch.ts#L17) | Yes |
-| `guardReadRoutes` | function | [apps/server/src/http/v2-guard.ts:17](../../apps/server/src/http/v2-guard.ts#L17) | Yes |
+| `guardReadRoutes` | function | [apps/server/src/http/v2-guard.ts:18](../../apps/server/src/http/v2-guard.ts#L18) | Yes |
 | `IncidentService.constructor` | constructor | [apps/server/src/obs/incidents.ts:18](../../apps/server/src/obs/incidents.ts#L18) | Yes |
 | `IncidentService.recordTradeMiss` | method | [apps/server/src/obs/incidents.ts:24](../../apps/server/src/obs/incidents.ts#L24) | Yes |
 | `IncidentService.raise` | method | [apps/server/src/obs/incidents.ts:44](../../apps/server/src/obs/incidents.ts#L44) | Yes |
