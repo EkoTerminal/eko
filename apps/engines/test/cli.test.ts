@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,4 +62,9 @@ describe('replay CLI shutdown',()=>{
     finally {await reopened.close();}
   } finally {await rm(directory,{recursive:true,force:true});}
  },testBudgetMs);
+});
+
+it('exits non-zero for invalid engine configuration', () => {
+ const result=spawnSync(process.execPath,['--import','tsx','src/cli.ts'],{cwd:new URL('..',import.meta.url),env:{PATH:process.env.PATH,APP_ROLE:'engines',RPC_HTTP_URL:'invalid'},encoding:'utf8'});
+ expect(result.status).toBe(1);expect(result.stderr).toContain('Engines halted');
 });

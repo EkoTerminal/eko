@@ -7,7 +7,7 @@ import { DeferredEvents } from './deferred.js';
 import { isAddress, type Address } from 'viem';
 import { reportIndexerError } from './guard-stop.js';
 import { z } from 'zod';
-import { loadRegistry, createMeteredClients, RpcGuardError, rpcStopReason, isTransientRpcUnavailable, safeError, type ProgressWatchdog, type RpcEnv } from '@eko/chain';
+import { loadRegistry, createMeteredClients, rpcRoleHealth, RpcGuardError, rpcStopReason, isTransientRpcUnavailable, safeError, type ProgressWatchdog, type RpcEnv } from '@eko/chain';
 import { openDb, migrate, migrateEngines, rebuildBars, launchEmitter } from '@eko/db';
 import { createClients } from './clients.js';
 import { BlockDecoder } from './decode.js';
@@ -53,7 +53,8 @@ async function main() {
   let registryStop:()=>void=()=>{};
   let interrupted = false; let failed = false;
   const stop = (reason: 'shutdown_requested' | 'rpc_session_budget_reached' = 'shutdown_requested') => { interrupted = true; if (reason === 'shutdown_requested') log(reason, { finishing_current_transaction: true }); worker?.stop(); registryStop(); meter.stop(reason); };
-  const meter = createMeteredClients(env, { db, log, transientRetrySec: env.INDEX_TRANSIENT_RETRY_SEC, onSessionBudget: () => stop('rpc_session_budget_reached') }).meter;
+  const updatePause = await rpcRoleHealth(db, 'indexer');
+  const meter = createMeteredClients(env, { db, log, pauseOnOutage: true, onPauseChange: updatePause, onSessionBudget: () => stop('rpc_session_budget_reached') }).meter;
   const signalStop = () => stop();
   process.once('SIGTERM', signalStop); process.once('SIGINT', signalStop);
   meter.start();
@@ -94,7 +95,7 @@ async function main() {
       worker = new PonsBackfill(client, db, decoder, { workers: parsed.workers, logRange: env.INDEX_LOG_RANGE });
     } else {
       // An alive process that stops moving exits non-zero so the platform restarts it, and its lag stays visible meanwhile.
-      const stallWatch = watchdog = indexerWatchdog({ stallMs: env.INDEX_STALL_SEC * 1000, client, metrics: liveMetrics, log,
+      const stallWatch = watchdog = indexerWatchdog({ paused: () => meter.pause !== null, stallMs: env.INDEX_STALL_SEC * 1000, client, metrics: liveMetrics, log,
         emit: (metric, value) => telemetry.emit(metric, value) });
       const hooks = { onHead: (n: bigint) => stallWatch.observeHead(n), onProgress: (n: bigint) => stallWatch.progress(n) };
       worker = env.INDEX_HEAD_MODE === 'blocks'

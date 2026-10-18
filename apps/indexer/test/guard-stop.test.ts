@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import { RpcGuardError, rpcStopReason } from '@eko/chain';
 import { reportIndexerError } from '../src/guard-stop.js';
@@ -38,4 +39,9 @@ describe('indexer exit reasons', () => {
     expect(JSON.stringify(logger.mock.calls[0][1].stack_frames)).not.toMatch(/demo-account|sample|https|tmp/);
   });
 
+});
+
+it('exits non-zero for invalid indexer configuration', () => {
+  const result=spawnSync(process.execPath,['--import','tsx','src/cli.ts'],{cwd:new URL('..',import.meta.url),env:{PATH:process.env.PATH,APP_ROLE:'indexer',RPC_HTTP_URL:'invalid'},encoding:'utf8'});
+  expect(result.status).toBe(1);expect(result.stdout).toContain('indexer_halted');
 });

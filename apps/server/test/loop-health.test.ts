@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChainDb } from '@eko/db';
+import { rpcRoleHealth } from '@eko/chain';
 import * as retention from '@eko/db';
 import { LoopHeartbeat, loopHealth } from '../src/loop-health.js';
 import { healthRoutes } from '../src/http/v1/health.js';
@@ -112,4 +113,21 @@ it('pricing, onboarding and projection timers report completion rather than entr
   await vi.advanceTimersByTimeAsync(120_001);
   for (const heartbeat of [pricing.heartbeat, onboarding.heartbeat, reads.heartbeat]) expect(heartbeat.snapshot().ok).toBe(false);
   release(); await pricing.stop(); await onboarding.stop(); await reads.close();
+});
+
+ it('reports cross-process RPC pauses on v1 readiness while database liveness stays 200', async () => {
+  const db = await retention.openDb({pgliteDir: ':memory:'});
+  const app = Fastify();
+  try {
+    const update = await rpcRoleHealth(db, 'engines');
+    await app.register(async v1 => healthRoutes(v1, usage, loadConfig({NODE_ENV:'test'}), () => db.sql.query('SELECT 1'), undefined, db), {prefix:'/v1'});
+    const pause = {state:'PAUSED' as const, reason:'provider_balance_exceeded' as const, provider:'paid' as const, since:1000, nextRetryAt:11000};
+    await update(pause);
+    const ready = await app.inject('/v1/health/loops');
+    expect(ready.statusCode).toBe(503);expect((await app.inject('/v1/health')).statusCode).toBe(200);
+    expect(ready.json().loops.engines).toEqual({...pause, stale:false});
+    await db.sql.query('UPDATE rpc_role_health SET updated_at=0');
+    expect((await app.inject('/v1/health/loops')).json().loops.engines.stale).toBe(true);
+    await update(null);expect((await app.inject('/v1/health/loops')).statusCode).toBe(200);
+  } finally {await app.close();await db.close();}
 });

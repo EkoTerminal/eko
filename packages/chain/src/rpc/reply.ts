@@ -14,7 +14,7 @@ export class RpcReplyError extends Error {
   override readonly name = 'RpcReplyError';
   constructor(readonly fault: RpcReplyFault, readonly transient: boolean, message: string, readonly status?: number) { super(message); }
 }
-const transientStatus = (status: number) => status === 408 || status === 425 || status === 429 || status >= 500;
+const transientStatus = (status: number) => status === 402 || status === 408 || status === 425 || status === 429 || status >= 500;
 type Entry = { id?: unknown; result?: unknown; error?: unknown };
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 /** The provider's own short reason, never its body: HTML pages and echoed request text stay out of logs. */

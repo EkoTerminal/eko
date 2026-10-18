@@ -77,6 +77,8 @@ export function createPonsAdapter(ctx: PonsContext, options: {
 // TODO(spec): The Pons router launch topic 0xdcacba5e… remains unidentified and is counted as unknown.
 
 export interface PonsProfileClient {
+  /** Background acquisition rejects on outage instead of waiting behind foreground acquisition. */
+  outageNonBlocking?: boolean;
   readContract(input: { address: Address; abi: typeof ponsCurveAbi; functionName: 'currentSnipeTaxBps' | 'creatorTaxBps' | 'feeBps'; args?: readonly [Address]; blockNumber: bigint }): Promise<bigint>;
   getCode(input: { address: Address; blockNumber: bigint }): Promise<`0x${string}` | undefined>;
   /**

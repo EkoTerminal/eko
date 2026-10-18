@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { priceMovedCoins, binary, hex, migrate, migrateEngines, rebuildBalances, InProcessBus, ChainDb, ReceiptOutbox } from '@eko/db';
 import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
-import { loadRegistry, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain';
+import { loadRegistry, RpcMeter, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';
 import { decodeEventLog, type Hex } from 'viem';
@@ -64,6 +64,39 @@ describe('reserved scheduling',()=>{
 });
 
 describe('engines: fixture-backed and synthetic indexed rows',()=>{
+ it('retains the same worker verdict state through an RPC pause and resumes the pending block',async()=>{
+  const db=await setup();await transfer(db,1,actor,100);await swap(db,1,1);
+  let now=0,available=true,release!:()=>void,paused!:()=>void;
+  const entered=new Promise<void>(resolve=>{paused=resolve;});
+  const meter=new RpcMeter({RPC_HTTP_URL:'https://paid.invalid'},{store:{reserve:async()=>({allowed:true,total:1}),today:async()=>[]},pauseOnOutage:true,now:()=>now,log:()=>{},
+   onPauseChange:state=>{if(state)paused();},sleep:async ms=>{now+=ms;if(ms>=10000)await new Promise<void>(resolve=>{release=resolve;});}});
+  const send=async(r:{method:string})=>{if(!available)throw new Error('User balance exceeded');return r.method==='eth_blockNumber'?'0x2':r.method==='eth_getCode'?'0x60006000':0n;};
+  const profile:PonsProfileClient={getCode:async()=>await meter.request({method:'eth_getCode'},{paid:send,public:send},'archive') as Hex,
+   readContract:async()=>await meter.request({method:'eth_call'},{paid:send,public:send},'archive') as bigint};
+  const worker=new EngineWorker(db,{client:profile});
+  try {
+   await worker.processBlock(1);const before=worker.summary();const completed=worker.telemetry().cardFailures;
+   await block(db,2,60);await swap(db,2,1,100,5,actor,coin,60);available=false;
+   const pending=worker.processBlock(2);await entered;
+   expect(worker.summary()).toEqual(before);expect(worker.telemetry().cardFailures).toBe(completed);
+   expect((await latest(db)).verdict.lastChecked?.block).toBe(1);
+   available=true;release();await pending;
+   expect(meter.pause).toBeNull();expect(worker.summary().coinsEvaluated).toBe(before.coinsEvaluated);
+   expect((await latest(db)).verdict.lastChecked?.block).toBe(2);
+  } finally {await meter.close();}
+ });
+ it('keeps database-only price-crash re-ratings running during an RPC pause',async()=>{
+  const db=await setup(false);await pair(db,150001);await swap(db,1,1,100,100);
+  await new EngineWorker(db).processBlock(1);
+  await block(db,2,601);await swap(db,2,1,100,50,actor,coin,601);
+  await db.sql.query('SELECT refresh_read_models($1::bytea[],$2::bigint)',[[binary(coin)],epoch+2000]);
+  const rpc=client(),headers=vi.fn(async()=>{throw new Error('RPC must stay paused');});
+  const worker=new EngineWorker(db,{client:rpc,readBlock:headers,rpcPaused:()=>true,now:()=>epoch+2000,rerate:true,rerateIdleMs:10,onRerate:()=>worker.stop()});
+  worker.poll=async()=>{await new Promise(resolve=>setTimeout(resolve,10));return 0;};
+  await worker.run();
+  expect((await latest(db)).verdict.priceMove?.downSinceRatedPct).toBe(50);
+  expect(rpc.getCode).not.toHaveBeenCalled();expect(rpc.readContract).not.toHaveBeenCalled();expect(headers).not.toHaveBeenCalled();
+ });
  it('emits queue completion for durable live output, including incomplete output, but excludes replay',async()=>{
   const db=await setup(false);await transfer(db,1,actor,100);
   const completion=vi.fn();const worker=new EngineWorker(db,{now:()=>epoch+100,onQueueCompletion:completion});

@@ -1,5 +1,5 @@
 import { binary, hex, type ChainDb } from '@eko/db';
-import { readPonsProfile, rpcStopReason, type PonsProfileClient } from '@eko/chain';
+import { readPonsProfile, rpcStopReason, isTransientRpcUnavailable, type PonsProfileClient } from '@eko/chain';
 import { keccak256, toFunctionSelector } from 'viem';
 import type { Address } from '@eko/shared';
 import type { ClockCache } from './activity.js';
@@ -37,6 +37,7 @@ class PonsProfiles {
   constructor(private db: ChainDb) {}
   read(coin: Address, curve: Address, block: number, hash: Uint8Array | null, client?: PonsProfileClient, _clock?: ClockCache) {
     if (!hash) return Promise.resolve(undefined);
+    if (!client || client.outageNonBlocking) return this.load(coin, curve, block, hash, client);
     const key = `${coin}:${curve}:${block}:${hex(hash)}`;
     const found = this.attempts.get(key); if (found) return found;
     const next = (this.queues.get(coin) ?? Promise.resolve()).then(() => this.load(coin, curve, block, hash, client));
@@ -63,7 +64,7 @@ class PonsProfiles {
       // the budget-less hours re-failing (2026-10-10 on the new host: 599 restarts overnight).
       const stop = rpcStopReason(error);
       if (stop === 'rpc_budget_exhausted') return undefined;
-      if (stop) throw error; /* Missing reads remain unknown at this checkpoint, never a permanent failure or zero. */
+      if (stop || isTransientRpcUnavailable(error)) throw error; /* Missing reads remain unknown at this checkpoint, never a permanent failure or zero. */
     }
     await this.db.sql.query('INSERT INTO engine_reads VALUES($1,$2,$3,$4) ON CONFLICT(coin,block) DO UPDATE SET block_hash=excluded.block_hash,profile=excluded.profile',
       [binary(coin), block, hash, profile ? JSON.stringify(profile) : null]);

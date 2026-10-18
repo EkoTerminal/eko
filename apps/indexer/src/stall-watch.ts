@@ -8,10 +8,10 @@ import type { ChainClient, Logger, Metrics } from './types.js';
  * to launch monitoring; the last measured lag keeps growing while the cursor stands still.
  */
 export function indexerWatchdog(input: {
-  stallMs: number; client: Pick<ChainClient, 'head'>; metrics: Pick<Metrics, 'hasHeadMeasurement' | 'headLagMs'>;
+  paused?: () => boolean; stallMs: number; client: Pick<ChainClient, 'head'>; metrics: Pick<Metrics, 'hasHeadMeasurement' | 'headLagMs'>;
   emit: (metric: 'head_lag_ms', value: number) => void; log: Logger; now?: () => number; exit?: (code: number) => void;
 }): ProgressWatchdog {
-  return new ProgressWatchdog({ role: 'indexer', stallMs: input.stallMs, trackHead: true, log: input.log, now: input.now, exit: input.exit,
+  return new ProgressWatchdog({ role: 'indexer', paused: input.paused, stallMs: input.stallMs, trackHead: true, log: input.log, now: input.now, exit: input.exit,
     // Only used when the head loop itself has not read the head for a minute: one metered public call.
     probe: () => input.client.head(),
     onReport: state => {

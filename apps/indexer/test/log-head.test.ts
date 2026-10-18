@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PartitionLockTimeoutError, binary, chainTables, hex, migrate, ChainDb } from '@eko/db';
 import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
-import { AddressRegistry, createMeteredClients, decodeResult, loadRegistry, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, RpcGuardError, RpcReplyError, rpcStopReason } from '@eko/chain';
+import { AddressRegistry, createMeteredClients, decodeResult, loadRegistry, ponsCurveAbi, v3Abi, v4Abi, erc20Abi, RpcGuardError, RpcMeter, RpcReplyError, rpcStopReason } from '@eko/chain';
 import { decodeFunctionData, encodeFunctionResult, encodeAbiParameters, encodeEventTopics, parseAbi, toEventSelector, toHex, type AbiEvent, type Address, type Hex } from 'viem';
 import { BlockRows } from '../src/rows.js';
 import { enrichSenders } from '../src/enrich.js';
@@ -889,6 +889,27 @@ describe('head loop through provider outages', () => {
     const data: Data = new Map([[0n, { block: empty(0), receipts: [] }], ...Array.from({ length: count }, (_, i) => [BigInt(i + 1), trade(i + 1)] as const)]);
     return { db, data, client: memory(data) };
   }
+  it('pauses paid ingest in place and resumes the same follower and decoder after a balance outage', async () => {
+    const { db, client } = await trades(2);
+    let now=0,available=true,release!:()=>void,paused!:()=>void;
+    const entered=new Promise<void>(resolve=>{paused=resolve;});
+    const meter=new RpcMeter({RPC_HTTP_URL:'https://paid.invalid'}, {store:{reserve:async()=>({allowed:true,total:1}),today:async()=>[]},
+      pauseOnOutage:true,now:()=>now,log:quiet,onPauseChange:state=>{if(state)paused();},sleep:async ms=>{now+=ms;if(ms>=10000)await new Promise<void>(resolve=>{release=resolve;});}});
+    meters.push(meter);
+    const logs=client.logs.bind(client);
+    const send=async(r:{method:string})=>{if(!available)throw new Error('User balance exceeded');return r.method==='eth_blockNumber'?'0x2':'ok';};
+    client.logs=async filter=>{await meter.request({method:'eth_call'},{paid:send,public:send},'archive');return logs(filter);};
+    const live=follower(db,client,{maxRange:1});
+    const decoder=live.decoder,invalidated=vi.spyOn(decoder,'invalidate');
+    await live.tick();expect(await db.cursor('head_logs')).toBe(1n);
+    available=false;const pending=live.tick();await entered;
+    expect(meter.pause?.reason).toBe('provider_balance_exceeded');expect(await db.cursor('head_logs')).toBe(1n);
+    expect((await db.sql.query('SELECT * FROM swaps WHERE block>0')).rows).toHaveLength(1);
+    available=true;release();await pending;
+    expect(live.decoder).toBe(decoder);expect(invalidated).not.toHaveBeenCalled();
+    expect(meter.pause).toBeNull();expect(await db.cursor('head_logs')).toBe(2n);
+    expect((await db.sql.query('SELECT * FROM swaps WHERE block>0')).rows).toHaveLength(2);
+  });
   it('backs off with capped jittered delays and keeps running instead of halting, reporting heads and committed cursors', async () => {
     const { db, client } = await trades(2);
     const logs = client.logs.bind(client); let failures = 0;

@@ -15,6 +15,7 @@ export interface WatchdogOptions {
    * counts. Without it (engines), any silence of `progress()` for `stallMs` is a stall.
    */
   trackHead?: boolean;
+  paused?: () => boolean;
   /** An independent chain-head read used when the worker has not reported one recently. */
   probe?: () => Promise<bigint>;
   probeMs?: number; probeTimeoutMs?: number;
@@ -41,6 +42,7 @@ export class ProgressWatchdog {
   private behindSince: number | null = null;
   private reportedAt: number; private probing = false; private timer?: ReturnType<typeof setInterval>;
   private tripped = false;
+  private wasPaused = false;
   constructor(private readonly options: WatchdogOptions) {
     if (!(options.stallMs > 0)) throw new Error('Invalid watchdog stall threshold');
     this.now = options.now ?? Date.now;
@@ -77,6 +79,11 @@ export class ProgressWatchdog {
   check(): StallReason | undefined {
     if (this.tripped) return undefined;
     const now = this.now(), { stallMs } = this.options;
+    if (this.options.paused?.()) { this.wasPaused = true; return undefined; }
+    if (this.wasPaused) {
+      this.wasPaused = false; this.progressAt = now; this.headAt = now;
+      if (this.behindSince != null) this.behindSince = now;
+    }
     if (now - this.reportedAt >= (this.options.reportMs ?? 60_000)) { this.reportedAt = now; this.report(); }
     let reason: StallReason | undefined;
     if (!this.options.trackHead) { if (now - this.progressAt >= stallMs) reason = 'no_heartbeat'; }

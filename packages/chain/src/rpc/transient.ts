@@ -1,6 +1,8 @@
+import { providerErrorClass } from './outage.js';
 import { RpcReplyError } from './reply.js';
 /** Classify transport failures before sanitizing them; never retain provider bodies or URLs. */
 export function isTransientRpcError(error: unknown): boolean {
+  if (providerErrorClass(error)) return true;
   const seen = new Set<unknown>();
   let transient = false;
   for (let depth = 0; error && depth < 16 && !seen.has(error); depth++) {

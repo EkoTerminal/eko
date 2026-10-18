@@ -77,6 +77,8 @@ export interface WorkerOptions {
   /** A poll stopped on a spent daily paid budget; run() waits `budgetWaitMs` (default 60 s) and polls again. */
   onBudgetWait?: () => void; budgetWaitMs?: number;
   /** Live: run rerateLoop() beside the polls (the CLI turns it on). `onRerate` reports each batch's cards. */
+  rpcPaused?: () => boolean;
+  rerateClient?: PonsProfileClient;
   rerate?: boolean; rerateIdleMs?: number; onRerate?: (cards: number, firstScans: number, traded: number) => void; onRerateError?: (error: unknown) => void;
   /** Live: re-rate pending cards written before this ISO time (the CLI passes RATING_CODE_AT). Wall-clock, like engine_runs.created_at. */
   rerateBefore?: string;
@@ -626,12 +628,12 @@ export class EngineWorker {
           await countEvaluations(this.db,batch.map(({card})=>({path:'loop',outcome:'planned',reason:'head',firstRating:!card,count:1})));
           for(const {coin,card} of batch)if(card)this.rerated.set(coin,card);else this.firstTried.set(coin,block);
           try {
-            if(!(await resolveClock(this.db,block,this.readBlock,this.clock)))break;
+            if(!(await resolveClock(this.db,block,this.options.rpcPaused?.() ? undefined : this.readBlock,this.clock)))break;
             const loaded=(await Promise.all(batch.map(async ({coin,card})=>{
               const prune=await historyPrune(this.db,coin);
               if(prune && !(await revivedBy(this.db,coin,prune,block))){await countEvaluations(this.db,[{path:'loop',outcome:'skipped_candidate',reason:'history_pruned',firstRating:!card,count:1}]);return null;}
-              if(!card){await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.options.referenceSimulation?.(coin,block);}
-              const sources=await loadSources(this.db,coin,block,this.client,this.clock,undefined,false,this.rerateMemo).catch(error=>{
+              if(!card){await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);if(!this.options.rpcPaused?.())await this.options.referenceSimulation?.(coin,block);}
+              const sources=await loadSources(this.db,coin,block,this.options.rpcPaused?.() ? undefined : this.options.rerateClient ?? this.client,this.clock,undefined,false,this.rerateMemo).catch(error=>{
                 if(!isRpcUnavailable(error))throw error;
                 return null; // Failure/backoff was recorded by loadSources; continue the reserved lane.
               });
@@ -669,7 +671,7 @@ export class EngineWorker {
           }
         }
         if(work.length)this.options.onRerate?.(cards,firstScans,tradedCards);
-        if(work.length)continue;
+        if(work.length && !this.options.rpcPaused?.())continue;
       } catch(error) {
         if(rpcStopReason(error)!=='rpc_budget_exhausted')this.options.onRerateError?.(error);
       }
