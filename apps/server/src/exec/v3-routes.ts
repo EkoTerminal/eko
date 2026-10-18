@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { loadRegistry, type AddressRegistry, type RegistryKey } from '@eko/chain';
 import { binary, hex, type SqlClient } from '@eko/db';
 import type { TradeQuote, TradeQuoteRequest, UnsignedTx } from '@eko/shared';
@@ -140,7 +141,7 @@ export async function quoteV3Trade(client: PublicClient, input: TradeQuoteReques
   const tokens = [...new Set([input.coin.toLowerCase(), weth.toLowerCase(), ...pools.flatMap(p => [p.currency0.toLowerCase(), p.currency1.toLowerCase()])])] as Address[];
   const metadata = new Map(await Promise.all(tokens.map(async token => {
     const [decimals, price] = await Promise.all([
-      client.readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals', blockNumber: block }),
+      withRpcOrigin('server.v3_routes.L143',()=>client.readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals', blockNumber: block })),
       sources.priceUsd(token, block),
     ]);
     if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new ChainQuoteError('no_route', 'Invalid token decimals');
@@ -155,7 +156,7 @@ export async function quoteV3Trade(client: PublicClient, input: TradeQuoteReques
   const allowanceOf = (token: Address) => {
     let found = allowances.get(token.toLowerCase());
     if (!found) {
-      found = client.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [input.account!, router], blockNumber: block });
+      found = withRpcOrigin('server.v3_routes.L158',()=>client.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [input.account!, router], blockNumber: block }));
       allowances.set(token.toLowerCase(), found);
     }
     return found;
@@ -178,12 +179,12 @@ export async function quoteV3Trade(client: PublicClient, input: TradeQuoteReques
     let token0: Address;
     let approvalNeeded: boolean;
     try {
-      const canonical = await client.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'getPool', args: [tokenIn, tokenOut, pool.fee], blockNumber: block });
+      const canonical = await withRpcOrigin('server.v3_routes.L181',()=>client.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'getPool', args: [tokenIn, tokenOut, pool.fee], blockNumber: block }));
       if (same(canonical, zeroAddress) || !same(canonical, pool.address)) return null;
       const [quoted, slot, first] = await Promise.all([
-        client.simulateContract({ address: quoter, abi: QUOTER_V2_ABI, functionName: 'quoteExactInputSingle', args: [{ tokenIn, tokenOut, amountIn, fee: pool.fee, sqrtPriceLimitX96: 0n }], blockNumber: block }),
-        client.readContract({ address: canonical, abi: POOL_ABI, functionName: 'slot0', blockNumber: block }),
-        client.readContract({ address: canonical, abi: POOL_ABI, functionName: 'token0', blockNumber: block }),
+        withRpcOrigin('server.v3_routes.rawL185',()=>client.simulateContract({ address: quoter, abi: QUOTER_V2_ABI, functionName: 'quoteExactInputSingle', args: [{ tokenIn, tokenOut, amountIn, fee: pool.fee, sqrtPriceLimitX96: 0n }], blockNumber: block })),
+        withRpcOrigin('server.v3_routes.L185',()=>client.readContract({ address: canonical, abi: POOL_ABI, functionName: 'slot0', blockNumber: block })),
+        withRpcOrigin('server.v3_routes.L186',()=>client.readContract({ address: canonical, abi: POOL_ABI, functionName: 'token0', blockNumber: block })),
       ]);
       [amountOut, , , gasEstimate] = quoted.result;
       sqrtPrice = slot[0]; token0 = first;

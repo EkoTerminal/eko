@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { createHash } from 'node:crypto';
 import { decodeEventLog, encodeFunctionData, formatEther, parseAbi, toEventSelector, toHex, type Hex } from 'viem';
 import { binary, hex, type ChainDb } from '@eko/db';
@@ -90,9 +91,9 @@ export class SecurityCollectors {
       catch { this.unavailable(name); }
     }
   }
-  private async chain() { if (quantity.parse(await this.rpc.request('eth_chainId', [])) !== 4663n) throw new Error('Wrong chain'); }
+  private async chain() { if (quantity.parse(await withRpcOrigin('server.security_collectors.rawL93',()=>this.rpc.request('eth_chainId', []))) !== 4663n) throw new Error('Wrong chain'); }
   private async header(block: bigint | 'latest') {
-    const h = headerSchema.parse(await this.rpc.request('eth_getBlockByNumber', [block === 'latest' ? block : toHex(block), false]));
+    const h = headerSchema.parse(await withRpcOrigin('server.security_collectors.rawL95',()=>this.rpc.request('eth_getBlockByNumber', [block === 'latest' ? block : toHex(block), false])));
     if (block !== 'latest' && h.number !== block) throw new Error('Wrong block');
     return h;
   }
@@ -149,9 +150,9 @@ export class SecurityCollectors {
     if (from <= head.number) {
       const to = from + 499n < head.number ? from + 499n : head.number;
       const end = await this.header(to);
-      const logs = z.array(logSchema).max(1000).parse(await this.rpc.request('eth_getLogs', [{
+      const logs = z.array(logSchema).max(1000).parse(await withRpcOrigin('server.security_collectors.rawL152',()=>this.rpc.request('eth_getLogs', [{
         address: this.bindings.registry, fromBlock: toHex(from), toBlock: toHex(to), topics: [topics],
-      }]));
+      }])));
       const evidence: Evidence[] = [];
       const headers = new Map<string, Header>([[to.toString(), end]]);
       for (const log of logs) {
@@ -192,11 +193,11 @@ export class SecurityCollectors {
     this.validRegistry(); await this.chain();
     const head = await this.header('latest');
     const pinned = { blockHash: head.hash, requireCanonical: true };
-    const result = await this.rpc.request('eth_call', [{ to: this.bindings.registry, data: committerData }, pinned]);
+    const result = await withRpcOrigin('server.security_collectors.rawL195',()=>this.rpc.request('eth_call', [{ to: this.bindings.registry, data: committerData }, pinned]));
     if (typeof result !== 'string' || !/^0x0{24}[0-9a-fA-F]{40}$/.test(result)) throw new Error('Invalid committer');
     const address = `0x${result.slice(-40).toLowerCase()}`;
     if (address === zero) throw new Error('Committer disabled');
-    const balance = quantity.parse(await this.rpc.request('eth_getBalance', [address, pinned]));
+    const balance = quantity.parse(await withRpcOrigin('server.security_collectors.rawL199',()=>this.rpc.request('eth_getBalance', [address, pinned])));
     if ((await this.header(head.number)).hash !== head.hash) throw new Error('Reorg during balance read');
     await this.record({ metric: 'receipt_committer_balance_eth', value: Number(formatEther(balance)) });
   }
@@ -236,7 +237,7 @@ export class SecurityCollectors {
         const metadata = (await this.db.sql.query<{ decimals: number | null }>('SELECT decimals FROM tokens WHERE address=$1', [t.token])).rows[0];
         if (metadata?.decimals !== asset.decimals) throw new Error('Missing or conflicting decimals');
         let receipt = receipts.get(txHash);
-        if (!receipt) { receipt = receiptSchema.parse(await this.rpc.request('eth_getTransactionReceipt', [txHash])); receipts.set(txHash, receipt); }
+        if (!receipt) { receipt = receiptSchema.parse(await withRpcOrigin('server.security_collectors.rawL239',()=>this.rpc.request('eth_getTransactionReceipt', [txHash]))); receipts.set(txHash, receipt); }
         if (receipt.status !== 1n || receipt.transactionHash !== txHash || receipt.blockNumber !== BigInt(t.block) || receipt.blockHash !== hex(t.hash)) throw new Error('Receipt not canonical');
         const log = receipt.logs.find(l => l.logIndex === BigInt(t.log_index));
         if (!log || log.removed || log.blockHash !== receipt.blockHash || log.transactionHash !== txHash || log.blockNumber !== receipt.blockNumber || log.address.toLowerCase() !== token) throw new Error('Transfer log missing');

@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { loopHealth, type LoopHeartbeat } from './loop-health.js';
 import { installRateLimitObservations, pluginRejectionObserver } from './obs/rate-limits.js';
 import { BlueChipListingWorker } from './blue-chip-listings.js';
@@ -190,16 +191,16 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   const market = new MarketDataService(feed, db, MARKETS);
   const providers = new ProviderRegistry(cfg);
   const budget = new InferenceBudget(db, cfg.AI_DAILY_BUDGET_USD, cfg.AI_MAX_CALLS_PER_BOT_HOUR);
-  const chains = new ChainClients({ mainnet: cfg.RH_MAINNET_RPC_URL, testnet: cfg.RH_TESTNET_RPC_URL }, cfg, dbh.rpcUsage);
+  const chains = new ChainClients({ mainnet: cfg.RH_MAINNET_RPC_URL, testnet: cfg.RH_TESTNET_RPC_URL }, cfg, dbh.rpcUsage, dbh.chain);
   chains.meter.start();
   // Swaps quoted in a token with no indexed price are priced at its Uniswap v3 USDG pool (repricePoolQuotes). A reverted
   // or undecodable read (no pool at that block) is no price; budget stops and transient provider failures are retried.
   const usdgPools = new Map<string, Promise<UsdgPool | null>>();
   const tokenSpot: TokenSpot = async (token, decimals, block) => {
-    const mainnet = chains.get('robinhood-mainnet'), client: SpotRpc = { request: input => mainnet.request(input as never) };
+    const mainnet = chains.get('robinhood-mainnet','worker.pricing_spot'), client: SpotRpc = { request: input => withRpcOrigin('server.app.rawL199',()=>mainnet.request(input as never)) };
     try {
       let pool = usdgPools.get(token);
-      if (!pool) { pool = bestUsdgPool(client, token as `0x${string}`, block).then(found => found.pool); usdgPools.set(token, pool); pool.catch(() => usdgPools.delete(token)); }
+      if (!pool) { pool = bestUsdgPool(client, token as `0x${string}`, block, undefined, true).then(found => found.pool); usdgPools.set(token, pool); pool.catch(() => usdgPools.delete(token)); }
       const found = await pool;
       return found ? await usdgPoolPrice(client, found, decimals, block) : null;
     } catch (error) {
@@ -207,14 +208,14 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
       return null;
     }
   };
-  const tokenMeta = chainTokenMeta(() => chains.get('robinhood-mainnet'));
+  const tokenMeta = chainTokenMeta(() => chains.get('robinhood-mainnet','worker.pricing_metadata'));
   const pricingRepair = new PricingRepairWorker(dbh.chain, (event, fields) => logger.info({ event, ...fields }, event), undefined, undefined, undefined, undefined, undefined, tokenSpot, tokenMeta);
   // Onboarding reads (token metadata, first mint, its sender) go through the metered client like the pricing reads
   // above: four or five per coin, with their own daily ceiling (chainOnboarding). The public RPC answers most requests
   // from this host's Node services with an HTTP 403 challenge (2026-10-13: seven of eight), so it cannot carry them.
-  const coinOnboarding = new CoinOnboardingWorker(dbh.chain, chainOnboarding(() => chains.get('robinhood-mainnet')),
+  const coinOnboarding = new CoinOnboardingWorker(dbh.chain, chainOnboarding(() => chains.get('robinhood-mainnet','worker.onboarding')),
     (event, fields) => logger.info({ event, ...fields }, event));
-  const receipts = new ReceiptApiStore(dbh.chain, cfg.RECEIPTS_REGISTRY_ADDRESS, chains.get('robinhood-mainnet'));
+  const receipts = new ReceiptApiStore(dbh.chain, cfg.RECEIPTS_REGISTRY_ADDRESS, chains.get('robinhood-mainnet','server.receipts'));
   const portfolio = new PortfolioService(db);
   const quotes = new QuoteStore();
   const auth = new AuthService(db, cfg);
@@ -366,7 +367,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
   // Missing runtime assets remain explicit; never substitute another image or font.
   const ogRenderer = opts.ogRenderer ?? await createOgRenderer().catch(() => undefined);
   const shares = new ShareService(cfg.origins[0], { scan: reads.scan, coins: reads.coins,
-    bags: new BagsService(reads.store, db, chains.get('robinhood-mainnet')), receipts }, ogRenderer);
+    bags: new BagsService(reads.store, db, chains.get('robinhood-mainnet','server.bags')), receipts }, ogRenderer);
   app.addHook('onClose', async () => { if (!opts.ogRenderer) await ogRenderer?.close(); });
   await registerShareRoutes(app, shares);
   await securityTxtRoutes(app);

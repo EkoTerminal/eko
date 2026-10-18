@@ -1,3 +1,4 @@
+import { batchGetters } from './rpc/getter-batch.js';
 import { decodeFunctionResult, encodeFunctionData, parseAbi, toHex, zeroAddress, type Address, type Hex } from 'viem';
 import { loadRegistry, type AddressRegistry } from './registry.js';
 import { rpcStopReason } from './rpc/metered.js';
@@ -16,16 +17,29 @@ const poolAbi = parseAbi(['function liquidity() view returns (uint128)', 'functi
  * pool found). Robinhood stock tokens trade there; their pools are not indexed, so they have no indexed USD price.
  * Null without a pool holding liquidity. Provider failures and budget stops propagate.
  */
-export async function bestUsdgPool(rpc: SpotRpc, token: Address, block: bigint, registry: AddressRegistry = loadRegistry()): Promise<{ pool: UsdgPool | null; requests: number }> {
+export async function bestUsdgPool(rpc: SpotRpc, token: Address, block: bigint, registry: AddressRegistry = loadRegistry(), batch = false): Promise<{ pool: UsdgPool | null; requests: number }> {
   const factory = registry.addressOf('uniswapV3.factory'), usdg = registry.requireAddress('tokens.USDG');
   let requests = 0, best: { pool: UsdgPool; liquidity: bigint } | null = null;
   if (!factory) return { pool: null, requests };
   const call = async (to: Address, data: Hex) => { requests++; return await rpc.request({ method: 'eth_call', params: [{ to, data }, toHex(block)] }) as Hex; };
-  for (const fee of FEES) {
-    const pool = decodeFunctionResult({ abi: factoryAbi, functionName: 'getPool', data: await call(factory, encodeFunctionData({ abi: factoryAbi, functionName: 'getPool', args: [token, usdg, fee] })) });
-    if (pool === zeroAddress) continue;
-    const liquidity = decodeFunctionResult({ abi: poolAbi, functionName: 'liquidity', data: await call(pool, encodeFunctionData({ abi: poolAbi, functionName: 'liquidity' })) });
-    if (liquidity > 0n && (!best || liquidity > best.liquidity)) best = { pool: { pool, tokenFirst: token.toLowerCase() < usdg.toLowerCase() }, liquidity };
+  if (!batch) {
+    for (const fee of FEES) {
+      const pool = decodeFunctionResult({ abi: factoryAbi, functionName: 'getPool', data: await call(factory, encodeFunctionData({ abi: factoryAbi, functionName: 'getPool', args: [token, usdg, fee] })) });
+      if (pool === zeroAddress) continue;
+      const liquidity = decodeFunctionResult({ abi: poolAbi, functionName: 'liquidity', data: await call(pool, encodeFunctionData({ abi: poolAbi, functionName: 'liquidity' })) });
+      if (liquidity > 0n && (!best || liquidity > best.liquidity)) best = { pool: { pool, tokenFirst: token.toLowerCase() < usdg.toLowerCase() }, liquidity };
+    }
+  } else {
+    requests++;
+    const pools=await batchGetters(rpc,FEES.map(fee=>({to:factory,
+      data:encodeFunctionData({abi:factoryAbi,functionName:'getPool',args:[token,usdg,fee]})})),block);
+    const addresses=pools.map(data=>decodeFunctionResult({abi:factoryAbi,functionName:'getPool',data})).filter(pool=>pool!==zeroAddress);
+    if(addresses.length)requests++;
+    const liquids=await batchGetters(rpc,addresses.map(to=>({to,data:encodeFunctionData({abi:poolAbi,functionName:'liquidity'})})),block);
+    for(let i=0;i<addresses.length;i++) {
+      const pool=addresses[i],liquidity=decodeFunctionResult({abi:poolAbi,functionName:'liquidity',data:liquids[i]});
+      if(liquidity>0n && (!best || liquidity>best.liquidity))best={pool:{pool,tokenFirst:token.toLowerCase()<usdg.toLowerCase()},liquidity};
+    }
   }
   return { pool: best?.pool ?? null, requests };
 }

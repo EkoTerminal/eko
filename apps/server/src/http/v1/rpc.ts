@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import type { FastifyInstance } from 'fastify';
 import type { PublicClient } from 'viem';
 import { z } from 'zod';
@@ -78,7 +79,7 @@ export async function rpcRoutes(app: FastifyInstance, client: PublicClient) {
     const validated = params[methodName].safeParse(parsed.data.params);
     if (!validated.success) return reply.status(400).send(error(id, -32602, 'Invalid params'));
     try {
-      const result = await client.request({ method: methodName, params: validated.data } as never, { dedupe: false });
+      const result = await withRpcOrigin('server.rpc.rawL81',()=>client.request({ method: methodName, params: validated.data } as never, { dedupe: false }));
       if (methodName === 'eth_chainId' && result !== '0x1237') throw new Error('Unexpected chain');
       return { jsonrpc: '2.0', id, result };
     } catch {

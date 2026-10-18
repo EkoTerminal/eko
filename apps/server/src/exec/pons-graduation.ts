@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { keccak256, parseAbi, zeroAddress, type Address, type Hex, type PublicClient } from 'viem';
 import { loadRegistry, v4PoolId } from '@eko/chain';
 import { V4_MANAGER, type IndexedV4Pool } from './v4-routes.js';
@@ -38,19 +39,19 @@ export async function ponsGraduationLock(client: Pick<PublicClient, 'readContrac
   if (!same(pool.key.hooks, PONS_HOOK) || !same(graduatedPool, pool.id) || !same(pool.key.currency1, coin) || !same(pool.key.currency0, zeroAddress)) return none;
   const at = { blockNumber: block } as const;
   const [locker, posm, hook] = await Promise.all([
-    client.readContract({ address: PONS_FACTORY, abi: FACTORY_ABI, functionName: 'locker', ...at }),
-    client.readContract({ address: PONS_FACTORY, abi: FACTORY_ABI, functionName: 'positionManager', ...at }),
-    client.readContract({ address: PONS_FACTORY, abi: FACTORY_ABI, functionName: 'memeHook', ...at })]);
-  const [lockerCode, posmCode, manager, tokenId] = await Promise.all([client.getCode({ address: locker, ...at }), client.getCode({ address: posm, ...at }),
-    client.readContract({ address: posm, abi: POSM_ABI, functionName: 'poolManager', ...at }),
-    client.readContract({ address: locker, abi: LOCKER_ABI, functionName: 'lockedPositions', args: [coin], ...at })]);
+    withRpcOrigin('server.pons_graduation.L41',()=>client.readContract({ address: PONS_FACTORY, abi: FACTORY_ABI, functionName: 'locker', ...at })),
+    withRpcOrigin('server.pons_graduation.L42',()=>client.readContract({ address: PONS_FACTORY, abi: FACTORY_ABI, functionName: 'positionManager', ...at })),
+    withRpcOrigin('server.pons_graduation.L43',()=>client.readContract({ address: PONS_FACTORY, abi: FACTORY_ABI, functionName: 'memeHook', ...at }))]);
+  const [lockerCode, posmCode, manager, tokenId] = await Promise.all([withRpcOrigin('server.pons_graduation.L44.c1',()=>client.getCode({ address: locker, ...at })), withRpcOrigin('server.pons_graduation.L44.c2',()=>client.getCode({ address: posm, ...at })),
+    withRpcOrigin('server.pons_graduation.L45',()=>client.readContract({ address: posm, abi: POSM_ABI, functionName: 'poolManager', ...at })),
+    withRpcOrigin('server.pons_graduation.L46',()=>client.readContract({ address: locker, abi: LOCKER_ABI, functionName: 'lockedPositions', args: [coin], ...at }))]);
   if (!same(hook, PONS_HOOK) || keccak256(lockerCode ?? '0x') !== pins.locker || keccak256(posmCode ?? '0x') !== pins.positionManager ||
     !same(manager, V4_MANAGER) || tokenId === 0n) return none;
   const [owner, approved, liquidity, [poolKey]] = await Promise.all([
-    client.readContract({ address: posm, abi: POSM_ABI, functionName: 'ownerOf', args: [tokenId], ...at }),
-    client.readContract({ address: posm, abi: POSM_ABI, functionName: 'getApproved', args: [tokenId], ...at }),
-    client.readContract({ address: posm, abi: POSM_ABI, functionName: 'getPositionLiquidity', args: [tokenId], ...at }),
-    client.readContract({ address: posm, abi: POSM_ABI, functionName: 'getPoolAndPositionInfo', args: [tokenId], ...at })]);
+    withRpcOrigin('server.pons_graduation.L50',()=>client.readContract({ address: posm, abi: POSM_ABI, functionName: 'ownerOf', args: [tokenId], ...at })),
+    withRpcOrigin('server.pons_graduation.L51',()=>client.readContract({ address: posm, abi: POSM_ABI, functionName: 'getApproved', args: [tokenId], ...at })),
+    withRpcOrigin('server.pons_graduation.L52',()=>client.readContract({ address: posm, abi: POSM_ABI, functionName: 'getPositionLiquidity', args: [tokenId], ...at })),
+    withRpcOrigin('server.pons_graduation.L53',()=>client.readContract({ address: posm, abi: POSM_ABI, functionName: 'getPoolAndPositionInfo', args: [tokenId], ...at }))]);
   const locked = same(owner, locker) && same(approved, zeroAddress) && liquidity > 0n && same(v4PoolId(poolKey), pool.id);
   return { locked, tokenId, liquidity, locker: lower(locker) };
 }

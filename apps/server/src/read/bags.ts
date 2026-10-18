@@ -1,6 +1,7 @@
+import { withRpcOrigin } from '@eko/chain';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { binary, hex, ScanJobs, ScanQueueFull, type ScanJob } from '@eko/db';
+import { binary, hex, maintainedBalance, ScanJobs, ScanQueueFull, type ScanJob } from '@eko/db';
 import { BagReportSchema, PublicBagReportSchema, findingsFirst, type Address, type BagReport, type CoinCard, type CoinSummary, type PublicBagReport } from '@eko/shared';
 import { toUntrusted } from '@eko/untrusted';
 import { erc20Abi, formatUnits, type PublicClient } from 'viem';
@@ -102,7 +103,7 @@ export class BagsService {
         let balance: string | null = null, balanceStatus: Holding['balanceStatus'] = 'unavailable';
         if (pin && candidate.decimals !== null && candidate.decimals >= 0 && candidate.decimals <= 255) {
           try {
-            const raw = await this.client.readContract({ address, abi: erc20Abi, functionName: 'balanceOf', args: [wallet], blockNumber: block });
+            const raw = await maintainedBalance(chain,address,wallet,block) ?? await withRpcOrigin('server.bags.L105',()=>this.client.readContract({ address, abi: erc20Abi, functionName: 'balanceOf', args: [wallet], blockNumber: block }));
             balance = formatUnits(raw, candidate.decimals); balanceStatus = 'observed';
           } catch { balanceStatus = 'error'; }
         }

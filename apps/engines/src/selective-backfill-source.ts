@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { z } from 'zod';
 import { keccak256, zeroAddress, type Hex } from 'viem';
 import { RpcMeter, createMeteredClients, decodePonsResult, rpcStopReason, safeError,
@@ -110,7 +111,7 @@ export function createMeasuredBackfillSource(options: { rpc: BackfillRpc; store:
   const stopIfNotProvider = (error: unknown) => raiseBackfillStops(store, error);
   const header = async (block: string): Promise<BackfillResponse> => {
     let raw: unknown;
-    try { raw = await rpc.request('eth_getBlockByNumber', [quantity(block), false]); }
+    try { raw = await withRpcOrigin('engines.selective_backfill_source.rawL113',()=>rpc.request('eth_getBlockByNumber', [quantity(block), false])); }
     catch (error) { stopIfNotProvider(error); return { kind: 'missing', reason: 'header_unavailable' }; }
     const at = parseRpcHeader(raw); // null past the provider's head, or malformed
     if (!at) return { kind: 'missing', reason: 'header_unavailable' };
@@ -134,7 +135,7 @@ export function createMeasuredBackfillSource(options: { rpc: BackfillRpc; store:
   };
   const logs = async (r: Extract<BackfillRequest, { kind: 'logs' }>): Promise<BackfillResponse> => {
     let raw: unknown;
-    try { raw = await rpc.request('eth_getLogs', [{ fromBlock: quantity(r.from), toBlock: quantity(r.through), address: r.addresses, topics: r.topics }]); }
+    try { raw = await withRpcOrigin('engines.selective_backfill_source.rawL137',()=>rpc.request('eth_getLogs', [{ fromBlock: quantity(r.from), toBlock: quantity(r.through), address: r.addresses, topics: r.topics }])); }
     catch (error) { stopIfNotProvider(error); return logRangeLimited(error) ? { kind: 'dense' } : { kind: 'missing', reason: 'range_unavailable' }; }
     if (Array.isArray(raw) && raw.length > maxLogs) return { kind: 'dense' };
     const parsed = z.array(rpcLog).safeParse(raw);
@@ -162,8 +163,8 @@ export function createMeasuredBackfillSource(options: { rpc: BackfillRpc; store:
   const boundary = async (r: Extract<BackfillRequest, { kind: 'boundary' }>): Promise<BackfillResponse> => {
     let code: unknown, balance: unknown;
     try {
-      code = await rpc.request('eth_getCode', [r.coin, quantity(r.cursor.blockNumber)]);
-      balance = await rpc.request('eth_getBalance', [r.coin, quantity(r.cursor.blockNumber)]);
+      code = await withRpcOrigin('engines.selective_backfill_source.rawL165',()=>rpc.request('eth_getCode', [r.coin, quantity(r.cursor.blockNumber)]));
+      balance = await withRpcOrigin('engines.selective_backfill_source.rawL166',()=>rpc.request('eth_getBalance', [r.coin, quantity(r.cursor.blockNumber)]));
     } catch (error) { stopIfNotProvider(error); return { kind: 'missing', reason: 'boundary_unavailable' }; }
     const c = bytes.safeParse(code), b = quantityHex.safeParse(balance);
     if (!c.success || !b.success) return { kind: 'missing', reason: 'boundary_unavailable' };

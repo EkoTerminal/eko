@@ -181,7 +181,7 @@ describe('RPC admission and routing', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h.lines.filter(l => JSON.parse(l).event === 'rpc_usage')).toHaveLength(1);
     const summary = JSON.parse(h.lines.at(-1)!);
-    expect(summary.lastMinute).toEqual([{ provider: 'paid', method: 'eth_blockNumber', calls: 1, units: 1 }]);
+    expect(summary.lastMinute).toEqual([{ origin: 'unlabelled', provider: 'paid', method: 'eth_blockNumber', calls: 1, units: 1 }]);
     h.advance(60_001); await h.meter.summary();
     expect(JSON.parse(h.lines.at(-1)!).lastMinute).toEqual([]);
     await h.meter.close(); await h.meter.close();

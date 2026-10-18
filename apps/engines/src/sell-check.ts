@@ -1,5 +1,5 @@
 import { binary, hex, type ChainDb } from '@eko/db';
-import { balanceSlot, loadRegistry, poolSpotUsd, RpcGuardError, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
+import { withRpcOrigin, balanceSlot, loadRegistry, poolSpotUsd, RpcGuardError, rpcStopReason, runSellProbe, sellRouteId, v4PoolId, SELL_CHECK_METHOD, type AddressRegistry, type SellProbe, type SellRoute, type SellRpc } from '@eko/chain';
 import type { Address } from '@eko/shared';
 import { getAddress, zeroAddress, type Hex } from 'viem';
 
@@ -125,7 +125,7 @@ export class SellChecker {
   private balances = new Map<string, ReturnType<typeof balanceSlot>>();
   /** Pool spot prices of pair tokens without an indexed price, kept ten minutes (nine to twelve paid reads each). */
   private spots = new Map<string, { at: number; value: ReturnType<typeof poolSpotUsd> }>();
-  constructor(readonly db: ChainDb, readonly rpc: SellRpc, readonly options: { registry?: AddressRegistry; now?: () => number } = {}) {}
+  constructor(readonly db: ChainDb, readonly rpc: SellRpc, readonly options: { registry?: AddressRegistry; now?: () => number; paidWorkAllowed?: (work: 'routine' | 'first_rating' | 'crash') => Promise<boolean> } = {}) {}
   private get registry() { return this.options.registry ??= loadRegistry(); }
   now() { return this.options.now?.() ?? Date.now(); }
   ethUsd() { return indexedEthUsd(this.db, this.now(), this.registry); }
@@ -136,7 +136,7 @@ export class SellChecker {
     const rpc: SellRpc = { request: async input => {
       if (stopReason || (admit && !admit())) { limited = true; throw new Error('Sell-check request allowance exhausted'); }
       requests++;
-      try { return await this.rpc.request(input); }
+      try { return await withRpcOrigin('engines.sell_check.rawL139',()=>this.rpc.request(input)); }
       catch (error) {
         if (admit && rpcStopReason(error)) { stopReason = rpcStopReason(error); throw new Error('Sell-check RPC stopped'); }
         throw error;
@@ -360,14 +360,16 @@ export class SellCheckScheduler {
     let attempted = 0;
     for (let i = 0; i < coins.length && !this.stopped;) {
       const kind = coins[i]!.class, urgent = kind === 'first_live' || kind === 'crash';
+      const work=kind === 'first_live' ? 'first_rating' : kind === 'crash' ? 'crash' : 'routine';
+      if(this.checker.options.paidWorkAllowed && !(await this.checker.options.paidWorkAllowed(work))) {i++;continue;}
       const reserve = urgent ? 0 : Math.ceil(this.cfg.dailyRequests * this.cfg.reservePct / 100);
       let allowance = Math.max(0, await this.budget(this.checker.now()) - reserve);
       if (allowance < SELL_CHECK_SIZES_USD.length * 2) {
         this.log(reserve ? 'sell_check_reserve' : 'sell_check_daily_cap', { cap: this.cfg.dailyRequests, remaining: allowance + reserve }); break;
       }
       const group = coins.slice(i, i + Math.min(this.cfg.parallel, Math.floor(allowance / 4))).filter(c => c.class === kind);
-      const results = await Promise.all(group.map(({ coin }) => this.checker.check(coin, block, SELL_CHECK_SIZES_USD, ethUsd,
-        () => { if (allowance <= 0) return false; allowance--; return true; })));
+      const results = await Promise.all(group.map(({ coin }) => withRpcOrigin('engines.sell_check',()=>this.checker.check(coin, block, SELL_CHECK_SIZES_USD, ethUsd,
+        () => { if (allowance <= 0) return false; allowance--; return true; }),work)));
       for (let j = 0; j < results.length; j++) {
         await persistSellCheck(this.db, results[j]!, new Date(this.checker.now()), group[j]!.activity, kind);
         attempted++;

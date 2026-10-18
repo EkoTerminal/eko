@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { formatUnits, keccak256, type Address, type Hex, type PublicClient } from 'viem';
 import { loadRegistry, type MeteredForkLease } from '@eko/chain';
 import { ActualOrderBindingSchema, canonicalize, type ActualOrderBinding, type ActualOrderObservation, type ActualOrderState,
@@ -27,7 +28,7 @@ const WETH = lower(registry.requireAddress('tokens.WETH'));
  * open and its fee terms, so a quote taken before graduation, or before a fee change, never matches the order-time state.
  */
 export async function ponsFingerprints(client: Pick<PublicClient, 'getCode'>, s: PonsCurveState, side: 'buy' | 'sell') {
-  const [coinCode, curveCode] = await Promise.all([client.getCode({ address: s.coin, blockNumber: s.block }), client.getCode({ address: s.curve, blockNumber: s.block })]);
+  const [coinCode, curveCode] = await Promise.all([withRpcOrigin('server.pons_trade.L30.c1',()=>client.getCode({ address: s.coin, blockNumber: s.block })), withRpcOrigin('server.pons_trade.L30.c2',()=>client.getCode({ address: s.curve, blockNumber: s.block }))]);
   return {
     routeFingerprint: digest({ venue: 'pons_curve', factory: PONS_FACTORY, curve: s.curve, coin: s.coin, side, buy: '0x59a87bc1', sell: '0xd04c6983' }),
     profileHash: digest({ coinCode: keccak256(coinCode ?? '0x'), curveCode: keccak256(curveCode ?? '0x') }),
@@ -174,8 +175,8 @@ export function ponsTradeBackend(o: { chain: () => PublicClient; lease: MeteredF
       const [fp, native, held, allowance, indexed, verdict] = await Promise.all([
         ponsFingerprints(chain(), s, b.side),
         chain().getBalance({ address: b.account, blockNumber: at }),
-        chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'balanceOf', args: [b.account], blockNumber: at }),
-        chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'allowance', args: [b.account, curve], blockNumber: at }),
+        withRpcOrigin('server.pons_trade.L177',()=>chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'balanceOf', args: [b.account], blockNumber: at })),
+        withRpcOrigin('server.pons_trade.L178',()=>chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'allowance', args: [b.account, curve], blockNumber: at })),
         o.sources.curve(b.coin), o.verdict(b.coin),
       ]);
       // A graduation the indexer saw first also closes the route: the fingerprint then differs from the binding.

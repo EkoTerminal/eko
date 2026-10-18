@@ -629,6 +629,13 @@ export class LogHeadFollower {
           for(const date of dates) await this.db.ensurePartitions(date);
           await this.db.tx(async tx=>{
             await batch.flush(tx,this.timings.flush);
+            // This live batch includes the launch's mint and all tracked Transfer logs from that boundary.
+            const launchTokens=(batch.get('pons_events') ?? []).filter(row=>row.kind==='launch').map(row=>row.token);
+            if(launchTokens.length)await tx.sql.query(`INSERT INTO token_balance_origins(token,block,block_hash)
+              SELECT e.token,e.block,c.hash FROM pons_events e JOIN chain_blocks c ON c.number=e.block
+              WHERE e.kind='launch' AND e.token=ANY($1::bytea[]) AND EXISTS (
+                SELECT 1 FROM token_transfers t WHERE t.token=e.token AND t.block=e.block AND t.from_address=decode(repeat('00',20),'hex'))
+              ON CONFLICT(token) DO NOTHING`,[launchTokens]);
             await tx.setCursor('head_logs',covered,null);
             if(last) { const applied=await tx.cursor('head');if(applied==null||BigInt(last.number)>=applied)await tx.setCursor('head',BigInt(last.number),last.hash); }
           });

@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { LoopHeartbeat } from './loop-health.js';
 import { parseAbi, type PublicClient } from 'viem';
 import { binary, hex, refreshBars, type ChainDb } from '@eko/db';
@@ -131,9 +132,18 @@ const erc20Metadata = parseAbi(['function decimals() view returns (uint8)', 'fun
 export function chainTokenMeta(client: () => PublicClient): TokenMetaReader {
   return async token => {
     const field = async <T,>(functionName: 'decimals' | 'symbol' | 'name'): Promise<T | null> => {
-      try { return await client().readContract({ address: token as `0x${string}`, abi: erc20Metadata, functionName }) as T; }
+      try { return await withRpcOrigin('server.pricing_repair.L134',()=>client().readContract({ address: token as `0x${string}`, abi: erc20Metadata, functionName })) as T; }
       catch (error) { if (rpcStopReason(error) || isTransientRpcUnavailable(error)) throw error; return null; }
     };
+    const reader=client();
+    if(reader.multicall) {
+      try {
+        const values=await withRpcOrigin('worker.pricing_metadata.batch',()=>reader.multicall({allowFailure:true,contracts: (['decimals','symbol','name'] as const).map(functionName=>({
+          address:token as `0x${string}`,abi:erc20Metadata,functionName}))}));
+        const value=(i:number)=>values[i].status==='success' ? values[i].result : null;
+        return {decimals:value(0) as number|null,symbol:value(1) as string|null,name:value(2) as string|null};
+      } catch(error) {if(rpcStopReason(error) || isTransientRpcUnavailable(error))throw error;return {decimals:null,symbol:null,name:null};}
+    }
     return { decimals: await field<number>('decimals'), symbol: await field<string>('symbol'), name: await field<string>('name') };
   };
 }

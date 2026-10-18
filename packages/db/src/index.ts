@@ -40,3 +40,5 @@ export * from './blue-chip-schema.js';
 export * from './rating-checks.js';
 
 export * from './raw-partitions.js';
+
+export { maintainedBalance } from './maintained-balance.js';

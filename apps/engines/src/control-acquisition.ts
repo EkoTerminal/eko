@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { ponsCurveAbi, type createMeteredClients } from '@eko/chain';
 import { binary, GuardMeasurementStore, type ChainDb } from '@eko/db';
 import { canonicalize } from '@eko/policy';
@@ -18,13 +19,18 @@ export async function acquirePonsGetterObservations(clients: Pick<ReturnType<typ
       throw new Error('Profile acquisition pin mismatch');
   };
   await check();
-  const [tokenCode, curveCode, creator, fee, snipe, launchedAt] = await Promise.all([
-    clients.archive.getCode({ address: coin, blockNumber }), clients.archive.getCode({ address: curve, blockNumber }),
-    clients.archive.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'creatorTaxBps', blockNumber }),
-    clients.archive.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'feeBps', blockNumber }),
-    clients.archive.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'currentSnipeTaxBps', args: [coin], blockNumber }),
-    clients.archive.readContract({ address: curve, abi: ponsCurveAbi, functionName: 'launchedAt', blockNumber }),
+  const contracts = [
+    {address:curve,abi:ponsCurveAbi,functionName:'creatorTaxBps'},
+    {address:curve,abi:ponsCurveAbi,functionName:'feeBps'},
+    {address:curve,abi:ponsCurveAbi,functionName:'currentSnipeTaxBps',args:[coin]},
+    {address:curve,abi:ponsCurveAbi,functionName:'launchedAt'},
+  ] as const;
+  const [tokenCode,curveCode,values]=await Promise.all([
+    withRpcOrigin('engines.control_acquisition.L28.c1',()=>clients.archive.getCode({address:coin,blockNumber})),withRpcOrigin('engines.control_acquisition.L28.c2',()=>clients.archive.getCode({address:curve,blockNumber})),
+    clients.archive.multicall ? withRpcOrigin('engines.control_acquisition.L29',()=>clients.archive.multicall({allowFailure:false,blockNumber,contracts})) :
+      Promise.all(contracts.map(contract=>withRpcOrigin('engines.control_acquisition.L30',()=>clients.archive.readContract({...contract,blockNumber})))),
   ]);
+  const [creator,fee,snipe,launchedAt]=values;
   if (typeof creator !== 'bigint' || typeof fee !== 'bigint' || typeof snipe !== 'bigint' || typeof launchedAt !== 'bigint') throw new Error('Invalid getter result');
   if (!tokenCode || tokenCode === '0x' || !curveCode || curveCode === '0x' || [creator, fee, snipe].some(v => v < 0n || v > 10000n))
     throw new Error('Invalid Pons getter observation');

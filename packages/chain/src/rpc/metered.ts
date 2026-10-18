@@ -1,3 +1,6 @@
+import type { PaidState } from './paid-policy.js';
+import { rpcScope, type RpcWork } from './origin.js';
+import { RpcCodeCache } from './code-cache.js';
 import { custom, http, webSocket, type Transport } from 'viem';
 import { routeRequest, supportsPublic, type Provider, type RpcRequest, type RouteContext } from './routes.js';
 import { persistentUsageStore, createSqlUsageStore, type RpcUsageDb, type UsageRow, type UsageBatch, type UsageStore } from './usage.js';
@@ -7,6 +10,7 @@ import { replyGuardFetch, RpcReplyError, type FetchFn } from './reply.js';
 import { RpcOutage, providerErrorClass, type ProviderErrorClass, type RpcPause } from './outage.js';
 import { backoffDelay } from './backoff.js';
 export interface RpcEnv {
+  APP_ROLE?: string; RPC_PAID_DAILY_SOFT_LIMIT?: string; RPC_PAID_INDEXER_RESERVE?: string;
   RPC_HTTP_URL?: string; RPC_PUBLIC_HTTP_URL?: string; RPC_WS_URL?: string;
   RPC_OUTAGE_MAX_BACKOFF_SEC?: string; RPC_PAID_MAX_RPM?: string; RPC_PUBLIC_MAX_RPM?: string; RPC_PAID_DAILY_BUDGET?: string;
   RPC_SESSION_BUDGET?: string; RPC_WEIGHTS?: string; DATABASE_URL?: string; RPC_USAGE_DIR?: string; RPC_TIMEOUT_MS?: string;
@@ -14,7 +18,7 @@ export interface RpcEnv {
 export type RpcLog = (event: string, fields: Record<string, unknown>) => void;
 export class RpcGuardError extends Error {
   /** `transient` marks a provider outage that outlasted the retry window, not a usage-store or request fault. */
-  constructor(readonly code: 'rpc_budget_exhausted' | 'rpc_session_budget_reached' | 'shutdown_requested' | 'rpc_unavailable' | 'provider_balance_exceeded' | 'provider_quota_exceeded', message: string = code, readonly transient = false) { super(message); }
+  constructor(readonly code: 'rpc_budget_exhausted' | 'rpc_session_budget_reached' | 'shutdown_requested' | 'rpc_unavailable' | 'rpc_paid_deferred' | 'provider_balance_exceeded' | 'provider_quota_exceeded', message: string = code, readonly transient = false) { super(message); }
 }
 export type RpcStopReason = 'rpc_budget_exhausted' | 'rpc_session_budget_reached' | 'shutdown_requested';
 /** viem wraps transport errors; inspect causes without trusting request text. */
@@ -24,15 +28,17 @@ function rpcGuardCode(error: unknown): RpcGuardError['code'] | undefined {
     seen.add(error);
     if (typeof error !== 'object') return undefined;
     const e = error as { code?: unknown; cause?: unknown };
+    if (e.code === 'rpc_paid_deferred') return 'rpc_paid_deferred';
     if (e.code === 'rpc_budget_exhausted' || e.code === 'rpc_session_budget_reached' || e.code === 'shutdown_requested' || e.code === 'rpc_unavailable' || e.code === 'provider_balance_exceeded' || e.code === 'provider_quota_exceeded') return e.code;
     error = e.cause;
   }
   return undefined;
 }
 export function rpcStopReason(error: unknown): RpcStopReason | undefined {
-  const code=rpcGuardCode(error);return code==='rpc_unavailable'||code==='provider_balance_exceeded'||code==='provider_quota_exceeded'?undefined:code;
+  const code=rpcGuardCode(error);return code==='rpc_unavailable'||code==='rpc_paid_deferred'||code==='provider_balance_exceeded'||code==='provider_quota_exceeded'?undefined:code;
 }
-export const isRpcUnavailable = (error: unknown) => ['rpc_unavailable','provider_balance_exceeded','provider_quota_exceeded'].includes(rpcGuardCode(error) ?? '');
+export const isRpcPaidDeferred = (error: unknown) => rpcGuardCode(error)==='rpc_paid_deferred';
+export const isRpcUnavailable = (error: unknown) => ['rpc_unavailable','rpc_paid_deferred','provider_balance_exceeded','provider_quota_exceeded'].includes(rpcGuardCode(error) ?? '');
 /** Providers stayed unavailable for transient reasons (timeouts, 429/5xx, malformed replies); callers may back off and retry. */
 export function isTransientRpcUnavailable(error: unknown): boolean {
   const seen = new Set<unknown>();
@@ -41,7 +47,7 @@ export function isTransientRpcUnavailable(error: unknown): boolean {
     const e = error as { code?: unknown; transient?: unknown; cause?: unknown };
     if (e.code === 'provider_balance_exceeded' || e.code === 'provider_quota_exceeded') return true;
     if (e.code === 'rpc_unavailable') return e.transient === true;
-    if (e.code === 'rpc_budget_exhausted' || e.code === 'rpc_session_budget_reached' || e.code === 'shutdown_requested') return false;
+    if (e.code === 'rpc_paid_deferred' || e.code === 'rpc_budget_exhausted' || e.code === 'rpc_session_budget_reached' || e.code === 'shutdown_requested') return false;
     error = e.cause;
   }
   return false;
@@ -66,7 +72,9 @@ export function rpcConfig(env: RpcEnv) {
   return { weights, paidRpm: numeric(env.RPC_PAID_MAX_RPM, 1200, 'RPC_PAID_MAX_RPM'), publicRpm: numeric(env.RPC_PUBLIC_MAX_RPM, 300, 'RPC_PUBLIC_MAX_RPM'),
     // Every HTTP request, body included, is bounded; the meter adds a backstop for any transport.
     timeoutMs: numeric(env.RPC_TIMEOUT_MS, 10_000, 'RPC_TIMEOUT_MS'),
-    dailyBudget: numeric(env.RPC_PAID_DAILY_BUDGET, 200_000, 'RPC_PAID_DAILY_BUDGET', true),
+    softLimit: numeric(env.RPC_PAID_DAILY_SOFT_LIMIT, 500_000, 'RPC_PAID_DAILY_SOFT_LIMIT', true),
+    indexerReserve: numeric(env.RPC_PAID_INDEXER_RESERVE, 300_000, 'RPC_PAID_INDEXER_RESERVE', true),
+    dailyBudget: numeric(env.RPC_PAID_DAILY_BUDGET, numeric(env.RPC_PAID_DAILY_SOFT_LIMIT, 500_000, 'RPC_PAID_DAILY_SOFT_LIMIT', true) + numeric(env.RPC_PAID_INDEXER_RESERVE, 300_000, 'RPC_PAID_INDEXER_RESERVE', true), 'RPC_PAID_DAILY_BUDGET', true),
     sessionBudget: env.RPC_SESSION_BUDGET ? numeric(env.RPC_SESSION_BUDGET, 0, 'RPC_SESSION_BUDGET', true) : Infinity };
 }
 export interface MeterOptions {
@@ -88,6 +96,9 @@ export class RpcMeter {
   private outageFailure?: unknown;
   get pause() { return this.outage?.pause ?? null; }
   readonly store: UsageStore;
+  private codeCache?: RpcCodeCache;
+  private policyMinute = -1;
+  private lastPaidState?: PaidState;
   private readonly transientRetryMs: number;
   private readonly storeTimeoutMs: number;
   private readonly fetchFn?: FetchFn;
@@ -103,7 +114,8 @@ export class RpcMeter {
   private flushing?: Promise<void>;
   private flushTimer?: ReturnType<typeof setInterval>;
   readonly timing = { admissionMs: 0, rpcMs: 0, rateWaitMs: 0, publicRateWaitMs:0, paidRateWaitMs:0 };
-  private get leased() { return !!(this.store.lease && this.store.record && this.store.release); }
+  private get policyActive() { return !!(this.env.APP_ROLE && this.store.paidPolicy); }
+  private get leased() { return !this.policyActive && !!(this.store.lease && this.store.record && this.store.release); }
   private count(day: string, provider: Provider, method: string, units: number, unleasedUnits = 0) {
     const key = `${day}:${provider}:${method}`, row = this.pendingUsage.get(key) ?? { day,provider,method,calls:0,units:0,unleasedUnits:0 };
     row.calls++; row.units += units; row.unleasedUnits += unleasedUnits; this.pendingUsage.set(key,row);
@@ -127,7 +139,7 @@ export class RpcMeter {
   private notificationWrites = new Set<Promise<void>>();
   private pushLeases = new Set<string>();
   private warningDay = ''; private exhaustedDay = '';
-  private minute: (UsageRow & { at: number })[] = [];
+  private minute: (UsageRow & { at: number; origin?: string })[] = [];
   private timer?: ReturnType<typeof setInterval>;
   private sockets = new Set<() => void>();
   private socketClosers = new WeakMap<object, () => void>();
@@ -141,6 +153,7 @@ export class RpcMeter {
       catch { throw new Error(`Invalid ${name}`); }
     }
     this.config = rpcConfig(env);
+    if (options.db) this.codeCache = new RpcCodeCache(options.db);
     this.transientRetryMs = numeric(options.transientRetrySec?.toString(),0,'transientRetrySec',true) * 1000;
     this.storeTimeoutMs = numeric(options.storeTimeoutMs?.toString(),30_000,'storeTimeoutMs');
     this.fetchFn = options.fetchFn;
@@ -178,6 +191,7 @@ export class RpcMeter {
   stop(reason: RpcGuardError['code'] = 'shutdown_requested') { this.reason ??= reason; this.stopped = true; this.controller.abort(); this.closeSockets(); }
   private stopError() { return new RpcGuardError(this.reason ?? 'shutdown_requested'); }
   private observePaid(day: string, total: number, closed = false) {
+    if(this.policyActive)return;
     if (this.paidDay !== day) { this.paidDay = day; this.paidTotal = 0; }
     this.paidTotal = Math.max(this.paidTotal, total);
     if (this.paidTotal >= this.config.dailyBudget * .8 && this.warningDay !== day) {
@@ -227,7 +241,7 @@ export class RpcMeter {
       this.observePaid(day, (this.paidDay === day ? this.paidTotal : 0) + units);
       return;
     }
-    const write = Promise.resolve().then(() => this.store.reserve(day, 'paid', method, units, Infinity)).then(result => {
+    const write = Promise.resolve().then(async () => { if(this.policyActive)await this.paidWorkAllowed('routine',true,true); return this.store.reserve(day, 'paid', method, units, Infinity); }).then(result => {
       if (day === this.day()) this.observePaid(day, result.total);
     }).catch(() => {
       this.log('rpc_usage_unavailable', {}); this.stop('rpc_unavailable');
@@ -282,13 +296,30 @@ export class RpcMeter {
     try { today = await this.store.today(day); } catch { throw new RpcGuardError('rpc_unavailable', 'RPC usage persistence unavailable'); }
     const paidUnits = today.filter(r => r.provider === 'paid').reduce((sum, r) => sum + r.units, 0);
     this.observePaid(day, paidUnits);
-    return { day, today, paidOpen: this.exhaustedDay !== day && paidUnits < this.config.dailyBudget, budgetLeft: Math.max(0, this.config.dailyBudget - paidUnits), sessionUnits: this.sessionUnits };
+    if(this.policyActive)await this.paidWorkAllowed();
+    const policy=this.policyActive ? this.lastPaidState : undefined;
+    return { day, today, ...(policy ? {paidCalls:policy.total,paidDegraded:policy.degraded,nonIndexerCalls:policy.nonIndexer} : {}), paidOpen: policy ? policy.allowed : this.exhaustedDay !== day && paidUnits < this.config.dailyBudget, budgetLeft: Math.max(0, this.config.dailyBudget - (policy?.total ?? paidUnits)), sessionUnits: this.sessionUnits };
   }
   async summary() {
     this.minute = this.minute.filter(r => r.at > this.now() - 60_000);
-    const rows = new Map<string, UsageRow>();
-    for (const r of this.minute) { const key = `${r.provider}:${r.method}`, old = rows.get(key) ?? { provider: r.provider, method: r.method, calls: 0, units: 0 }; old.calls += r.calls; old.units += r.units; rows.set(key, old); }
+    const rows = new Map<string, UsageRow & { origin?: string }>();
+    for (const r of this.minute) { const key = `${r.provider}:${r.method}:${r.origin ?? "unlabelled"}`, old = rows.get(key) ?? { provider: r.provider, method: r.method, origin: r.origin ?? "unlabelled", calls: 0, units: 0 }; old.calls += r.calls; old.units += r.units; rows.set(key, old); }
     const usage = await this.usage(); this.log('rpc_usage', { ...usage, lastMinute: [...rows.values()] }); return usage;
+  }
+  /** Read-only scheduling check; dispatch repeats admission atomically across every role. */
+  async paidWorkAllowed(work: RpcWork = 'routine', consume = false, incurred = false): Promise<boolean> {
+    if (!this.store.paidPolicy || !this.env.APP_ROLE) return true;
+    const state = await this.deadline(this.store.paidPolicy(this.day(), { role: this.env.APP_ROLE ?? 'other',
+      urgent: !['engines','worker'].includes(this.env.APP_ROLE ?? '') || work === 'first_rating' || work === 'crash', softLimit:this.config.softLimit,
+      ceiling:this.config.dailyBudget,reserve:this.config.indexerReserve,incurred },consume),this.storeTimeoutMs);
+    this.lastPaidState=state;
+    if(incurred && state.total>=this.config.dailyBudget)this.closeSockets();
+    const minute=Math.floor(this.now()/60_000);
+    if ((state.degraded || !state.allowed) && this.policyMinute!==minute) {
+      this.policyMinute=minute;this.log('rpc_paid_ceiling_degraded',{role:this.env.APP_ROLE ?? 'other',calls:state.total,
+        nonIndexerCalls:state.nonIndexer,softLimit:this.config.softLimit,indexerReserve:this.config.indexerReserve});
+    }
+    return state.allowed;
   }
   close(): Promise<void> {
     return this.closing ??= (async () => {
@@ -334,6 +365,7 @@ export class RpcMeter {
       const day = this.day();
       if (provider === 'paid' && this.exhaustedDay === day) throw new RpcGuardError('rpc_budget_exhausted');
       if (this.sessionUnits + units > this.config.sessionBudget) { this.signalSession(); throw new RpcGuardError('rpc_session_budget_reached'); }
+      if (provider === 'paid' && !(await this.paidWorkAllowed(rpcScope()?.work, true))) throw new RpcGuardError(this.env.APP_ROLE==='indexer' ? 'rpc_budget_exhausted' : 'rpc_paid_deferred');
       if (this.leased) {
         if (provider === 'paid') {
           const key = `${day}:${provider}`;
@@ -355,7 +387,7 @@ export class RpcMeter {
         this.count(day,provider,request.method,units,provider === 'public' ? units : 0);
       } else {
         let reserved;
-        try { reserved = await this.deadline(this.store.reserve(day, provider, request.method, units, provider === 'paid' ? this.config.dailyBudget : Infinity),this.storeTimeoutMs); }
+        try { reserved = await this.deadline(this.store.reserve(day, provider, request.method, units, provider === 'paid' && !this.policyActive ? this.config.dailyBudget : Infinity),this.storeTimeoutMs); }
         catch { throw new RpcGuardError('rpc_unavailable', 'RPC usage persistence unavailable'); }
         if (provider === 'paid') this.observePaid(day, reserved.total, !reserved.allowed);
         if (!reserved.allowed) throw new RpcGuardError('rpc_budget_exhausted');
@@ -366,7 +398,7 @@ export class RpcMeter {
       // dispatch readiness so the following admission cannot form a catch-up burst.
       this.next[provider]=Math.max(this.next[provider],this.now()+60_000/(provider==='paid'?this.config.paidRpm:this.config.publicRpm));
       this.sessionUnits += units;
-      this.minute.push({ provider, method: request.method, calls: 1, units, at: this.now() });
+      this.minute.push({ provider, method: request.method, origin: rpcScope()?.origin ?? this.env.APP_ROLE ?? 'unlabelled', calls: 1, units, at: this.now() });
       return {provider,finalCall:this.sessionUnits >= this.config.sessionBudget};
     } finally { this.activeAdmission[provider]=false;this.queued[provider]--; this.timing.admissionMs += performance.now()-began; release(); }
   }
@@ -385,6 +417,12 @@ export class RpcMeter {
   async request(request: RpcRequest | readonly RpcRequest[], send: Record<Provider, (r: RpcRequest) => Promise<unknown>>, context: RouteContext = 'default', waitForRecovery = true): Promise<unknown> {
     if (Array.isArray(request)) return Promise.all(request.map(r => this.request(r, send, context, waitForRecovery)));
     const r = request as RpcRequest;
+    if (this.codeCache && r.method === 'eth_getCode') {
+      return this.codeCache.read(r, () => this.requestUncached(r, send, context, waitForRecovery), waitForRecovery);
+    }
+    return this.requestUncached(r, send, context, waitForRecovery);
+  }
+  private async requestUncached(r: RpcRequest, send: Record<Provider, (r: RpcRequest) => Promise<unknown>>, context: RouteContext, waitForRecovery: boolean): Promise<unknown> {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(r.method)) throw new RpcGuardError('rpc_unavailable', 'Invalid RPC method');
     if (this.outageFailure) throw this.outageFailure;
     if (!waitForRecovery && this.pause) throw new RpcGuardError(this.pause.reason, this.pause.reason, true);
@@ -426,7 +464,7 @@ export class RpcMeter {
             if (typeof result !== 'string' || !/^0x[0-9a-f]+$/i.test(result)) throw new RpcReplyError('not_json', true, 'Invalid block number probe');
           }, failure => providerErrorClass(failure) ?? (isTransientRpcUnavailable(failure) || (!(failure instanceof RpcGuardError) && isTransientRpcError(failure)) ? 'rpc_unavailable' : undefined));
           if (!waitForRecovery) {
-            void recovery.catch(failure => { this.outageFailure = failure; });
+            void recovery.catch(failure => { if (!rpcStopReason(failure) && !isRpcPaidDeferred(failure)) this.outageFailure = failure; });
             throw new RpcGuardError(outageClass, outageClass, true);
           }
           await recovery;

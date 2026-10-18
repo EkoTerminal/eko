@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { priceMovedCoins, binary, hex, migrate, migrateEngines, rebuildBalances, InProcessBus, ChainDb, ReceiptOutbox } from '@eko/db';
 import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
-import { loadRegistry, RpcMeter, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain';
+import { RpcGuardError, loadRegistry, RpcMeter, ponsCurveAbi, ponsFactoryAbi, type PonsProfileClient } from '@eko/chain';
 import { CoinCardSchema, VerdictSchema, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { RULES_VERSION } from '@eko/playbooks';
 import { decodeEventLog, type Hex } from 'viem';
@@ -37,6 +37,33 @@ async function count(db:ChainDb,table:string){return Number((await db.sql.query<
 async function setup(pons=true){const db=await database();await block(db,1);await token(db,coin,1,pons);return db;}
 
 describe('reserved scheduling',()=>{
+ it('waits and resumes a deferred poll without restarting the role',async()=>{
+  const db=await database(),wait=vi.fn(),worker=new EngineWorker(db,{budgetWaitMs:1,onBudgetWait:wait});
+  const poll=vi.spyOn(worker,'poll').mockRejectedValueOnce(new RpcGuardError('rpc_paid_deferred')).mockImplementationOnce(async()=>{worker.stop();return 0;});
+  await worker.run();expect(wait).toHaveBeenCalledTimes(1);expect(poll).toHaveBeenCalledTimes(2);
+ });
+
+ it('degraded admission rates listed first coins and crashes while preserving a card on routine deferral',async()=>{
+  const db=await setup(false);await db.sql.query("INSERT INTO read_coins(coin,tier,activity,first_block,pair_column,pair_block) VALUES($1,2,to_timestamp($2),1,'new',1) ON CONFLICT(coin) DO UPDATE SET activity=excluded.activity",[binary(coin),epoch+1]);
+  const allowed=vi.fn(async(work:string)=>work!=='routine'),referenceSimulation=vi.fn(async()=>{}),worker=new EngineWorker(db,{paidWorkAllowed:allowed,referenceSimulation,now:()=>epoch+100});
+  await worker.processBlock(1);expect(allowed).toHaveBeenLastCalledWith('first_rating');expect(await count(db,'coin_cards')).toBe(1);
+  const before=await latest(db);await block(db,2);await transfer(db,2,actor,10);
+  await worker.processBlock(2);expect(allowed).toHaveBeenLastCalledWith('routine');expect(await latest(db)).toEqual(before);
+  await block(db,3);await transfer(db,3,actor,1);
+  await db.sql.query('UPDATE coin_rating_checks SET full_price=100,peak_recorded=false WHERE coin=$1',[binary(coin)]);
+  await db.sql.query('INSERT INTO coin_rating_prices VALUES($1,30,100,to_timestamp($2),3,0,$3)',[binary(coin),epoch+3,binary(hash(999))]);
+  await worker.processBlock(3);expect(allowed).toHaveBeenLastCalledWith('crash');
+  expect((await db.sql.query('SELECT 1 FROM engine_runs WHERE coin=$1 AND block=3',[binary(coin)])).rows).toHaveLength(1);
+  await block(db,4);await transfer(db,4,actor,1);await worker.processBlock(4);expect(allowed).toHaveBeenLastCalledWith('routine');
+  expect(referenceSimulation).toHaveBeenCalledTimes(2);
+ });
+ it('does not exempt an unlisted first coin from the degraded gate',async()=>{
+  const db=await setup(false);await db.sql.query('UPDATE read_coins SET activity=to_timestamp($1)',[epoch-8*86400]);
+  const allowed=vi.fn(async(work:string)=>work!=='routine');
+  await new EngineWorker(db,{paidWorkAllowed:allowed,now:()=>epoch+100}).processBlock(1);
+  expect(allowed).toHaveBeenLastCalledWith('routine');expect(await count(db,'coin_cards')).toBe(0);
+ });
+
  it('reserves half of every ordinary cycle for pending launches despite a large rated queue and urgent crashes',()=>{
   const pending=Array.from({length:200},(_,i)=>address(1000+i));
   const routine=Array.from({length:200},(_,i)=>({coin:address(2000+i),card:`rated-${i}`}));

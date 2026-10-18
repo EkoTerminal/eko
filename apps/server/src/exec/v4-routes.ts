@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { decodeAbiParameters, decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeFunctionData, formatUnits, hexToBigInt, keccak256, padHex, parseAbi,
   toHex, zeroAddress, type Address, type Hex, type PublicClient } from 'viem';
 import { loadRegistry, v4PoolId, type V4PoolKey } from '@eko/chain';
@@ -61,7 +62,7 @@ const POOLS_SLOT = 6n, LIQUIDITY_OFFSET = 3n, TICK_BITMAP_OFFSET = 5n;
 /** Slot0 and active liquidity of a pool from PoolManager storage (v4-core StateLibrary layout), at a pinned block. */
 export async function readV4Pool(client: Pick<PublicClient, 'readContract'>, poolId: Hex, block: bigint): Promise<V4PoolState> {
   const stateSlot = keccak256(encodeAbiParameters([{ type: 'bytes32' }, { type: 'uint256' }], [poolId, POOLS_SLOT]));
-  const load = (slot: Hex) => client.readContract({ address: V4_MANAGER, abi: V4_MANAGER_ABI, functionName: 'extsload', args: [slot], blockNumber: block });
+  const load = (slot: Hex) => withRpcOrigin('server.v4_routes.L64',()=>client.readContract({ address: V4_MANAGER, abi: V4_MANAGER_ABI, functionName: 'extsload', args: [slot], blockNumber: block }));
   const [slot0, liquidity] = await Promise.all([load(stateSlot), load(toHex(hexToBigInt(stateSlot) + LIQUIDITY_OFFSET, { size: 32 }))]);
   const s = hexToBigInt(slot0), rawTick = (s >> 160n) & 0xffffffn;
   return { sqrtPriceX96: s & ((1n << 160n) - 1n), tick: rawTick >= 0x800000n ? rawTick - 0x1000000n : rawTick,
@@ -83,7 +84,7 @@ export async function v4DepthWei(client: Pick<PublicClient, 'readContract'>, poo
   let crossed: bigint | null = null;
   for (let word = hi >> 8n; word >= lo >> 8n && crossed === null; word--) {
     const slot = keccak256(encodeAbiParameters([{ type: 'int256' }, { type: 'bytes32' }], [word, toHex(hexToBigInt(s.stateSlot) + TICK_BITMAP_OFFSET, { size: 32 })]));
-    const bits = hexToBigInt(await client.readContract({ address: V4_MANAGER, abi: V4_MANAGER_ABI, functionName: 'extsload', args: [slot], blockNumber: block }));
+    const bits = hexToBigInt(await withRpcOrigin('server.v4_routes.L86',()=>client.readContract({ address: V4_MANAGER, abi: V4_MANAGER_ABI, functionName: 'extsload', args: [slot], blockNumber: block })));
     for (let c = word === hi >> 8n ? hi : (word << 8n) + 255n; c >= word << 8n && c >= lo; c--) {
       const t = c * spacing;
       if (t <= s.tick && t > s.tick - band && (bits >> BigInt(((Number(c % 256n) + 256) % 256))) & 1n) { crossed = t; break; }
@@ -151,9 +152,9 @@ export function v4CallTerms(data: Hex): V4CallTerms | null {
 /** The router and quoter are wired to the registry's PoolManager and Permit2 is deployed, at the block. */
 export async function v4Wired(client: Pick<PublicClient, 'readContract' | 'getCode'>, block: bigint): Promise<boolean> {
   const [router, quoter, permit2] = await Promise.all([
-    client.readContract({ address: V4_ROUTER, abi: V4_ROUTER_ABI, functionName: 'poolManager', blockNumber: block }),
-    client.readContract({ address: V4_QUOTER, abi: V4_QUOTER_ABI, functionName: 'poolManager', blockNumber: block }),
-    client.getCode({ address: PERMIT2, blockNumber: block })]);
+    withRpcOrigin('server.v4_routes.L154',()=>client.readContract({ address: V4_ROUTER, abi: V4_ROUTER_ABI, functionName: 'poolManager', blockNumber: block })),
+    withRpcOrigin('server.v4_routes.L155',()=>client.readContract({ address: V4_QUOTER, abi: V4_QUOTER_ABI, functionName: 'poolManager', blockNumber: block })),
+    withRpcOrigin('server.v4_routes.L156',()=>client.getCode({ address: PERMIT2, blockNumber: block }))]);
   return same(router, V4_MANAGER) && same(quoter, V4_MANAGER) && !!permit2 && permit2 !== '0x';
 }
 /**
@@ -162,8 +163,8 @@ export async function v4Wired(client: Pick<PublicClient, 'readContract' | 'getCo
  */
 export async function v4Allowances(client: Pick<PublicClient, 'readContract'>, coin: Address, account: Address, block: bigint, nowSec: number) {
   const [erc20, [amount, expiration]] = await Promise.all([
-    client.readContract({ address: coin, abi: ERC20_ABI, functionName: 'allowance', args: [account, PERMIT2], blockNumber: block }),
-    client.readContract({ address: PERMIT2, abi: PERMIT2_ABI, functionName: 'allowance', args: [account, coin, V4_ROUTER], blockNumber: block })]);
+    withRpcOrigin('server.v4_routes.L165',()=>client.readContract({ address: coin, abi: ERC20_ABI, functionName: 'allowance', args: [account, PERMIT2], blockNumber: block })),
+    withRpcOrigin('server.v4_routes.L166',()=>client.readContract({ address: PERMIT2, abi: PERMIT2_ABI, functionName: 'allowance', args: [account, coin, V4_ROUTER], blockNumber: block }))]);
   const permit2 = expiration > nowSec + PERMIT2_MIN_LEFT_SEC ? amount : 0n;
   return { erc20, permit2, permit2Expiration: expiration, usable: erc20 < permit2 ? erc20 : permit2 };
 }
@@ -197,8 +198,8 @@ export async function quoteV4Trade(client: PublicClient, input: TradeQuoteReques
       if (state.sqrtPriceX96 === 0n || state.liquidity === 0n) return null;
       const amountIn = input.side === 'buy' ? wei : coinPerWei(state, wei);
       if (amountIn <= 0n || amountIn >= 2n ** 128n) return null;
-      const { result: [amountOut, gas] } = await client.simulateContract({ address: V4_QUOTER, abi: V4_QUOTER_ABI, functionName: 'quoteExactInputSingle',
-        args: [{ poolKey: pool.key, zeroForOne: input.side === 'buy', exactAmount: amountIn, hookData: '0x' }], blockNumber: block });
+      const { result: [amountOut, gas] } = await withRpcOrigin('server.v4_routes.rawL201',()=>client.simulateContract({ address: V4_QUOTER, abi: V4_QUOTER_ABI, functionName: 'quoteExactInputSingle',
+        args: [{ poolKey: pool.key, zeroForOne: input.side === 'buy', exactAmount: amountIn, hookData: '0x' }], blockNumber: block }));
       return amountOut > 0n ? { pool, state, amountIn, amountOut, gas } : null;
     } catch { return null; }
   }))).filter(c => c !== null).sort((a, b) => a.amountOut > b.amountOut ? -1 : a.amountOut < b.amountOut ? 1 : 0);

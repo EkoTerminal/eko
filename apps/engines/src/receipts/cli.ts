@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -42,9 +43,9 @@ async function main() {
         // A mounted SOPS/host-secret file is re-read only when a fresh attempt is
         // needed. Pending transactions always retain the old committer and hash.
         const account=await readAccount();
-        const committer=await rpc.paid.readContract({address:registry,abi:receiptsAbi,functionName:'committer'}) as string;
+        const committer=await withRpcOrigin('engines.receipts_cli.L45',()=>rpc.paid.readContract({address:registry,abi:receiptsAbi,functionName:'committer'})) as string;
         if (committer.toLowerCase() !== account.address.toLowerCase()) throw new Error('Committer rotation requires secret reload');
-        const code=await rpc.paid.getCode({address:registry});
+        const code=await withRpcOrigin('engines.receipts_cli.L47',()=>rpc.paid.getCode({address:registry}));
         if (!code || code==='0x') throw new Error('Receipt registry code unavailable');
         const request=await prepareTransactionRequest(rpc.paid,{account,chain:robinhood,to:registry,data:commitData(batch),value:0n,type:'eip1559'});
         const raw=await account.signTransaction({chainId:4663,type:'eip1559',nonce:request.nonce,gas:request.gas!,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeFunctionData, encodeAbiParameters, encodeFunctionData, pad, parseAbi, toHex, zeroAddress, type Address, type Hex } from 'viem';
+import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, encodeFunctionData, pad, parseAbi, toHex, zeroAddress, type Address, type Hex } from 'viem';
 import { bestUsdgPool, poolSpotUsd, usdgPoolPrice } from '../src/pool-spot.js';
 import { loadRegistry } from '../src/registry.js';
 import { RpcGuardError } from '../src/rpc/metered.js';
@@ -42,4 +42,21 @@ describe('Uniswap v3 USDG pool prices', () => {
     expect(await poolSpotUsd({ request: async () => { throw new Error('header not found'); } }, low, 18, 9n, registry)).toEqual({ usd: null, requests: 0, failed: true });
     await expect(poolSpotUsd({ request: async () => { throw new RpcGuardError('rpc_budget_exhausted'); } }, low, 18, 9n, registry)).rejects.toThrow('rpc_budget_exhausted');
   });
+});
+
+it('batches worker pool discovery at the same block: identical pool, six calls become two',async()=>{
+  const raw=chain(low,{500:{liquidity:10n,raw:1},3000:{liquidity:1000n,raw:1}});
+  const multi=parseAbi(['function aggregate3((address target,bool allowFailure,bytes callData)[] calls) payable returns ((bool success,bytes returnData)[] returnData)']);
+  let counted=0;
+  const rpc={request:async (r:{method:string;params:readonly unknown[]})=>{
+    counted++;expect(r.params[1]).toBe('0x9');
+    const [call]=r.params as [{to:Address;data:Hex}];
+    if(call.to.toLowerCase()!==registry.requireAddress('multicall3').toLowerCase())return raw.request(r);
+    const decoded=decodeFunctionData({abi:multi,data:call.data});
+    const results=await Promise.all(decoded.args[0].map(async c=>({success:true,returnData:await raw.request({method:'eth_call',params:[{to:c.target,data:c.callData},r.params[1]]}) as Hex})));
+    return encodeFunctionResult({abi:multi,functionName:'aggregate3',result:results});
+  }};
+  const before=await bestUsdgPool(rpc,low,9n,registry);expect(counted).toBe(6);counted=0;
+  const after=await bestUsdgPool(rpc,low,9n,registry,true);expect(after.pool).toEqual(before.pool);
+  expect(after.requests).toBe(2);expect(counted).toBe(2);
 });

@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { encodeFunctionData, formatUnits, keccak256, zeroAddress, type Address, type Hex, type PublicClient } from 'viem';
 import { loadRegistry, v4PoolId, type MeteredForkLease } from '@eko/chain';
 import { ActualOrderBindingSchema, canonicalize, type ActualOrderBinding, type ActualOrderObservation, type ActualOrderState,
@@ -31,8 +32,8 @@ const FAR_DEADLINE = 2n ** 48n;
  * between quote and order unnoticed.
  */
 export async function v4Fingerprints(client: Pick<PublicClient, 'getCode'>, coin: Address, pool: IndexedV4Pool, side: 'buy' | 'sell', block: bigint, locked = false) {
-  const [coinCode, hookCode] = await Promise.all([client.getCode({ address: coin, blockNumber: block }),
-    same(pool.key.hooks, zeroAddress) ? Promise.resolve('0x' as Hex) : client.getCode({ address: pool.key.hooks, blockNumber: block })]);
+  const [coinCode, hookCode] = await Promise.all([withRpcOrigin('server.v4_trade.L34',()=>client.getCode({ address: coin, blockNumber: block })),
+    same(pool.key.hooks, zeroAddress) ? Promise.resolve('0x' as Hex) : withRpcOrigin('server.v4_trade.L35',()=>client.getCode({ address: pool.key.hooks, blockNumber: block }))]);
   return {
     routeFingerprint: digest({ venue: 'uniswap_v4', poolId: pool.id, key: pool.key, router: V4_ROUTER, permit2: PERMIT2, manager: V4_MANAGER, side }),
     profileHash: digest({ coinCode: keccak256(coinCode ?? '0x'), hookCode: keccak256(hookCode ?? '0x') }),
@@ -191,7 +192,7 @@ export function v4TradeBackend(o: { chain: () => PublicClient; lease: MeteredFor
       const [fp, s, wired, native, held, allowances, verdict] = await Promise.all([
         v4Fingerprints(chain(), b.coin, pool ?? { id: poolId as Hex, key: terms.key }, b.side, at, locked), readV4Pool(chain(), poolId as Hex, at),
         v4Wired(chain(), at), chain().getBalance({ address: b.account, blockNumber: at }),
-        chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'balanceOf', args: [b.account], blockNumber: at }),
+        withRpcOrigin('server.v4_trade.L194',()=>chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'balanceOf', args: [b.account], blockNumber: at })),
         v4Allowances(chain(), b.coin, b.account, at, Math.floor(now / 1000)), o.verdict(b.coin),
       ]);
       const state: ActualOrderState = { observedAtMs: now, criticalCheckedAtMs: now, cursor: cursorOf(head), ...fp,

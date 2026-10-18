@@ -208,6 +208,18 @@ describe('private bags and persisted public snapshots (offline fixtures)', () =>
     expect(refused.statusCode).toBe(429); expect(refused.json().error).toBe('rate_limited');
     expect(refused.headers['cache-control']).toBe('private, no-store');
   });
+  it('reuses a proven maintained balance at the requested block with identical output and zero RPC calls',async()=>{
+    const a=await owner(10919);await holding(a.wallet);balance.mockClear();
+    const before=(await get(a.wallet,a.cookie)).json();expect(balance).toHaveBeenCalledTimes(1);
+    const pin=(await chain().sql.query<{number:string;hash:Uint8Array}>('SELECT number,hash FROM chain_blocks ORDER BY number DESC LIMIT 1')).rows[0];
+    await chain().sql.query('UPDATE balances SET amount=$3 WHERE token=$1 AND holder=$2',[binary(card.identity.address),binary(a.wallet),'123456789012345678901234567890']);
+    await chain().sql.query('INSERT INTO token_balance_origins VALUES($1,$2,$3)',[binary(card.identity.address),pin.number,pin.hash]);
+    await chain().sql.query("INSERT INTO ingest_cursors VALUES('head_logs',$1,NULL) ON CONFLICT(stream) DO UPDATE SET block=excluded.block",[pin.number]);
+    try {
+      balance.mockClear();const after=(await get(a.wallet,a.cookie)).json();expect(after.holdings[0].balance).toBe(before.holdings[0].balance);
+      expect(after.holdings[0].balanceStatus).toBe('observed');expect(balance).not.toHaveBeenCalled();
+    } finally {await chain().sql.query('DELETE FROM token_balance_origins WHERE token=$1',[binary(card.identity.address)]);}
+  });
   it('invalidates balances when the indexed block hash changes during acquisition', async () => {
     const a = await owner(10912); await holding(a.wallet);
     const pin = (await chain().sql.query<{ hash: Uint8Array; number: string }>('SELECT number,hash FROM chain_blocks ORDER BY number DESC LIMIT 1')).rows[0]!;

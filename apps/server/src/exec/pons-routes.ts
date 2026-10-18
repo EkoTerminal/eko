@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { decodeEventLog, decodeFunctionData, encodeFunctionData, formatUnits, padHex, parseAbi, zeroAddress,
   type Address, type Hex, type PublicClient } from 'viem';
 import { loadRegistry } from '@eko/chain';
@@ -86,19 +87,19 @@ export const ponsOpen = (s: PonsCurveState) => !s.graduated && !s.readyToGraduat
 export async function readPonsCurve(client: Pick<PublicClient, 'readContract'>, coin: Address, curve: Address, block: bigint): Promise<PonsCurveState> {
   const at = { address: curve, abi: PONS_CURVE_ABI, blockNumber: block } as const;
   const [token, factory, pair, graduated, readyToGraduate] = await Promise.all([
-    client.readContract({ ...at, functionName: 'token' }), client.readContract({ ...at, functionName: 'factory' }),
-    client.readContract({ ...at, functionName: 'pairToken' }), client.readContract({ ...at, functionName: 'graduated' }),
-    client.readContract({ ...at, functionName: 'readyToGraduate' }),
+    withRpcOrigin('server.pons_routes.L89.c1',()=>client.readContract({ ...at, functionName: 'token' })), withRpcOrigin('server.pons_routes.L89.c2',()=>client.readContract({ ...at, functionName: 'factory' })),
+    withRpcOrigin('server.pons_routes.L90.c1',()=>client.readContract({ ...at, functionName: 'pairToken' })), withRpcOrigin('server.pons_routes.L90.c2',()=>client.readContract({ ...at, functionName: 'graduated' })),
+    withRpcOrigin('server.pons_routes.L91',()=>client.readContract({ ...at, functionName: 'readyToGraduate' })),
   ]);
   if (!same(token, coin) || !same(factory, PONS_FACTORY)) throw new ChainQuoteError('no_route', 'The indexed curve does not belong to this coin');
   if (!same(pair, zeroAddress)) throw new ChainQuoteError('no_route', 'Only native-ETH Pons curves are supported');
   const base = { coin: lower(coin), curve: lower(curve), block, graduated, readyToGraduate };
   if (graduated) return { ...base, quoteReserve: 0n, tokenReserve: 0n, sellable: 0n, realQuote: 0n, feeBps: 0n, creatorTaxBps: 0n, snipeTaxBps: 0n, decimals: 18 };
   const [[quoteReserve, tokenReserve], sellable, realQuote, feeBps, creatorTaxBps, snipeTaxBps, decimals] = await Promise.all([
-    client.readContract({ ...at, functionName: 'getReserves' }), client.readContract({ ...at, functionName: 'sellableTokens' }),
-    client.readContract({ ...at, functionName: 'realQuoteReserve' }), client.readContract({ ...at, functionName: 'feeBps' }),
-    client.readContract({ ...at, functionName: 'creatorTaxBps' }), client.readContract({ ...at, functionName: 'currentSnipeTaxBps', args: [coin] }),
-    client.readContract({ address: coin, abi: ERC20_ABI, functionName: 'decimals', blockNumber: block }),
+    withRpcOrigin('server.pons_routes.L98.c1',()=>client.readContract({ ...at, functionName: 'getReserves' })), withRpcOrigin('server.pons_routes.L98.c2',()=>client.readContract({ ...at, functionName: 'sellableTokens' })),
+    withRpcOrigin('server.pons_routes.L99.c1',()=>client.readContract({ ...at, functionName: 'realQuoteReserve' })), withRpcOrigin('server.pons_routes.L99.c2',()=>client.readContract({ ...at, functionName: 'feeBps' })),
+    withRpcOrigin('server.pons_routes.L100.c1',()=>client.readContract({ ...at, functionName: 'creatorTaxBps' })), withRpcOrigin('server.pons_routes.L100.c2',()=>client.readContract({ ...at, functionName: 'currentSnipeTaxBps', args: [coin] })),
+    withRpcOrigin('server.pons_routes.L101',()=>client.readContract({ address: coin, abi: ERC20_ABI, functionName: 'decimals', blockNumber: block })),
   ]);
   if ([feeBps, creatorTaxBps, snipeTaxBps].some(bps => bps < 0n || bps > 10_000n) || feeBps + creatorTaxBps >= 10_000n)
     throw new ChainQuoteError('no_route', 'Invalid Pons fee terms');
@@ -214,7 +215,7 @@ export async function quotePonsTrade(client: PublicClient, input: TradeQuoteRequ
   const minOut = expectedOut * BigInt(10_000 - input.slippageBps) / 10_000n;
   if (minOut <= 0n) throw new ChainQuoteError('no_route', 'Minimum output rounds to zero');
   const approvalNeeded = input.side === 'sell' && (!input.account ||
-    await client.readContract({ address: coin, abi: ERC20_ABI, functionName: 'allowance', args: [recipient, s.curve], blockNumber: block }) < amountIn);
+    await withRpcOrigin('server.pons_routes.L217',()=>client.readContract({ address: coin, abi: ERC20_ABI, functionName: 'allowance', args: [recipient, s.curve], blockNumber: block })) < amountIn);
   const tx: UnsignedTx = { chainId: 4663, to: s.curve, value: input.side === 'buy' ? amountIn.toString() : '0',
     data: ponsTradeCall({ side: input.side, amountIn, minOut, recipient }) };
   const feeWei = await sources.networkFeeWei(tx, PONS_GAS_ESTIMATE, block);

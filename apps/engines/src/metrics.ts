@@ -11,6 +11,7 @@ export class ReplayMetrics {
   profile(client:PonsProfileClient):PonsProfileClient {return {
     readContract:input=>this.rpc(input.functionName,()=>client.readContract(input)),
     getCode:input=>this.rpc('eth_getCode',()=>client.getCode(input)),
+    ...(client.readGetters ? {readGetters: (input: Parameters<NonNullable<PonsProfileClient['readGetters']>>[0])=>this.rpc('pons_getters_batch',()=>client.readGetters!(input))} : {}),
   };}
   headers(read:BlockReader):BlockReader {
     const result:BlockReader=block=>this.rpc('eth_getBlockByNumber',()=>read(block));

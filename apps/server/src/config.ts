@@ -152,6 +152,8 @@ const EnvSchema = z.object({
   RPC_PAID_MAX_RPM: z.string().optional(),
   RPC_PUBLIC_MAX_RPM: z.string().optional(),
   RPC_PAID_DAILY_BUDGET: z.string().optional(),
+  RPC_PAID_DAILY_SOFT_LIMIT: z.string().optional(),
+  RPC_PAID_INDEXER_RESERVE: z.string().optional(),
   RPC_SESSION_BUDGET: z.string().optional(),
   RPC_WEIGHTS: z.string().optional(),
   RH_TESTNET_RPC_URL: z.string().optional(),
@@ -207,7 +209,7 @@ export const identityConfigKeys = {
   MARKET_DATA_SOURCE: true, DEMO_SEED: true, ENABLE_DEV_ROUTES: true, SERVE_WEB: true,
   RUN_WORKER: true, AI_DAILY_BUDGET_USD: true, AI_MAX_CALLS_PER_BOT_HOUR: true,
   AI_TIMEOUT_MS: true, RPC_PAID_MAX_RPM: true, RPC_PUBLIC_MAX_RPM: true,
-  RPC_PAID_DAILY_BUDGET: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
+  RPC_PAID_DAILY_BUDGET: true, RPC_PAID_DAILY_SOFT_LIMIT: true, RPC_PAID_INDEXER_RESERVE: true, RPC_SESSION_BUDGET: true, RPC_WEIGHTS: true,
   LIVE_TRADING_ENABLED: true, SECURITY_COLLECTORS: true, READ_LIQUIDITY_PROBE_KEYS: true,
   RETENTION_SWAP_DAYS: true, RETENTION_TRANSFER_DAYS: true, FINGERPRINT_LOOKBACK_DAYS: true, FINGERPRINT_REFRESH_DAYS: true, RETENTION_SETTLE_HOURS: true, RETENTION_RAW_DAYS: true, RETENTION_RATING_DAYS: true, RETENTION_RECEIPT_HOURS: true, RETENTION_RECEIPT_KEEP_CURRENT: true, RETENTION_DRY_RUN: true, RETENTION_ENABLED: true,
   RETENTION_QUOTE_TRANSFER_DAYS: true, RETENTION_IDLE_TOKEN_DAYS: true, RETENTION_PENDING_POOL_DAYS: true, RETENTION_FEED_DAYS: true,
@@ -239,6 +241,8 @@ function normalizeIdentityConfiguration(c: z.infer<typeof IdentityEnvSchema>, tr
   values.RPC_PAID_MAX_RPM = rpc.paidRpm;
   values.RPC_PUBLIC_MAX_RPM = rpc.publicRpm;
   values.RPC_PAID_DAILY_BUDGET = rpc.dailyBudget;
+  values.RPC_PAID_DAILY_SOFT_LIMIT = rpc.softLimit;
+  values.RPC_PAID_INDEXER_RESERVE = rpc.indexerReserve;
   values.RPC_SESSION_BUDGET = Number.isFinite(rpc.sessionBudget) ? rpc.sessionBudget : 'unlimited';
   values.RPC_WEIGHTS = rpc.weights;
   return { environment: values, tradeCaps };

@@ -9,7 +9,7 @@ import { expireV4ReferenceTraces } from './v4-reference.js';
 import { binary, hex, publishReceipt, priceMovedCoins, ScanJobs, scanTarget, recordScanStart, recordScanVerdict, type ChainDb, type EngineBus } from '@eko/db';
 import { assembleVerdict, evaluatePlaybooks, rules, RULES_VERSION } from '@eko/playbooks';
 import { shouldRecomputeSignal } from '@eko/signal';
-import { isRpcUnavailable, rpcStopReason, type PonsProfileClient } from '@eko/chain';
+import { isRpcUnavailable, isRpcPaidDeferred, rpcStopReason, withRpcOrigin, type RpcWork, type PonsProfileClient } from '@eko/chain';
 import { ratingPriceMove, type Address, type CoinCard, type PlaybookId, type Verdict } from '@eko/shared';
 import { lockEngineWrites } from './write-locks.js';
 import { OutcomeDifferences, ratingOutcome } from './rating-outcome.js';
@@ -67,6 +67,7 @@ import { verdictReceipt } from './receipt.js';
 import { historyPrune, historyPrunes, revivedBy } from './history-prunes.js';
 
 export interface WorkerOptions {
+  paidWorkAllowed?: (work: RpcWork) => Promise<boolean>;
   sellCheckBudget?: { dailyRequests: number; reservePct: number };
   fingerprints?:FingerprintOptions;
   flow?:FlowOptions;
@@ -298,8 +299,8 @@ export class EngineWorker {
           await jobs.finish(job,'done','ready');completed++;continue;
         }
         await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);
-        await this.options.referenceSimulation?.(coin,block);
-        const sources=await loadSources(this.db,coin,block,this.client,this.clock);
+        await this.prepareReference(coin,block);
+        const sources=await this.loadRatingSources(this.db,coin,block,this.client,this.clock);
         if(!sources){this.cardFailures++;await jobs.finish(job,'waiting','pending','indexed_launch_evidence_unavailable');continue;}
         const card=await this.db.tx(async tx=>{
           const owner=(await tx.sql.query<{lease_id:string}>('SELECT lease_id FROM scan_jobs WHERE id=$1 FOR UPDATE',[job.id])).rows[0];
@@ -315,6 +316,28 @@ export class EngineWorker {
       } catch {await jobs.fail(job,'engine');}
     }
     return completed;
+  }
+  private async ratingWork(coin:Address,block:number):Promise<RpcWork> {
+    const row=(await this.db.sql.query<{listed:boolean;first:boolean;price:number|null;peak:number|null;full_price:number|null;peak_recorded:boolean|null;fresh:boolean}>(`
+      SELECT r.activity>to_timestamp($2::double precision-604800) AS listed,l.coin IS NULL AS first,
+        p.price,p.peak,c.full_price,c.peak_recorded,p.block>coalesce(c.checked_block,l.as_of_block) AS fresh FROM tokens t LEFT JOIN read_coins r ON r.coin=t.address
+        LEFT JOIN coin_card_latest l ON l.coin=t.address LEFT JOIN coin_rating_prices p ON p.coin=t.address AND p.block<=$3
+        LEFT JOIN coin_rating_checks c ON c.coin=t.address WHERE t.address=$1`,
+      [binary(coin),this.options.now?.() ?? Date.now()/1000,block])).rows[0];
+    return row?.first && row.listed ? 'first_rating' : row && !row.first && row.fresh &&
+      ratingPriceMove(row.price,row.full_price,row.peak,row.peak_recorded ?? false).force ? 'crash' : 'routine';
+  }
+  private async prepareReference(coin:Address,block:number) {
+    if(!this.options.referenceSimulation)return;
+    if(!this.options.paidWorkAllowed)return this.options.referenceSimulation(coin,block);
+    const work=await this.ratingWork(coin,block);
+    if(await this.options.paidWorkAllowed(work))return withRpcOrigin('engines.reference_simulation',()=>this.options.referenceSimulation!(coin,block),work);
+  }
+  private async loadRatingSources(...args: Parameters<typeof loadSources>): ReturnType<typeof loadSources> {
+    if (!this.options.paidWorkAllowed) return loadSources(...args);
+    const [,coin,block]=args,work=await this.ratingWork(coin,block);
+    if (!(await this.options.paidWorkAllowed(work))) return null;
+    return withRpcOrigin('engines.rating',()=>loadSources(...args),work);
   }
   private async recordScan(card:CoinCard) {
     const ms=await recordScanVerdict(this.db,card,(this.options.now?.() ?? Date.now()/1000)*1000);
@@ -488,8 +511,8 @@ export class EngineWorker {
         const existing=this.cache ? this.cache.runs.has(`${point.coin}:${point.block}`) : (await this.db.sql.query('SELECT 1 FROM engine_runs WHERE coin=$1 AND block=$2 AND rules_version=$3',[binary(point.coin),point.block,RULES_VERSION])).rows.length;
         if(existing && !(live && revised.has(point.coin) && point.block===to)){progress.skipped++;if(live)await countEvaluations(this.db,[{path:'poll',outcome:'skipped',reason:'existing_run',firstRating:first(point.coin),count:1}]);return null;}
         await resolveClock(this.db,point.block,this.readBlock,this.clock);
-        if(live){await recordScanStart(this.db,point.coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.options.referenceSimulation?.(point.coin,point.block);}
-        const sources=await loadSources(this.db,point.coin,point.block,this.client,this.clock,this.cache,!live,memo).catch(error=>{
+        if(live){await recordScanStart(this.db,point.coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.prepareReference(point.coin,point.block);}
+        const sources=await this.loadRatingSources(this.db,point.coin,point.block,this.client,this.clock,this.cache,!live,memo).catch(error=>{
           if(!live || !isRpcUnavailable(error))throw error;
           return null; // loadSources durably records the failure; one coin must not cancel its neighbours.
         });
@@ -575,7 +598,7 @@ export class EngineWorker {
           // A spent daily paid budget is not a fault: a restart meets the same budget, and each one costs a cold refresh
           // (2026-10-10: 24 restarts in seven minutes on the new host). Wait and poll again; public lanes and the next
           // UTC day let it through. The wait counts as progress for the stall watchdog. Other errors still stop.
-          if(rpcStopReason(error)!=='rpc_budget_exhausted')throw error;
+          if(rpcStopReason(error)!=='rpc_budget_exhausted' && !isRpcPaidDeferred(error))throw error;
           this.options.onBudgetWait?.();this.options.onHeartbeat?.();
           await new Promise<void>(resolve=>{const timer=setTimeout(resolve,this.options.budgetWaitMs ?? 60_000);this.wake=()=>{clearTimeout(timer);this.wake=undefined;resolve();};if(this.stopped)this.wake();});
           continue;
@@ -632,8 +655,8 @@ export class EngineWorker {
             const loaded=(await Promise.all(batch.map(async ({coin,card})=>{
               const prune=await historyPrune(this.db,coin);
               if(prune && !(await revivedBy(this.db,coin,prune,block))){await countEvaluations(this.db,[{path:'loop',outcome:'skipped_candidate',reason:'history_pruned',firstRating:!card,count:1}]);return null;}
-              if(!card){await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);if(!this.options.rpcPaused?.())await this.options.referenceSimulation?.(coin,block);}
-              const sources=await loadSources(this.db,coin,block,this.options.rpcPaused?.() ? undefined : this.options.rerateClient ?? this.client,this.clock,undefined,false,this.rerateMemo).catch(error=>{
+              if(!card){await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);if(!this.options.rpcPaused?.())await this.prepareReference(coin,block);}
+              const sources=await this.loadRatingSources(this.db,coin,block,this.options.rpcPaused?.() ? undefined : this.options.rerateClient ?? this.client,this.clock,undefined,false,this.rerateMemo).catch(error=>{
                 if(!isRpcUnavailable(error))throw error;
                 return null; // Failure/backoff was recorded by loadSources; continue the reserved lane.
               });
@@ -671,9 +694,9 @@ export class EngineWorker {
           }
         }
         if(work.length)this.options.onRerate?.(cards,firstScans,tradedCards);
-        if(work.length && !this.options.rpcPaused?.())continue;
+        if(work.length && !this.options.rpcPaused?.() && (!this.options.paidWorkAllowed || cards>0))continue;
       } catch(error) {
-        if(rpcStopReason(error)!=='rpc_budget_exhausted')this.options.onRerateError?.(error);
+        if(rpcStopReason(error)!=='rpc_budget_exhausted' && !isRpcPaidDeferred(error))this.options.onRerateError?.(error);
       }
       await new Promise<void>(resolve=>{const timer=setTimeout(resolve,this.options.rerateIdleMs ?? 30_000);this.rerateWake=()=>{clearTimeout(timer);resolve();};if(this.stopped)resolve();});
     }
@@ -721,8 +744,8 @@ export class EngineWorker {
     for (let offset=0;offset<selected.length;offset+=width) {
       const batch=selected.slice(offset,offset+width);
       const sources=await Promise.all(batch.map(async coin=>{
-        if(!replay){await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.options.referenceSimulation?.(coin,block);}
-        return loadSources(this.db,coin,block,this.options.client,this.clock,undefined,replay);
+        if(!replay){await recordScanStart(this.db,coin,(this.options.now?.() ?? Date.now()/1000)*1000);await this.prepareReference(coin,block);}
+        return this.loadRatingSources(this.db,coin,block,this.options.client,this.clock,undefined,replay);
       }));
       batch.forEach((coin,i)=>prepared.set(coin,sources[i]));
     }

@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Address, Hex, PublicClient } from 'viem';
@@ -339,8 +340,8 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
       const tokens = await Promise.all(
         Object.values(net.tokens).map(async (t) => {
           const [bal, allowance] = await Promise.all([
-            client.readContract({ address: t.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [addr] }),
-            net.contracts.uniswapV3SwapRouter02 ? client.readContract({ address: t.address, abi: ERC20_ABI, functionName: 'allowance', args: [addr, net.contracts.uniswapV3SwapRouter02] }) : Promise.resolve(0n),
+            withRpcOrigin('server.routes.L342',()=>client.readContract({ address: t.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [addr] })),
+            net.contracts.uniswapV3SwapRouter02 ? withRpcOrigin('server.routes.L343',()=>client.readContract({ address: t.address, abi: ERC20_ABI, functionName: 'allowance', args: [addr, net.contracts.uniswapV3SwapRouter02!] })) : Promise.resolve(0n),
           ]);
           return { symbol: t.symbol, address: t.address, amount: Number(formatUnits(bal, t.decimals)), routerAllowance: Number(formatUnits(allowance, t.decimals)) };
         }),

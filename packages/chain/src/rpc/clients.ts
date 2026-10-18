@@ -1,3 +1,4 @@
+import { batchedReads } from './batched-reads.js';
 import { createPublicClient, type Chain, type PublicClient } from 'viem';
 import { robinhood } from 'viem/chains';
 import type { PonsReadClient } from '../launchpads/pons.js';
@@ -35,5 +36,5 @@ export function createMeteredClients(env: RpcEnv, options: MeterOptions & { chai
 }
 /** Execution may use another chain, while sharing the process meter and paid budget. */
 export function createMeteredPublicClient(meter: RpcMeter, chain: Chain, publicUrl?: string): PublicClient {
-  return createPublicClient({ chain, transport: meter.transport(publicUrl ? 'public' : 'default', publicUrl) }) as PublicClient;
+  return batchedReads(createPublicClient({ chain, transport: meter.transport(publicUrl ? 'public' : 'default', publicUrl) }) as PublicClient);
 }

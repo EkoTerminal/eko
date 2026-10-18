@@ -1,5 +1,5 @@
 import { binary, hex, type ChainDb } from '@eko/db';
-import { readPonsProfile, rpcStopReason, isTransientRpcUnavailable, type PonsProfileClient } from '@eko/chain';
+import { readPonsProfile, isRpcPaidDeferred, rpcStopReason, isTransientRpcUnavailable, type PonsProfileClient } from '@eko/chain';
 import { keccak256, toFunctionSelector } from 'viem';
 import type { Address } from '@eko/shared';
 import type { ClockCache } from './activity.js';
@@ -29,6 +29,7 @@ export function ponsProfiles(db: ChainDb) {
   let found = readers.get(db); if (!found) { found = new PonsProfiles(db); readers.set(db, found); } return found;
 }
 /** Unreviewed getters are observations at one exact canonical checkpoint, never fixed template facts.
+ * TODO(spec): Getter invalidation needs complete setter/upgrade events and a verified anti-snipe time schedule.
  * Cross-block reuse requires the separate reviewed effective profile path. Legacy static rows are ignored.
  */
 class PonsProfiles {
@@ -62,6 +63,7 @@ class PonsProfiles {
       // A spent daily paid budget leaves this checkpoint's getters unknown and unstored: the card says not fully checked
       // and a later checkpoint reads them again. Throwing stopped the scanner, and each restart's cold refresh spent
       // the budget-less hours re-failing (2026-10-10 on the new host: 599 restarts overnight).
+      if(isRpcPaidDeferred(error))throw error;
       const stop = rpcStopReason(error);
       if (stop === 'rpc_budget_exhausted') return undefined;
       if (stop || isTransientRpcUnavailable(error)) throw error; /* Missing reads remain unknown at this checkpoint, never a permanent failure or zero. */

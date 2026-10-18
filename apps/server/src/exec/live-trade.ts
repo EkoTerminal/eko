@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { decodeFunctionData, encodeFunctionData, keccak256, padHex, parseAbi, stringToHex, toHex,
   type Address, type Hex, type PublicClient } from 'viem';
 import { binary, type SqlClient } from '@eko/db';
@@ -74,7 +75,7 @@ export function liveTradeSources(chain: () => PublicClient, sql: () => SqlClient
   const decimals = new Map<string, Promise<number>>();
   const decimalsOf = (token: Address) => {
     let found = decimals.get(token);
-    if (!found) { found = chain().readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals' }).then(Number); decimals.set(token, found); found.catch(() => decimals.delete(token)); }
+    if (!found) { found = withRpcOrigin('server.live_trade.L77',()=>chain().readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals' })).then(Number); decimals.set(token, found); found.catch(() => decimals.delete(token)); }
     return found;
   };
   /** Spot price of `token` in `quote` units from the deepest indexed pool pairing them, at the block. */
@@ -82,8 +83,8 @@ export function liveTradeSources(chain: () => PublicClient, sql: () => SqlClient
     let best: { liquidity: bigint; sqrt: bigint; token0: Address } | null = null;
     for (const p of pools.filter(p => [p.currency0, p.currency1].some(c => same(c, quote)))) {
       const [liquidity, slot] = await Promise.all([
-        chain().readContract({ address: p.address, abi: LIQUIDITY_ABI, functionName: 'liquidity', blockNumber: block }),
-        chain().readContract({ address: p.address, abi: POOL_ABI, functionName: 'slot0', blockNumber: block }),
+        withRpcOrigin('server.live_trade.L85',()=>chain().readContract({ address: p.address, abi: LIQUIDITY_ABI, functionName: 'liquidity', blockNumber: block })),
+        withRpcOrigin('server.live_trade.L86',()=>chain().readContract({ address: p.address, abi: POOL_ABI, functionName: 'slot0', blockNumber: block })),
       ]);
       if (slot[0] > 0n && (!best || liquidity > best.liquidity)) best = { liquidity, sqrt: slot[0], token0: lower(p.currency0) };
     }
@@ -117,7 +118,7 @@ export function liveTradeSources(chain: () => PublicClient, sql: () => SqlClient
     networkFeeWei: async (tx, gas, block) => {
       try {
         const [header, l1] = await Promise.all([chain().getBlock({ blockNumber: block }),
-          chain().simulateContract({ address: NODE_INTERFACE, abi: NODE_INTERFACE_ABI, functionName: 'gasEstimateL1Component', args: [tx.to, false, tx.data], blockNumber: block })]);
+          withRpcOrigin('server.live_trade.rawL121',()=>chain().simulateContract({ address: NODE_INTERFACE, abi: NODE_INTERFACE_ABI, functionName: 'gasEstimateL1Component', args: [tx.to, false, tx.data], blockNumber: block }))]);
         return header.baseFeePerGas == null ? null : (gas + l1.result[0]) * header.baseFeePerGas;
       } catch { return null; }
     },
@@ -141,7 +142,7 @@ export function simulationRpc(url: string, timeoutMs = 10_000): AnvilRpc {
  */
 export function simulationLease(rpc: AnvilRpc): MeteredForkLease {
   return new SerializedMeteredForkLease(rpc, async cursor => {
-    await rpc.request({ method: 'anvil_reset', params: [{ forking: { blockNumber: Number(cursor.blockNumber) } }] });
+    await withRpcOrigin('server.live_trade.rawL145',()=>rpc.request({ method: 'anvil_reset', params: [{ forking: { blockNumber: Number(cursor.blockNumber) } }] }));
   });
 }
 
@@ -155,16 +156,16 @@ const erc20 = {
 class SimAccount {
   readonly receipts: Hex[] = [];
   constructor(private readonly rpc: AnvilRpc, readonly address: Address) {}
-  private async call(to: Address, data: Hex) { return await this.rpc.request({ method: 'eth_call', params: [{ from: this.address, to, data }, 'latest'] }) as Hex; }
+  private async call(to: Address, data: Hex) { return await withRpcOrigin('server.live_trade.rawL159',()=>this.rpc.request({ method: 'eth_call', params: [{ from: this.address, to, data }, 'latest'] })) as Hex; }
   async token(token: Address) { return BigInt(await this.call(token, erc20.balanceOf(this.address))); }
   async allowance(token: Address, spender: Address) { return BigInt(await this.call(token, erc20.allowance(this.address, spender))); }
-  async native() { return BigInt(await this.rpc.request({ method: 'eth_getBalance', params: [this.address, 'latest'] }) as Hex); }
-  async code() { return await this.rpc.request({ method: 'eth_getCode', params: [this.address, 'latest'] }) as Hex; }
+  async native() { return BigInt(await withRpcOrigin('server.live_trade.rawL162',()=>this.rpc.request({ method: 'eth_getBalance', params: [this.address, 'latest'] })) as Hex); }
+  async code() { return await withRpcOrigin('server.live_trade.rawL163',()=>this.rpc.request({ method: 'eth_getCode', params: [this.address, 'latest'] })) as Hex; }
   async send(to: Address, data: Hex, value: bigint) {
-    const hash = await this.rpc.request({ method: 'eth_sendTransaction', params: [{ from: this.address, to, data, value: toHex(value), gas: toHex(3_000_000n) }] }) as Hex;
+    const hash = await withRpcOrigin('server.live_trade.rawL165',()=>this.rpc.request({ method: 'eth_sendTransaction', params: [{ from: this.address, to, data, value: toHex(value), gas: toHex(3_000_000n) }] })) as Hex;
     // Mine explicitly: a forked Anvil's automine can seal over a second later, beyond the 5-second refresh window.
-    await this.rpc.request({ method: 'evm_mine', params: [] });
-    const receipt = await this.rpc.request({ method: 'eth_getTransactionReceipt', params: [hash] }) as { status: Hex; gasUsed: Hex; effectiveGasPrice: Hex } | null;
+    await withRpcOrigin('server.live_trade.rawL167',()=>this.rpc.request({ method: 'evm_mine', params: [] }));
+    const receipt = await withRpcOrigin('server.live_trade.rawL168',()=>this.rpc.request({ method: 'eth_getTransactionReceipt', params: [hash] })) as { status: Hex; gasUsed: Hex; effectiveGasPrice: Hex } | null;
     if (!receipt) throw new Error('Simulation receipt unavailable');
     this.receipts.push(hash);
     return { ok: BigInt(receipt.status) === 1n, network: BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice) };
@@ -184,18 +185,18 @@ class SimAccount {
 async function withAccount<T>(lease: MeteredForkLease, cursor: GuardCursor, account: Address, work: (sim: SimAccount) => Promise<T>): Promise<T> {
   return lease.withExclusive(async (rpc, reset) => {
     await reset(cursor);
-    await rpc.request({ method: 'evm_setAutomine', params: [false] });
-    const header = await rpc.request({ method: 'eth_getBlockByNumber', params: [toHex(BigInt(cursor.blockNumber)), false] }) as { hash?: string } | null;
+    await withRpcOrigin('server.live_trade.rawL188',()=>rpc.request({ method: 'evm_setAutomine', params: [false] }));
+    const header = await withRpcOrigin('server.live_trade.rawL189',()=>rpc.request({ method: 'eth_getBlockByNumber', params: [toHex(BigInt(cursor.blockNumber)), false] })) as { hash?: string } | null;
     if (!same(header?.hash, cursor.blockHash)) throw new Error('Simulation pin mismatch');
-    await rpc.request({ method: 'anvil_impersonateAccount', params: [account] });
+    await withRpcOrigin('server.live_trade.rawL191',()=>rpc.request({ method: 'anvil_impersonateAccount', params: [account] }));
     try { return await work(new SimAccount(rpc, account)); }
-    finally { await rpc.request({ method: 'anvil_stopImpersonatingAccount', params: [account] }); }
+    finally { await withRpcOrigin('server.live_trade.rawL193',()=>rpc.request({ method: 'anvil_stopImpersonatingAccount', params: [account] })); }
   });
 }
 
 /** Route, code and control fingerprints for one coin/pool route; stable across blocks unless code or route changes. */
 async function fingerprints(client: PublicClient, coin: Address, pool: Address, terms: RouteTerms, block: bigint) {
-  const [coinCode, poolCode] = await Promise.all([client.getCode({ address: coin, blockNumber: block }), client.getCode({ address: pool, blockNumber: block })]);
+  const [coinCode, poolCode] = await Promise.all([withRpcOrigin('server.live_trade.L198.c1',()=>client.getCode({ address: coin, blockNumber: block })), withRpcOrigin('server.live_trade.L198.c2',()=>client.getCode({ address: pool, blockNumber: block }))]);
   return {
     routeFingerprint: digest({ venue: 'uniswap_v3', pool, router: ROUTER, tokenIn: terms.tokenIn, tokenOut: terms.tokenOut, fee: terms.fee }),
     profileHash: digest({ coinCode: keccak256(coinCode ?? '0x'), poolCode: keccak256(poolCode ?? '0x') }),
@@ -205,12 +206,12 @@ async function fingerprints(client: PublicClient, coin: Address, pool: Address, 
 
 /** Largest USD size of a short ladder (up to the strictest preset's $50k) whose buy moves the pool price at most 2%. */
 async function depthUsdLower(client: PublicClient, pool: Address, terms: RouteTerms, priceIn: number, decimalsIn: number, block: bigint): Promise<number> {
-  const slot = await client.readContract({ address: pool, abi: POOL_ABI, functionName: 'slot0', blockNumber: block });
+  const slot = await withRpcOrigin('server.live_trade.L208',()=>client.readContract({ address: pool, abi: POOL_ABI, functionName: 'slot0', blockNumber: block }));
   for (const usd of [50_000, 10_000, 2_000]) {
     const amountIn = BigInt(Math.floor(usd / priceIn * 10 ** decimalsIn));
     try {
-      const { result } = await client.simulateContract({ address: QUOTER, abi: QUOTER_V2_ABI, functionName: 'quoteExactInputSingle',
-        args: [{ tokenIn: terms.tokenIn, tokenOut: terms.tokenOut, amountIn, fee: terms.fee, sqrtPriceLimitX96: 0n }], blockNumber: block });
+      const { result } = await withRpcOrigin('server.live_trade.rawL213',()=>client.simulateContract({ address: QUOTER, abi: QUOTER_V2_ABI, functionName: 'quoteExactInputSingle',
+        args: [{ tokenIn: terms.tokenIn, tokenOut: terms.tokenOut, amountIn, fee: terms.fee, sqrtPriceLimitX96: 0n }], blockNumber: block }));
       if (Math.abs((Number(result[1]) / Number(slot[0])) ** 2 - 1) <= 0.02) return usd;
     } catch { /* this size cannot fill; try a smaller one */ }
   }
@@ -238,9 +239,9 @@ export class V3ActualOrderProbe implements ActualOrderProbe {
       terms.amountIn !== BigInt(b.amountIn) || terms.minOut !== BigInt(b.minOut)) return result;
     const block = BigInt(state.cursor.blockNumber), quote = b.side === 'buy' ? terms.tokenIn : terms.tokenOut;
     try {
-      const pool = lower(await this.chain().readContract({ address: FACTORY, abi: FACTORY_ABI, functionName: 'getPool', args: [terms.tokenIn, terms.tokenOut, terms.fee], blockNumber: block }));
+      const pool = lower(await withRpcOrigin('server.live_trade.L241',()=>this.chain().readContract({ address: FACTORY, abi: FACTORY_ABI, functionName: 'getPool', args: [terms.tokenIn, terms.tokenOut, terms.fee], blockNumber: block })));
       const [price, decimals, fp] = await Promise.all([this.sources.priceUsd(quote, block),
-        this.chain().readContract({ address: quote, abi: ERC20_ABI, functionName: 'decimals', blockNumber: block }),
+        withRpcOrigin('server.live_trade.L243',()=>this.chain().readContract({ address: quote, abi: ERC20_ABI, functionName: 'decimals', blockNumber: block })),
         fingerprints(this.chain(), b.coin, pool, terms, block)]);
       if (ZERO.test(pool) || !price || fp.routeFingerprint !== b.routeFingerprint) return result;
       const paidInToken = b.side === 'buy' && BigInt(b.tx.value) === 0n;
@@ -435,9 +436,9 @@ export function v3TradeAcquisition(o: { chain: () => PublicClient; lease: Metere
       const [fp, native, held, allowance, canonical, verdict] = await Promise.all([
         fingerprints(chain(), b.coin, pool, terms, at),
         chain().getBalance({ address: b.account, blockNumber: at }),
-        chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'balanceOf', args: [b.account], blockNumber: at }),
-        chain().readContract({ address: paying, abi: ERC20_ABI, functionName: 'allowance', args: [b.account, ROUTER], blockNumber: at }),
-        chain().readContract({ address: FACTORY, abi: FACTORY_ABI, functionName: 'getPool', args: [terms.tokenIn, terms.tokenOut, terms.fee], blockNumber: at }),
+        withRpcOrigin('server.live_trade.L438',()=>chain().readContract({ address: b.coin, abi: ERC20_ABI, functionName: 'balanceOf', args: [b.account], blockNumber: at })),
+        withRpcOrigin('server.live_trade.L439',()=>chain().readContract({ address: paying, abi: ERC20_ABI, functionName: 'allowance', args: [b.account, ROUTER], blockNumber: at })),
+        withRpcOrigin('server.live_trade.L440',()=>chain().readContract({ address: FACTORY, abi: FACTORY_ABI, functionName: 'getPool', args: [terms.tokenIn, terms.tokenOut, terms.fee], blockNumber: at })),
         o.verdict(b.coin),
       ]);
       const now = Date.now();

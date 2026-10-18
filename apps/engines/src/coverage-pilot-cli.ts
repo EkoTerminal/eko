@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { mkdir, cp, rename, rm, readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,8 +138,8 @@ export async function coveragePilotMain(args: string[]) {
       },
       logs: async job => {
         if (!pinned) await checkPins();
-        const value = await rpc!.archive.request({ method: 'eth_getLogs', params: [{ fromBlock: quantity(job.from), toBlock: quantity(job.through),
-          address: job.addresses, topics: job.topics }] } as never);
+        const value = await withRpcOrigin('engines.coverage_pilot_cli.rawL140',()=>rpc!.archive.request({ method: 'eth_getLogs', params: [{ fromBlock: quantity(job.from), toBlock: quantity(job.through),
+          address: job.addresses, topics: job.topics }] } as never));
         const logs = z.array(rpcLog).parse(value);
         for (const log of logs) {
           if (log.removed || !job.addresses.includes(log.address.toLowerCase()) || BigInt(log.blockNumber) < BigInt(job.from) || BigInt(log.blockNumber) > BigInt(job.through) ||

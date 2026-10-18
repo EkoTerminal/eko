@@ -1,6 +1,7 @@
+import { withRpcOrigin } from '@eko/chain';
 import { logger } from '../obs/logger.js';
 import { reportError } from '../obs/errors.js';
-import { RpcMeter, createMeteredPublicClient, safeError, type RpcEnv, type UsageStore } from '@eko/chain';
+import { rpcOriginClient, RpcMeter, createMeteredPublicClient, safeError, type RpcEnv, type UsageStore, type RpcUsageDb } from '@eko/chain';
 import {
   decodeEventLog,
   encodeFunctionData,
@@ -41,9 +42,9 @@ export class ChainClients {
    * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
    */
-  constructor(rpc: { mainnet?: string; testnet?: string }, env: RpcEnv, store: UsageStore) {
+  constructor(rpc: { mainnet?: string; testnet?: string }, env: RpcEnv, store: UsageStore, db?: RpcUsageDb) {
     // TODO(spec): TEAM_ALERT_CHAT_ID pager delivery is absent; use the existing Sentry alert path.
-    this.meter = new RpcMeter({ ...env, RPC_HTTP_URL: env.RPC_HTTP_URL ?? rpc.mainnet }, { store, log: (event, fields) => logger.info(fields, event), alert: (event, fields) => reportError(new Error(event), fields) });
+    this.meter = new RpcMeter({ ...env, RPC_HTTP_URL: env.RPC_HTTP_URL ?? rpc.mainnet }, { db, store, log: (event, fields) => logger.info(fields, event), alert: (event, fields) => reportError(new Error(event), fields) });
     this.clients.set(
       'robinhood-mainnet',
       createMeteredPublicClient(this.meter, robinhood),
@@ -65,8 +66,8 @@ export class ChainClients {
    * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
    */
-  get(id: NetworkId): PublicClient {
-    return this.clients.get(id)!;
+  get(id: NetworkId, origin = 'server.execution'): PublicClient {
+    return rpcOriginClient(this.clients.get(id)!,origin);
   }
 
   /**
@@ -213,12 +214,12 @@ export class UniswapV3Adapter implements ExecutionAdapter {
     const tiers = await Promise.all(
       route.feeTiers.map(async (fee): Promise<TierQuote | null> => {
         try {
-          const { result } = await client.simulateContract({
+          const { result } = await withRpcOrigin('server.chain.rawL217',()=>client.simulateContract({
             address: c.uniswapV3QuoterV2!,
             abi: QUOTER_V2_ABI,
             functionName: 'quoteExactInputSingle',
             args: [{ tokenIn: tokenIn.address, tokenOut: tokenOut.address, amountIn: amountInRaw, fee, sqrtPriceLimitX96: 0n }],
-          });
+          }));
           return { fee, amountOut: result[0], gasEstimate: result[3] };
         } catch (err) {
           const name = (err as { name?: string; cause?: { name?: string } }).cause?.name ?? (err as { name?: string }).name ?? '';
@@ -232,10 +233,10 @@ export class UniswapV3Adapter implements ExecutionAdapter {
     if (!best) throw new ChainQuoteError('no_liquidity', 'No Uniswap v3 pool could fill this size right now.');
 
     // Mid price from the chosen pool (for price impact vs. the pool's own spot price).
-    const pool = await client.readContract({ address: c.uniswapV3Factory!, abi: FACTORY_ABI, functionName: 'getPool', args: [base.address, quoteTok.address, best.fee] });
+    const pool = await withRpcOrigin('server.chain.L235',()=>client.readContract({ address: c.uniswapV3Factory!, abi: FACTORY_ABI, functionName: 'getPool', args: [base.address, quoteTok.address, best.fee] }));
     const [slot0, token0] = await Promise.all([
-      client.readContract({ address: pool, abi: POOL_ABI, functionName: 'slot0' }),
-      client.readContract({ address: pool, abi: POOL_ABI, functionName: 'token0' }),
+      withRpcOrigin('server.chain.L237',()=>client.readContract({ address: pool, abi: POOL_ABI, functionName: 'slot0' })),
+      withRpcOrigin('server.chain.L238',()=>client.readContract({ address: pool, abi: POOL_ABI, functionName: 'token0' })),
     ]);
     const baseIs0 = token0.toLowerCase() === base.address.toLowerCase();
     const p0in1 = sqrtPriceToPrice(slot0[0], baseIs0 ? base.decimals : quoteTok.decimals, baseIs0 ? quoteTok.decimals : base.decimals);
@@ -277,14 +278,15 @@ export class UniswapV3Adapter implements ExecutionAdapter {
     let approval: NonNullable<Quote['tx']>['approval'] = null;
     let gasUnits = best.gasEstimate + 60_000n;
     const gasPrice = await client.getGasPrice();
-    if (input.account) {
+    const account=input.account;
+    if (account) {
       const [ethBal, inBal] = await Promise.all([
-        client.getBalance({ address: input.account }),
-        buying ? client.readContract({ address: quoteTok.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [input.account] }) : Promise.resolve(0n),
+        client.getBalance({ address: account }),
+        buying ? withRpcOrigin('server.chain.L283',()=>client.readContract({ address: quoteTok.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [account] })) : Promise.resolve(0n),
       ]);
       if (buying) {
         if (inBal < amountInRaw) warnings.push(`insufficient_balance: wallet holds ${formatUnits(inBal, quoteTok.decimals)} ${quoteTok.symbol}`);
-        const allowance = await client.readContract({ address: quoteTok.address, abi: ERC20_ABI, functionName: 'allowance', args: [input.account, c.uniswapV3SwapRouter02!] });
+        const allowance = await withRpcOrigin('server.chain.L287',()=>client.readContract({ address: quoteTok.address, abi: ERC20_ABI, functionName: 'allowance', args: [account, c.uniswapV3SwapRouter02!] }));
         if (allowance < amountInRaw) approval = { token: quoteTok.address, spender: c.uniswapV3SwapRouter02!, amount: amountInRaw.toString() };
       } else {
         const reserve = parseUnits(String(GAS_RESERVE_ETH), 18);
@@ -292,7 +294,7 @@ export class UniswapV3Adapter implements ExecutionAdapter {
       }
       if (!approval && !warnings.some((w) => w.startsWith('insufficient_balance'))) {
         try {
-          await client.call({ account: input.account, to: c.uniswapV3SwapRouter02!, data, value });
+          await withRpcOrigin('server.chain.rawL297',()=>client.call({ account: input.account, to: c.uniswapV3SwapRouter02!, data, value }));
           gasUnits = await client.estimateGas({ account: input.account, to: c.uniswapV3SwapRouter02!, data, value });
           metrics.observe('simulation.failure', 0, { mode: input.mode });
         } catch (err) {

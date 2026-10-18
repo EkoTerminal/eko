@@ -59,6 +59,11 @@ export class RpcOutage {
         if (reportFailure) throw reportFailure;
         await changed?.(null);
         log('rpc_resumed', { provider });
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+        // A local ceiling can clear for urgent work or the next UTC day; it is not a persisted provider outage.
+        if (code === 'rpc_paid_deferred' || code === 'rpc_budget_exhausted') await changed?.(null);
+        throw error;
       } finally { clearInterval(timer); this.pause = null; this.recovery = undefined; }
     })();
     return this.recovery;

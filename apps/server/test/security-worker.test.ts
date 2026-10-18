@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ load: vi.fn(), construct: vi.fn(), warn: vi.fn() }));
-vi.mock('@eko/chain', () => ({ loadRegistry: mocks.load }));
+vi.mock('@eko/chain', async () => ({ loadRegistry: mocks.load, withRpcOrigin: (await import('../../../packages/chain/src/rpc/origin.js')).withRpcOrigin }));
 vi.mock('../src/obs/security-collectors.js', () => ({
   SecurityCollectors: class { constructor(...args: unknown[]) { mocks.construct(...args); } },
 }));
@@ -32,7 +32,7 @@ describe('security collector worker wiring', () => {
     const [db, rpc, config, bindings, record, unavailable, budget, diagnostic] = mocks.construct.mock.calls[0]!;
     expect(db).toBe(ctx.dbh.chain); expect(config).toBe(ctx.cfg.SECURITY_COLLECTORS);
     expect(bindings).toEqual({ registry: addr('a'), burn: addr('b'), published: [addr('c'), addr('b')], weth: addr('d'), usdg: addr('e') });
-    expect(ctx.chains.get).toHaveBeenCalledExactlyOnceWith('robinhood-mainnet');
+    expect(ctx.chains.get).toHaveBeenCalledExactlyOnceWith('robinhood-mainnet','worker.security_collectors');
     const client = ctx.chains.get.mock.results[0]!.value;
     expect(client.request).not.toHaveBeenCalled();
     expect(await rpc.request('eth_chainId', [])).toBe('fixture-result');

@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -261,7 +262,7 @@ export class AuthService {
     }
     if (!ok) {
       const client = clients[fields.chainId];
-      if (client) ok = await client.verifySiweMessage({ message, signature, address: fields.address, nonce: fields.nonce, domain: fields.domain }).catch(() => false);
+      if (client) ok = await withRpcOrigin('server.auth.verify_contract_signature',()=>client.verifySiweMessage({ message, signature, address: fields.address, nonce: fields.nonce, domain: fields.domain })).catch(() => false);
     }
     if (!ok) throw Object.assign(new Error('Signature verification failed'), { statusCode: 401 });
 

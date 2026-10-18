@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,7 +138,7 @@ export async function pinEnumerationWatermark(rpc: BackfillRpc, store: BackfillA
     pin.costNanoUsd = (BigInt(pin.units) * BigInt(limits.unitNanoUsd)).toString(); await save(pin);
   });
   let raw: unknown = null;
-  try { raw = await rpc.request('eth_getBlockByNumber', [limits.finality, false]); }
+  try { raw = await withRpcOrigin('engines.launch_enumeration_cli.rawL140',()=>rpc.request('eth_getBlockByNumber', [limits.finality, false])); }
   catch (error) { raiseBackfillStops(store, error); }
   finally { store.bind(null); }
   const cursor = parseRpcHeader(raw);

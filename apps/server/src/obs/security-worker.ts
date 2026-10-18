@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { loadRegistry } from '@eko/chain';
 import type { Ctx } from '../app.js';
 import { SecurityCollectors } from './security-collectors.js';
@@ -23,9 +24,9 @@ export function workerSecurityCollectors(ctx: Ctx) {
   const registry = loadRegistry();
   const accepted = registry.addressOf('ours.receiptsRegistry');
   const zero = `0x${'0'.repeat(40)}` as const;
-  const client = ctx.chains.get('robinhood-mainnet');
+  const client = ctx.chains.get('robinhood-mainnet','worker.security_collectors');
   const collectors = new SecurityCollectors(ctx.dbh.chain, {
-    request: (method, params) => client.request({ method, params } as never),
+    request: (method, params) => withRpcOrigin('server.security_worker.rawL28',()=>client.request({ method, params } as never)),
   }, config, {
     // An unset or mismatched manifest does not authorize a different registry scan.
     registry: accepted && accepted.toLowerCase() === ctx.cfg.RECEIPTS_REGISTRY_ADDRESS.toLowerCase() ? accepted.toLowerCase() as `0x${string}` : zero,

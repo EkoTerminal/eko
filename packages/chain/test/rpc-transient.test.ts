@@ -96,7 +96,7 @@ describe('bounded indexer transport retries', () => {
 });
 describe('live public capacity spill-over', () => {
   it('defaults to the measured public cap and the increased paid cap', () => {
-    expect(rpcConfig({})).toMatchObject({paidRpm:1200,publicRpm:300,dailyBudget:200000});
+    expect(rpcConfig({})).toMatchObject({paidRpm:1200,publicRpm:300,dailyBudget:800000,softLimit:500000,indexerReserve:300000});
   });
   it.each(['eth_getBlockReceipts','eth_getLogs','eth_blockNumber'])('reserves nearby public slots for %s before spilling overflow', async method => {
     const h=harness();

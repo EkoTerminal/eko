@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import { LoopHeartbeat } from './loop-health.js';
 import { decodeAbiParameters, hexToString, parseAbi, type Hex, type PublicClient } from 'viem';
 import { binary, hex, type ChainDb } from '@eko/db';
@@ -209,7 +210,7 @@ export function chainOnboarding(metered: () => PublicClient, registry = loadRegi
     async facts(token) {
       const calls = Object.values(SELECTORS).map(callData => ({ target: token as Hex, allowFailure: true, callData: callData as Hex }));
       let results: readonly { success: boolean; returnData: Hex }[];
-      try { results = await client().readContract({ address: multicall, abi: multicall3, functionName: 'aggregate3', args: [calls] }); }
+      try { results = await withRpcOrigin('server.coin_onboarding.L212',()=>client().readContract({ address: multicall, abi: multicall3, functionName: 'aggregate3', args: [calls] })); }
       catch (error) { stop(error); return { decimals: null, symbol: null, name: null, totalSupply: null }; }
       const [decimals, symbol, name, supply] = results;
       const number = (r: { success: boolean; returnData: Hex }) => { try { return r.success && r.returnData.length === 66 ? BigInt(r.returnData) : null; } catch { return null; } };

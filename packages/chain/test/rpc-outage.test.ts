@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { RpcGuardError, RpcMeter, isTransientRpcUnavailable, rpcStopReason } from '../src/rpc/metered.js';
 import { providerErrorClass } from '../src/rpc/outage.js';
+import { withRpcOrigin } from '../src/rpc/origin.js';
 import { ProgressWatchdog } from '../src/watchdog.js';
 import type { RpcRequest } from '../src/rpc/routes.js';
 afterEach(() => vi.useRealTimers());
@@ -100,4 +101,36 @@ it('does not dispatch an admitted request if another in-flight call pauses the p
   available=true;await vi.advanceTimersByTimeAsync(11_000);
   await expect(Promise.all([first,second])).resolves.toEqual(['result','result']);
   await meter.close();
+});
+
+it('keeps urgent work and origin accounting available when the ceiling defers an outage recovery probe', async () => {
+  let now=0, total=0, available=false, releaseRecovery!:()=>void;
+  const log=vi.fn(), changed=vi.fn();
+  const saved={...store(),paidPolicy:vi.fn(async (_day:string,policy:{urgent:boolean},consume:boolean)=>{
+    const allowed=total<1 || policy.urgent;
+    if(allowed && consume)total++;
+    return {allowed,degraded:total>=1,total,nonIndexer:total};
+  })};
+  const meter=new RpcMeter({APP_ROLE:'engines',RPC_HTTP_URL:'https://paid.invalid',RPC_PAID_DAILY_SOFT_LIMIT:'1'},
+    {store:saved,pauseOnOutage:true,onPauseChange:changed,log,now:()=>now,sleep:async ms=>{
+      now+=ms;if(ms>=10_000)await new Promise<void>(resolve=>{releaseRecovery=resolve;});
+    }});
+  const paid=vi.fn(async()=>{if(!available)throw new Error('User balance exceeded');return 'result';});
+  const send={paid,public:paid};
+  try {
+    await expect(withRpcOrigin('test.routine',()=>meter.request({method:'eth_call'},send,'archive',false)))
+      .rejects.toMatchObject({code:'provider_balance_exceeded'});
+    expect(meter.pause?.reason).toBe('provider_balance_exceeded');
+    releaseRecovery();await vi.waitFor(()=>expect(meter.pause).toBeNull());
+    expect(changed).toHaveBeenLastCalledWith(null);
+    available=true;
+    await expect(withRpcOrigin('test.first_rating',()=>meter.request({method:'eth_call'},send,'archive'),'first_rating')).resolves.toBe('result');
+    await expect(withRpcOrigin('test.routine',()=>meter.request({method:'eth_call'},send,'archive'))).rejects.toMatchObject({code:'rpc_paid_deferred'});
+    expect(meter.pause).toBeNull();expect(paid).toHaveBeenCalledTimes(2);expect(total).toBe(2);
+    await meter.summary();
+    expect(log.mock.calls.find(([event])=>event==='rpc_usage')?.[1].lastMinute).toEqual([
+      {provider:'paid',method:'eth_call',origin:'test.routine',calls:1,units:1},
+      {provider:'paid',method:'eth_call',origin:'test.first_rating',calls:1,units:1},
+    ]);
+  } finally {await meter.close();}
 });

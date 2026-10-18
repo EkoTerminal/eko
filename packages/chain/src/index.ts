@@ -55,5 +55,6 @@ export * from './simulation/campaign-input.js';
 export * from './simulation/campaign-replay.js';
 export * from './simulation/campaign-pressure.js';
 
+export { withRpcOrigin, rpcOriginClient, type RpcWork } from './rpc/origin.js';
 export * from './rpc/outage.js';
 export * from './rpc/role-health.js';

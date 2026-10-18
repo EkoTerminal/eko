@@ -12,7 +12,8 @@ vi.mock('node:fs/promises', async importOriginal => {
   return { ...original, readFile: (...args: Parameters<typeof original.readFile>) =>
     args[0] === 'fixture-key-file' ? Promise.resolve(fixture.key) : original.readFile(...args) };
 });
-vi.mock('@eko/chain', () => ({
+vi.mock('@eko/chain', async () => ({
+  withRpcOrigin: (await import('../../../packages/chain/src/rpc/origin.js')).withRpcOrigin,
   loadRegistry: () => ({ requireAddress: () => `0x${'ab'.repeat(20)}` }),
   createMeteredClients: () => ({ paid: { readContract: fixture.readContract, getCode: fixture.getCode,
     sendRawTransaction: fixture.broadcast }, meter: { close: fixture.meterClose } }),

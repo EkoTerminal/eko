@@ -1,3 +1,4 @@
+import { withRpcOrigin } from '@eko/chain';
 import type { ChainDb } from '@eko/db';
 import { SellChecker, readSellChecks, recordSellRefusal, type SellCheckResult } from '@eko/engines';
 import type { Address } from '@eko/shared';
@@ -26,7 +27,7 @@ export class SellGuard {
    */
   constructor(private readonly db: ChainDb, private readonly client: SellGuardClient, private readonly now: () => number = Date.now,
     private readonly options: { probe?: boolean; storedMaxAgeMs?: number } = {}) {
-    this.checker = new SellChecker(db, { request: input => client.request(input) }, { now });
+    this.checker = new SellChecker(db, { request: input => withRpcOrigin('server.sell_guard.rawL29',()=>client.request(input)) }, { now });
   }
   /**
    * The coin's sell check for a buy of `amountUsd`: the engines' stored reading (sellable or refused) when it is at

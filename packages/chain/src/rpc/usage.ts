@@ -1,8 +1,10 @@
+import { sqlPaidPolicy, type PaidPolicy, type PaidState } from './paid-policy.js';
 import type { ChainDb, SqlClient } from '@eko/db';
 import type { Provider } from './routes.js';
 export type UsageRow = { provider: Provider; method: string; calls: number; units: number };
 export type UsageBatch = UsageRow & { day: string; unleasedUnits: number };
 export interface UsageStore {
+  paidPolicy?(day: string, policy: PaidPolicy, consume: boolean): Promise<PaidState>;
   lease?(day: string, provider: Provider, units: number, minimum: number, limit: number): Promise<{ allowed: boolean; total: number; units: number }>;
   record?(rows: UsageBatch[]): Promise<void>;
   release?(day: string, provider: Provider, units: number): Promise<void>;
@@ -20,7 +22,9 @@ export interface RpcUsageDb { sql: SqlClient; tx<T>(fn: (tx: { sql: SqlClient })
 export function createSqlUsageStore(db: RpcUsageDb): UsageStore {
   let ready: Promise<unknown> | undefined;
   const init = () => ready ??= db.sql.query(rpcUsageSchema);
+  const policy = sqlPaidPolicy(db);
   return {
+    paidPolicy: async (...args) => { await init(); return policy(...args); },
     async lease(day, provider, units, minimum, limit) {
       await init();
       const acquire = async (amount: number) => {
@@ -87,6 +91,7 @@ export function persistentUsageStore(env: { DATABASE_URL?: string; RPC_USAGE_DIR
     return { db, store: createSqlUsageStore(db) };
   });
   return {
+    paidPolicy: async (...args) => (await get()).store.paidPolicy!(...args),
     reserve: async (...args) => (await get()).store.reserve(...args),
     lease: async (...args) => (await get()).store.lease!(...args),
     record: async rows => (await get()).store.record!(rows),

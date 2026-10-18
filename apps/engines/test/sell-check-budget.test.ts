@@ -35,6 +35,14 @@ async function fixture() {
 }
 
 describe('sell-check budget discipline', () => {
+  it('adds the shared ceiling above unchanged 0219 scheduling: listed first checks remain eligible',async()=>{
+    const {checker,scheduler,rpc}=await fixture();
+    checker.options.paidWorkAllowed=vi.fn(async work=>work==='first_rating' || work==='crash');
+    expect(await scheduler().tick()).toBe(4);expect(rpc.request).toHaveBeenCalledTimes(8);
+    expect(checker.options.paidWorkAllowed).toHaveBeenCalledWith('first_rating');
+    expect(checker.options.paidWorkAllowed).toHaveBeenCalledWith('routine');
+  });
+
   it('keeps unsupported readings for seven days across restarts, with a configurable cooldown and route/pool invalidation', async () => {
     const { db, record, due } = await fixture();
     await record(1, 'unsupported', now - 6 * day);
