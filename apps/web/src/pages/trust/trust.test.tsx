@@ -87,6 +87,15 @@ describe('Scoreboard and receipt UI', () => {
     expect(html).toContain('Private — only the owner can reveal this.');
     expect(html).toContain('salted commitment only'); expect(html).not.toContain('<pre');
   });
+  it('shows expired payloads and their summary without promising a later reveal', () => {
+    const summary={coin:`0x${'ab'.repeat(20)}`,receiptId:item.id,revisionId:item.id,recordedAt:'2026-10-01T00:00:00Z',
+      rulesVersion:'1.0.0',level:'clear',supersedes:null,reorgOf:null,window:{kind:'snapshot',blockNumber:1,blockHash:null}};
+    for(const receipt of [pending,anchor]) {
+      const html=renderReceipt({...receipt,payloadStatus:'expired',summary});
+      expect(html).toContain('Receipt payload expired');expect(html).toContain('Receipt summary');
+      expect(html).toContain(item.id);expect(html).not.toContain('Payload not revealed yet');
+    }
+  });
   it('renders JSON as inert text with no HTML, images, links or scripts', () => {
     const html = renderReceipt({ ...anchor, revealed: { '<img src=x onerror=alert(1)>': '</pre><script>sample</script>', url: 'javascript:alert(1)' }, canonicalPayload: '{}' });
     expect(html).toContain('&lt;script&gt;'); expect(html).toContain('&lt;img');

@@ -16,6 +16,10 @@ describe('chain retention settings', () => {
   it('defaults to report-only settlement, a seven-day cap, seven-day rating history and 48-hour receipt payloads',()=>{
     const c=loadConfig(base);expect(c.RETENTION_ENABLED).toBe(true);expect(loadConfig({...base,RETENTION_ENABLED:'false'}).RETENTION_ENABLED).toBe(false);expect([c.RETENTION_DRY_RUN,c.RETENTION_SETTLE_HOURS,c.RETENTION_RAW_DAYS,c.RETENTION_RATING_DAYS,c.RETENTION_RECEIPT_HOURS]).toEqual([true,24,7,7,48]);
     expect(loadConfig({...base,RETENTION_DRY_RUN:'false'}).RETENTION_DRY_RUN).toBe(false);
+    expect(c.RETENTION_RECEIPT_KEEP_CURRENT).toBe(false);
+    for(const value of ['true','1'])expect(loadConfig({...base,RETENTION_RECEIPT_KEEP_CURRENT:value}).RETENTION_RECEIPT_KEEP_CURRENT).toBe(true);
+    for(const value of ['false','0',''])expect(loadConfig({...base,RETENTION_RECEIPT_KEEP_CURRENT:value}).RETENTION_RECEIPT_KEEP_CURRENT).toBe(false);
+    expect(()=>loadConfig({...base,RETENTION_RECEIPT_KEEP_CURRENT:'invalid'})).toThrow('RETENTION_RECEIPT_KEEP_CURRENT');
     expect([c.RETENTION_SWAP_DAYS,c.RETENTION_TRANSFER_DAYS,c.FINGERPRINT_LOOKBACK_DAYS,c.FINGERPRINT_REFRESH_DAYS]).toEqual([7,3,3,3]);
     expect(loadConfig({...base,RETENTION_SWAP_DAYS:'10',RETENTION_TRANSFER_DAYS:'2',FINGERPRINT_LOOKBACK_DAYS:'6',FINGERPRINT_REFRESH_DAYS:'4'}).RETENTION_SWAP_DAYS).toBe(10);
     for(const key of ['RETENTION_TRANSFER_DAYS','FINGERPRINT_LOOKBACK_DAYS','FINGERPRINT_REFRESH_DAYS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
@@ -51,14 +55,14 @@ describe('chain retention settings', () => {
 });
 
 describe('retention worker', () => {
-  it('runs backlogged passes after a pause, then waits ten minutes and stops cleanly',async()=>{
+  it.each([false,true])('forwards keep-current=%s and runs backlogged passes, then waits ten minutes',async receiptKeepCurrent=>{
     vi.useFakeTimers();
     const result={quoteRows:0,idleTokens:0,idleRows:0,pendingRows:0,feedRows:0,dangerCoins:0,quietCoins:0,historyTransfers:0,historyLiquidity:0,historyPons:0,historySwaps:0,trendingSnapshots:0,skippedRules:[],finished:false};
     const run=vi.spyOn(retention,'runRetention').mockResolvedValueOnce(result).mockResolvedValue({...result,finished:true});
-    const worker=new RetentionWorker({} as ChainDb,{ratingDays:7,receiptHours:48,dryRun:false},vi.fn());
+    const worker=new RetentionWorker({} as ChainDb,{ratingDays:7,receiptHours:48,receiptKeepCurrent,dryRun:false},vi.fn());
     try {
       worker.start();await worker.tick();expect(run).toHaveBeenCalledTimes(1);
-      expect(run).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({ratingDays:7,receiptHours:48}));
+      expect(run).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({ratingDays:7,receiptHours:48,receiptKeepCurrent}));
       await vi.advanceTimersByTimeAsync(99);expect(run).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);expect(run).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(599999);expect(run).toHaveBeenCalledTimes(2);

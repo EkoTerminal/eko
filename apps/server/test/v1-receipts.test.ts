@@ -4,11 +4,13 @@ import type { Abi, Hex } from 'viem';
 import { canonicalize, createGuardReceiptCodec, GuardAssessmentV2Schema, GuardReceiptPayloadSchema,
   ReceiptLookupSchema, type ReceiptItem, type PublicReceiptPayload } from '@eko/shared';
 import { GuardReceiptStore, GuardSourceStore, GuardVerdictStore, ReceiptOutbox, guardManifestId,
-  publishPrivateReceipt, publishReceipt, runRetention, type ReceiptCommitAnchor, type ReceiptRegistryReader } from '@eko/db';
+  binary, publishPrivateReceipt, publishReceipt, runRetention, type ReceiptCommitAnchor, type ReceiptRegistryReader } from '@eko/db';
 import fixture from '../../../packages/shared/test/fixtures/receipts/guard-v2.json' with { type: 'json' };
 import registryAbi from '../../../packages/chain/abi/eko/ReceiptsRegistry.json' with { type: 'json' };
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import v1 from '../../../packages/shared/test/fixtures/contracts/v1.json' with { type: 'json' };
+import { SensesReadService } from '../src/read/senses.js';
 import { accounts } from '../src/db/schema.js';
 
 const codec = createGuardReceiptCodec({ concat, encodeAbiParameters, keccak256, stringToHex });
@@ -210,16 +212,30 @@ describe('081 receipt API: synthetic PGlite/logs and HTTP injection, no live evi
 
 
 describe('retained receipt proof without the old payload',()=>{
-  it('verifies the same live anchor/root after payload removal, without inventing a reveal',async()=>{
+  it('serves an expired current receipt with its summary, keeps the card and consumes the scoreboard',async()=>{
     const db=built.ctx.dbh.chain;
     const old:PublicReceiptPayload={...payload('retention-api-old'),kind:'verdict',decision:{level:'clear'},window:{kind:'snapshot',blockNumber:20,blockHash:codec.hash('retention-api-block')}};
     const next:PublicReceiptPayload={...old,receiptId:'retention-api-next',revisionId:'retention-api-next',supersedes:old.receiptId};
     await publishReceipt(db,'engines',old);await publishReceipt(db,'engines',next);
+    await publishReceipt(db,'engines',{...old,receiptId:'retention-api-pending',revisionId:'retention-api-pending'});
     const outbox=new ReceiptOutbox(db),items=[await outbox.enqueue(old.receiptId),await outbox.enqueue(next.receiptId)];
+    const card={...structuredClone(v1.CoinCard),identity:{...v1.CoinCard.identity,address:registry},
+      verdict:{...v1.CoinCard.verdict,coin:registry,receipt:{id:old.receiptId,hash:items[0]!.hash,status:'committed'}}};
+    await db.sql.query("INSERT INTO coin_cards VALUES('sample-retention-card',$1,20,'fixture',$2,'1.0.0')",[binary(registry),card]);
+    await db.sql.query("INSERT INTO coin_card_latest VALUES($1,'sample-retention-card',20,$2)",[binary(registry),card]);
+    const cardBefore=await built.ctx.reads.store.card(registry);
     await anchor(items,9001);const before=(await get(old.receiptId)).json();expect(before.status).toBe('anchored');expect(before.revealed).toEqual(old);
-    await runRetention(db,{quoteTokens:[],ratingDays:7,dryRun:false,pauseMs:0,now:()=>Date.parse('2026-11-01T00:00:00Z')});
+    await runRetention(db,{quoteTokens:[],ratingDays:7,receiptHours:48,dryRun:false,pauseMs:0,now:()=>Date.parse('2026-11-01T00:00:00Z')});
+    const pending=await get('retention-api-pending');expect(pending.statusCode).toBe(200);
+    expect(pending.json()).toMatchObject({status:'pending',payloadStatus:'expired',summary:{receiptId:'retention-api-pending',level:'clear'}});
     const after=(await get(old.receiptId)).json();expect(after.status).toBe('anchored');expect(after.revealed).toBeUndefined();expect(after.canonicalPayload).toBeUndefined();
-    const {revealed:_r,canonicalPayload:_c,...proof}=before;expect(after).toEqual(proof);
+    const {revealed:_r,canonicalPayload:_c,...proof}=before;
+    expect(after).toEqual({...proof,payloadStatus:'expired',summary:expect.objectContaining({coin:registry,receiptId:old.receiptId,level:'clear'})});
+    expect(await built.ctx.reads.store.card(registry)).toEqual(cardBefore);
+    const senses=new SensesReadService({} as never,built.ctx.receipts);
+    expect(await senses.receipt(old.receiptId)).toEqual(after);
+    const scoreboard=await built.ctx.reads.scoreboard.list('calls');
+    expect(scoreboard.rows).toEqual(expect.arrayContaining([expect.objectContaining({receiptId:old.receiptId,level:'clear',coin:registry})]));
     expect(codec.verifyReceiptProof(items[0]!,after.proof,after.merkleRoot)).toBe(true);
   });
 });

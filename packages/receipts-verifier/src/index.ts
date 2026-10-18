@@ -40,7 +40,9 @@ export async function verifyReceipt(raw: unknown, trustedRegistry: Address | nul
       return fail('The receipt identity, kind or hash does not match the leaf.');
   } catch { return fail('The payload cannot be canonicalized as JCS JSON.'); }
   steps.push({ status: commitmentOnly ? 'commitment' : 'passed', message: commitmentOnly
-    ? 'Commitment leaf matches. The unrevealed payload has not been checked.'
+    ? receipt.payloadStatus === 'expired'
+      ? 'Commitment leaf matches. The payload has expired; the summary is not checked by this proof.'
+      : 'Commitment leaf matches. The unrevealed payload has not been checked.'
     : 'JCS payload hash and receipt leaf match.' });
   if (!receiptVerifier.verifyReceiptProof(receipt, receipt.proof, receipt.merkleRoot))
     return fail('The sibling proof does not fold to the claimed Merkle root.');

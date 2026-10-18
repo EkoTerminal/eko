@@ -252,6 +252,11 @@ describe('launch Senses (synthetic read fixtures; no ports/providers)', () => {
     expect(result).toMatchObject({ hash: proof.hash, leaf: proof.leaf, merkleRoot: proof.merkleRoot, proof: proof.proof });
     expect(result).not.toHaveProperty('revealed'); expect(result).not.toHaveProperty('canonicalPayload');
     expect(proof.canonicalPayload).toBe('agents buy now');
+    const {revealed:_revealed,canonicalPayload:_canonical,...expired}=proof;
+    const summary={coin,receiptId:proof.id,revisionId:proof.id,recordedAt:'2026-10-01T00:00:00Z',
+      rulesVersion:'1.0.0',level:'clear' as const,supersedes:null,reorgOf:null,window:{kind:'snapshot' as const,blockNumber:1,blockHash:null}};
+    f.receipts.get.mockResolvedValue({...expired,payloadStatus:'expired',summary});
+    expect(await f.invoke('receipts_lookup',{id:proof.id})).toEqual({...expired,payloadStatus:'expired',summary});
     f.receipts.get.mockResolvedValue({ ...receiptSamples.ReceiptLookup, kind: 'harness_private' });
     expect(await f.invoke('receipts_lookup', { id: proof.id })).not.toHaveProperty('revealed');
   });

@@ -3,7 +3,7 @@ import { runRetention, type ChainDb, type RetentionResult } from '@eko/db';
 import { RETENTION_RULE_INPUTS } from '@eko/engines';
 import { loadRegistry } from '@eko/chain';
 
-export interface RetentionSettings { enabled?: boolean; settleHours?: number; rawDays?: number; swapDays?: number; transferDays?: number; ratingDays?: number; receiptHours?: number; dryRun?: boolean; quoteDays?: number; idleTokenDays?: number; pendingPoolDays?: number; feedDays?: number; dangerQuietDays?: number; quietCoinDays?: number }
+export interface RetentionSettings { enabled?: boolean; settleHours?: number; rawDays?: number; swapDays?: number; transferDays?: number; ratingDays?: number; receiptHours?: number; receiptKeepCurrent?: boolean; dryRun?: boolean; quoteDays?: number; idleTokenDays?: number; pendingPoolDays?: number; feedDays?: number; dangerQuietDays?: number; quietCoinDays?: number }
 
 /**
  * Run the configured retention (packages/db/src/retention.ts) on the singleton worker while backlogged, otherwise every ten minutes, each enabled

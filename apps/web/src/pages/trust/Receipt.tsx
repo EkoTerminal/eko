@@ -31,7 +31,9 @@ export function ReceiptContents({ receipt, result, checking = false, onVerify, r
       })}</ol>
     </div>}
     <h2>What it commits</h2>
-    {receipt.kind === 'harness_private' ? <p>Private — only the owner can reveal this. Verification checks the salted commitment only.</p>
+    {receipt.payloadStatus === 'expired' ? <><p>Receipt payload expired. The summary remains available; verification checks the commitment only.</p>
+      {receipt.summary && <pre className="receipt-json" tabIndex={0} role="region" aria-label="Receipt summary">{JSON.stringify(receipt.summary, null, 2)}</pre>}</>
+      : receipt.kind === 'harness_private' ? <p>Private — only the owner can reveal this. Verification checks the salted commitment only.</p>
       : anchored && receipt.revealed !== undefined ? <pre className="receipt-json" tabIndex={0} role="region" aria-label="Committed receipt contents">{JSON.stringify(receipt.revealed, null, 2)}</pre>
         : <p>Payload not revealed yet. Only the commitment can be checked after anchoring.</p>}
   </div></section>;

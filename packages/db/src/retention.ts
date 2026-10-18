@@ -27,6 +27,8 @@ export interface RetentionOptions {
   ratingDays?: number;
   /** Verdict payload window; defaults to the rating window for compatibility callers. */
   receiptHours?: number;
+  /** Opt in to keeping the current card receipt payload beyond the window. Default false. */
+  receiptKeepCurrent?: boolean;
   /** Worker runs partition maintenance at start and hourly; other rules retain their cadence. */
   rawPartitions?: boolean;
   /** Compatibility rawDays callers retain their other transfer rules. */

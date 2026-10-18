@@ -25,7 +25,12 @@ export type PublicReceiptPayload = z.infer<typeof PublicReceiptPayloadSchema>;
 // original required anchor fields remain unchanged for existing consumers.
 // TODO(spec): CA-16's Receipt requires anchor fields even while pending. Use
 // this additive discriminated lookup shape rather than zero/empty anchors.
+// Owner retention policy: summaries describe expired payloads; they are not canonical bytes.
+export const ReceiptSummarySchema = z.strictObject(PublicReceiptPayloadSchema.shape).pick({ coin: true, supersedes: true, reorgOf: true,
+  recordedAt: true, rulesVersion: true, revisionId: true, receiptId: true, window: true,
+}).extend({ level: z.enum(['clear', 'monitor', 'danger', 'pending']).nullable() });
 const lookup = {
+  payloadStatus: z.literal('expired').optional(), summary: ReceiptSummarySchema.optional(),
   id: z.string().min(1), kind: z.enum(['verdict', 'forecast', 'harness_private']),
   hash: Bytes32Schema, leaf: Bytes32Schema, canonicalization: z.literal('jcs-rfc8785/v1'),
 };
@@ -38,6 +43,8 @@ export const ReceiptLookupSchema = z.discriminatedUnion('status', [
     revealed: z.json().optional(), canonicalPayload: z.string().optional(),
   }),
 ]).superRefine((p, ctx) => {
+  if (p.payloadStatus === 'expired' && (p.kind !== 'verdict' || (p.status === 'anchored' && p.revealed !== undefined)))
+    ctx.addIssue({ code: 'custom', message: 'Invalid expired payload' });
   if (p.status === 'anchored' && ((p.revealed === undefined) !== (p.canonicalPayload === undefined)
     || (p.kind === 'harness_private' && p.revealed !== undefined)))
     ctx.addIssue({ code: 'custom', message: 'Invalid receipt reveal' });

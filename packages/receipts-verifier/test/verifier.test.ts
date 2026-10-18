@@ -96,6 +96,15 @@ describe('browser verifier', () => {
     const { revealed: _, canonicalPayload: _bytes, ...anchor } = receipt.status === 'anchored' ? receipt : (() => { throw new Error('fixture'); })();
     expect((await verifyReceipt(anchor, registry, reader)).status).toBe('commitment');
   });
+  it('checks expired public commitments without treating the summary as a verified payload', async () => {
+    const {receipt,reader}=setup();
+    const {revealed:_,canonicalPayload:_bytes,...anchor}=receipt;
+    const result=await verifyReceipt({...anchor,payloadStatus:'expired'},registry,reader);
+    expect(result.status).toBe('commitment');
+    expect(result.steps.map(s=>s.status)).toEqual(['commitment','passed','passed']);
+    expect(result.steps[0].message).toContain('payload has expired');
+    expect((await verifyReceipt({...receipt,payloadStatus:'expired'},registry,reader)).status).toBe('failed');
+  });
   it('does no reads for pending receipts and fails closed without a pin or RPC', async () => {
     const { receipt, reader } = setup();
     const pending = { id: receipt.id, kind: receipt.kind, hash: receipt.hash, leaf: receipt.leaf, canonicalization: receipt.canonicalization, status: 'pending' };

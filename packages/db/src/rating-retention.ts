@@ -53,7 +53,8 @@ export function ratingSelections() {
   return selections;
 }
 export const receiptSelection = `SELECT p.* FROM receipt_publications p WHERE p.recorded_at<$1 AND p.data IS NOT NULL AND p.kind='verdict'
-  AND p.producer='engines' AND p.chain_id=4663
+  AND p.producer='engines' AND p.chain_id=4663`;
+const currentReceiptExclusion = `
   AND NOT EXISTS(SELECT 1 FROM coin_card_latest c WHERE c.coin=decode(substring(p.data->>'coin' FROM 3),'hex') AND c.data->'verdict'->'receipt'->>'id'=p.id)`;
 
 /** Fetch a bounded key window before testing eligibility, even if none of its rows can be removed. */
@@ -76,7 +77,7 @@ export async function ratingRetention(db: ChainDb, options: RetentionOptions, re
   const cutoff = new Date(nowMs-(options.ratingDays ?? 7)*86400000);
   result.ratingRows = Object.fromEntries(['receipt_publications','receipt_items',...ratingSelections().map(r=>r.table)].map(t=>[t,0]));
   const receiptCutoff = options.receiptHours === undefined ? cutoff : new Date(nowMs-options.receiptHours*3600000);
-  await runRule('receipt_publications', (timeLeft,limit) => receiptRetention(db,options,result,receiptCutoff,limit,timeLeft,cursors));
+  await runRule('receipt_publications', (timeLeft,limit) => receiptRetention(db,options,result,receiptCutoff,limit,timeLeft,cursors,nowMs));
   for (const rule of ratingSelections()) await runRule(rule.table, async (timeLeft,limit) => {
     if (options.dryRun) {
       addReport(result,await reportRows(db,rule.table,'',[]));
@@ -129,12 +130,20 @@ export async function ratingRetention(db: ChainDb, options: RetentionOptions, re
     }
   });
 }
-async function receiptRetention(db:ChainDb,options:RetentionOptions,result:RetentionResult,cutoff:Date,limit:number,timeLeft:()=>boolean,cursors:Map<string,unknown[]>) {
+async function receiptRetention(db:ChainDb,options:RetentionOptions,result:RetentionResult,cutoff:Date,limit:number,timeLeft:()=>boolean,cursors:Map<string,unknown[]>,nowMs:number) {
   if(options.dryRun) {
     for(const table of ['receipt_publications','receipt_items'])addReport(result,await reportRows(db,table,'',[]));
     return;
   }
   addReport(result,{table:'receipt_publications',rows:0,estimatedBytes:0,examined:0,eligible:0});
+  // The optional third cursor value holds a completed, ineligible walk for one hour.
+  const cursor=cursors.get('receipt_publications');
+  if(cursor?.[2] !== undefined) {
+    if(options.receiptKeepCurrent && nowMs<Number(cursor[2]))return;
+    cursors.delete('receipt_publications');
+  }
+  const selection=receiptSelection+(options.receiptKeepCurrent ? currentReceiptExclusion : '');
+  let eligibleThisPass=0;
   while(timeLeft()) {
     const after=cursors.get('receipt_publications');
     // 2026-10-17: large TOAST payloads must be validated without holding publication row locks.
@@ -142,10 +151,16 @@ async function receiptRetention(db:ChainDb,options:RetentionOptions,result:Reten
       WHERE recorded_at<$1 AND data IS NOT NULL AND kind='verdict' AND producer='engines' AND chain_id=4663
       ${after ? 'AND (recorded_at,id)>($2::timestamptz,$3::text)' : ''}
       ORDER BY recorded_at,id LIMIT ${limit}`,[cutoff,...(after ?? [])])).rows;
-    if(!window.length) {cursors.delete('receipt_publications');break;}
+    if(!window.length) {
+      if(options.receiptKeepCurrent && after && eligibleThisPass===0)
+        cursors.set('receipt_publications',[...after.slice(0,2),(options.now ?? Date.now)()+3_600_000]);
+      else cursors.delete('receipt_publications');
+      break;
+    }
     const next=[window.at(-1)!.recorded_at,window.at(-1)!.id];
     addReport(result,{table:'receipt_publications',rows:0,estimatedBytes:0,examined:window.length});
-    const eligible=(await db.sql.query<{id:string}>(`${receiptSelection.replace('SELECT p.*','SELECT p.id')} AND p.id=ANY($2::text[])`,[cutoff,window.map(r=>r.id)])).rows;
+    const eligible=(await db.sql.query<{id:string}>(`${selection.replace('SELECT p.*','SELECT p.id')} AND p.id=ANY($2::text[])`,[cutoff,window.map(r=>r.id)])).rows;
+    eligibleThisPass+=eligible.length;
     addReport(result,{table:'receipt_publications',rows:0,estimatedBytes:0,eligible:eligible.length});
     if(!eligible.length) {cursors.set('receipt_publications',next);continue;}
     // Fetch large payloads only for eligible IDs; a concurrent stripper may already have cleared them.
@@ -153,7 +168,7 @@ async function receiptRetention(db:ChainDb,options:RetentionOptions,result:Reten
     for(const row of candidates)validateReceiptPublication(row);
     const n=await retentionBatch(db,async tx=>{
       // Payloads are append-only. Recheck eligibility under lock after validation; another stripper may have won.
-      const rows=(await tx.sql.query<{id:string}>(`${receiptSelection.replace('SELECT p.*','SELECT p.id')} AND p.id=ANY($2::text[]) FOR UPDATE OF p SKIP LOCKED`,[cutoff,candidates.map(r=>r.id)])).rows;
+      const rows=(await tx.sql.query<{id:string}>(`${selection.replace('SELECT p.*','SELECT p.id')} AND p.id=ANY($2::text[]) FOR UPDATE OF p SKIP LOCKED`,[cutoff,candidates.map(r=>r.id)])).rows;
       if(!rows.length)return {publications:0,items:0,after:next};
       const ids=rows.map(r=>r.id);
       await tx.sql.query(`UPDATE receipt_publications SET summary=jsonb_build_object('coin',data->'coin','supersedes',data->'supersedes','reorgOf',data->'reorgOf',

@@ -1,7 +1,7 @@
 import { concat, decodeEventLog, encodeAbiParameters, keccak256, stringToHex } from 'viem';
 import type { Abi, Address, Hex } from 'viem';
 import { canonicalize, createGuardReceiptCodec, GuardReceiptPayloadSchema, PublicReceiptPayloadSchema,
-  ReceiptItemSchema, ReceiptLookupSchema, VerdictSchema } from '@eko/shared';
+  ReceiptItemSchema, ReceiptLookupSchema, ReceiptSummarySchema, VerdictSchema } from '@eko/shared';
 import type { ReceiptLookup } from '@eko/shared';
 import registryAbi from '../../chain/abi/eko/ReceiptsRegistry.json' with { type: 'json' };
 import type { ChainDb } from './client.js';
@@ -93,7 +93,9 @@ export class ReceiptApiStore {
         }
       }
     }
-    const base = { ...item, leaf, canonicalization: 'jcs-rfc8785/v1' as const };
+    const summary=archived ? (await this.db.sql.query<{summary:unknown}>('SELECT summary FROM receipt_publications WHERE id=$1',[id])).rows[0]?.summary : undefined;
+    const base = { ...item, leaf, canonicalization: 'jcs-rfc8785/v1' as const,
+      ...(archived ? { payloadStatus:'expired' as const, ...(summary ? {summary:ReceiptSummarySchema.parse(summary)} : {}) } : {}) };
     const anchor = (await this.db.sql.query<AnchorRow>(`SELECT a.data,i.proof,b.root,b.leaf_count,a.tx_hash,t.registry,t.committer
       FROM receipt_batch_items i JOIN receipt_batches b ON b.id=i.batch_id
       JOIN receipt_commit_anchors a ON a.batch_id=b.id JOIN receipt_commit_attempts t ON t.tx_hash=a.tx_hash AND t.batch_id=b.id

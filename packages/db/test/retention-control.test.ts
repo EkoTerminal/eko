@@ -132,7 +132,7 @@ describe('bounded retention control', () => {
     expect(selection).toContain('(x.run_id,x.block)>=' );expect(selection).toContain('(x.run_id,x.block)<=' );
     expect(selection).toContain('r.id=x.run_id');expect(selection).toContain('FOR UPDATE OF x SKIP LOCKED');
   });
-  it('reports committed rating rows and uses a per-coin receipt probe',async()=>{
+  it.each([false,true])('reports committed rating rows with keep-current=%s',async receiptKeepCurrent=>{
     let windows=0;
     const {db,statements}=fixture(sql=>{
       if(sql.startsWith('SELECT id FROM guard_shadow_runs') && windows++===0)return [{id:'sample-shadow'}];
@@ -147,14 +147,14 @@ describe('bounded retention control', () => {
     let clock=0;
     const query=db.sql.query.bind(db.sql);
     db.sql.query=(async (sql:string,params?:unknown[])=>{const r=await query(sql,params);if(sql.startsWith('SELECT p.id FROM receipt_publications'))clock+=6;return r;}) as typeof db.sql.query;
-    const result=await runRetention(db,{...options,budgetMs:5,now:()=>clock});
+    const result=await runRetention(db,{...options,receiptKeepCurrent,budgetMs:5,now:()=>clock});
     expect(result.ratingRows?.guard_shadow_runs).toBe(1);
     expect(result.tables).toContainEqual({table:'guard_shadow_runs',rows:1,estimatedBytes:0});
     expect(result.ruleStats?.receipt_publications).toMatchObject({examined:1,eligible:0});
     expect(statements.some(s=>s.sql.startsWith('SELECT p.* FROM receipt_publications'))).toBe(false);
     const receipt=statements.find(s=>s.sql.startsWith('SELECT p.id FROM receipt_publications'))!.sql;
-    expect(receipt).toContain('NOT EXISTS(SELECT 1 FROM coin_card_latest');
-    expect(receipt).toContain("c.data->'verdict'->'receipt'->>'id'=p.id");
+    expect(receipt.includes('NOT EXISTS(SELECT 1 FROM coin_card_latest')).toBe(receiptKeepCurrent);
+    expect(receipt.includes("c.data->'verdict'->'receipt'->>'id'=p.id")).toBe(receiptKeepCurrent);
     expect(receipt).not.toContain('publication_sequence');
     expect(receipt).not.toContain('DISTINCT');
   });
