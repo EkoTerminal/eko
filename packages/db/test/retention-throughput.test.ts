@@ -77,11 +77,11 @@ describe('retention batch plans and throughput',()=>{
     }finally{await db.close();}
   });
   it.each([
-    {hours:47,current:false,receiptKeepCurrent:false,stripped:false},
-    {hours:49,current:false,receiptKeepCurrent:false,stripped:true},
-    {hours:47,current:true,receiptKeepCurrent:false,stripped:false},
-    {hours:49,current:true,receiptKeepCurrent:false,stripped:true},
-    {hours:49,current:true,receiptKeepCurrent:true,stripped:false},
+    {hours:23,current:false,receiptKeepCurrent:false,stripped:false},
+    {hours:25,current:false,receiptKeepCurrent:false,stripped:true},
+    {hours:23,current:true,receiptKeepCurrent:false,stripped:false},
+    {hours:25,current:true,receiptKeepCurrent:false,stripped:true},
+    {hours:25,current:true,receiptKeepCurrent:true,stripped:false},
   ])(
     'at $hours hours with current card receipt=$current, keep current=$receiptKeepCurrent, stripped=$stripped',async({hours,current,receiptKeepCurrent,stripped})=>{
       const db=await openDb({pgliteDir:':memory:'});
@@ -94,14 +94,14 @@ describe('retention batch plans and throughput',()=>{
           await db.sql.query("INSERT INTO coin_cards VALUES('sample-card',$1,1,'fixture','{}','1.0.0')",[binary(coin)]);
           await db.sql.query("INSERT INTO coin_card_latest VALUES($1,'sample-card',1,$2)",[binary(coin),{verdict:{receipt:{id:row.id}}}]);
         }
-        const result=await runRetention(db,{quoteTokens:[],ratingDays:7,receiptHours:48,receiptKeepCurrent,dryRun:false,pauseMs:0,now:()=>now});
+        const result=await runRetention(db,{quoteTokens:[],ratingDays:7,receiptHours:24,receiptKeepCurrent,dryRun:false,pauseMs:0,now:()=>now});
         expect(result.ratingRows?.receipt_publications).toBe(stripped ? 1 : 0);
         expect(result.ratingRows?.receipt_items).toBe(stripped ? 1 : 0);
         for(const table of ['receipt_publications','receipt_items']) {
           const stored=(await db.sql.query(`SELECT data,canonical_payload FROM ${table} WHERE id=$1`,[row.id])).rows;
           expect(stored).toEqual([{data:stripped ? null : row.data,canonical_payload:stripped ? null : row.canonical_payload}]);
         }
-        expect(result.ruleStats?.receipt_publications).toMatchObject({examined:hours<48 ? 0 : 1,eligible:stripped ? 1 : 0});
+        expect(result.ruleStats?.receipt_publications).toMatchObject({examined:hours<24 ? 0 : 1,eligible:stripped ? 1 : 0});
         if(stripped)expect((await db.sql.query('SELECT summary FROM receipt_publications WHERE id=$1',[row.id])).rows).toEqual([
           {summary:expect.objectContaining({coin,receiptId:row.id,recordedAt:row.data.recordedAt,level:'clear'})}]);
       }finally{await db.close();}
@@ -119,7 +119,7 @@ describe('retention batch plans and throughput',()=>{
         return sql.query<T>(text,params);
       }});
       const traced=new ChainDb(wrap(db.sql),work=>db.tx(tx=>work(wrap(tx.sql))));
-      const options={quoteTokens:[],ratingDays:7,receiptHours:48,receiptKeepCurrent:true,dryRun:false,pauseMs:0,now:()=>clock};
+      const options={quoteTokens:[],ratingDays:7,receiptHours:24,receiptKeepCurrent:true,dryRun:false,pauseMs:0,now:()=>clock};
       expect((await runRetention(traced,options)).ruleStats?.receipt_publications).toMatchObject({examined:1,eligible:0});
       expect(windowReads).toBe(2);
       expect(retentionCursors(traced).get('receipt_publications')).toEqual([old,'sample-held',now+3_600_000]);

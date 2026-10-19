@@ -164,6 +164,11 @@ async function sealTransfers(db: ChainDb) {
     opening_holdings=coalesce(coin_lifetime.opening_holdings,excluded.opening_holdings),graduation_holdings=coalesce(coin_lifetime.graduation_holdings,excluded.graduation_holdings),revision=coin_lifetime.revision+1`);
 }
 async function sealSwaps(db: ChainDb, seal: RawSeal, options: RawSealOptions) {
+  // Preserve only the watcher fields that cannot be reconstructed from coin aggregates.
+  // Publication is atomic with the existing day/coin checkpoint and its live-source fence.
+  await db.sql.query(`INSERT INTO watcher_swap_evidence(ts,tx_hash,log_index,block,coin,pool_id,trader,side,usd,priced_block,senders_pending,pricing_pending,tx_to,quote_asset,amount_quote)
+    SELECT ts,tx_hash,log_index,block,coin,pool_id,trader,side,usd,priced_block,senders_pending,pricing_pending,tx_to,quote_asset,amount_quote FROM raw_seal_rows WHERE ts>=$1::timestamptz
+    ON CONFLICT DO NOTHING`,[new Date(Math.floor(+(options.now ?? new Date())/86400000)*86400000-7*86400000)]);
   await db.sql.query(`ALTER TABLE raw_seal_coins ADD COLUMN identity jsonb`);
   await db.sql.query(`UPDATE raw_seal_coins c SET identity=jsonb_build_object('deployer',coalesce('0x'||encode(c.deployer,'hex'),''),'firstBlock',coalesce(c.first_block,0),
     'createdSec',coalesce(extract(epoch FROM c.created),0),'firstBlocks',$1::integer,'cohortSec',$2::integer,'pools',coalesce((SELECT jsonb_agg('0x'||encode(p.id,'hex')) FROM pools p WHERE p.currency0=c.coin OR p.currency1=c.coin),'[]')||$3::jsonb)`,[options.firstBlocks ?? 35,options.cohortSec ?? 60,JSON.stringify(options.poolManager?[options.poolManager.toLowerCase()]:[])]);
@@ -218,7 +223,7 @@ async function sealSwaps(db: ChainDb, seal: RawSeal, options: RawSealOptions) {
 /** The original reducer avoids repeatedly copying growing JSONB state on every event. */
 async function foldLifetimeBatch(db:ChainDb,seal:RawSeal,options:RawSealOptions) {
   const coins=(await db.sql.query<{coin:Uint8Array;data:Lifetime;identity:Omit<LifetimeIdentity,'pools'>&{pools:string[]}}>('SELECT coin,data,identity FROM raw_seal_coins ORDER BY coin')).rows;
-  const checkpointBefore=options.checkpointBefore ?? options.tsBefore ?? new Date(+(options.now ?? new Date())-Number(process.env.RETENTION_SWAP_DAYS ?? 7)*86400000);
+  const checkpointBefore=options.checkpointBefore ?? options.tsBefore ?? new Date(+(options.now ?? new Date())-Number(process.env.RETENTION_SWAP_DAYS ?? 1)*86400000);
   const summaries:unknown[]=[];
   const checkpoints:unknown[]=[];
   for(const coin of coins) {
@@ -287,5 +292,6 @@ async function sealGradePrices(db: ChainDb, seal: RawSeal, now: Date) {
       AND v.data->>'level' IN('clear','monitor','danger') AND EXISTS(SELECT 1 FROM engine_block_times b WHERE b.number=v.valid_from_block AND b.ts>=c.since) ORDER BY valid_from_block LIMIT 1
     )f JOIN verdicts v ON v.coin=t.coin AND v.valid_from_block=f.valid_from_block JOIN engine_block_times b ON b.number=v.valid_from_block LEFT JOIN receipt_publications p ON p.id=v.id
     WHERE v.data->>'level' IN('clear','monitor','danger') ORDER BY p.publication_sequence ASC NULLS FIRST,v.id LIMIT 1)g
-    WHERE g.ts+h.sec*interval '1 second'<$3 AND g.ts<$2::timestamptz+interval '1 hour' ON CONFLICT DO NOTHING`,[GRADE_CUTS,seal.end_ts,now]);
+    WHERE g.ts<$3 AND g.ts<$2::timestamptz+interval '1 hour' ON CONFLICT(coin,since,horizon_sec) DO UPDATE SET
+      p0=coalesce(retention_grade_prices.p0,excluded.p0),p1=coalesce(excluded.p1,retention_grade_prices.p1),hi=greatest(retention_grade_prices.hi,excluded.hi)`,[GRADE_CUTS,seal.end_ts,now]);
 }

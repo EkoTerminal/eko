@@ -103,8 +103,8 @@ export class ChainDb {
   async ensurePartitions(date: Date, options: { daysAhead?: number; now?: Date } = {}) {
     const daysAhead = options.daysAhead ?? Number(process.env.DAYS_AHEAD ?? 3);
     if (!Number.isInteger(daysAhead) || daysAhead < 0 || daysAhead > 366 || !Number.isFinite(date.getTime())) throw new Error('Invalid partition date or DAYS_AHEAD');
-    const swapDays=Number(process.env.RETENTION_SWAP_DAYS ?? 7),transferDays=Number(process.env.RETENTION_TRANSFER_DAYS ?? 3);
-    if(!Number.isInteger(swapDays) || swapDays<7 || swapDays>365 || !Number.isInteger(transferDays) || transferDays<1 || transferDays>365)throw new Error('Invalid raw partition window');
+    const swapDays=Number(process.env.RETENTION_SWAP_DAYS ?? 1),transferDays=Number(process.env.RETENTION_TRANSFER_DAYS ?? 1);
+    if(!Number.isInteger(swapDays) || swapDays<1 || swapDays>365 || !Number.isInteger(transferDays) || transferDays<1 || transferDays>365)throw new Error('Invalid raw partition window');
     const today = (options.now ?? new Date()).toISOString().slice(0,10);
     const midnight = Date.parse(`${today}T00:00:00Z`), last = midnight + daysAhead*86400000;
     const month = date.toISOString().slice(0,7), cacheKey = `${today}:${daysAhead}:${swapDays}:${transferDays}:${month}`;
@@ -176,7 +176,7 @@ export async function openDb(options: { databaseUrl?: string; pgliteDir?: string
   } catch (error) { await release(); throw error; }
 }
 export async function migrate(db: ChainDb) {
-  const migrations = await Promise.all(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources', '0181_transfer_baselines', '0184_sparse_parent_links', '0187_drop_holder_transfer_indexes', '0188_block_and_pool_lookups', '0190_chain_block_time_index', '0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history', '0211_bounded_raw_seals', '0222_rpc_read_cache'].map(async id => ({ id, sql: await readFile(new URL(`${import.meta.url.includes('/dist/') ? './chain-drizzle/' : '../drizzle/'}${id}.sql`, import.meta.url), 'utf8') })));
+  const migrations = await Promise.all(['0101_chain', '0102_market', '0103_range_errors', '0110_rpc_usage', '0111_pending_senders', '0112_pending_pricing', '0115_guard_sources', '0117_pons_progress', '0136_wallet_protocol', '0150_agent_registry', '0180_eth_usd_reference_sources', '0181_transfer_baselines', '0184_sparse_parent_links', '0187_drop_holder_transfer_indexes', '0188_block_and_pool_lookups', '0190_chain_block_time_index', '0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history', '0211_bounded_raw_seals', '0222_rpc_read_cache', '0224_watcher_evidence'].map(async id => ({ id, sql: await readFile(new URL(`${import.meta.url.includes('/dist/') ? './chain-drizzle/' : '../drizzle/'}${id}.sql`, import.meta.url), 'utf8') })));
   await db.sql.query('CREATE TABLE IF NOT EXISTS eko_indexer_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
   await db.tx(async tx => {
     await tx.sql.query("SET LOCAL lock_timeout='5s'");

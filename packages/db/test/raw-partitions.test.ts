@@ -18,7 +18,7 @@ it('creates UTC daily bounds with configurable lookahead, caches repeated calls 
  db=await openDb({pgliteDir:':memory:'});await migrate(db);
  const date=new Date('2027-01-30T23:59:59Z');await db.ensurePartitions(date,{daysAhead:2,now:date});
  const leaves=async()=>(await db.sql.query<{name:string;bound:string}>(`SELECT c.relname AS name,pg_get_expr(c.relpartbound,c.oid) AS bound FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid WHERE i.inhparent='swaps'::regclass AND c.relname LIKE 'swaps_d2027_%' ORDER BY name`)).rows;
- expect((await leaves()).map(r=>r.name)).toEqual(Array.from({length:10},(_,i)=>`swaps_d${new Date(Date.parse('2027-01-23')+i*86400000).toISOString().slice(0,10).replaceAll('-','_')}`));
+ expect((await leaves()).map(r=>r.name)).toEqual(Array.from({length:4},(_,i)=>`swaps_d${new Date(Date.parse('2027-01-29')+i*86400000).toISOString().slice(0,10).replaceAll('-','_')}`));
  for(const leaf of await leaves()){
   const bounds=[...leaf.bound.matchAll(/'([^']+)'/g)].map(m=>new Date(m[1]!).toISOString());
   expect(bounds[0]).toBe(`${leaf.name.slice(7).replaceAll('_','-')}T00:00:00.000Z`);expect(Date.parse(bounds[1]!)-Date.parse(bounds[0]!)).toBe(86400000);
@@ -76,10 +76,10 @@ it('never provisions before data starts, including with empty older leaves, or o
  }
  const names=async(table:string)=>(await db.sql.query<{name:string}>(`SELECT c.relname AS name FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid WHERE i.inhparent=$1::regclass AND c.relname LIKE '%_d%' ORDER BY c.relname`,[table])).rows.map(r=>r.name);
  await db.ensurePartitions(new Date('2026-10-07'),{now:new Date('2026-10-07'),daysAhead:3});
- expect(await names('swaps')).toEqual(Array.from({length:10},(_,i)=>`swaps_d2026_10_${String(i+1).padStart(2,'0')}`));
- expect(await names('token_transfers')).toEqual([1,4,5,6,7,8,9,10].map(i=>`token_transfers_d2026_10_${String(i).padStart(2,'0')}`));
+ expect(await names('swaps')).toEqual([1,6,7,8,9,10].map(i=>`swaps_d2026_10_${String(i).padStart(2,'0')}`));
+ expect(await names('token_transfers')).toEqual([1,6,7,8,9,10].map(i=>`token_transfers_d2026_10_${String(i).padStart(2,'0')}`));
  await db.ensurePartitions(new Date('2026-09-07'),{now:new Date('2026-10-20'),daysAhead:1});
- expect((await names('swaps')).filter(n=>!Array.from({length:10},(_,i)=>`swaps_d2026_10_${String(i+1).padStart(2,'0')}`).includes(n))).toEqual(Array.from({length:9},(_,i)=>`swaps_d2026_10_${i+13}`));
+ expect((await names('swaps')).filter(n=>![1,6,7,8,9,10].map(i=>`swaps_d2026_10_${String(i).padStart(2,'0')}`).includes(n))).toEqual([19,20,21].map(i=>`swaps_d2026_10_${i}`));
 
 });
 

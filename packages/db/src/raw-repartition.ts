@@ -2,8 +2,8 @@ import type { ChainDb } from './client.js';
 import { sealRawPartition, rawSealStatementMs, type RawTable, type RawSealOptions } from './raw-partitions.js';
 
 /** Operator-only; the persisted range fence fixes the cutoff across retries and midnight. */
-export async function sealOctober(db: ChainDb, asOf: Date, swapDays=7, transferDays=3,inputs:Pick<RawSealOptions,'firstBlocks'|'cohortSec'|'poolManager'|'onProgress'>={}) {
-  if (!Number.isFinite(+asOf) || swapDays<7 || transferDays<1)throw new Error('Invalid maintenance window');
+export async function sealOctober(db: ChainDb, asOf: Date, swapDays=1, transferDays=1,inputs:Pick<RawSealOptions,'firstBlocks'|'cohortSec'|'poolManager'|'onProgress'>={}) {
+  if (!Number.isFinite(+asOf) || swapDays<1 || transferDays<1)throw new Error('Invalid maintenance window');
   for(const [table,days] of [['swaps',swapDays],['token_transfers',transferDays]] as const) {
     const prior=await db.tx(async tx=>{
       await tx.sql.query(`SET LOCAL statement_timeout='${rawSealStatementMs()}ms'`);

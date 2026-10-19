@@ -24,7 +24,7 @@ describe('settled indexed API reads',()=>{
     const money=async()=>Promise.all([readCurveStates(db,[coin]),readPoolLiquidity(db,[coin]),readPoolMoney(db,[coin],now)]);
     const grades=await built.ctx.reads.grades.read();
     const before=await read(),values=await money(),usage=JSON.stringify(built.ctx.chains.meter.usage());
-    const result=await runRetention(db,{quoteTokens:[],swapDays:7,transferDays:3,dryRun:false,pauseMs:0,now:()=>now});
+    const result=await runRetention(db,{quoteTokens:[],swapDays:1,transferDays:1,dryRun:false,pauseMs:0,now:()=>now});
     expect(result.historyTransfers+result.historySwaps+result.historyPons).toBeGreaterThan(0);
     expect(await read()).toEqual(before);expect(await built.ctx.reads.grades.read()).toEqual(grades);expect(await money()).toEqual(values);
     const scan=(await built.app.inject(`/v1/scan?q=${coin}`)).json();expect(scan.status).toBe('ready');const {delayedSec:_transport,...storedCard}=before[0];expect(scan.card).toEqual(storedCard);

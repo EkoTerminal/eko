@@ -463,7 +463,8 @@ describe('logs-first head', () => {
 
   it('upgrades existing nullable prices to pending pricing without changing known prices and migrates idempotently',async()=>{
     const {db}=await deferredToken();
-    // This later view did not exist in the pre-0112 schema being simulated.
+    // These later views did not exist in the pre-0112 schema being simulated.
+    await db.sql.query('DROP VIEW watcher_read_swaps');
     await db.sql.query('DROP VIEW raw_history_live_swaps');
     await db.sql.query('ALTER TABLE swaps DROP COLUMN pricing_pending');
     await db.sql.query("DELETE FROM eko_indexer_migrations WHERE id='0112_pending_pricing'");

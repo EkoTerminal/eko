@@ -81,7 +81,7 @@ it('rolls back normally inside the raw window and rejects reorgs across compacte
 });
 it('validates raw horizons and leaves report-only history untouched',async()=>{
   await fixture();const before=await rows('SELECT count(*)::int AS n FROM swaps');
-  await expect(runRetention(db,{quoteTokens:[],swapDays:6})).rejects.toThrow('seven swap days');
+  await expect(runRetention(db,{quoteTokens:[],swapDays:0})).rejects.toThrow('one swap day');
   await expect(runRetention(db,{quoteTokens:[],transferDays:0})).rejects.toThrow('transfer day');
   const r=await runRetention(db,{quoteTokens:[],swapDays:7,transferDays:3,now});
   expect(r.dryRun).toBe(true);expect(await rows('SELECT count(*)::int AS n FROM swaps')).toEqual(before);

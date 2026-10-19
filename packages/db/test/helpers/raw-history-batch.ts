@@ -13,8 +13,8 @@ export interface RawHistoryBatch { rule: 'raw_swaps'|'raw_transfers'; rows: numb
 export interface RawHistoryControl { pauseEveryBatch?:boolean; onBatch?: (batch: RawHistoryBatch) => Promise<void> }
 /** All identities, including quotes, pending and unrated coins. The oldest block is drained before advancing. */
 export async function rawHistoryPass(db: ChainDb, options: RetentionOptions, result: RetentionResult, now: number, run: RetentionRuleRunner, control: RawHistoryControl = {}) {
-  const swapDays=options.swapDays ?? 7,transferDays=options.transferDays ?? 3;
-  if(!Number.isInteger(swapDays) || swapDays<7 || !Number.isInteger(transferDays) || transferDays<1)throw new Error('Raw history requires at least seven swap days and one transfer day');
+  const swapDays=options.swapDays ?? 1,transferDays=options.transferDays ?? 1;
+  if(!Number.isInteger(swapDays) || swapDays<1 || !Number.isInteger(transferDays) || transferDays<1)throw new Error('Raw history requires at least one swap day and one transfer day');
   for(const swaps of [true,false]) await run(swaps ? 'raw_swaps' : 'raw_transfers',async(timeLeft,limit)=>{
     const table=swaps ? 'swaps' : 'token_transfers',key=swaps ? 'coin' : 'token';
     if(options.dryRun) {addReport(result,await reportRows(db,table,'',[]));return;}

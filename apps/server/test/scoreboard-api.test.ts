@@ -1,10 +1,12 @@
 // Synthetic acquisition envelopes and local PGlite only; no live monitoring evidence.
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { binary, publishReceipt } from '@eko/db';
+import { binary, publishReceipt, runRetention } from '@eko/db';
 import { enqueueOutcomeLabels, runOutcomeMaturityQueue, outcomeStreamKey, invalidateOutcomeDependency } from '@eko/engines';
 import { ScoreboardResponseSchema, type Address, type PublicReceiptPayload, type TradeQuote, type AvailabilityCut } from '@eko/shared';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { provisionHistory } from '../../../packages/db/test/helpers/historical-db.js';
+import { ScoreboardService } from '../src/read/scoreboard.js';
 import { outcomeFixture, confirmation } from '../../engines/test/outcome-fixtures.js';
 import { hash } from '../../../packages/chain/test/reference-fixtures.js';
 import { accounts, tradeOrders, tradeQuotes, tradeGuardMisses, auditLog } from '../src/db/schema.js';
@@ -154,6 +156,24 @@ it('publishes all-launch and Clear cohorts at the known-at cut, with censoring, 
   const rows = (await service().list('cohort')).rows; expect(rows).toHaveLength(2);
   expect(rows.find(r => r.detail.group === 'all')!.detail).toMatchObject({ eligible: 4, evaluated: 1, censored: 1, immature: 1, ungraded: 1, rugDenominator: 1, medianDenominator: 1, medianOutcomePct: -20 });
   expect(rows.find(r => r.detail.group === 'clear')!.detail).toMatchObject({ eligible: 1, evaluated: 1, censored: 0, immature: 0, ungraded: 0 });
+  // Weekly cohorts and accepted outcomes must survive the one-day raw and payload windows.
+  await provisionHistory(db(),new Date(week));
+  await db().insert('swaps',{ts:new Date(week),block:98,tx_hash:binary(hash('old-scoreboard-trade')),log_index:0,
+    venue:'uniswap_v3',pool_id:binary(address(90)),coin:binary(coin),quote_asset:binary(address(0)),trader:binary(wallet),side:1,amount_coin:'1',amount_quote:'1',price_quote:1,usd:1});
+  await runRetention(db(),{quoteTokens:[],swapDays:1,transferDays:1,ratingDays:1,receiptHours:24,dryRun:false,pauseMs:0,now:()=>now});
+  expect((await db().sql.query('SELECT 1 FROM swaps WHERE ts<$1',[new Date(now-86400000)])).rows).toEqual([]);
+  expect((await db().sql.query("SELECT data FROM receipt_publications WHERE id='call-fixture'")).rows).toEqual([{data:null}]);
+  const fresh=new ScoreboardService(db(),()=>now),query=db().sql.query.bind(db().sql);
+  db().sql.query=async(sql,params)=>{
+    if (/\b(?:swaps|coin_cards)\b/.test(sql)) throw new Error('Scoreboard must use retained summaries');
+    return query(sql,params);
+  };
+  try {
+    await fresh.publishCohort(args);
+    expect((await fresh.list('cohort')).rows).toEqual(rows);
+    expect((await fresh.list('calls')).rows.some(r=>r.detail.event==='grade' && r.grade==='hit')).toBe(true);
+  } finally {db().sql.query=query;}
+
 });
 it('retains original calls and grades and appends corrections after withdrawal and source invalidation', async () => {
   const original = (await db().sql.query('SELECT * FROM receipt_publications WHERE id=$1', ['call-fixture'])).rows;

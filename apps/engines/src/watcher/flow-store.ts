@@ -35,7 +35,7 @@ async function headerAt(db:ChainDb,block:number) {
   if(!h)throw new Error('Canonical flow block unavailable');return h;
 }
 async function swapRows(db:ChainDb,block:number,from:Date,to:Date,coin?:Address) {
-  return (await db.sql.query<Row>(`SELECT s.*,b.hash AS block_hash FROM swaps s JOIN chain_blocks b ON b.number=s.block
+  return (await db.sql.query<Row>(`SELECT s.*,b.hash AS block_hash FROM watcher_read_swaps s JOIN chain_blocks b ON b.number=s.block
     WHERE s.block<=$1 AND s.ts>$2 AND s.ts<=$3 ${coin?'AND s.coin=$4':''} ORDER BY s.block,s.tx_hash,s.log_index`,[block,from,to,...(coin?[binary(coin)]:[])])).rows;
 }
 /** Watcher-only writes. API consumers read these projections without running classification. */

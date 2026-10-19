@@ -83,11 +83,11 @@ describe('chain retention roll-up', () => {
       .toMatchObject({ quoteRows: 0, idleRows: 0, idleTokens: 0, finished: true });
   });
 
-  it('is off unless configured, refuses an idle window inside the engines window, and stops at its time budget', async () => {
+  it('is off unless configured, refuses a zero-day idle window, and stops at its time budget', async () => {
     const db = await fixture(), total = await count(db, quote) + await count(db, idle) + await count(db, active);
     expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], now: () => epoch + 20.5 * DAY })).toMatchObject({ quoteRows: 0, idleRows: 0, pendingRows: 0, feedRows: 0 });
     expect(await count(db, quote) + await count(db, idle) + await count(db, active)).toBe(total);
-    await expect(runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], idleTokenDays: 7, now: () => epoch + 20.5 * DAY })).rejects.toThrow('idle window');
+    await expect(runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], idleTokenDays: 0, now: () => epoch + 20.5 * DAY })).rejects.toThrow('at least one quiet day');
     let clock = epoch + 20.5 * DAY;
     const partial = await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [quote], quoteDays: 2, batchRows: 2, budgetMs: 1, now: () => (clock += 1) });
     expect(partial.finished).toBe(false);

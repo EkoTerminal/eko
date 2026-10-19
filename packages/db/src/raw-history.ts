@@ -4,9 +4,9 @@ import { rawMaintenance, sealRawPartition, type RawSeal, type RawTable, rawSealS
 
 /** One backend owns the existing reorg/retention mutex across the independently committed phases. */
 export async function rawPartitionPass(db: ChainDb, options: RetentionOptions, result: RetentionResult, now: number) {
-  const windows = {swaps: options.swapDays ?? 7,token_transfers: options.transferDays ?? 3};
-  if(!Number.isInteger(windows.swaps) || windows.swaps<7 || !Number.isInteger(windows.token_transfers) || windows.token_transfers<1)
-    throw new Error('Raw history requires at least seven swap days and one transfer day');
+  const windows = {swaps: options.swapDays ?? 1,token_transfers: options.transferDays ?? 1};
+  if(!Number.isInteger(windows.swaps) || windows.swaps<1 || !Number.isInteger(windows.token_transfers) || windows.token_transfers<1)
+    throw new Error('Raw history requires at least one swap day and one transfer day');
   const pass=async (session:ChainDb)=>{
     if(options.dryRun)for(const table of options.rawPartitionTables ?? ['swaps','token_transfers'])
       (result.tables ??=[]).push({table,rows:0,estimatedBytes:0,estimateSkipped:true});

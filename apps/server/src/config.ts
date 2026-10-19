@@ -167,28 +167,27 @@ const EnvSchema = z.object({
   SECURITY_COLLECTORS: z.string().default('{}').transform(parseSecurityCollectors),
   /** Owner-requested determination retention on the worker. Defaults only report, including legacy rules. */
   RETENTION_SETTLE_HOURS: z.coerce.number().int().min(1).max(8760).default(24),
-  RETENTION_SWAP_DAYS: z.coerce.number().int().min(7).max(365).default(7),
-  RETENTION_TRANSFER_DAYS: z.coerce.number().int().min(1).max(365).default(3),
-  FINGERPRINT_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(365).default(3),
+  RETENTION_SWAP_DAYS: z.coerce.number().int().min(1).max(365).default(1),
+  RETENTION_TRANSFER_DAYS: z.coerce.number().int().min(1).max(365).default(1),
+  FINGERPRINT_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(365).default(1),
   READ_LIQUIDITY_PROBE_KEYS: z.coerce.number().int().min(1).max(1000).default(100),
-  FINGERPRINT_REFRESH_DAYS: z.coerce.number().int().min(1).max(365).default(3),
-  RETENTION_RAW_DAYS: z.coerce.number().int().min(1).max(365).default(7),
-  RETENTION_RATING_DAYS: z.coerce.number().int().min(1).max(365).default(7),
+  FINGERPRINT_REFRESH_DAYS: z.coerce.number().int().min(1).max(365).default(1),
+  RETENTION_RAW_DAYS: z.coerce.number().int().min(1).max(365).default(1),
+  RETENTION_RATING_DAYS: z.coerce.number().int().min(1).max(365).default(1),
   RETENTION_RECEIPT_KEEP_CURRENT: bool,
-  RETENTION_RECEIPT_HOURS: z.coerce.number().int().min(1).max(24*365).default(48),
+  RETENTION_RECEIPT_HOURS: z.coerce.number().int().min(1).max(24*365).default(24),
   RETENTION_ENABLED: z.enum(['true','false','1','0']).default('true').transform(v=>v==='true' || v==='1'),
   RETENTION_DRY_RUN: z.enum(['true','false','1','0']).default('true').transform(v=>v==='true' || v==='1'),
   RETENTION_QUOTE_TRANSFER_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
-  /** Must exceed the engines' seven-day idle window, so live evaluation never reads compacted coins. */
-  RETENTION_IDLE_TOKEN_DAYS: optionalValue(z.coerce.number().int().min(8).max(365)),
-  RETENTION_PENDING_POOL_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
+  /** Holdings remain available from transfer baselines after compaction. */
+  RETENTION_IDLE_TOKEN_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
+  RETENTION_PENDING_POOL_DAYS: z.preprocess(v => v === '' ? undefined : v, z.coerce.number().int().min(1).max(365).default(1)),
   /** Verdict, playbook and wash rows of the derived Feed projection; their sources are kept (docs/operations/retention.md). */
-  RETENTION_FEED_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
+  RETENTION_FEED_DAYS: z.preprocess(v => v === '' ? undefined : v, z.coerce.number().int().min(1).max(365).default(1)),
   /** Per-coin history: drop raw history of Danger coins with no swap or transfer for this many days, keeping a summary. */
   RETENTION_DANGER_QUIET_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
-  /** Per-coin history of every non-quote coin with no swap or transfer for this many days. Must exceed the engines'
-   * seven-day idle window. */
-  RETENTION_QUIET_COIN_DAYS: optionalValue(z.coerce.number().int().min(8).max(365)),
+  /** Per-coin history of quiet non-quote coins, with lifetime summaries retained. */
+  RETENTION_QUIET_COIN_DAYS: optionalValue(z.coerce.number().int().min(1).max(365)),
   /** Live sell check (BACKEND §6.2). Off unless true: the engines role measures exit cost, and the API re-checks every
    * buy quote and refuses a coin whose sell fails. SELL_CHECK_DAILY_REQUESTS is read by the engines role; it is parsed
    * here too so the build identity attests the cap for every role. */
@@ -273,7 +272,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (c.NODE_ENV === 'production' && !c.DATABASE_URL?.trim()) throw new Error('DATABASE_URL is required in production; PGlite is for local development and tests');
   if (c.NODE_ENV === 'production' && c.APP_ROLE === 'api' && c.RUN_WORKER) throw new Error('API replicas require RUN_WORKER=false; use APP_ROLE=worker for the reconciler');
   if (c.APP_ROLE === 'worker' && !c.RUN_WORKER) throw new Error('APP_ROLE=worker requires RUN_WORKER=true');
-  if(c.FINGERPRINT_LOOKBACK_DAYS+c.FINGERPRINT_REFRESH_DAYS>c.RETENTION_SWAP_DAYS)throw new Error('Fingerprint lookback plus refresh must fit RETENTION_SWAP_DAYS');
+  if(c.FINGERPRINT_LOOKBACK_DAYS+c.FINGERPRINT_REFRESH_DAYS>7)throw new Error('Fingerprint lookback plus refresh must fit the seven-day watcher evidence window');
   if (c.RETENTION_ENABLED && (!c.RETENTION_DRY_RUN || (c.RETENTION_QUOTE_TRANSFER_DAYS ?? c.RETENTION_IDLE_TOKEN_DAYS ?? c.RETENTION_DANGER_QUIET_DAYS ?? c.RETENTION_QUIET_COIN_DAYS) !== undefined) && c.SECURITY_COLLECTORS.wallets)
     throw new Error('Transfer retention cannot run with the wallet outflow collectors, which read transfer history');
   if (c.APP_ROLE === 'dev' && (!c.RPC_HTTP_URL || !c.RPC_WS_URL)) throw new Error('APP_ROLE=dev requires RPC_HTTP_URL and RPC_WS_URL');

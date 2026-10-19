@@ -1,4 +1,4 @@
-import { addOutcomeHours, prepareOutcomeEvents, addOutcomeEvents, type OutcomeCuts } from './raw-history-checkpoints.js';
+import { addOutcomeHours, prepareOutcomeEvents, addOutcomeEvents, preserveOutcomeHoldings, type OutcomeCuts } from './raw-history-checkpoints.js';
 import { retentionLimits } from './retention-control.js';
 import type { ChainDb } from './client.js';
 import { addLifetimePons, addLifetimeSwaps, addLifetimeLiquidity, type LifetimeLiquidityRow, emptyLifetime, packSwap, readLifetime, saveLifetime, recordBuyerStatistics } from './lifetime.js';
@@ -105,7 +105,9 @@ export async function compactLifetimeSwaps(db: ChainDb, coin: Uint8Array, throug
     buyers=(SELECT count(*) FROM read_buyers WHERE coin=$1),swaps=history_prunes.swaps+excluded.swaps,updated_at=now()`,
     [coin, String(last.block), rows[0]!.ts, last.ts, data.buyers.length, rows.length]);
   await db.sql.query(`UPDATE history_prunes SET buyer_stats_complete=true,buyers=(SELECT count(*) FROM coin_buyer_firsts WHERE coin=$1)+(SELECT coalesce(sum(n),0) FROM coin_unknown_buys WHERE coin=$1) WHERE coin=$1`,[coin]);
-  await db.sql.query(`DELETE FROM swaps s USING unnest($2::timestamptz[],$3::bytea[],$4::integer[]) p(ts,hash,idx) WHERE s.coin=$1 AND s.ts=p.ts AND s.tx_hash=p.hash AND s.log_index=p.idx`,[coin,rows.map(r=>new Date(r.ts as string).toISOString()),rows.map(r=>r.tx_hash),rows.map(r=>r.log_index)]);
+  await db.sql.query(`WITH removed AS (DELETE FROM swaps s USING unnest($2::timestamptz[],$3::bytea[],$4::integer[]) p(ts,hash,idx) WHERE s.coin=$1 AND s.ts=p.ts AND s.tx_hash=p.hash AND s.log_index=p.idx RETURNING s.*),
+    evidence AS (INSERT INTO watcher_swap_evidence(ts,tx_hash,log_index,block,coin,pool_id,trader,side,usd,priced_block,senders_pending,pricing_pending,tx_to,quote_asset,amount_quote)
+      SELECT ts,tx_hash,log_index,block,coin,pool_id,trader,side,usd,priced_block,senders_pending,pricing_pending,tx_to,quote_asset,amount_quote FROM removed WHERE ts>=(date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')-interval '7 days' ON CONFLICT DO NOTHING RETURNING 1) SELECT count(*) FROM removed`,[coin,rows.map(r=>new Date(r.ts as string).toISOString()),rows.map(r=>r.tx_hash),rows.map(r=>r.log_index)]);
   return rows.length;
 }
 async function compactPons(db: ChainDb, coin: Uint8Array, through: bigint, limit: number): Promise<number> {
@@ -176,11 +178,11 @@ export async function pruneDeterminedCoin(db: ChainDb, coin: QuietCoin, rule: Hi
 
 export async function determinationPass(db: ChainDb, options: RetentionOptions, result: RetentionResult, quotes: Uint8Array[], nowMs: number,
   rule: 'settled' | 'raw_cap', timeLeft: () => boolean, reported = new Map<string, RetentionTableReport>(), cursors = new Map<string,unknown[]>()) {
-  const days = rule === 'settled' ? (options.settleHours ?? 24)/24 : options.rawDays ?? 7;
+  const days = rule === 'settled' ? (options.settleHours ?? 24)/24 : options.rawDays ?? 1;
   const through = await retentionHorizon(db, days, nowMs); if (through == null) return;
   const taxThrough=await retentionHorizon(db,1,nowMs);
   const transferThrough=taxThrough==null ? null : through<taxThrough ? through : taxThrough;
-  // The Census requires seven days, independent of a coin’s determination status.
+  // Watcher inputs survive separately; transaction-level checks require one raw day.
   let swapsThrough = options.swapDays !== undefined || options.transferDays !== undefined ? null : await retentionHorizon(db, Math.max(days, SWAP_EVIDENCE_DAYS), nowMs);
   if (swapsThrough != null && !options.dryRun) {
     let done = false;
@@ -225,5 +227,6 @@ export async function compactUnratedTransfers(db:ChainDb,coin:Uint8Array,through
   if((await db.sql.query('SELECT 1 FROM history_prunes p WHERE p.coin=$1 AND p.transfers+p.swaps+p.liquidity+p.pons>0 AND NOT EXISTS(SELECT 1 FROM coin_lifetime l WHERE l.coin=p.coin)',[coin])).rows.length)return 0;
   if(!await readLifetime(db,coin))await saveLifetime(db,coin,emptyLifetime());
   await preserveGraduation(db,coin,through);
+  await preserveOutcomeHoldings(db,coin,through);
   const n=await compactTransfers(db,[coin],through,limit);if(n)await db.sql.query('UPDATE coin_lifetime SET revision=revision+1 WHERE coin=$1',[coin]);return n;
 }

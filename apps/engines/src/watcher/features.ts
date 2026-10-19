@@ -32,7 +32,7 @@ export function sizeBucket(wei:string):string {
   const scale=10n**BigInt(digits-4);return ((n+scale/2n)/scale*scale).toString();
 }
 export function walletFeatures(input:FeatureInput):WalletFeatures {
-  const {block,sec}=input,days=input.lookbackDays ?? 3;
+  const {block,sec}=input,days=input.lookbackDays ?? 1;
   if(!Number.isInteger(days)||days<1)throw new Error('Invalid fingerprint lookback');
   if(!Number.isSafeInteger(block)||block<0||!Number.isSafeInteger(sec)||sec<0)throw new Error('Invalid feature cut');
   const unique=new Map<string,FingerprintSwap>();

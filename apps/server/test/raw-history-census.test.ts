@@ -21,9 +21,9 @@ it('keeps the seven-day Census identical and ends individual trade markers at th
     expect(await census()).toEqual({status:'available'});
     const read=async()=>(await db.sql.query('SELECT data FROM census_snapshots')).rows;
     const before=await read();expect((await readMarkers(db,coin,epoch/1000-1,(epoch+21*day)/1000)).markers).toHaveLength(3);
-    expect((await runRetention(db,{quoteTokens:[],swapDays:7,transferDays:3,dryRun:false,pauseMs:0,now:()=>epoch+20*day})).historySwaps).toBe(1);
+    expect((await runRetention(db,{quoteTokens:[],swapDays:1,transferDays:1,dryRun:false,pauseMs:0,now:()=>epoch+20*day})).historySwaps).toBe(2);
     expect(await read()).toEqual(before);expect(await census()).toEqual({status:'available'});expect(await read()).toEqual(before);
     const markers=await readMarkers(db,coin,epoch/1000-1,(epoch+21*day)/1000);
-    expect(markers.markers).toHaveLength(2);expect(markers.markers.every(m=>m.ts>epoch/1000)).toBe(true);
+    expect(markers.markers).toHaveLength(1);expect(markers.markers.every(m=>m.ts>epoch/1000)).toBe(true);
   } finally {await db.close();}
 });

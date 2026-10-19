@@ -3,6 +3,7 @@ import { binary, hex, ChainDb, openDb, migrate, migrateEngines, type SqlClient }
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { readCurveStates, readPoolLiquidity, readPoolMoney } from '../src/read/pool-liquidity.js';
+import { provisionHistory } from '../../../packages/db/test/helpers/historical-db.js';
 import { seedReadFixture, sampleAddress } from './read-fixture.js';
 
 const now=Date.parse('2026-10-17T12:00:00Z'),coins=Array.from({length:7},(_,i)=>sampleAddress(700+i));
@@ -125,6 +126,7 @@ it('reuses durable positions for price-only dirty coins, reloads on pool/event r
   const db=await openDb({pgliteDir:':memory:'}),coin=sampleAddress(880),id=pool(880),other=pool(881);
   try {
   await migrate(db);await migrateEngines(db);
+  await provisionHistory(db,new Date(now));
   await db.insert('tokens',{address:binary(coin),deployer:binary(sampleAddress(900)),first_block:1,block:1,launchpad:'other'});
   await db.insert('pools',{id:binary(id),currency0:binary(coin),currency1:binary(sampleAddress(0)),venue:'uniswap_v4',fee:3000,tick_spacing:60,created_block:1,block:1});
   await db.insert('liquidity_events',{block:10,ts:new Date(now-1000),tx_hash:binary(pool(882)),log_index:0,venue:'uniswap_v4',pool_id:binary(id),kind:'ModifyLiquidity',data:JSON.stringify({tickLower:-887200,tickUpper:887200,liquidityDelta:'1000'})});

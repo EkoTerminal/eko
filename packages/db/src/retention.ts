@@ -11,7 +11,7 @@ import { binary } from './types.js';
  * holdings are recomputed from transfer history, so each compacted (token, holder) pair keeps its net movement in
  * `transfer_baselines`. Derived Feed rows are deleted outright: their sources (verdicts, playbook matches) are kept.
  * Quiet coins (dead or Danger) keep a summary (`history_prunes`, bars, balances, baselines) instead of raw history.
- * The worker defaults to report-only settlement and seven-day caps. Actual deletion requires dryRun=false.
+ * The worker defaults to report-only settlement and one-day caps. Actual deletion requires dryRun=false.
  * This owner-requested policy supersedes BACKEND §3.6 for the named tables. Reader exceptions are in docs/operations/retention.md.
  */
 export interface RetentionOptions {
@@ -40,7 +40,7 @@ export interface RetentionOptions {
   poolManager?: string;
   /** Compact quote-token transfers older than this many days. */
   quoteDays?: number;
-  /** Compact every transfer of a token with no transfer in this many days. Must exceed the engines' 7-day idle window. */
+  /** Compact every transfer of a token with no transfer in this many days. Baselines preserve current holdings. */
   idleTokenDays?: number;
   /** Delete raw events of pools still unknown after this many days. */
   pendingPoolDays?: number;
@@ -49,8 +49,7 @@ export interface RetentionOptions {
   /** Drop the raw history of coins whose current verdict is Danger and that had no swap or transfer in this many days
    * (see `pruneQuietCoins`). */
   dangerQuietDays?: number;
-  /** Drop the raw history of every non-quote coin with no swap or transfer in this many days. Must exceed the engines'
-   * 7-day idle window. */
+  /** Drop the raw history of every non-quote coin with no swap or transfer in this many days. Lifetime summaries preserve engine inputs. */
   quietCoinDays?: number;
   /** Rows per transaction (Feed batches are capped lower, see `FEED_BATCH_ROWS`). */
   batchRows?: number;
@@ -80,8 +79,8 @@ const DAY_MS = 86_400_000;
 export const FEED_BATCH_ROWS = 5_000;
 /** The engines stop evaluating a coin seven days after its last activity. */
 export const ENGINE_IDLE_DAYS = 7;
-/** The Census requires seven complete days of raw swaps. */
-export const SWAP_EVIDENCE_DAYS = 7;
+/** Transaction-level tax samples require a trailing day; watcher evidence is retained separately. */
+export const SWAP_EVIDENCE_DAYS = 1;
 /** Feed kinds projected from kept sources and never re-derived by the read-model refresh. `new_pair` and `graduation`
  * rows are a few per coin and are re-derived by every refresh of their coin, so they stay. */
 const FEED_KINDS = ['verdict', 'playbook', 'wash'];
@@ -269,7 +268,9 @@ export async function pruneSwaps(db: ChainDb, coin: Uint8Array, through: bigint,
     const moved = Number((await tx.sql.query<{ n: string }>(`WITH edge AS (
         SELECT date_trunc('minute',ts)+interval '1 minute' AS ts FROM swaps WHERE coin=$1 AND block<=$2 ORDER BY ts LIMIT 1 OFFSET $3
       ), gone AS (DELETE FROM swaps WHERE coin=$1 AND block<=$2 AND ts<coalesce((SELECT ts FROM edge),'infinity'::timestamptz)
-        AND (SELECT count(*) FROM (SELECT 1 FROM swaps WHERE coin=$1 AND block<=$2 AND ts<coalesce((SELECT ts FROM edge),'infinity'::timestamptz) LIMIT 10001) bounded)<=10000 RETURNING 1)
+        AND (SELECT count(*) FROM (SELECT 1 FROM swaps WHERE coin=$1 AND block<=$2 AND ts<coalesce((SELECT ts FROM edge),'infinity'::timestamptz) LIMIT 10001) bounded)<=10000 RETURNING *), evidence AS (
+        INSERT INTO watcher_swap_evidence(ts,tx_hash,log_index,block,coin,pool_id,trader,side,usd,priced_block,senders_pending,pricing_pending,tx_to,quote_asset,amount_quote)
+        SELECT ts,tx_hash,log_index,block,coin,pool_id,trader,side,usd,priced_block,senders_pending,pricing_pending,tx_to,quote_asset,amount_quote FROM gone WHERE ts>=(date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')-interval '7 days' ON CONFLICT DO NOTHING RETURNING 1)
       SELECT count(*)::text AS n FROM gone`, [coin, through.toString(), Math.max(0, limit - 1)])).rows[0]?.n ?? 0);
     if (prior) await tx.sql.query('UPDATE flow_dirty SET revision=$2,from_sec=$3 WHERE coin=$1', [coin, prior.revision, prior.from_sec]);
     else await tx.sql.query('DELETE FROM flow_dirty WHERE coin=$1', [coin]);
@@ -381,15 +382,15 @@ export async function rawCandidates(db: ChainDb, through: bigint, quote: Uint8Ar
 export async function runRetention(source: ChainDb, options: RetentionOptions): Promise<RetentionResult> {
   options = { ...options, dryRun: options.dryRun ?? true };
   const now = options.now ?? Date.now, started = now();
-  if (options.quietCoinDays !== undefined && options.quietCoinDays <= ENGINE_IDLE_DAYS) throw new Error('Quiet-coin retention must exceed the engines idle window');
-  if (options.idleTokenDays !== undefined && options.idleTokenDays <= ENGINE_IDLE_DAYS) throw new Error('Idle-token retention must exceed the engines idle window');
+  if (options.quietCoinDays !== undefined && options.quietCoinDays < 1) throw new Error('Quiet-coin retention needs at least one quiet day');
+  if (options.idleTokenDays !== undefined && options.idleTokenDays < 1) throw new Error('Idle-token retention needs at least one quiet day');
   if (options.dangerQuietDays !== undefined && !(options.dangerQuietDays >= 1)) throw new Error('Danger-coin retention needs at least one quiet day');
   const result: RetentionResult = { quoteRows: 0, idleTokens: 0, idleRows: 0, pendingRows: 0, feedRows: 0, dangerCoins: 0, quietCoins: 0,
     historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, skippedRules: [] };
   if (options.dryRun) { result.dryRun = true; result.tables = []; }
   const capped = options.swapDays !== undefined || options.transferDays !== undefined;
   if ((capped || options.rawDays !== undefined) && options.rawPartitions !== false) await rawPartitionPass(source, { ...options,
-    swapDays:options.swapDays ?? Math.max(options.rawDays ?? 7,7),rawPartitionTables:capped ? undefined : ['swaps'] }, result, started);
+    swapDays:options.swapDays ?? Math.max(options.rawDays ?? 1,1),rawPartitionTables:capped ? undefined : ['swaps'] }, result, started);
   // Long partition maintenance must not consume the other rules' unchanged per-pass budgets.
   const passDeadline = Date.now() + Math.min(options.passBudgetMs ?? 115_000, 115_000);
   let queryDeadline = passDeadline;
@@ -397,6 +398,16 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
   let limit = Math.min(options.batchRows ?? 1000, 5000);
   const rules = retentionRules(options, result, budget => { queryDeadline = Math.min(passDeadline, Date.now() + budget); }, retentionBatchSizes(source));
   const runRule: typeof rules = (name, work) => rules(name, (timeLeft, rows) => { limit = rows; return work(timeLeft, rows); });
+  if ((capped || options.rawDays !== undefined || options.settleHours !== undefined || options.dangerQuietDays !== undefined || options.quietCoinDays !== undefined) && !result.skippedRules.includes('raw_partitions')) await runRule('watcher_swap_evidence', async timeLeft => {
+    if (options.dryRun) { addReport(result, await reportRows(db, 'watcher_swap_evidence', '', [])); return; }
+    while (timeLeft()) {
+      const removed = await retentionBatch(db, tx => tx.sql.query(`DELETE FROM watcher_swap_evidence WHERE (ts,tx_hash,log_index) IN (
+        SELECT ts,tx_hash,log_index FROM watcher_swap_evidence WHERE ts<$1 ORDER BY ts,tx_hash,log_index LIMIT $2) RETURNING 1`,
+        [new Date(Math.floor(started/DAY_MS)*DAY_MS-7*DAY_MS),limit]), options.pauseMs);
+      if (removed.rows.length<limit) return;
+    }
+    result.finished=false;
+  });
   const quote = options.quoteTokens.map(token => binary(token as `0x${string}`));
   if (options.rawDays !== undefined) quote.push(ZERO_ADDRESS);
   const modern = options.settleHours !== undefined || options.rawDays !== undefined;
@@ -448,10 +459,14 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
   if (!capped && !modern && options.idleTokenDays !== undefined) await runRule('idle_transfers', async timeLeft => {
     const through = await retentionHorizon(db, options.idleTokenDays!, started); if (through == null) return;
     if (options.dryRun) { await report('token_transfers'); return; }
+    const summaries=(await db.sql.query<{present:boolean}>("SELECT to_regclass('coin_lifetime') IS NOT NULL AS present")).rows[0]?.present;
     while (timeLeft()) {
       const tokens = await idleTokens(db, through, quote, 200); if (!tokens.length) return;
       result.idleTokens += tokens.length;
-      if (!await drain(timeLeft, tx => compactTransfers(tx, tokens, through, limit), 'idleRows')) return;
+      if (!await drain(timeLeft, async tx => {
+        if(!summaries)return compactTransfers(tx,tokens,through,limit); // Chain-only callers have no engine history readers.
+        let moved=0;for(const token of tokens) {if(moved>=limit)break;moved+=await compactUnratedTransfers(tx,token,through,limit-moved);}return moved;
+      }, 'idleRows')) return;
     }
     result.finished = false;
   });

@@ -16,12 +16,11 @@ storage and keep a bounded raw history on a 100 GB volume.
   `packages/db/src/retention.ts`, `apps/server/src/retention-worker.ts`):
   - `RETENTION_QUOTE_TRANSFER_DAYS=2`: transfers of the registry quote tokens (WETH, USDG) older than two days.
     They were 52% of all transfers, and nothing reads their history except balances.
-  - `RETENTION_IDLE_TOKEN_DAYS=14`: every transfer of a token with no transfer in 14 days. The engines ignore coins
-    idle for seven days, so live evaluation never reads a compacted coin.
-  - `RETENTION_PENDING_POOL_DAYS=3`: raw events of pools still unknown after three days.
+  - `RETENTION_IDLE_TOKEN_DAYS=1`: compact transfers after one idle day. Baselines, opening holdings and outcome checkpoints support ongoing engine reads.
+  - `RETENTION_PENDING_POOL_DAYS=1`: raw events of pools still unknown after one day.
 - **Derived tables** (`RETENTION_FEED_DAYS` and the table-by-table decisions): [retention.md](retention.md).
 - **Per-coin history** (`RETENTION_DANGER_QUIET_DAYS`, `RETENTION_QUIET_COIN_DAYS`, off until set): quiet Danger and
-  dead coins keep a summary instead of raw transfers, liquidity, Pons events and, after seven quiet days, swaps. Decisions
+  dead coins keep a summary instead of raw transfers, liquidity, Pons events and, after one quiet day, swaps. Decisions
   per table and per reader: [retention.md](retention.md#per-coin-history-of-quiet-coins).
 
 ## Why compaction and not deletion
@@ -34,7 +33,7 @@ before it, and replays across compacted ranges, are not reproducible; that is th
 
 ## Guards and identity
 
-- Every setting is unset by default. `RETENTION_IDLE_TOKEN_DAYS` and `RETENTION_QUIET_COIN_DAYS` must exceed seven days.
+- Feed and unknown-pool windows default to one day. Legacy idle/quiet settings remain optional, with a one-day minimum; retained baselines and lifetime summaries support engine reads.
 - Do not backfill or re-enrich a block range older than the shortest retention window while retention runs: re-inserted
   transfers would be counted on top of their baseline. The live indexer only rewrites its 256-block reorg window.
 - Transfer retention, the per-coin history rules included, refuses to start when the wallet outflow collectors are

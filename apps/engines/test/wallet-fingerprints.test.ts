@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { recordBuyerStatistics } from '../../../packages/db/src/lifetime.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { migrate, migrateEngines, binary, type ChainDb } from '@eko/db';
+import { migrate, migrateEngines, binary, runRetention, type ChainDb } from '@eko/db';
 import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { encodeFunctionData, parseAbi, type Address, type Hex } from 'viem';
 import { walletFeatures, sizeBucket, entropy, type FeatureInput, type FingerprintSwap, type WalletFeatures } from '../src/watcher/features.js';
@@ -17,10 +17,10 @@ const swap=(n:number,changes:Partial<FingerprintSwap>={}):FingerprintSwap=>({blo
 const input=(swaps:FingerprintSwap[],changes:Partial<FeatureInput>={}):FeatureInput=>({swaps,block:1000,sec:sec+1000,delegated7702:false,knownRouters:[router],userops:[],useropsComplete:true,reactions:[],...changes});
 const empty=():WalletFeatures=>walletFeatures(input([]));
 describe('fp-1.0.0 pure features',()=>{
-  it('defaults both windows to three days and rejects a combined window beyond retained swaps',()=>{
-    expect(fingerprintWindows({},{})).toEqual({lookbackDays:3,refreshDays:3});
+  it('defaults both windows to one day and bounds refreshes by watcher evidence',()=>{
+    expect(fingerprintWindows({},{})).toEqual({lookbackDays:1,refreshDays:1});
     expect(fingerprintWindows({},{FINGERPRINT_LOOKBACK_DAYS:'4',FINGERPRINT_REFRESH_DAYS:'2'})).toEqual({lookbackDays:4,refreshDays:2});
-    expect(()=>fingerprintWindows({},{FINGERPRINT_LOOKBACK_DAYS:'5'})).toThrow('must fit');
+    expect(()=>fingerprintWindows({},{FINGERPRINT_LOOKBACK_DAYS:'7'})).toThrow('must fit');
     expect(()=>fingerprintWindows({lookbackDays:0},{})).toThrow('must fit');
     expect(walletFeatures(input([swap(1,{sec:sec+1000-4*86400})],{lookbackDays:4})).swaps).toBe(1);
     expect(walletFeatures(input([swap(1,{sec:sec+1000-4*86400})])).swaps).toBe(0);
@@ -29,7 +29,7 @@ describe('fp-1.0.0 pure features',()=>{
     const swaps=Array.from({length:201},(_,n)=>swap(n+1));
     swaps.push(swap(1001),swap(999,{sec:sec+1001}),swap(0,{sec:sec+1000-3*86400-1}),swap(201));
     expect(walletFeatures(input(swaps)).swaps).toBe(200);
-    expect(walletFeatures(input([swap(1,{sec:sec+1000-3*86400})])).swaps).toBe(1);
+    expect(walletFeatures(input([swap(1,{sec:sec+1000-86400})])).swaps).toBe(1);
     expect(()=>walletFeatures(input([swap(1),swap(1,{aa4337:true})]))).toThrow('Conflicting');
   });
   it('computes actor shares, modal routers/shapes, buy sizes and distinct transaction gas patterns',()=>{
@@ -99,6 +99,21 @@ async function indexed(db:ChainDb,block:number,a=wallet,fork=0) {
   await db.insert('swaps',{ts:new Date(sec*1000),block:String(block),tx_hash:binary(hash(block)),log_index:1,venue:'uniswap_v3',pool_id:binary(router),coin:binary(coin),quote_asset:binary(address(0)),trader:binary(a),tx_from:binary(a),tx_to:binary(block%2?router:address(4)),side:1,amount_coin:'1',amount_quote:'1000000000000000000',price_quote:1});
 }
 describe('indexed wallet fingerprint storage',()=>{
+  it('refreshes an original cut from watcher evidence after its lookback day leaves raw swaps',async()=>{
+    const db=await setup(),day=86400000,start=sec*1000,head=start+2*day+3600000;
+    for(const [block,ts] of [[1,start+day/2],[2,start+day+day/2],[3,head]]) {
+      await indexed(db,block);
+      await db.sql.query('UPDATE chain_blocks SET ts=$2 WHERE number=$1',[block,new Date(ts)]);
+      await db.sql.query('UPDATE swaps SET ts=$2 WHERE block=$1',[block,new Date(ts)]);
+    }
+    const before=await loadFingerprintInput(db,wallet,2);
+    expect(before.input.swaps).toHaveLength(2);
+    await runRetention(db,{quoteTokens:[],swapDays:1,transferDays:1,dryRun:false,pauseMs:0,now:()=>head});
+    expect((await db.sql.query('SELECT block FROM swaps ORDER BY block')).rows).toEqual([{block:2},{block:3}]);
+    expect((await db.sql.query('SELECT block FROM watcher_swap_evidence ORDER BY block')).rows).toEqual([{block:1}]);
+    expect(await loadFingerprintInput(db,wallet,2)).toEqual(before);
+  });
+
   it('updates changed wallets incrementally, replays bounded original cuts and snapshots without duplicate labels',async()=>{
     const db=await setup();for(let b=1;b<=6;b++)await indexed(db,b);
     expect(walletFeatures((await loadFingerprintInput(db,wallet,6)).input).swaps).toBe(6);

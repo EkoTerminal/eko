@@ -5,6 +5,9 @@ BACKEND §14.0. These files authorize no external action. Public repositories,
 release tags, deployment and outreach remain owner decisions. There is no bug bounty
 (owner decision, 2026-10-05).
 
+Engines-verdict receipt payloads have a 24-hour verification window (owner decision, 2026-10-19).
+After expiry, identifiers, summaries and commitment proofs remain available.
+
 ## Contents and candidate linkage
 
 [artifact-manifests.json](artifact-manifests.json) inventories the exact source

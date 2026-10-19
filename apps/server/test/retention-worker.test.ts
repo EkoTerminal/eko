@@ -13,36 +13,36 @@ const handles: ChainDb[] = [];
 afterEach(async () => { await Promise.all(handles.splice(0).map(db => db.close())); });
 
 describe('chain retention settings', () => {
-  it('defaults to report-only settlement, a seven-day cap, seven-day rating history and 48-hour receipt payloads',()=>{
-    const c=loadConfig(base);expect(c.RETENTION_ENABLED).toBe(true);expect(loadConfig({...base,RETENTION_ENABLED:'false'}).RETENTION_ENABLED).toBe(false);expect([c.RETENTION_DRY_RUN,c.RETENTION_SETTLE_HOURS,c.RETENTION_RAW_DAYS,c.RETENTION_RATING_DAYS,c.RETENTION_RECEIPT_HOURS]).toEqual([true,24,7,7,48]);
+  it('defaults to report-only settlement, one-day raw and rating history and 24-hour receipt payloads',()=>{
+    const c=loadConfig(base);expect(c.RETENTION_ENABLED).toBe(true);expect(loadConfig({...base,RETENTION_ENABLED:'false'}).RETENTION_ENABLED).toBe(false);expect([c.RETENTION_DRY_RUN,c.RETENTION_SETTLE_HOURS,c.RETENTION_RAW_DAYS,c.RETENTION_RATING_DAYS,c.RETENTION_RECEIPT_HOURS]).toEqual([true,24,1,1,24]);
     expect(loadConfig({...base,RETENTION_DRY_RUN:'false'}).RETENTION_DRY_RUN).toBe(false);
     expect(c.RETENTION_RECEIPT_KEEP_CURRENT).toBe(false);
     for(const value of ['true','1'])expect(loadConfig({...base,RETENTION_RECEIPT_KEEP_CURRENT:value}).RETENTION_RECEIPT_KEEP_CURRENT).toBe(true);
     for(const value of ['false','0',''])expect(loadConfig({...base,RETENTION_RECEIPT_KEEP_CURRENT:value}).RETENTION_RECEIPT_KEEP_CURRENT).toBe(false);
     expect(()=>loadConfig({...base,RETENTION_RECEIPT_KEEP_CURRENT:'invalid'})).toThrow('RETENTION_RECEIPT_KEEP_CURRENT');
-    expect([c.RETENTION_SWAP_DAYS,c.RETENTION_TRANSFER_DAYS,c.FINGERPRINT_LOOKBACK_DAYS,c.FINGERPRINT_REFRESH_DAYS]).toEqual([7,3,3,3]);
-    expect(loadConfig({...base,RETENTION_SWAP_DAYS:'10',RETENTION_TRANSFER_DAYS:'2',FINGERPRINT_LOOKBACK_DAYS:'6',FINGERPRINT_REFRESH_DAYS:'4'}).RETENTION_SWAP_DAYS).toBe(10);
+    expect([c.RETENTION_SWAP_DAYS,c.RETENTION_TRANSFER_DAYS,c.FINGERPRINT_LOOKBACK_DAYS,c.FINGERPRINT_REFRESH_DAYS]).toEqual([1,1,1,1]);
+    expect(loadConfig({...base,RETENTION_SWAP_DAYS:'10',RETENTION_TRANSFER_DAYS:'2',FINGERPRINT_LOOKBACK_DAYS:'4',FINGERPRINT_REFRESH_DAYS:'3'}).RETENTION_SWAP_DAYS).toBe(10);
     for(const key of ['RETENTION_TRANSFER_DAYS','FINGERPRINT_LOOKBACK_DAYS','FINGERPRINT_REFRESH_DAYS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
-    expect(()=>loadConfig({...base,RETENTION_SWAP_DAYS:'6'})).toThrow('RETENTION_SWAP_DAYS');
-    expect(()=>loadConfig({...base,FINGERPRINT_LOOKBACK_DAYS:'5'})).toThrow('must fit');
+    expect(()=>loadConfig({...base,RETENTION_SWAP_DAYS:'0'})).toThrow('RETENTION_SWAP_DAYS');
+    expect(()=>loadConfig({...base,FINGERPRINT_LOOKBACK_DAYS:'7'})).toThrow('must fit');
     for(const key of ['RETENTION_SETTLE_HOURS','RETENTION_RAW_DAYS','RETENTION_RATING_DAYS','RETENTION_RECEIPT_HOURS'])expect(()=>loadConfig({...base,[key]:'0'})).toThrow(key);
     for(const value of ['1','8760'])expect(loadConfig({...base,RETENTION_RECEIPT_HOURS:value}).RETENTION_RECEIPT_HOURS).toBe(Number(value));
     for(const value of ['1.5','8761'])expect(()=>loadConfig({...base,RETENTION_RECEIPT_HOURS:value})).toThrow('RETENTION_RECEIPT_HOURS');
     expect(()=>loadConfig({...base,RETENTION_DRY_RUN:'false',SECURITY_COLLECTORS:walletCollectors})).toThrow('wallet outflow collectors');
     expect(loadConfig({...base,RETENTION_ENABLED:'false',RETENTION_DRY_RUN:'false',SECURITY_COLLECTORS:walletCollectors}).RETENTION_ENABLED).toBe(false);
   });
-  it('are off by default, bounded, and refused alongside the wallet outflow collectors', () => {
+  it('keeps legacy rules optional and bounds one-day feed and pending defaults, and refused alongside the wallet outflow collectors', () => {
     const off = loadConfig(base);
     expect([off.RETENTION_QUOTE_TRANSFER_DAYS, off.RETENTION_IDLE_TOKEN_DAYS, off.RETENTION_PENDING_POOL_DAYS, off.RETENTION_FEED_DAYS,
-      off.RETENTION_DANGER_QUIET_DAYS, off.RETENTION_QUIET_COIN_DAYS]).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
+      off.RETENTION_DANGER_QUIET_DAYS, off.RETENTION_QUIET_COIN_DAYS]).toEqual([undefined, undefined, 1, 1, undefined, undefined]);
     const on = loadConfig({ ...base, RETENTION_QUOTE_TRANSFER_DAYS: '2', RETENTION_IDLE_TOKEN_DAYS: '14', RETENTION_PENDING_POOL_DAYS: '3', RETENTION_FEED_DAYS: '3',
       RETENTION_DANGER_QUIET_DAYS: '2', RETENTION_QUIET_COIN_DAYS: '8' });
     expect([on.RETENTION_QUOTE_TRANSFER_DAYS, on.RETENTION_IDLE_TOKEN_DAYS, on.RETENTION_PENDING_POOL_DAYS, on.RETENTION_FEED_DAYS,
       on.RETENTION_DANGER_QUIET_DAYS, on.RETENTION_QUIET_COIN_DAYS]).toEqual([2, 14, 3, 3, 2, 8]);
     expect(() => loadConfig({ ...base, RETENTION_FEED_DAYS: '0' })).toThrow('RETENTION_FEED_DAYS');
-    expect(() => loadConfig({ ...base, RETENTION_IDLE_TOKEN_DAYS: '7' })).toThrow('RETENTION_IDLE_TOKEN_DAYS');
-    // The quiet-coin window must exceed the engines' seven-day idle window, like the idle-token rule.
-    expect(() => loadConfig({ ...base, RETENTION_QUIET_COIN_DAYS: '7' })).toThrow('RETENTION_QUIET_COIN_DAYS');
+    expect(() => loadConfig({ ...base, RETENTION_IDLE_TOKEN_DAYS: '0' })).toThrow('RETENTION_IDLE_TOKEN_DAYS');
+    expect(loadConfig({ ...base, RETENTION_IDLE_TOKEN_DAYS: '1', RETENTION_QUIET_COIN_DAYS: '1' })).toMatchObject({ RETENTION_IDLE_TOKEN_DAYS: 1, RETENTION_QUIET_COIN_DAYS: 1 });
+    expect(() => loadConfig({ ...base, RETENTION_QUIET_COIN_DAYS: '0' })).toThrow('RETENTION_QUIET_COIN_DAYS');
     expect(() => loadConfig({ ...base, RETENTION_DANGER_QUIET_DAYS: '0' })).toThrow('RETENTION_DANGER_QUIET_DAYS');
     // Both history rules compact transfers, so they are refused with the wallet outflow collectors too.
     expect(() => loadConfig({ ...base, RETENTION_DANGER_QUIET_DAYS: '2', SECURITY_COLLECTORS: walletCollectors })).toThrow('wallet outflow collectors');

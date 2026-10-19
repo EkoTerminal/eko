@@ -25,8 +25,9 @@ export async function preserveGradePrices(db: ChainDb, coin: Uint8Array, before:
     (SELECT max(s.usd/s.amount_coin::double precision) FROM swaps s WHERE s.coin=$1 AND s.ts>g.ts AND s.ts<=g.ts+h.sec*interval '1 second' AND s.usd>0 AND s.amount_coin>0)
     FROM unnest($2::timestamptz[]) c(since) CROSS JOIN (VALUES(3600),(86400)) h(sec)
     CROSS JOIN LATERAL (${gradeSeek('$1')}) g
-    WHERE g.ts+h.sec*interval '1 second'<$3 AND g.ts<$4
-      AND NOT EXISTS(SELECT 1 FROM retention_grade_prices p WHERE p.coin=$1 AND p.since=c.since AND p.horizon_sec=h.sec) ON CONFLICT DO NOTHING`, [coin,GRADE_CUTS,before,endangeredBefore]);
+    WHERE g.ts<$3 AND g.ts<$4
+    ON CONFLICT(coin,since,horizon_sec) DO UPDATE SET
+      p0=coalesce(retention_grade_prices.p0,excluded.p0),p1=coalesce(excluded.p1,retention_grade_prices.p1),hi=greatest(retention_grade_prices.hi,excluded.hi)`, [coin,GRADE_CUTS,before,endangeredBefore]);
 }
 const old = (block: string) => `EXISTS(SELECT 1 FROM engine_block_times b WHERE b.number=${block} AND b.ts<$1)`;
 const gradeProbe = `SELECT g.id FROM (${gradeSeek('x.coin')}) g`;
@@ -74,7 +75,7 @@ function windowPredicate(rows: Record<string, unknown>[], columns: string[], typ
 }
 export async function ratingRetention(db: ChainDb, options: RetentionOptions, result: RetentionResult, nowMs: number,
   runRule: RetentionRuleRunner, cursors: Map<string, unknown[]>) {
-  const cutoff = new Date(nowMs-(options.ratingDays ?? 7)*86400000);
+  const cutoff = new Date(nowMs-(options.ratingDays ?? 1)*86400000);
   result.ratingRows = Object.fromEntries(['receipt_publications','receipt_items',...ratingSelections().map(r=>r.table)].map(t=>[t,0]));
   const receiptCutoff = options.receiptHours === undefined ? cutoff : new Date(nowMs-options.receiptHours*3600000);
   await runRule('receipt_publications', (timeLeft,limit) => receiptRetention(db,options,result,receiptCutoff,limit,timeLeft,cursors,nowMs));

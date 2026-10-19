@@ -47,10 +47,10 @@ describe('chain database transaction boundaries', () => {
     });
     const date = new Date('2026-12-15T00:00:00Z');
     await expect(db.ensurePartitions(date)).rejects.toThrow('fixture rollback');
-    expect(query.mock.calls.filter(([text]) => String(text).startsWith('CREATE TABLE'))).toHaveLength(21);
+    expect(query.mock.calls.filter(([text]) => String(text).startsWith('CREATE TABLE'))).toHaveLength(13);
     abort = false; query.mockClear();
     await db.ensurePartitions(date);
-    expect(query.mock.calls.filter(([text]) => String(text).startsWith('CREATE TABLE'))).toHaveLength(21);
+    expect(query.mock.calls.filter(([text]) => String(text).startsWith('CREATE TABLE'))).toHaveLength(13);
     expect(query.mock.calls.some(([text]) => String(text).includes('bars_1m_2027_02'))).toBe(true);
     query.mockClear(); await db.ensurePartitions(date);
     expect(query).not.toHaveBeenCalled();

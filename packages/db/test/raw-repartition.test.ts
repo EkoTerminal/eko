@@ -44,8 +44,8 @@ async function helpers() {
 
 it.each(['swaps','token_transfers'])('atomic cutover of %s rolls back detach, catch-up and prior attaches on failure; retries preserve inserts, repairs and reorgs without parent trigger side effects',async t=>{
  await monthlyFixture();
- await sealOctober(db,new Date('2026-10-15T00:00:00Z'));
- await sealOctober(db,new Date('2026-10-16T00:00:00Z')); // Persisted cutoff wins across retries.
+ await sealOctober(db,new Date('2026-10-15T00:00:00Z'),7,3);
+ await sealOctober(db,new Date('2026-10-16T00:00:00Z'),7,3); // Persisted cutoff wins across retries.
  await helpers();
  await call('plan',t);await call('plan',t);
  const cutoff=new Date(t==='swaps'?'2026-10-08':'2026-10-12');

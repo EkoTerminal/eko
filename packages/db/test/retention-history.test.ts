@@ -126,10 +126,11 @@ describe('per-coin history retention', () => {
     expect(await prune(db, coins.dead)).toMatchObject({ rule: 'quiet_coin', verdict_level: 'monitor', danger_playbooks: [], buyers: '2', transfers: String(before.dead.transfers), swaps: String(before.dead.swaps),
       liquidity: '2', pons: '2', first_trade_ts: at(0.001), last_trade_ts: at(3) });
     expect((await prune(db, coins.dead))!.swaps_through_block).not.toBeNull();
-    // Danger and quiet for three days: transfers and events go now, swaps stay until they are seven days quiet.
-    expect(await counts(db, coins.danger)).toEqual({ ...before.danger, transfers: 0, liquidity: 1, pons: 0 });
+    // Danger and quiet for three days: transfers, events and swaps pass the one-day floor.
+    expect(await counts(db, coins.danger)).toEqual({ ...before.danger, transfers: 0, swaps: 0, liquidity: 1, pons: 0 });
     // The verdict at prune time is recorded: Danger, with its Danger playbooks.
-    expect(await prune(db, coins.danger)).toMatchObject({ rule: 'danger_quiet', swaps_through_block: null, verdict_level: 'danger', danger_playbooks: ['bundle_dump', 'honeypot'] });
+    expect(await prune(db, coins.danger)).toMatchObject({ rule: 'danger_quiet', verdict_level: 'danger', danger_playbooks: ['bundle_dump', 'honeypot'] });
+    expect((await prune(db, coins.danger))!.swaps_through_block).not.toBeNull();
     // Never traded, so its outcomes are decided without labels: only its mint transfers existed.
     expect(await counts(db, coins.untraded)).toMatchObject({ transfers: 0, swaps: 0 });
     expect(await prune(db, coins.untraded)).toMatchObject({ verdict_level: null, danger_playbooks: [] });
@@ -197,7 +198,7 @@ describe('per-coin history retention', () => {
     const db = await fixture();
     expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], now })).toMatchObject({ dangerCoins: 0, quietCoins: 0, historyTransfers: 0 });
     expect((await db.sql.query('SELECT 1 FROM history_prunes')).rows).toHaveLength(0);
-    await expect(runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], quietCoinDays: 7, now })).rejects.toThrow('idle window');
+    await expect(runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], quietCoinDays: 0, now })).rejects.toThrow('at least one quiet day');
     await expect(runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [weth], dangerQuietDays: 0, now })).rejects.toThrow('quiet day');
     // The API keeps the read models current; buyers and the last trade survive the swaps they came from.
     await refreshReads(db);
@@ -245,10 +246,10 @@ describe('determination retention',()=>{
     expect(report.tables?.find(t=>t.table==='swaps')).toMatchObject({estimatedBytes:0,estimateSkipped:true});
     expect(await snapshot()).toEqual(before);
   });
-  it('keeps seven days of raw swaps and summarizes older pending and undecided swaps without pruning their auxiliary evidence',async()=>{
+  it('settles swaps after one quiet day and summarizes expired pending and undecided swaps without pruning their auxiliary evidence',async()=>{
     const db=await fixture(),pending=await counts(db,coins.pending),unlabeled=await counts(db,coins.unlabeled);
     await runRetention(db,{quoteTokens:[weth],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now});
-    expect((await counts(db,coins.calm)).swaps).toBe(2);
+    expect((await counts(db,coins.calm)).swaps).toBe(0);
     expect(await counts(db,coins.pending)).toEqual({...pending,swaps:0});expect(await counts(db,coins.unlabeled)).toEqual({...unlabeled,swaps:0});
     for(const coin of [coins.pending,coins.unlabeled])expect((await db.sql.query<{data:{count:number}}>('SELECT data FROM coin_lifetime WHERE coin=$1',[binary(coin)])).rows[0].data.count).toBe(5);
     expect((await counts(db,coins.calm)).transfers).toBe(0);

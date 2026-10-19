@@ -66,11 +66,11 @@ describe('engines over pruned coin history', () => {
     const worker = (sec: number) => new EngineWorker(db, { now: () => epoch + sec });
     expect(await worker(5 * DAY + 600).poll()).toBeGreaterThan(0);
     // A Danger card, all three outcome horizons labeled, then two quiet days: the Danger rule drops its transfers and
-    // liquidity events. Its swaps stay (they are younger than seven days).
+    // liquidity events and swaps older than the one-day evidence floor.
     await db.sql.query(`UPDATE coin_card_latest SET data=jsonb_set(data,'{verdict,level}','"danger"') WHERE coin=$1`, [binary(coin)]);
     for (const horizon of ['1h', '24h', '7d']) await db.sql.query("INSERT INTO outcomes VALUES($1,$2,1,'rugged','{}') ON CONFLICT DO NOTHING", [binary(coin), horizon]);
     await block(db, 20, 8 * DAY);
-    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], dangerQuietDays: 2, now: () => (epoch + 8 * DAY) * 1000 })).toMatchObject({ dangerCoins: 1, historyLiquidity: 2, historySwaps: 0 });
+    expect(await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], dangerQuietDays: 2, now: () => (epoch + 8 * DAY) * 1000 })).toMatchObject({ dangerCoins: 1, historyLiquidity: 2, historySwaps: 4 });
     expect(await rating(db)).toEqual({ verdict_level: 'danger', danger_playbooks: [] });
     const before = await cards(db), card = await latest(db);
     // Still inside the engines' seven-day window, but nothing new happened: no re-evaluation, no failure, same card.
@@ -103,15 +103,15 @@ describe('engines over pruned coin history', () => {
     const sources = (await loadSources(db, coin, 21))!;
     expect(sources.holderSummary.count).toBe(await holders(db));
     expect(sources.liquidity).toBeUndefined();
-    // Its swaps were kept, so whole-life trade checks are still measured.
-    expect(sources.attributionCoverage?.deployer_sells?.reason).toBe('unattributed_swaps');
+    // Legacy quiet compaction predates lifetime evidence, so missing whole-life inputs stay explicit.
+    expect(sources.attributionCoverage?.deployer_sells?.reason).toBe('history_pruned');
 
-    // Quiet again for seven days: its swaps go too (trending lists are saved first). A later revival marks the whole-life
+    // Quiet again: its new swap goes too (trending lists are saved first). A later revival keeps the whole-life
     // trade checks partial, and a buyer's place among the coin's buyers counts the deleted buyers.
     for (const horizon of ['1h', '24h', '7d']) expect((await db.sql.query('SELECT 1 FROM outcomes WHERE coin=$1 AND horizon=$2', [binary(coin), horizon])).rows).toHaveLength(1);
     await block(db, 30, 40 * DAY);
     const second = await runRetention(db, { dryRun: false, pauseMs: 0, quoteTokens: [], quietCoinDays: 8, now: () => (epoch + 40 * DAY) * 1000 });
-    expect(second).toMatchObject({ quietCoins: 1, historySwaps: 5 });
+    expect(second).toMatchObject({ quietCoins: 1, historySwaps: 1 });
     expect((await db.sql.query('SELECT 1 FROM trending_snapshots WHERE created_block=1')).rows).toHaveLength(1);
     await block(db, 31, 41 * DAY); await swap(db, 31, 41 * DAY, latecomer, 1); await transfer(db, 31, 41 * DAY, traders[2]!, latecomer, 5);
     const late = (await loadSources(db, coin, 31))!;
@@ -188,8 +188,9 @@ describe('outcomes after determination',()=>{
       for(const h of ['1h','24h'])expect((await db.sql.query('SELECT 1 FROM outcomes WHERE coin=$1 AND horizon=$2',[binary(coin),h])).rows).toHaveLength(1);
       await block(db,20,6*DAY+601);
     }
-    const r=await runRetention(compacted,{quoteTokens:[],settleHours:24,rawDays:7,dryRun:false,pauseMs:0,now:()=>(epoch+6*DAY+601)*1000});
+    const r=await runRetention(compacted,{quoteTokens:[],swapDays:1,transferDays:1,settleHours:24,rawDays:1,dryRun:false,pauseMs:0,now:()=>(epoch+6*DAY+601)*1000});
     expect(r.historyTransfers).toBeGreaterThan(0);expect(r.historyLiquidity).toBe(2);
+    expect((await compacted.sql.query('SELECT block FROM swaps WHERE block<10')).rows).toEqual([]);
     for(const db of [full,compacted]) {
       await block(db,21,8*DAY);
       await db.sql.query("INSERT INTO engine_block_times VALUES(21,$1,$2,'head') ON CONFLICT DO NOTHING",[new Date((epoch+8*DAY)*1000),binary(hash(21))]);

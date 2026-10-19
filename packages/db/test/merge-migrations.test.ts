@@ -11,6 +11,7 @@ const mainEngines = ['0104_engines','0105_engine_activity','0106_engine_rules_ve
 const mergedTail = [
   ['engines','0221_pool_prices_headers'],
   ['indexer','0222_rpc_read_cache'],
+  ['indexer','0224_watcher_evidence'],
   ['engines','0223_radar_row_projection'],
 ] as const;
 const mergedIndexer = [...mainIndexer.slice(0,-1),'0115_guard_sources','0117_pons_progress','0136_wallet_protocol','0150_agent_registry','0180_eth_usd_reference_sources','0181_transfer_baselines','0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index','0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history','0211_bounded_raw_seals',...mergedTail.filter(([role])=>role==='indexer').map(([,id])=>id)];
@@ -135,7 +136,7 @@ describe('main and Guard migration union',()=>{
       await migrate(db);await migrateEngines(db);await assertMerged(db);
       expect((await db.sql.query<{data:unknown}>('SELECT data FROM pons_events')).rows[0].data).toEqual(data);
       expect((await db.sql.query("SELECT id FROM verdicts WHERE id='main-fixture'")).rows).toHaveLength(1);
-      const after=(await db.sql.query('SELECT * FROM eko_indexer_migrations WHERE id NOT IN ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ORDER BY id',['0115_guard_sources','0136_wallet_protocol','0150_agent_registry','0180_eth_usd_reference_sources','0181_transfer_baselines','0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index','0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history','0211_bounded_raw_seals','0222_rpc_read_cache'])).rows;
+      const after=(await db.sql.query('SELECT * FROM eko_indexer_migrations WHERE id NOT IN ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ORDER BY id',['0115_guard_sources','0136_wallet_protocol','0150_agent_registry','0180_eth_usd_reference_sources','0181_transfer_baselines','0184_sparse_parent_links','0187_drop_holder_transfer_indexes','0188_block_and_pool_lookups','0190_chain_block_time_index','0195_reference_swaps_unnamed', '0199_swaps_index_diet', '0205_chain_read_indexes', '0206_watcher_read_indexes', '0207_raw_history_indexes', '0208_raw_history_progress', '0209_bar_write_locks', '0210_daily_raw_history','0211_bounded_raw_seals','0222_rpc_read_cache','0224_watcher_evidence'])).rows;
       expect(after).toEqual(before);
       expect((await db.sql.query('SELECT * FROM coin_cards')).rows).toEqual(cardsBefore);
       await db.sql.query("INSERT INTO coin_cards VALUES('enriched-card',$1,1,'enriched','{}','1.0.2')",[coin]);

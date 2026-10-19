@@ -59,9 +59,9 @@ export class GradeOutcomesService {
           ORDER BY v.coin,v.valid_from_block,publication.publication_sequence ASC NULLS FIRST,v.id),
         priced AS (
           SELECT g.level,
-            CASE WHEN saved.coin IS NOT NULL THEN saved.p0 ELSE (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=g.coin AND s.ts<=g.ts AND s.ts>g.ts-interval '1 hour' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1) END AS p0,
-            CASE WHEN saved.coin IS NOT NULL THEN saved.p1 ELSE (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=g.coin AND s.ts<=g.ts+$3*interval '1 second' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1) END AS p1,
-            CASE WHEN saved.coin IS NOT NULL THEN saved.hi ELSE (SELECT max(s.usd/s.amount_coin::double precision) FROM swaps s WHERE s.coin=g.coin AND s.ts>g.ts AND s.ts<=g.ts+$3*interval '1 second' AND s.usd>0 AND s.amount_coin>0) END AS hi
+            coalesce(saved.p0, (SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=g.coin AND s.ts<=g.ts AND s.ts>g.ts-interval '1 hour' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1)) AS p0,
+            coalesce((SELECT s.usd/s.amount_coin::double precision FROM swaps s WHERE s.coin=g.coin AND s.ts<=g.ts+$3*interval '1 second' AND s.usd>0 AND s.amount_coin>0 ORDER BY s.ts DESC LIMIT 1),saved.p1) AS p1,
+            greatest(saved.hi,(SELECT max(s.usd/s.amount_coin::double precision) FROM swaps s WHERE s.coin=g.coin AND s.ts>g.ts AND s.ts<=g.ts+$3*interval '1 second' AND s.usd>0 AND s.amount_coin>0)) AS hi
           FROM graded g LEFT JOIN retention_grade_prices saved ON saved.coin=g.coin AND saved.since=$1 AND saved.horizon_sec=$3)
         SELECT level,count(*) AS ratings,count(*) FILTER (WHERE p1<=0.5*p0) AS down50,count(*) FILTER (WHERE p1<=0.5*p0 AND coalesce(hi,p0)<1.2*p0) AS never_up
         FROM priced WHERE p0 IS NOT NULL GROUP BY level`, [new Date(since), new Date(now - horizonSec * 1000), horizonSec, pons]);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { binary, hex, migrate, migrateEngines, type ChainDb } from '@eko/db';
+import { binary, hex, migrate, migrateEngines, runRetention, type ChainDb } from '@eko/db';
 import { openDb } from '../../../packages/db/test/helpers/historical-db.js';
 import { CoinOnboardingWorker, attributeLiquidity, attributeSwaps, decodeText, type AttributionAddresses, type OnboardingChain } from '../src/coin-onboarding.js';
 import type { PricingAssets } from '../src/pricing-repair.js';
@@ -167,6 +167,27 @@ describe('coin onboarding', () => {
     expect((await db.sql.query('SELECT senders_pending FROM liquidity_events WHERE block=900')).rows).toEqual([{senders_pending:false}]);
     expect((await db.sql.query('SELECT status FROM coin_onboarding')).rows).toEqual([{status:'done'}]);
     expect(events).not.toContain('coin_onboarding_failed');expect(calls.filter(c=>c.startsWith('facts:'))).toHaveLength(1);
+  });
+  it('finishes onboarding and pricing with only one day of raw rows after its early day is dropped',async()=>{
+    const db=await open(),early=new Date(now-3*86400000);
+    await db.ensurePartitions(early);
+    await db.insert('tokens',{address:binary(usdg),decimals:6,first_block:'1',block:'1'});
+    await db.insert('chain_blocks',{number:200,block:200,hash:binary(hash(200)),parent_hash:null,ts:early});
+    await db.insert('chain_blocks',{number:990,block:990,hash:binary(hash(990)),parent_hash:null,ts:at(990)});
+    await swap(db,200,200,1,'1000000000000000000',{ts:early,quote_asset:binary(usdg),amount_quote:'5000000'});
+    await swap(db,900,900,1,'1000000000000000000',{quote_asset:binary(usdg),amount_quote:'5000000'});
+    await transfer(db,900,900,manager,buyer,'1000000000000000000');
+    await runRetention(db,{quoteTokens:[],swapDays:1,transferDays:1,dryRun:false,pauseMs:0,now:()=>now});
+    expect((await db.sql.query('SELECT block FROM swaps ORDER BY block')).rows).toEqual([{block:900}]);
+    expect((await db.sql.query('SELECT 1 FROM raw_history_seals WHERE sealed AND dropped')).rows.length).toBeGreaterThan(0);
+    const events:string[]=[];
+    const worker=new CoinOnboardingWorker(db,chain({decimals:18,symbol:'DEMO',name:'Sample token',totalSupply:1000n},
+      {wallet:launcher,to:null,block:99n,tx:hash(77),mintTo:launcher}),event=>events.push(event),{now:()=>now,assets,addresses});
+    await worker.tick();await worker.tick();
+    expect((await db.sql.query('SELECT status FROM coin_onboarding')).rows).toEqual([{status:'done'}]);
+    expect((await db.sql.query('SELECT usd,senders_pending,pricing_pending FROM swaps')).rows).toEqual([{usd:5,senders_pending:false,pricing_pending:false}]);
+    expect((await db.sql.query('SELECT trades FROM bars_1m WHERE coin=$1 AND minute>$2',[binary(coin),new Date(now-86400000)])).rows).toEqual([{trades:1}]);
+    expect(events).not.toContain('coin_onboarding_failed');
   });
   it('records done with sealed history when a seal arrives after the pass snapshot',async()=>{
     const db=await open(),events:string[]=[];
