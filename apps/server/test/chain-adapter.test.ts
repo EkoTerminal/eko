@@ -1,3 +1,4 @@
+import { RpcGuardError } from '@eko/chain';
 import { describe, expect, it, vi } from 'vitest';
 import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseUnits, type Address, type Hex, type TransactionReceipt } from 'viem';
 import { UniswapV3Adapter, POOL_ABI, ROUTER_ABI } from '../src/exec/chain.js';
@@ -94,6 +95,12 @@ describe('configured unsigned v3 adapter', () => {
     expect(client.getTransaction).toHaveBeenCalledWith({ hash }); expect(client.getTransactionReceipt).toHaveBeenCalledWith({ hash });
     client.getTransaction.mockRejectedValue(new Error('not found')); client.getTransactionReceipt.mockRejectedValue(new Error('not found'));
     expect(await adapter.transaction(hash)).toBeNull(); expect(await adapter.receipt(hash)).toBeNull();
+  });
+  it('preserves provider pause scheduling through receipt and transaction adapters',async()=>{
+    const {adapter,client}=fixture();
+    const error=new RpcGuardError('provider_balance_exceeded','provider_balance_exceeded',true,now+60_000);
+    client.getTransaction.mockRejectedValue(error);client.getTransactionReceipt.mockRejectedValue(error);
+    await expect(adapter.transaction(hash)).rejects.toBe(error);await expect(adapter.receipt(hash)).rejects.toBe(error);
   });
   it('parses signed swap amounts, ignores malformed logs and refuses zero-base or unknown-market fills', () => {
     const { adapter } = fixture(), route = adapter.route('ETH-USD')!;

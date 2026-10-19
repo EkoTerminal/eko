@@ -14,6 +14,7 @@ vi.mock('viem', async importOriginal => {
   };
 });
 import { RpcMeter, defaultPublicRpc, rpcStopReason, type RpcEnv } from '../src/rpc/metered.js';
+import { providerErrorClass } from '../src/rpc/outage.js';
 import { createMeteredClients } from '../src/rpc/clients.js';
 function setup(budget = '10', env: RpcEnv = {}) {
   const rows = new Map<string, { provider: 'paid' | 'public'; method: string; calls: number; units: number }>();
@@ -146,4 +147,23 @@ describe('viem transport boundary', () => {
     }
     await meter.close();
   });
+});
+
+
+it('publishes asynchronous socket balance refusals without refunding an accepted subscription',async()=>{
+  const db=await openDb({pgliteDir:':memory:'});
+  const meter=new RpcMeter({APP_ROLE:'worker',RPC_HTTP_URL:'https://paid.invalid',RPC_WS_URL:'wss://paid.invalid'},
+    {store:createSqlUsageStore(db),log:vi.fn()});
+  try {
+    const clients=createMeteredClients(meter.env,{meter}),onError=vi.fn();
+    await clients.headWs!.transport.subscribe({params:['newHeads'],onData:vi.fn(),onError});
+    fake.subscribe.mock.calls[0][0].onError(Object.assign(new Error('payment required'),{status:402}));
+    const usage=await meter.usage();
+    expect(usage).toMatchObject({paidCalls:1,refusedToday:1});
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({code:'provider_balance_exceeded'}));
+    expect(meter.pause?.reason).toBe('provider_balance_exceeded');expect(fake.close).toHaveBeenCalled();
+    const error=await clients.paid.request({method:'eth_call',params:[{}]} as never).catch(error=>error);
+    expect(providerErrorClass(error)).toBe('provider_balance_exceeded');
+    expect(fake.send).not.toHaveBeenCalled();
+  }finally{await meter.close();await db.close();}
 });

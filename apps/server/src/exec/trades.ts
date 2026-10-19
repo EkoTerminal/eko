@@ -1,3 +1,4 @@
+import { rpcPauseRetryAt } from '@eko/chain';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, lt, or, isNull, sql } from 'drizzle-orm';
 import { canonicalize, PreflightRequestSchema, TradeQuoteRequestSchema, TradeQuoteSchema, TradeOrderSchema,
@@ -328,7 +329,7 @@ export class TradeService {
         or(isNull(tradeOrders.postFillEvidence), sql`${tradeOrders.postFillEvidence}->>'status' = 'unavailable'`))));
     for (const row of rows) {
       // Provider failures leave the durable work retryable and never manufacture a fill or a guard miss.
-      try { await this.reconcileOne(row, backend); } catch { /* retry on the next worker tick */ }
+      try { await this.reconcileOne(row, backend); } catch(error) { if(rpcPauseRetryAt(error)!==undefined)throw error; /* retry on the next worker tick */ }
     }
   }
   private async reconcileOne(row: typeof tradeOrders.$inferSelect, backend: TradeReconciliationBackend) {

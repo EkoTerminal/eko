@@ -1,3 +1,4 @@
+import { rpcPauseRetryAt } from '@eko/chain';
 import { and, desc, eq, inArray, lt } from 'drizzle-orm';
 import type { Address, Hex } from 'viem';
 import {
@@ -656,6 +657,7 @@ export class ExecutionService {
   // ───────────────────────── reconciliation ─────────────────────────
 
   private reconciling = false;
+  private rpcRetryAt = 0;
   /**
    * Serialize reconciliation, expire stale unsigned orders and check submitted transactions against
    * retained sender/router/calldata/value before recording receipt-based fills. Host worker only;
@@ -665,7 +667,7 @@ export class ExecutionService {
    * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
    */
   async reconcile() {
-    if (this.reconciling) return;
+    if (this.reconciling || this.now()<this.rpcRetryAt) return;
     this.reconciling = true;
     try {
       await this.cfg.trades?.reconcile();
@@ -685,6 +687,10 @@ export class ExecutionService {
       }
       const pending = await this.db.select().from(orders).where(and(eq(orders.status, 'submitted'), inArray(orders.mode, ['testnet', 'live'])));
       for (const r of pending) await this.reconcileOne(r);
+    } catch(error) {
+      const retryAt=rpcPauseRetryAt(error);
+      if(retryAt===undefined)throw error;
+      this.rpcRetryAt=retryAt;
     } finally {
       this.reconciling = false;
     }

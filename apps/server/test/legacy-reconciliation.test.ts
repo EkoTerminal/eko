@@ -1,3 +1,4 @@
+import { RpcGuardError } from '@eko/chain';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { Quote } from '@eko/shared';
@@ -8,13 +9,13 @@ import type { ExecutionAdapter } from '../src/exec/types.js';
 
 const wallet = `0x${'11'.repeat(20)}`, router = `0x${'22'.repeat(20)}`;
 let sequence = 0, hash: string;
-const now = Date.parse('2026-10-03T12:00:00Z');
+let now = Date.parse('2026-10-03T12:00:00Z');
 let dbh: Awaited<ReturnType<typeof openDb>>, accountId: string, service: ExecutionService;
 const receipt = vi.fn(), transaction = vi.fn(), parseSwap = vi.fn(), onOrder = vi.fn(), onPortfolio = vi.fn();
 beforeAll(async () => { dbh = await openDb({ pgliteDir: ':memory:' }); await runMigrations(dbh); });
 afterAll(async () => { await dbh?.close(); });
 beforeEach(async () => {
-  vi.clearAllMocks();
+  vi.clearAllMocks();now=Date.parse('2026-10-03T12:00:00Z');
   hash = `0x${(++sequence).toString(16).padStart(64, '0')}`;
   const [account] = await dbh.db.insert(accounts).values({ kind: 'wallet' }).returning(); accountId = account!.id;
   receipt.mockResolvedValue({ status: 'success', logs: [], gasUsed: 20_000n, effectiveGasPrice: 1_000_000_000n });
@@ -70,6 +71,14 @@ describe('retained submitted-order reconciliation', () => {
     await dbh.db.update(orders).set({ submittedAt: new Date(now - 1_800_001) }).where(eq(orders.id, id));
     await service.reconcile(); expect(await order(id)).toMatchObject({ status: 'failed', errorCode: 'not_found' });
     expect(transaction).not.toHaveBeenCalled(); expect(onOrder).toHaveBeenCalledOnce();
+  });
+  it('parks submitted orders until the provider retry time and resumes without losing durable work',async()=>{
+    const id=await seed(),retryAt=now+60_000;
+    receipt.mockRejectedValueOnce(new RpcGuardError('provider_balance_exceeded','provider_balance_exceeded',true,retryAt));
+    await service.reconcile();
+    for(let i=0;i<10;i++)await service.reconcile();
+    expect(receipt).toHaveBeenCalledTimes(1);expect((await order(id)).status).toBe('submitted');
+    now=retryAt;await service.reconcile();expect((await order(id)).status).toBe('confirmed');
   });
   it('expires unsigned orders without querying a receipt', async () => {
     const id = await seed('buy', 'awaiting_signature'); await service.reconcile();

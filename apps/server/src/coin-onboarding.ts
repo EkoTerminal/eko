@@ -1,4 +1,4 @@
-import { withRpcOrigin } from '@eko/chain';
+import { withRpcOrigin, rpcPauseRetryAt } from '@eko/chain';
 import { LoopHeartbeat } from './loop-health.js';
 import { decodeAbiParameters, hexToString, parseAbi, type Hex, type PublicClient } from 'viem';
 import { binary, hex, type ChainDb } from '@eko/db';
@@ -271,6 +271,7 @@ export class CoinOnboardingWorker {
   readonly heartbeat: LoopHeartbeat;
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
+  private rpcRetryAt = 0;
   private queue: Candidate[] = [];
   private busy: Candidate[] = [];
   private busiest: Candidate[] = [];
@@ -344,7 +345,9 @@ export class CoinOnboardingWorker {
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
     if (this.running) return this.running;
+    if (this.now()<this.rpcRetryAt) return Promise.resolve();
     this.running = this.pass().then(() => this.heartbeat.complete()).catch(error => {
+      const retryAt=rpcPauseRetryAt(error); if(retryAt!==undefined){this.rpcRetryAt=retryAt;return;}
       // Spent reads are a pause, said once every five minutes; anything else is a failed pass.
       if (error instanceof OnboardingReadsSpent) { this.heartbeat.complete(); if (this.now() - this.pausedAt >= 300_000) { this.pausedAt = this.now(); this.log('coin_onboarding_paused', { reason: 'daily_reads_spent' }); } return; }
       this.log('coin_onboarding_failed', { error: String((error as Error)?.message ?? error).slice(0, 200) });
@@ -523,7 +526,7 @@ export class CoinOnboardingWorker {
         let outcome: 'onboarded' | 'set_aside' | 'unfinished';
         try { outcome = await this.onboard(candidate, until, bounds); }
         catch (error) {
-          if (error instanceof OnboardingReadsSpent) throw error;
+          if (error instanceof OnboardingReadsSpent || rpcPauseRetryAt(error)!==undefined) throw error;
           for (const key of this.rejected) this.reads.delete(key);
           this.rejected.clear();
           // Another writer held what this coin's statement needed (a deadlock or a serialization failure): nothing is

@@ -11,8 +11,8 @@ export function providerErrorClass(error: unknown): ProviderErrorClass | undefin
     seen.add(error);
     const e = error as { code?: unknown; status?: unknown; statusCode?: unknown; message?: unknown; shortMessage?: unknown; details?: unknown; cause?: unknown };
     const text = [e.message, e.shortMessage, e.details].join(' ');
-    if (e.code === 'provider_balance_exceeded' || Number(e.status ?? e.statusCode) === 402 || /balance.*(?:exceeded|exhausted|insufficient)|insufficient.*(?:balance|credits)|credits? (?:exhausted|depleted)|payment required/i.test(text)) return 'provider_balance_exceeded';
-    if (e.code === 'provider_quota_exceeded' || Number(e.status ?? e.statusCode) === 429 || /quota|rate.?limit|too many requests|usage limit|request limit/i.test(text)) quota = true;
+    if (e.code === 'provider_balance_exceeded' || (Number(e.status ?? e.statusCode) === 402 || Number(e.code) === 402) || /(?:balance|credits?).*(?:exceeded|exhausted|insufficient|depleted)|(?:insufficient|not enough).*(?:balance|credits?)|payment required/i.test(text)) return 'provider_balance_exceeded';
+    if (e.code === 'provider_quota_exceeded' || (Number(e.status ?? e.statusCode) === 429 || Number(e.code) === 429) || /quota|rate.?limit|too many requests|usage limit|request limit/i.test(text)) quota = true;
     error = e.cause;
   }
   return quota ? 'provider_quota_exceeded' : undefined;

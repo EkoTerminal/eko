@@ -218,7 +218,7 @@ describe('v1 config and demo sessions against migrated storage', () => {
       refresher: { name: 'refresher', stale: true, periodSec: 0.25, lastCycleAt: null },
       ranks: { name: 'ranks', stale: true, periodSec: 5, lastCycleAt: null },
       summaries: { name: 'summaries', stale: true, periodSec: 5, lastCycleAt: null },
-    }, rpc: { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), today: [], paidCalls: 0, paidDegraded: false, nonIndexerCalls: 0, paidOpen: true, budgetLeft: 800000, sessionUnits: 0 } });
+    }, rpc: { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), today: [], refusedToday: 0, paidCalls: 0, paidDegraded: false, nonIndexerCalls: 0, paidOpen: true, budgetLeft: 800000, sessionUnits: 0 } });
     const result = await built.app.inject('/v1/config');
     expect(result.statusCode).toBe(200);
     expect(result.headers['cache-control']).toBe('public, max-age=10');

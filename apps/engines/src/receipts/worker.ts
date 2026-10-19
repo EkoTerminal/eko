@@ -1,3 +1,4 @@
+import { rpcPauseRetryAt } from '@eko/chain';
 import { decodeEventLog, encodeFunctionData, keccak256, parseTransaction, recoverTransactionAddress } from 'viem';
 import type { Abi, Address, Hex, TransactionSerialized } from 'viem';
 import { GuardReceiptStore, ReceiptCommitJournal, ReceiptOutbox } from '@eko/db';
@@ -177,12 +178,17 @@ export class ReceiptWorker {
   async run(pollMs = 10000) {
     try {
       while (!this.stopped) {
+        let delay=pollMs;
         try { await this.tick(); }
-        catch { this.log('receipt_worker_error',{action:'recover_persisted_transaction'}); }
+        catch (error) {
+          const retryAt=rpcPauseRetryAt(error);
+          if(retryAt!==undefined)delay=Math.max(pollMs,retryAt-this.now());
+          else this.log('receipt_worker_error',{action:'recover_persisted_transaction'});
+        }
         const health = await this.journal.health();
         if (health.heartbeat_missing) this.log('receipt_heartbeat_missing',{alert:true,heartbeat_age_s:Number(health.heartbeat_age_s)});
         if (!this.stopped) await new Promise<void>(resolve => {
-          const timer=setTimeout(() => {this.wake=undefined;resolve();},pollMs);
+          const timer=setTimeout(() => {this.wake=undefined;resolve();},delay);
           this.wake=() => {clearTimeout(timer);this.wake=undefined;resolve();};
         });
       }

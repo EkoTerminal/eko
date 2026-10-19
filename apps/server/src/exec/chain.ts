@@ -1,4 +1,4 @@
-import { withRpcOrigin } from '@eko/chain';
+import { withRpcOrigin, rpcPauseRetryAt } from '@eko/chain';
 import { logger } from '../obs/logger.js';
 import { reportError } from '../obs/errors.js';
 import { rpcOriginClient, RpcMeter, createMeteredPublicClient, safeError, type RpcEnv, type UsageStore, type RpcUsageDb } from '@eko/chain';
@@ -389,28 +389,30 @@ export class UniswapV3Adapter implements ExecutionAdapter {
 
   /**
    * Read a transaction receipt through the configured network client. Public chain read, no wallet
-   * authentication; any provider/not-found failure returns null.
+   * authentication; provider pauses propagate retry timing; other provider/not-found failures return null.
    * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
    */
   async receipt(hash: Hex): Promise<TransactionReceipt | null> {
     try {
       return await this.chains.get(this.networkId).getTransactionReceipt({ hash });
-    } catch {
+    } catch (error) {
+      if (rpcPauseRetryAt(error)!==undefined)throw error;
       return null;
     }
   }
 
   /**
    * Read a transaction through the configured network client. Public chain read, no wallet
-   * authentication; any provider/not-found failure returns null.
+   * authentication; provider pauses propagate retry timing; other provider/not-found failures return null.
    * @see {@link ../../../../SECURITY.md#privileged-powers | Privileged powers}
    * @see {@link ../../../../docs/security/INVARIANTS.md | Unsigned execution and current admission invariants}
    */
   async transaction(hash: Hex) {
     try {
       return await this.chains.get(this.networkId).getTransaction({ hash });
-    } catch {
+    } catch (error) {
+      if (rpcPauseRetryAt(error)!==undefined)throw error;
       return null;
     }
   }

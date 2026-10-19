@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import type { PaidState } from './paid-policy.js';
 import { rpcScope, type RpcWork } from './origin.js';
 import { RpcCodeCache } from './code-cache.js';
 import { custom, http, webSocket, type Transport } from 'viem';
 import { routeRequest, supportsPublic, type Provider, type RpcRequest, type RouteContext } from './routes.js';
-import { persistentUsageStore, createSqlUsageStore, type RpcUsageDb, type UsageRow, type UsageBatch, type UsageStore } from './usage.js';
+import { persistentUsageStore, createSqlUsageStore, type RpcUsageDb, type UsageRow, type UsageBatch, type UsageStore, type PaidRefund } from './usage.js';
 import { safeError } from './safe-error.js';
 import { isTransientRpcError } from './transient.js';
 import { replyGuardFetch, RpcReplyError, type FetchFn } from './reply.js';
@@ -18,7 +19,7 @@ export interface RpcEnv {
 export type RpcLog = (event: string, fields: Record<string, unknown>) => void;
 export class RpcGuardError extends Error {
   /** `transient` marks a provider outage that outlasted the retry window, not a usage-store or request fault. */
-  constructor(readonly code: 'rpc_budget_exhausted' | 'rpc_session_budget_reached' | 'shutdown_requested' | 'rpc_unavailable' | 'rpc_paid_deferred' | 'provider_balance_exceeded' | 'provider_quota_exceeded', message: string = code, readonly transient = false) { super(message); }
+  constructor(readonly code: 'rpc_budget_exhausted' | 'rpc_session_budget_reached' | 'shutdown_requested' | 'rpc_unavailable' | 'rpc_paid_deferred' | 'provider_balance_exceeded' | 'provider_quota_exceeded', message: string = code, readonly transient = false, readonly nextRetryAt?: number) { super(message); }
 }
 export type RpcStopReason = 'rpc_budget_exhausted' | 'rpc_session_budget_reached' | 'shutdown_requested';
 /** viem wraps transport errors; inspect causes without trusting request text. */
@@ -37,6 +38,16 @@ function rpcGuardCode(error: unknown): RpcGuardError['code'] | undefined {
 export function rpcStopReason(error: unknown): RpcStopReason | undefined {
   const code=rpcGuardCode(error);return code==='rpc_unavailable'||code==='rpc_paid_deferred'||code==='provider_balance_exceeded'||code==='provider_quota_exceeded'?undefined:code;
 }
+/** Scheduling metadata survives viem's cause wrappers; never inspect provider text in worker loops. */
+export function rpcPauseRetryAt(error: unknown): number | undefined {
+  const seen = new Set<unknown>();
+  for (let depth=0; error && typeof error==='object' && depth<16 && !seen.has(error); depth++) {
+    seen.add(error); const e=error as {nextRetryAt?:unknown;cause?:unknown};
+    if (typeof e.nextRetryAt==='number' && Number.isFinite(e.nextRetryAt)) return e.nextRetryAt;
+    error=e.cause;
+  }
+  return undefined;
+}
 export const isRpcPaidDeferred = (error: unknown) => rpcGuardCode(error)==='rpc_paid_deferred';
 export const isRpcUnavailable = (error: unknown) => ['rpc_unavailable','rpc_paid_deferred','provider_balance_exceeded','provider_quota_exceeded'].includes(rpcGuardCode(error) ?? '');
 /** Providers stayed unavailable for transient reasons (timeouts, 429/5xx, malformed replies); callers may back off and retry. */
@@ -53,6 +64,7 @@ export function isTransientRpcUnavailable(error: unknown): boolean {
   return false;
 }
 export const defaultPublicRpc = 'https://rpc.mainnet.chain.robinhood.com';
+const pauseLogTimes = new WeakMap<object,Map<string,number>>();
 const numeric = (value: string | undefined, fallback: number, name: string, zero = false) => {
   const n = value === undefined || value === '' ? fallback : Number(value);
   if (!(n >= (zero ? 0 : 1)) || !Number.isFinite(n)) throw new Error(`Invalid ${name}`);
@@ -94,7 +106,13 @@ export class RpcMeter {
   readonly config;
   private readonly outage?: RpcOutage;
   private outageFailure?: unknown;
-  get pause() { return this.outage?.pause ?? null; }
+  get pause() { return this.sharedPause ?? this.outage?.pause ?? null; }
+  private sharedPause: RpcPause | null = null;
+  private sharedRecovery?: Promise<void>;
+  private readonly pauseOnOutage: boolean;
+  private readonly onPauseChange?: MeterOptions['onPauseChange'];
+  private readonly maxOutageBackoffMs: number;
+  private refused = new Map<string, {day:string;method:string;calls:number}>();
   readonly store: UsageStore;
   private codeCache?: RpcCodeCache;
   private policyMinute = -1;
@@ -163,15 +181,104 @@ export class RpcMeter {
     this.random = options.random ?? Math.random;
     this.log = options.log ?? ((event, fields) => console.log(JSON.stringify({ event, ...fields })));
     this.alert = options.alert ?? ((event, fields) => this.log('alert', { reason: event, ...fields }));
+    this.pauseOnOutage = options.pauseOnOutage ?? false;
+    this.onPauseChange = options.onPauseChange;
+    const maxBackoffSec = numeric(env.RPC_OUTAGE_MAX_BACKOFF_SEC, 300, 'RPC_OUTAGE_MAX_BACKOFF_SEC');
+    if (maxBackoffSec < 10) throw new Error('Invalid RPC_OUTAGE_MAX_BACKOFF_SEC');
+    this.maxOutageBackoffMs = maxBackoffSec * 1000;
     if (options.pauseOnOutage) {
-      const max = numeric(env.RPC_OUTAGE_MAX_BACKOFF_SEC, 300, 'RPC_OUTAGE_MAX_BACKOFF_SEC');
-      if (max < 10) throw new Error('Invalid RPC_OUTAGE_MAX_BACKOFF_SEC');
-      this.outage = new RpcOutage({ maxBackoffMs: max * 1000, now: this.now, wait: ms => this.wait(ms), log: this.log, changed: pause => { if (pause) this.closeSockets(); return options.onPauseChange ? this.deadline(Promise.resolve().then(() => options.onPauseChange!(pause)), this.storeTimeoutMs, () => new RpcGuardError('rpc_unavailable', 'RPC pause persistence unavailable')) : undefined; } });
+      this.outage = new RpcOutage({ maxBackoffMs: this.maxOutageBackoffMs, now: this.now, wait: ms => this.wait(ms), log: (event,fields)=>{if(event!=='rpc_paused'||this.shouldLogPause())this.log(event,{...fields,...(event==='rpc_paused'?{role:this.env.APP_ROLE ?? 'other',refusedToday:this.lastRefusedToday}:{})});}, changed: pause => { if (pause) this.closeSockets(); return options.onPauseChange ? this.deadline(Promise.resolve().then(() => options.onPauseChange!(pause)), this.storeTimeoutMs, () => new RpcGuardError('rpc_unavailable', 'RPC pause persistence unavailable')) : undefined; } });
     }
     this.onSessionBudget = options.onSessionBudget ?? (() => {
       if (process.listenerCount('SIGINT')) process.kill(process.pid, 'SIGINT');
       else void this.close().finally(() => process.exit(0));
     });
+  }
+  private lastRefusedToday = 0;
+  private shouldLogPause() {
+    const key=this.store.providerPause ?? this.store;
+    const times=pauseLogTimes.get(key) ?? new Map<string,number>();pauseLogTimes.set(key,times);
+    const role=this.env.APP_ROLE ?? 'other';
+    if(this.now()-(times.get(role) ?? -Infinity)<60_000)return false;
+    times.set(role,this.now());return true;
+  }
+  private async setSharedPause(pause: RpcPause | null) {
+    const changed = JSON.stringify(pause) !== JSON.stringify(this.sharedPause);
+    this.sharedPause = pause;
+    if (pause) this.closeSockets();
+    if (changed && this.onPauseChange) await this.deadline(Promise.resolve(this.onPauseChange(pause)),this.storeTimeoutMs);
+    if (pause && this.shouldLogPause()) {
+      this.log('rpc_paused',{role:this.env.APP_ROLE ?? 'other',...pause,refusedToday:await this.refusedCount()});
+    }
+  }
+  private async readSharedPause(refresh = false) {
+    try {
+      const pause = await this.deadline(this.store.providerPause!.read(this.now(),refresh),this.storeTimeoutMs);
+      await this.setSharedPause(pause); return pause;
+    } catch { throw new RpcGuardError('rpc_unavailable','RPC pause persistence unavailable'); }
+  }
+  private localRefusal(method: string) {
+    const day=this.day(), key=`${day}:${method}`, row=this.refused.get(key) ?? {day,method,calls:0};
+    row.calls++;this.refused.set(key,row);
+  }
+  private async refusedCount() {
+    const day=this.day();
+    const stored=await this.store.refusedToday?.(day) ?? 0;
+    return this.lastRefusedToday=stored+[...this.refused.values()].filter(r=>r.day===day).reduce((n,r)=>n+r.calls,0);
+  }
+  private refusedFlush?: Promise<void>;
+  private flushRefused(): Promise<void> {
+    if (this.refusedFlush) return this.refusedFlush;
+    const write=this.writeRefused().finally(()=>{this.refusedFlush=undefined;});
+    this.refusedFlush=write;return write;
+  }
+  private async writeRefused() {
+    if (!this.store.recordRefused) return;
+    for (const [key,row] of this.refused) {
+      const calls=row.calls;
+      await this.store.recordRefused(row.day,this.env.APP_ROLE ?? 'other',row.method,calls);
+      row.calls-=calls;if (!row.calls)this.refused.delete(key);
+    }
+  }
+  private recoverShared(send: (provider:Provider, request:RpcRequest) => Promise<unknown>) {
+    if (this.sharedRecovery) return this.sharedRecovery;
+    const recovery = (async () => {
+      for (;;) {
+        const pause=await this.readSharedPause();
+        if (!pause) return;
+        const grace=this.env.APP_ROLE==='indexer'?0:1000;
+        await this.wait(Math.max(100,Math.min(3000,pause.nextRetryAt+grace-this.now())));
+        if (this.stopped) throw this.stopError();
+        if(this.now()<pause.nextRetryAt+grace)continue;
+        const token=randomUUID();
+        const leaseMs=this.config.timeoutMs+2*this.storeTimeoutMs+10_000;
+        const claim=()=>this.deadline(this.store.providerPause!.claim(token,this.env.APP_ROLE ?? 'other',this.now(),leaseMs),this.storeTimeoutMs);
+        const claimed=await claim();
+        if (!claimed) continue;
+        let reason: ProviderErrorClass | null = null;
+        try {
+          const r={method:'eth_blockNumber'};
+          const result=await this.attempt('paid',r,async provider=>{
+            // Admission can queue behind a rate slot or SQL. Fence and renew again at dispatch.
+            if(!await claim())throw new RpcGuardError(pause.reason,pause.reason,true,pause.nextRetryAt);
+            return send(provider,r);
+          },false,true,true,undefined,true);
+          if (typeof result!=='string' || !/^0x[0-9a-f]+$/i.test(result)) throw new RpcReplyError('not_json',true,'Invalid block number probe');
+        } catch (error) {
+          if (this.stopped) throw this.stopError();
+          // A failed probe never clears a balance/quota pause (including local ceilings or transient transport faults).
+          reason=providerErrorClass(error) ?? pause.reason;
+        }
+        await this.deadline(this.store.providerPause!.finish(token,this.now(),reason,this.maxOutageBackoffMs),this.storeTimeoutMs);
+        await this.readSharedPause(true);
+        if (!this.sharedPause) { this.log('rpc_resumed',{provider:'paid'}); return; }
+      }
+    })();
+    this.sharedRecovery=recovery;
+    void recovery.catch(() => { if (!this.stopped) this.log('rpc_pause_recovery_unavailable',{}); }).finally(() => {
+      if (this.sharedRecovery===recovery)this.sharedRecovery=undefined;
+    });
+    return recovery;
   }
   private day() { return new Date(this.now()).toISOString().slice(0, 10); }
   start() {
@@ -291,6 +398,7 @@ export class RpcMeter {
   async usage() {
     await this.flushNotifications();
     await this.flushUsage();
+    await this.flushRefused();
     const day = this.day();
     let today: UsageRow[];
     try { today = await this.store.today(day); } catch { throw new RpcGuardError('rpc_unavailable', 'RPC usage persistence unavailable'); }
@@ -298,7 +406,7 @@ export class RpcMeter {
     this.observePaid(day, paidUnits);
     if(this.policyActive)await this.paidWorkAllowed();
     const policy=this.policyActive ? this.lastPaidState : undefined;
-    return { day, today, ...(policy ? {paidCalls:policy.total,paidDegraded:policy.degraded,nonIndexerCalls:policy.nonIndexer} : {}), paidOpen: policy ? policy.allowed : this.exhaustedDay !== day && paidUnits < this.config.dailyBudget, budgetLeft: Math.max(0, this.config.dailyBudget - (policy?.total ?? paidUnits)), sessionUnits: this.sessionUnits };
+    return { day, today, refusedToday:await this.refusedCount(), ...(policy ? {paidCalls:policy.total,paidDegraded:policy.degraded,nonIndexerCalls:policy.nonIndexer} : {}), paidOpen: policy ? policy.allowed : this.exhaustedDay !== day && paidUnits < this.config.dailyBudget, budgetLeft: Math.max(0, this.config.dailyBudget - (policy?.total ?? paidUnits)), sessionUnits: this.sessionUnits };
   }
   async summary() {
     this.minute = this.minute.filter(r => r.at > this.now() - 60_000);
@@ -329,6 +437,7 @@ export class RpcMeter {
       await Promise.all(Object.values(this.locks));
       try {
         await this.outage?.wait().catch(() => {});
+        await this.sharedRecovery?.catch(() => {});
         await this.flushNotifications();
         await this.flushUsage();
         if (this.leased) for (const [key, units] of this.credits) { const [day,provider] = key.split(':'); await this.store.release!(day,provider as Provider,units); }
@@ -338,7 +447,7 @@ export class RpcMeter {
     })();
   }
   /** Admission is serialized within the process; the SQL store serializes across processes. */
-  private async admit(provider: Provider, request: RpcRequest, spill = false, probe = false): Promise<{provider:Provider;finalCall:boolean}> {
+  private async admit(provider: Provider, request: RpcRequest, spill = false, probe = false): Promise<{provider:Provider;finalCall:boolean;refund:PaidRefund;minuteRow: (UsageRow & {at:number;origin?:string})}> {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(request.method)) throw new RpcGuardError('rpc_unavailable', 'Invalid RPC method');
     const began = performance.now();
     const previous = this.locks[provider]; let release!: () => void;
@@ -347,7 +456,11 @@ export class RpcMeter {
     this.activeAdmission[provider]=true;
     try {
       if (this.stopped) throw this.stopError();
-      if (!probe && this.pause) throw new RpcGuardError(this.pause.reason, this.pause.reason, true);
+      if (provider==='paid' && !probe && this.store.providerPause) {
+        const pause=await this.readSharedPause();
+        if (pause) { this.localRefusal(request.method); throw new RpcGuardError(pause.reason,pause.reason,true,pause.nextRetryAt); }
+      }
+      if (!probe && this.outage?.pause) throw new RpcGuardError(this.outage.pause.reason, this.outage.pause.reason, true);
       const units = Object.hasOwn(this.config.weights, request.method) ? this.config.weights[request.method] : 1;
       if (this.sessionUnits + units > this.config.sessionBudget) { this.signalSession(); throw new RpcGuardError('rpc_session_budget_reached'); }
       if (provider === 'paid' && this.exhaustedDay === this.day()) throw new RpcGuardError('rpc_budget_exhausted');
@@ -361,7 +474,11 @@ export class RpcMeter {
         this.next.paid = start;
         return await this.admit('public',request);
       }
-      if (!probe && this.pause) throw new RpcGuardError(this.pause.reason, this.pause.reason, true);
+      if (!probe && this.outage?.pause) throw new RpcGuardError(this.outage.pause.reason, this.outage.pause.reason, true);
+      if (provider==='paid' && !probe && this.store.providerPause) {
+        const pause=await this.readSharedPause();
+        if (pause) { this.localRefusal(request.method); throw new RpcGuardError(pause.reason,pause.reason,true,pause.nextRetryAt); }
+      }
       const day = this.day();
       if (provider === 'paid' && this.exhaustedDay === day) throw new RpcGuardError('rpc_budget_exhausted');
       if (this.sessionUnits + units > this.config.sessionBudget) { this.signalSession(); throw new RpcGuardError('rpc_session_budget_reached'); }
@@ -398,22 +515,56 @@ export class RpcMeter {
       // dispatch readiness so the following admission cannot form a catch-up burst.
       this.next[provider]=Math.max(this.next[provider],this.now()+60_000/(provider==='paid'?this.config.paidRpm:this.config.publicRpm));
       this.sessionUnits += units;
-      this.minute.push({ provider, method: request.method, origin: rpcScope()?.origin ?? this.env.APP_ROLE ?? 'unlabelled', calls: 1, units, at: this.now() });
-      return {provider,finalCall:this.sessionUnits >= this.config.sessionBudget};
+      const minuteRow={ provider, method: request.method, origin: rpcScope()?.origin ?? this.env.APP_ROLE ?? 'unlabelled', calls: 1, units, at: this.now() };
+      this.minute.push(minuteRow);
+      return {provider,finalCall:this.sessionUnits >= this.config.sessionBudget,minuteRow,
+        refund:{requestId:randomUUID(),day,role:this.env.APP_ROLE ?? 'other',method:request.method,units,policy:this.policyActive,leased:this.leased}};
     } finally { this.activeAdmission[provider]=false;this.queued[provider]--; this.timing.admissionMs += performance.now()-began; release(); }
   }
-  async attempt<T>(provider: Provider, request: RpcRequest, send: (provider:Provider) => Promise<T>, spill = false, probe = false, waitForRecovery = true): Promise<T> {
-    if (!probe && !waitForRecovery && this.pause) throw new RpcGuardError(this.pause.reason, this.pause.reason, true);
+  async attempt<T>(provider: Provider, request: RpcRequest, send: (provider:Provider) => Promise<T>, spill = false, probe = false, waitForRecovery = true, probeSend?: (provider:Provider, request:RpcRequest) => Promise<unknown>, sharedProbe = false): Promise<T> {
+    if (provider==='paid' && !sharedProbe && this.store.providerPause) {
+      for (;;) {
+        const pause=await this.readSharedPause();
+        if (!pause) break;
+        const recovery=this.recoverShared(probeSend ?? ((p)=>send(p)));
+        if (this.pauseOnOutage && waitForRecovery) { await recovery; continue; }
+        this.localRefusal(request.method);
+        throw new RpcGuardError(pause.reason,pause.reason,true,pause.nextRetryAt);
+      }
+    }
+    if (!probe && !waitForRecovery && this.outage?.pause) throw new RpcGuardError(this.outage.pause.reason,this.outage.pause.reason,true);
     if (!probe && this.outage) await this.outage.wait();
     const admission = await this.admit(provider, request,spill,probe);
-    if (!probe && this.pause) throw new RpcGuardError(this.pause.reason, this.pause.reason, true);
-    if (this.stopped) throw this.stopError();
     const began = performance.now();
-    // Backstop beyond the transport's own timeout: no admitted request may wait forever.
     const limit = this.config.timeoutMs + 5_000;
-    try { return await this.deadline(send(admission.provider), limit, () => new RpcReplyError('timeout', true, `RPC request timed out after ${limit} ms`)); }
-    finally { this.timing.rpcMs += performance.now()-began; if (admission.finalCall) this.signalSession(); }
+    let refunded=false;
+    try {
+      // A refusal may race a slow ledger admission. Undo that reservation without dispatching.
+      const pause=!sharedProbe && admission.provider==='paid' && this.store.providerPause ? await this.readSharedPause() : null;
+      if (pause) throw new RpcGuardError(pause.reason,pause.reason,true,pause.nextRetryAt);
+      if (!probe && this.outage?.pause) throw new RpcGuardError(this.outage.pause.reason,this.outage.pause.reason,true);
+      if (this.stopped) throw this.stopError();
+      return await this.deadline(send(admission.provider), limit, () => new RpcReplyError('timeout', true, `RPC request timed out after ${limit} ms`));
+    } catch (error) {
+      const reason=providerErrorClass(error);
+      if (admission.provider==='paid' && reason && this.store.providerPause) {
+        // Publish first, so queued callers stop before any further reservation or send.
+        const pause=await this.deadline(this.store.providerPause.refuse(reason,this.now()),this.storeTimeoutMs).catch(()=>{throw new RpcGuardError('rpc_unavailable','RPC pause persistence unavailable');});
+        await this.flushUsage();
+        if (this.store.refundPaid) await this.deadline(this.store.refundPaid(admission.refund),this.storeTimeoutMs).catch(()=>{throw new RpcGuardError('rpc_unavailable','RPC refund persistence unavailable');});
+        refunded=true;
+        this.sessionUnits-=admission.refund.units;
+        this.paidTotal=Math.max(0,this.paidTotal-admission.refund.units);
+        if (this.exhaustedDay===admission.refund.day)this.exhaustedDay='';
+        this.minute=this.minute.filter(row=>row!==admission.minuteRow);
+        await this.setSharedPause(pause);
+        if (!probe && probeSend) this.recoverShared(probeSend);
+        throw new RpcGuardError(reason,reason,true,pause.nextRetryAt);
+      }
+      throw error;
+    } finally { this.timing.rpcMs += performance.now()-began; if (admission.finalCall && !refunded) this.signalSession(); }
   }
+
   async request(request: RpcRequest | readonly RpcRequest[], send: Record<Provider, (r: RpcRequest) => Promise<unknown>>, context: RouteContext = 'default', waitForRecovery = true): Promise<unknown> {
     if (Array.isArray(request)) return Promise.all(request.map(r => this.request(r, send, context, waitForRecovery)));
     const r = request as RpcRequest;
@@ -425,7 +576,6 @@ export class RpcMeter {
   private async requestUncached(r: RpcRequest, send: Record<Provider, (r: RpcRequest) => Promise<unknown>>, context: RouteContext, waitForRecovery: boolean): Promise<unknown> {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(r.method)) throw new RpcGuardError('rpc_unavailable', 'Invalid RPC method');
     if (this.outageFailure) throw this.outageFailure;
-    if (!waitForRecovery && this.pause) throw new RpcGuardError(this.pause.reason, this.pause.reason, true);
     let provider = routeRequest(r, context);
     // Queue against the earliest free slot on either bucket. Reserving future public
     // slots keeps it busy even while paid-only enrichment is queued separately.
@@ -447,13 +597,18 @@ export class RpcMeter {
       let actualProvider = provider;
       const spill = !switched && transientSince == null && (context === 'head' || context === 'head_timestamp') && routeRequest(r,context) === 'public';
       try {
-        const result = await this.attempt(provider, r, actual => { actualProvider=actual;return send[actual](r); },spill,false,waitForRecovery);
+        const result = await this.attempt(provider, r, actual => { actualProvider=actual;return send[actual](r); },spill,false,waitForRecovery,(p,r)=>send[p](r));
         if (actualProvider === 'paid') this.paidSucceeded();
         return result;
       }
       catch (error) {
         provider = actualProvider;
         if (this.stopped) throw this.stopError();
+        if (provider==='paid' && this.store.providerPause && error instanceof RpcGuardError && providerErrorClass(error)) {
+          const recovery=this.recoverShared((p,r)=>send[p](r));
+          if (!this.pauseOnOutage || !waitForRecovery) throw error;
+          await recovery; switched=false;transientSince=undefined;retries=0;continue;
+        }
         const providerClass = providerErrorClass(error);
         const outageClass: ProviderErrorClass | undefined = providerClass ?? (isTransientRpcUnavailable(error) || (!(error instanceof RpcGuardError) && isTransientRpcError(error)) ? 'rpc_unavailable' : undefined);
         if (this.outage && outageClass) {
@@ -513,9 +668,24 @@ export class RpcMeter {
       }, context, waitForRecovery) }, { retryCount: 0 })(options);
     };
   }
+  private socketError(error: unknown, onError: ((error: Error)=>void) | undefined, probeSend: (provider:Provider,r:RpcRequest)=>Promise<unknown>) {
+    if (this.stopped) {onError?.(this.stopError());return;}
+    const reason=providerErrorClass(error);
+    if (!reason || !this.store.providerPause) {onError?.(new RpcGuardError('rpc_unavailable',safeError(error)));return;}
+    this.localRefusal('eth_subscription');
+    const write=(async()=>{
+      const pause=await this.deadline(this.store.providerPause!.refuse(reason,this.now()),this.storeTimeoutMs);
+      await this.setSharedPause(pause);this.recoverShared(probeSend);
+      onError?.(new RpcGuardError(reason,reason,true,pause.nextRetryAt));
+    })().catch(()=>onError?.(new RpcGuardError('rpc_unavailable','RPC pause persistence unavailable')));
+    this.notificationWrites.add(write);
+    void write.finally(()=>this.notificationWrites.delete(write));
+  }
   /** Disable hidden socket reconnects; the follower can restart through metered admission. */
   wsTransport(): Transport {
     return options => {
+      const probeSend=(_provider:Provider,r:RpcRequest)=>http(this.env.RPC_HTTP_URL,
+        {retryCount:0,timeout:this.config.timeoutMs,fetchFn:replyGuardFetch(this.fetchFn),batch:{batchSize:100,wait:1}})(options).request(r as never,{dedupe:false});
       const raw = webSocket(this.env.RPC_WS_URL, { retryCount: 0, reconnect: false, keepAlive: false })(options);
       const trackSocket = async () => {
         const socket = await raw.value!.getRpcClient();
@@ -529,25 +699,25 @@ export class RpcMeter {
           try { return await raw.request(r as never, { dedupe: false }); }
           finally { if (this.stopped || this.exhaustedDay === this.day()) { close(); this.sockets.delete(close); } }
         } catch (e) { if (e instanceof RpcGuardError) throw e; throw new RpcGuardError('rpc_unavailable', safeError(e)); }
-      }) }, { retryCount: 0 })(options);
+      },false,false,true,probeSend) }, { retryCount: 0 })(options);
       return { ...guarded, config: { ...guarded.config, type: 'webSocket' }, value: {
         subscribe: (input: Parameters<NonNullable<typeof raw.value>['subscribe']>[0]) => this.attempt('paid', { method: 'eth_subscribe', params: input.params }, async () => {
           try {
             const close = await trackSocket();
             const subscription = await raw.value!.subscribe({ ...input,
               onData: data => { this.notification(); input.onData(data); },
-              onError: e => input.onError?.(this.stopped ? this.stopError() : this.exhaustedDay === this.day() ? new RpcGuardError('rpc_budget_exhausted') : new RpcGuardError('rpc_unavailable', safeError(e))),
+              onError: e => this.exhaustedDay === this.day() ? input.onError?.(new RpcGuardError('rpc_budget_exhausted')) : this.socketError(e,input.onError,probeSend),
             });
             if (this.stopped || this.exhaustedDay === this.day()) { close(); this.sockets.delete(close); }
             return { subscriptionId: subscription.subscriptionId, unsubscribe: async () => {
               // Closing a socket sends no JSON-RPC call and requires no paid allowance.
               if (this.stopped || this.exhaustedDay === this.day()) { close(); this.sockets.delete(close); return { jsonrpc: '2.0', id: 0, result: true }; }
-              try { return await this.attempt('paid', { method: 'eth_unsubscribe' }, () => subscription.unsubscribe()); }
+              try { return await this.attempt('paid', { method: 'eth_unsubscribe' }, () => subscription.unsubscribe(),false,false,true,probeSend); }
               catch (e) { throw new RpcGuardError('rpc_unavailable', safeError(e)); }
               finally { close(); this.sockets.delete(close); }
             } };
           } catch (e) { if (e instanceof RpcGuardError) throw e; throw new RpcGuardError('rpc_unavailable', safeError(e)); }
-        }),
+        },false,false,true,probeSend),
       } };
     };
   }

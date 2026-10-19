@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChainDb } from '@eko/db';
-import { rpcRoleHealth } from '@eko/chain';
+import { rpcRoleHealth, RpcGuardError, createSqlUsageStore } from '@eko/chain';
 import * as retention from '@eko/db';
 import { LoopHeartbeat, loopHealth } from '../src/loop-health.js';
 import { healthRoutes } from '../src/http/v1/health.js';
@@ -11,7 +11,7 @@ import { PricingRepairWorker } from '../src/pricing-repair.js';
 import { CoinOnboardingWorker } from '../src/coin-onboarding.js';
 import { ReadStore } from '../src/read/store.js';
 
-const usage = async () => ({ day: '2026-10-17', today: [], paidOpen: false, budgetLeft: 0, sessionUnits: 0 });
+const usage = async () => ({ day: '2026-10-17', today: [], refusedToday: 0, paidOpen: false, budgetLeft: 0, sessionUnits: 0 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 it('keeps liveness healthy with unstarted or stale loops while loop readiness follows three periods', async () => {
@@ -130,4 +130,37 @@ it('pricing, onboarding and projection timers report completion rather than entr
     expect((await app.inject('/v1/health/loops')).json().loops.engines.stale).toBe(true);
     await update(null);expect((await app.inject('/v1/health/loops')).statusCode).toBe(200);
   } finally {await app.close();await db.close();}
+});
+
+
+it('reports the shared provider pause even before an indexer or engines role starts',async()=>{
+  const db=await retention.openDb({pgliteDir:':memory:'}),app=Fastify();
+  try {
+    const control=createSqlUsageStore(db).providerPause!;
+    const pause=await control.refuse('provider_quota_exceeded',1000);
+    await app.register(async v1=>healthRoutes(v1,usage,loadConfig({NODE_ENV:'test'}),()=>db.sql.query('SELECT 1'),undefined,db),{prefix:'/v1'});
+    const ready=await app.inject('/v1/health/loops');
+    expect(ready.statusCode).toBe(503);expect(ready.json().loops.provider).toEqual(pause);
+    expect((await app.inject('/v1/health')).statusCode).toBe(200);
+    expect(await control.claim('sample-probe','indexer',11000,1000)).toBe(true);
+    await control.finish('sample-probe',11000,null,300000);
+    expect((await app.inject('/v1/health/loops')).statusCode).toBe(200);
+  }finally{await app.close();await db.close();}
+});
+
+it('parks worker passes until the provider retry time without emitting per-pass failures',async()=>{
+  let now=1000;
+  const log=vi.fn(),db={} as ChainDb;
+  const workers=[new PricingRepairWorker(db,log,()=>now),new CoinOnboardingWorker(db,{} as never,log,{now:()=>now})];
+  for(const worker of workers) {
+    const pass=vi.spyOn(worker as unknown as {pass():Promise<void>},'pass')
+      .mockRejectedValueOnce(new RpcGuardError('provider_balance_exceeded','provider_balance_exceeded',true,61000))
+      .mockResolvedValue();
+    await worker.tick();
+    for(let i=0;i<20;i++)await worker.tick();
+    expect(pass).toHaveBeenCalledTimes(1);
+    now=61000;await worker.tick();expect(pass).toHaveBeenCalledTimes(2);now=1000;
+    await worker.stop();
+  }
+  expect(log).not.toHaveBeenCalled();
 });

@@ -1,3 +1,4 @@
+import { RpcGuardError } from '@eko/chain';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { concat, encodeAbiParameters, encodeEventTopics, keccak256, stringToHex } from 'viem';
@@ -246,4 +247,19 @@ describe('080 synthetic committer, no chain access', () => {
     await f.journal.release();expect(await second.acquire()).toBe(true);
     await new ReceiptWorker(second,f.chain,registry,undefined,() => now).tick();expect(f.chain.signs).toBe(1);expect(f.chain.sent).toHaveLength(1);
   });
+});
+
+
+it('sleeps the receipt worker until the provider retry and wakes promptly on stop',async()=>{
+  vi.useFakeTimers();vi.setSystemTime(1000);
+  const release=vi.fn(async()=>{}),log=vi.fn();
+  const journal={health:vi.fn(async()=>({heartbeat_missing:false})),release} as unknown as ReceiptCommitJournal;
+  const worker=new ReceiptWorker(journal,{} as ReceiptChain,registry,log);
+  const tick=vi.spyOn(worker,'tick').mockRejectedValueOnce(new RpcGuardError('provider_quota_exceeded','provider_quota_exceeded',true,61000))
+    .mockImplementation(async()=>worker.stop());
+  const running=worker.run(1000);
+  try {
+    await vi.advanceTimersByTimeAsync(59000);expect(tick).toHaveBeenCalledTimes(1);expect(log).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);await running;expect(tick).toHaveBeenCalledTimes(2);expect(release).toHaveBeenCalledOnce();
+  }finally{worker.stop();await running;vi.useRealTimers();}
 });

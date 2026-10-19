@@ -1,4 +1,4 @@
-import { withRpcOrigin } from '@eko/chain';
+import { withRpcOrigin, rpcPauseRetryAt } from '@eko/chain';
 import { LoopHeartbeat } from './loop-health.js';
 import { parseAbi, type PublicClient } from 'viem';
 import { binary, hex, refreshBars, type ChainDb } from '@eko/db';
@@ -226,6 +226,7 @@ export class PricingRepairWorker {
   readonly heartbeat: LoopHeartbeat;
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
+  private rpcRetryAt = 0;
   private cursor?: number;
   /** The process re-tagged every mispaired curve swap it found (new ones are decoded with their pair). */
   private retagged = false;
@@ -243,7 +244,8 @@ export class PricingRepairWorker {
   async stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined; await this.running; }
   tick(): Promise<void> {
     if (this.running) return this.running;
-    this.running = this.pass().then(() => this.heartbeat.complete()).catch(() => this.log('pricing_repair_failed', {})).finally(() => { this.running = undefined; });
+    if (this.now()<this.rpcRetryAt) return Promise.resolve();
+    this.running = this.pass().then(() => this.heartbeat.complete()).catch(error => { const retryAt=rpcPauseRetryAt(error); if(retryAt!==undefined){this.rpcRetryAt=retryAt;return;} this.log('pricing_repair_failed', {}); }).finally(() => { this.running = undefined; });
     return this.running;
   }
   /** Price one hour until done (`done`) or out of budget, so an unfinished hour is resumed rather than skipped. */
@@ -257,7 +259,7 @@ export class PricingRepairWorker {
     }
     // Then what has no indexed price: a provider failure leaves the hour for the next pass.
     if (this.spot) try { priced += (await repricePoolQuotes(this.db, this.assets!, this.spot, new Date(end - HOUR), new Date(end), this.spotPrices, candleFloor, bounds)).priced; }
-    catch { return { priced, done: false }; }
+    catch (error) { if(rpcPauseRetryAt(error)!==undefined)throw error; return { priced, done: false }; }
     return { priced, done: true };
   }
   private async pass() {

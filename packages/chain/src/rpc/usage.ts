@@ -1,9 +1,15 @@
+import { sqlProviderPause, type ProviderPauseStore } from './provider-pause.js';
 import { sqlPaidPolicy, type PaidPolicy, type PaidState } from './paid-policy.js';
 import type { ChainDb, SqlClient } from '@eko/db';
 import type { Provider } from './routes.js';
 export type UsageRow = { provider: Provider; method: string; calls: number; units: number };
 export type UsageBatch = UsageRow & { day: string; unleasedUnits: number };
+export interface PaidRefund { requestId: string; day: string; role: string; method: string; units: number; policy: boolean; leased: boolean }
 export interface UsageStore {
+  providerPause?: ProviderPauseStore;
+  refundPaid?(refund: PaidRefund): Promise<void>;
+  recordRefused?(day: string, role: string, method: string, calls: number): Promise<void>;
+  refusedToday?(day: string): Promise<number>;
   paidPolicy?(day: string, policy: PaidPolicy, consume: boolean): Promise<PaidState>;
   lease?(day: string, provider: Provider, units: number, minimum: number, limit: number): Promise<{ allowed: boolean; total: number; units: number }>;
   record?(rows: UsageBatch[]): Promise<void>;
@@ -23,7 +29,40 @@ export function createSqlUsageStore(db: RpcUsageDb): UsageStore {
   let ready: Promise<unknown> | undefined;
   const init = () => ready ??= db.sql.query(rpcUsageSchema);
   const policy = sqlPaidPolicy(db);
+  let refundsReady: Promise<unknown> | undefined;
+  const initRefunds = () => refundsReady ??= (async () => {
+    await init();
+    await db.sql.query('CREATE TABLE IF NOT EXISTS rpc_paid_refunds (request_id text PRIMARY KEY, day date NOT NULL)');
+    await db.sql.query(`CREATE TABLE IF NOT EXISTS rpc_paid_refused (
+      day date NOT NULL, role text NOT NULL, method text NOT NULL, calls bigint NOT NULL DEFAULT 0, PRIMARY KEY(day,role,method))`);
+  })();
+  const recordRefused = async (sql: SqlClient, day: string, role: string, method: string, calls: number) => {
+    await sql.query(`INSERT INTO rpc_paid_refused(day,role,method,calls) VALUES($1,$2,$3,$4)
+      ON CONFLICT(day,role,method) DO UPDATE SET calls=rpc_paid_refused.calls+excluded.calls`,[day,role,method,calls]);
+  };
   return {
+    providerPause: sqlProviderPause(db),
+    async refundPaid(r) {
+      await initRefunds();
+      await db.tx(async tx => {
+        const inserted = await tx.sql.query(`INSERT INTO rpc_paid_refunds(request_id,day) VALUES($1,$2)
+          ON CONFLICT DO NOTHING RETURNING request_id`,[r.requestId,r.day]);
+        if (!inserted.rows.length) return;
+        // Lock in admission order: daily call ceiling, then total usage, then method detail.
+        if (r.policy) await tx.sql.query(`UPDATE rpc_paid_daily SET total=total-1,
+          non_indexer=non_indexer-CASE WHEN $2='indexer' THEN 0 ELSE 1 END WHERE day=$1`,[r.day,r.role]);
+        await tx.sql.query(`UPDATE rpc_usage SET units=units-$2,calls=calls-$3
+          WHERE day=$1 AND provider='paid' AND method='__total__'`,[r.day,r.units,r.leased?0:1]);
+        await tx.sql.query(`UPDATE rpc_usage SET units=units-$3,calls=calls-1
+          WHERE day=$1 AND provider='paid' AND method=$2`,[r.day,r.method,r.units]);
+        await recordRefused(tx.sql,r.day,r.role,r.method,1);
+      });
+    },
+    async recordRefused(day,role,method,calls) { await initRefunds(); await recordRefused(db.sql,day,role,method,calls); },
+    async refusedToday(day) {
+      await initRefunds();
+      return Number((await db.sql.query<{calls:string}>('SELECT coalesce(sum(calls),0) AS calls FROM rpc_paid_refused WHERE day=$1',[day])).rows[0].calls);
+    },
     paidPolicy: async (...args) => { await init(); return policy(...args); },
     async lease(day, provider, units, minimum, limit) {
       await init();
@@ -78,7 +117,7 @@ export function createSqlUsageStore(db: RpcUsageDb): UsageStore {
     },
     async today(day) {
       await init();
-      const { rows } = await db.sql.query<UsageRow>("SELECT provider,method,calls,units FROM rpc_usage WHERE day=$1 AND method <> '__total__' ORDER BY provider,method", [day]);
+      const { rows } = await db.sql.query<UsageRow>("SELECT provider,method,calls,units FROM rpc_usage WHERE day=$1 AND method <> '__total__' AND calls>0 ORDER BY provider,method", [day]);
       return rows.map(r => ({ ...r, calls: Number(r.calls), units: Number(r.units) }));
     },
   };
@@ -91,6 +130,15 @@ export function persistentUsageStore(env: { DATABASE_URL?: string; RPC_USAGE_DIR
     return { db, store: createSqlUsageStore(db) };
   });
   return {
+    providerPause: {
+      read: async (...args) => (await get()).store.providerPause!.read(...args),
+      refuse: async (...args) => (await get()).store.providerPause!.refuse(...args),
+      claim: async (...args) => (await get()).store.providerPause!.claim(...args),
+      finish: async (...args) => (await get()).store.providerPause!.finish(...args),
+    },
+    refundPaid: async r => (await get()).store.refundPaid!(r),
+    recordRefused: async (...args) => (await get()).store.recordRefused!(...args),
+    refusedToday: async day => (await get()).store.refusedToday!(day),
     paidPolicy: async (...args) => (await get()).store.paidPolicy!(...args),
     reserve: async (...args) => (await get()).store.reserve(...args),
     lease: async (...args) => (await get()).store.lease!(...args),
