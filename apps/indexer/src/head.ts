@@ -1,7 +1,7 @@
 import { loadSenderScope } from './sender-scope.js';
 import { rpcStopReason, isTransientRpcUnavailable, backoffDelay } from '@eko/chain';
 import { safeError } from './safe-error.js';
-import { PartitionLockTimeoutError, binary, type ChainDb } from '@eko/db';
+import { retryableTransaction, PartitionLockTimeoutError, binary, type ChainDb } from '@eko/db';
 import type { BlockDecoder, RemoteInputs } from './decode.js';
 import { log, type ChainClient, type Logger, type RpcBlock, type RpcReceipt } from './types.js';
 import { lower } from './clients.js';
@@ -137,7 +137,7 @@ export class HeadFollower {
       const cursor = await tx.cursor('head');
       if (cursor == null || n >= cursor) await tx.setCursor('head', n, block.hash);
       if (inserted) await tx.notify('chain_block', { n: n.toString() });
-    });
+    },{retry:true});
     this.decoder.committed(prepared);
     this.decoder.metrics.observe(block.timestamp);
     return true;
@@ -232,7 +232,8 @@ export class HeadFollower {
             if (rpcStopReason(error)) { this.stop(); throw error; }
             if (this.stopRequested) break;
             if (this.client.rpcStopped?.()) { this.stop(); throw error; }
-            const outage = isTransientRpcUnavailable(error) || error instanceof PartitionLockTimeoutError;
+            this.db.recordTransactionSkip(error);
+            const outage = isTransientRpcUnavailable(error) || error instanceof PartitionLockTimeoutError || retryableTransaction(error);
             if (error instanceof ReorgDepthError || (attempt >= 3 && !outage)) throw error;
             const delay = outage ? backoffDelay(outages++, this.options.random, 1000, 60_000) : attempt * 250;
             this.logger('block_retry', { n: n.toString(), attempt, backoff_ms: Math.round(delay), error: safeError(error) });

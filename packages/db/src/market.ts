@@ -78,6 +78,7 @@ interface BarKey { coin: Uint8Array; minute: Date | string }
  * OFFSET 0 keeps the lateral subquery from being flattened back into that join. Same rows, same aggregates.
  */
 async function writeBars(db: ChainDb, keys: string, params: unknown[], perKey = false) {
+  // refreshBars holds read_lock_coins for the entire key set before any bar DELETE or INSERT.
   // A bar whose minute has no raw swap left is the summary history retention keeps for a pruned coin (retention.ts
   // deletes a coin's swaps in whole minutes), so it is never rebuilt from what remains. Reorgs delete their bars first
   // (deleteAbove), and every other rebuild has the minute's swaps.
@@ -104,6 +105,8 @@ async function writeBars(db: ChainDb, keys: string, params: unknown[], perKey = 
 export async function refreshBars(db: ChainDb, touched: BarKey[]) {
   const unique = [...new Map(touched.map(r => [`${hex(r.coin)}:${new Date(r.minute).toISOString()}`,r])).values()];
   for (const row of unique) await db.ensurePartitions(new Date(row.minute));
+  // Acquire the whole set before chunking: a later chunk must never introduce a lower coin lock.
+  await db.lockReadCoins([...new Map(unique.map(r=>[hex(r.coin),r.coin])).values()]);
   // Serialize same-coin writers, including absent bars, without blocking unrelated live minutes.
   for (const coin of [...new Map(unique.map(r => [hex(r.coin), r.coin])).entries()].sort(([a],[b])=>a.localeCompare(b)).map(([,coin])=>coin)) {
     await db.sql.query('INSERT INTO bar_write_locks(coin) VALUES($1) ON CONFLICT DO NOTHING',[coin]);

@@ -48,6 +48,16 @@ export class ReplayCache {
   /** Every stored block time, by number (initialize): horizon and prior-block searches go by time. */
   clockPoints:{number:number;sec:number}[]=[];
   constructor(readonly db:ChainDb,readonly to:number,readonly clock:ClockCache,readonly marketWindow=true) {}
+  /** Restore only state derived from transaction writes; source aggregates are rebuilt after rollback. */
+  checkpoint() {
+    const runs=new Set(this.runs),writes=new Map([...this.writes].map(([k,v])=>[k,{...v}])),
+      histories=new Map([...this.histories].map(([k,v])=>[k,[...v]])),matches=new Map([...this.matches].map(([k,v])=>[k,[...v]])),
+      outcomes=new Map([...this.outcomes].map(([k,v])=>[k,[...v]])),attempts=new Set(this.outcomeAttempts);
+    return ()=>{
+      this.runs=runs;this.writes=writes;this.histories=histories;this.matches=matches;
+      this.outcomes=outcomes;this.outcomeAttempts=attempts;this.holders.clear();this.trades.clear();
+    };
+  }
   async initialize() {
     // The shared clock cache is filled lazily (refreshClock), so it cannot be searched by time. Read every stored time
     // once; a time the cache already holds wins, and launch-time lookups by block (outcomes.ts) find every block here.

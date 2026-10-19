@@ -38,7 +38,7 @@ async function main() {
   if (args[0] === 'bars:rebuild') {
     const range = z.object({ from: z.coerce.bigint().min(0n), to: z.coerce.bigint().min(0n) }).parse({ from: option('from'), to: option('to') });
     const db = await openDb({ databaseUrl: process.env.DATABASE_URL, pgliteDir: process.env.PGLITE_DIR });
-    try { await migrate(db); await db.tx(tx => rebuildBars(tx, range.from, range.to)); log('bars_rebuilt', { from: range.from.toString(), to: range.to.toString() }); }
+    try { await migrate(db); await db.tx(tx => rebuildBars(tx, range.from, range.to),{retry:true}); log('bars_rebuilt', { from: range.from.toString(), to: range.to.toString() }); }
     finally { await db.close(); }
     return;
   }
@@ -46,6 +46,7 @@ async function main() {
   if (!parsed.success) throw new Error(`Invalid indexer environment: ${parsed.error.issues.map(i => i.path.join('.')).join(', ')}`);
   const env = { ...process.env, ...parsed.data } as RpcEnv & typeof parsed.data; const registry = loadRegistry();
   const db = await openDb({ databaseUrl: env.DATABASE_URL, pgliteDir: env.PGLITE_DIR });
+  const stopDbMetrics=db.startTransactionMetrics();
   const telemetry=launchEmitter(db.sql,()=>log('launch_metrics_unavailable'));
   let worker: HeadFollower | LogHeadFollower | PonsBackfill | undefined;
   let watchdog: ProgressWatchdog | undefined;
@@ -130,7 +131,7 @@ async function main() {
   } catch (error) { failed = true; throw error; } finally {
     process.removeListener('SIGTERM', signalStop); process.removeListener('SIGINT', signalStop);
     // The watchdog outlives cleanup: a shutdown that hangs on the database or RPC is a stall too.
-    try { try { await stopPartitions?.();await telemetry.drain();await meter.close(); } finally { await db.close(); } } finally { watchdog?.stop(); }
+    try { try { await stopPartitions?.();await telemetry.drain();await meter.close(); } finally { stopDbMetrics();await db.close(); } } finally { watchdog?.stop(); }
     if (!failed && (meter.stopReason === 'rpc_session_budget_reached' || meter.stopReason === 'shutdown_requested')) reportIndexerError(new RpcGuardError(meter.stopReason), log);
   }
 }

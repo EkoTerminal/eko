@@ -301,7 +301,8 @@ export class BlockDecoder {
    * do; a backfill stream reads one kind of log at a time). Only then can a transaction's own logs name the wallet
    * behind a swap or liquidity event outside the sender scope; without it those rows stay senders_pending.
    */
-  collect(block: RpcBlock, receipts: RpcReceipt[], state: Prepared, options: { ponsOnly?: boolean; transfers?: boolean } = {}) {
+  collect(block: RpcBlock, receipts: RpcReceipt[], state: Prepared, options: { ponsOnly?: boolean; transfers?: boolean; classify?:(reason:string,log:RpcLog)=>void } = {}) {
+    const classify=options.classify ?? ((reason:string,log:RpcLog)=>this.metrics.classify(reason,log));
     const rows = new BlockRows();
     rows.merge(state.protocolRows);
     const n = BigInt(block.number); const ts = dateOf(block);
@@ -345,14 +346,14 @@ export class BlockDecoder {
 
       const pons = decodePonsResult(l, tx, { registry: this.registry, tokenForCurve: c => state.curves.get(lower(c)) ?? null, ...ctx });
       const standard = options.ponsOnly ? { events: [], unknownTopics: 0, malformedLogs: 0 } : decodePoolEvents(l, { registry: this.registry, tx, ...ctx, isV3Pool: a => state.pools.get(lower(a))?.venue === 'uniswap_v3' });
-      if (pons.malformedLogs || standard.malformedLogs) this.metrics.classify('malformed', l);
+      if (pons.malformedLogs || standard.malformedLogs) classify('malformed', l);
       else if (!pons.events.length && !standard.events.length) {
         let reason=deferredPool?'deferred_pool':l.topics[0] === transferTopic && l.topics.length === 4 && l.data === '0x' ? 'not_erc20' : 'unknown_topic';
         if(state.curves.has(lower(l.address))&&unindexedPonsTopics.has(l.topics[0])){
           try{decodeEventLog({abi:ponsCurveAbi,topics:l.topics,data:l.data,strict:true});reason='unindexed_pons_event';}
           catch{reason='malformed';}
         }
-        this.metrics.classify(reason,l);
+        classify(reason,l);
       }
       for (const e of pons.events) {
         // Preserve the outer transaction separately from resolveActor/UserOp attribution.
@@ -407,7 +408,7 @@ export class BlockDecoder {
     return rows;
   }
   async write(db: ChainDb, block: RpcBlock, receipts: RpcReceipt[], state: Prepared, options: { ponsOnly?: boolean; transfers?: boolean } = {}) {
-    await this.collect(block, receipts, state, options).flush(db);
+    await this.collect(block, receipts, state, {...options,classify:(reason,log)=>db.afterCommit(()=>this.metrics.classify(reason,log))}).flush(db);
   }
   private swap(rows: BlockRows, state: Prepared, base: Record<string, unknown>, ts: Date, tx: RpcTransaction, actor: Address | null, s: { pool: Hex; venue: string; coin: Address; quote: Address; side: 1 | -1; amountCoin: bigint; amountQuote: bigint; recipient?: Address },
     context?: { logs: RpcLog[]; poolManager: string; knownPool: (address: string) => boolean }) {

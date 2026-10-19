@@ -6,7 +6,7 @@ import { refreshFingerprints, replayFingerprints, type FingerprintOptions } from
 import { writeRegistryLabels } from './registry-labels.js';
 import { expireSimulationTraces } from './reference-simulation.js';
 import { expireV4ReferenceTraces } from './v4-reference.js';
-import { binary, hex, publishReceipt, priceMovedCoins, ScanJobs, scanTarget, recordScanStart, recordScanVerdict, type ChainDb, type EngineBus } from '@eko/db';
+import { retryableTransaction, TransactionRetryExhaustedError, binary, hex, publishReceipt, priceMovedCoins, ScanJobs, scanTarget, recordScanStart, recordScanVerdict, type ChainDb, type EngineBus } from '@eko/db';
 import { assembleVerdict, evaluatePlaybooks, rules, RULES_VERSION } from '@eko/playbooks';
 import { shouldRecomputeSignal } from '@eko/signal';
 import { isRpcUnavailable, isRpcPaidDeferred, rpcStopReason, withRpcOrigin, type RpcWork, type PonsProfileClient } from '@eko/chain';
@@ -39,6 +39,7 @@ export const RATING_CODE_AT='2026-10-12T18:30:00Z';
  * not run on a coin with a second pool. They are few (onboarding began that morning) and are re-rated once.
  */
 export const UNISWAP_RATING_CODE_AT='2026-10-13T07:30:00Z';
+const DB_CONTENTION_SKIPPED=Symbol('database_contention');
 const NO_OTHER_RERATE='1970-01-01T00:00:00Z';
 /** Stale pending cards the re-rating loop loads at once and writes in one transaction. */
 export const RERATE_WIDTH=16;
@@ -302,7 +303,7 @@ export class EngineWorker {
         await this.prepareReference(coin,block);
         const sources=await this.loadRatingSources(this.db,coin,block,this.client,this.clock);
         if(!sources){this.cardFailures++;await jobs.finish(job,'waiting','pending','indexed_launch_evidence_unavailable');continue;}
-        const card=await this.db.tx(async tx=>{
+        const card=await this.writeTx(async tx=>{
           const owner=(await tx.sql.query<{lease_id:string}>('SELECT lease_id FROM scan_jobs WHERE id=$1 FOR UPDATE',[job.id])).rows[0];
           if(owner?.lease_id!==job.lease_id)return;
           await lockEngineWrites(tx,[sources],true);
@@ -312,7 +313,8 @@ export class EngineWorker {
           sources.history=await historyAt(tx,sources.deployer,coin,sources.asOfBlock);
           return this.persistRun(tx,sources);
         });
-        if(card){await this.recordScan(card);await jobs.finish(job,'done','ready');completed++;}
+        if(card===DB_CONTENTION_SKIPPED)await jobs.finish(job,'waiting','pending','database_contention');
+        else if(card){await this.recordScan(card);await jobs.finish(job,'done','ready');completed++;}
       } catch {await jobs.fail(job,'engine');}
     }
     return completed;
@@ -483,7 +485,7 @@ export class EngineWorker {
     const progress:EvaluationProgress={to,tasks:tasks.length,attempted:0,skipped:0,failed:0,completed:0,outcomeLoads:0,outcomesPending:false,phase:'sources',sec:0};
     const report=()=>{progress.sec=Math.round((performance.now()-queuedAt)/1000);progress.outcomesPending=!outcomesDone;this.options.onEvaluation?.({...progress});};
     const reporter=live && this.options.onEvaluation ? setInterval(report,this.options.evaluationReportMs ?? 60_000) : undefined;
-    const failedThisPoll=new Set<Address>();
+    const failedThisPoll=new Set<Address>(),contentionThisPoll=new Set<Address>();
     const queue:OutcomeQueue={};
     const outcomes=async (tx:ChainDb,block:number,sec:number,loads=this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE)=>{
       const budget:OutcomeBudget|undefined=live ? {loads,used:0} : undefined,phase=progress.phase;
@@ -525,7 +527,9 @@ export class EngineWorker {
         remaining.set(batch[i].coin,remaining.get(batch[i].coin)!-1);
         const sources=loaded[i];if(!sources){this.cache?.writes.delete(batch[i].coin);expire(batch[i].sec);continue;}
         progress.phase='write';
-        const writeStart=performance.now();const card=await this.db.tx(async tx=>{
+        const writeStart=performance.now();const card=await this.writeTx(async tx=>{
+          const before={outcomesDone,outcomesBlock,loads:progress.outcomeLoads,rows:structuredClone(queue.rows)};
+          tx.afterRollback(()=>{outcomesDone=before.outcomesDone;outcomesBlock=before.outcomesBlock;progress.outcomeLoads=before.loads;queue.rows=before.rows;});
           await lockEngineWrites(tx,[sources],!(live && batchStart<priority));
           if(!this.cache && !(live && revised.has(sources.coin) && sources.asOfBlock===to) && (await tx.sql.query('SELECT 1 FROM engine_runs WHERE coin=$1 AND block=$2 AND rules_version=$3',[binary(sources.coin),sources.asOfBlock,RULES_VERSION])).rows.length)return;
           // Outcomes are keyed by horizon time, so a later block covers every earlier one. Replay runs in block
@@ -539,6 +543,7 @@ export class EngineWorker {
         });
         this.metrics.writeMs+=performance.now()-writeStart;
         expire(sources.asOfSec);
+        if(card===DB_CONTENTION_SKIPPED){progress.skipped++;if(live){failedThisPoll.add(sources.coin);contentionThisPoll.add(sources.coin);}continue;}
         if(!card){progress.skipped++;continue;}
         progress.completed++;
         this.evaluated.set(sources.coin,{level:card.verdict.level,playbooks:card.playbooks});
@@ -551,14 +556,16 @@ export class EngineWorker {
     }
     // Outcome horizons still mature after a coin stops receiving card evaluations.
     const end=clock.at(-1);
-    if(!this.stopped && end && (outcomesBlock<end.number || !outcomesDone)){const start=performance.now();await this.db.tx(async tx=>{
+    if(!this.stopped && end && (outcomesBlock<end.number || !outcomesDone)){const start=performance.now();await this.writeTx(async tx=>{
+      const before={outcomesDone,outcomesBlock,loads:progress.outcomeLoads,rows:structuredClone(queue.rows)};
+      tx.afterRollback(()=>{outcomesDone=before.outcomesDone;outcomesBlock=before.outcomesBlock;progress.outcomeLoads=before.loads;queue.rows=before.rows;});
       await lockEngineWrites(tx,[],true);
       await outcomes(tx,end.number,end.sec,Math.max(this.options.outcomeLoadsPerWrite ?? OUTCOME_LOADS_PER_WRITE,OUTCOME_LOADS_PER_POLL));
     });this.metrics.writeMs+=performance.now()-start;}
     } finally {clearInterval(reporter);progress.phase='done';if(live)report();}
     // A yielded poll records only coins whose checkpoints all ran; the rest are planned again next poll.
     this.yielded=yielded;
-    if(!this.stopped && live)for(const coin of pending)if(!yielded || !remaining.get(coin.coin)) {
+    if(!this.stopped && live)for(const coin of pending)if(!contentionThisPoll.has(coin.coin) && (!yielded || !remaining.get(coin.coin))) {
       if(startup)this.startupDone.add(coin.coin);
       // The progress base lets the next poll (or the next process) read only this coin's rows above it.
       await this.db.sql.query(`INSERT INTO engine_activity_state(coin,revision,through_block,base_block,base_sum,base_sec,last_sec) VALUES($1,$2,$3,$4,$5,$6,$7)
@@ -598,8 +605,9 @@ export class EngineWorker {
           // A spent daily paid budget is not a fault: a restart meets the same budget, and each one costs a cold refresh
           // (2026-10-10: 24 restarts in seven minutes on the new host). Wait and poll again; public lanes and the next
           // UTC day let it through. The wait counts as progress for the stall watchdog. Other errors still stop.
-          if(rpcStopReason(error)!=='rpc_budget_exhausted' && !isRpcPaidDeferred(error))throw error;
-          this.options.onBudgetWait?.();this.options.onHeartbeat?.();
+          if(retryableTransaction(error)){this.db.recordTransactionSkip(error);}
+          else if(rpcStopReason(error)!=='rpc_budget_exhausted' && !isRpcPaidDeferred(error))throw error;
+          if(!retryableTransaction(error))this.options.onBudgetWait?.();this.options.onHeartbeat?.();
           await new Promise<void>(resolve=>{const timer=setTimeout(resolve,this.options.budgetWaitMs ?? 60_000);this.wake=()=>{clearTimeout(timer);this.wake=undefined;resolve();};if(this.stopped)this.wake();});
           continue;
         }
@@ -625,7 +633,7 @@ export class EngineWorker {
    */
   private async rerateLoop() {
     while (!this.stopped) {
-      let cards=0,firstScans=0;
+      let cards=0,firstScans=0,contentionSkipped=false;
       try {
         // The indexer's newest block; resolveClock stores its time when polls have not yet.
         const head=(await this.db.sql.query<{number:string|null}>('SELECT max(number)::text AS number FROM chain_blocks')).rows[0]?.number;
@@ -668,7 +676,7 @@ export class EngineWorker {
             // read_feed is taken before any card is written. The refresher locks read_feed, then read_coins; a card whose
             // verdict is unchanged writes only read_coins (its card trigger), so a later card's verdict trigger would
             // otherwise reach read_feed second and could deadlock with it.
-            const written=await this.db.tx(async tx=>{
+            const written=await this.writeTx(async tx=>{
               await lockEngineWrites(tx,loaded);
               await tx.sql.query('LOCK TABLE read_feed IN ROW EXCLUSIVE MODE');
               const out:CoinCard[]=[];
@@ -679,6 +687,11 @@ export class EngineWorker {
               }
               return out;
             });
+            if(written===DB_CONTENTION_SKIPPED) {
+              contentionSkipped=true;
+              for(const {coin,card} of batch){if(card)this.rerated.delete(coin);else this.firstTried.delete(coin);}
+              continue;
+            }
             for(const card of written){await this.recordScan(card);cards++;this.completed++;if(tradedCoins.has(card.identity.address.toLowerCase() as Address) || tradedCoins.has(card.identity.address as Address))tradedCards++;}
             firstScans+=written.filter(card=>first.includes(card.identity.address.toLowerCase() as Address)).length;
             if(written.length)this.options.onHeartbeat?.();
@@ -694,8 +707,9 @@ export class EngineWorker {
           }
         }
         if(work.length)this.options.onRerate?.(cards,firstScans,tradedCards);
-        if(work.length && !this.options.rpcPaused?.() && (!this.options.paidWorkAllowed || cards>0))continue;
+        if(work.length && !contentionSkipped && !this.options.rpcPaused?.() && (!this.options.paidWorkAllowed || cards>0))continue;
       } catch(error) {
+        this.db.recordTransactionSkip(error);
         if(rpcStopReason(error)!=='rpc_budget_exhausted' && !isRpcPaidDeferred(error))this.options.onRerateError?.(error);
       }
       await new Promise<void>(resolve=>{const timer=setTimeout(resolve,this.options.rerateIdleMs ?? 30_000);this.rerateWake=()=>{clearTimeout(timer);resolve();};if(this.stopped)resolve();});
@@ -750,7 +764,8 @@ export class EngineWorker {
       batch.forEach((coin,i)=>prepared.set(coin,sources[i]));
     }
     const cards:CoinCard[]=[];
-    await this.db.tx(async tx => {
+    await this.writeTx(async tx => {
+      cards.length=0;tx.afterRollback(()=>{cards.length=0;});
       await lockEngineWrites(tx,[...prepared.values()].filter((s):s is LoadedSources=>s!=null),true,true);
       if (!replay) {
         const cursor=(await tx.sql.query<{ block:string }>("SELECT block FROM engine_cursors WHERE stream='engines'")).rows[0];
@@ -769,6 +784,18 @@ export class EngineWorker {
       if (!replay) await tx.sql.query("INSERT INTO engine_cursors VALUES('engines',$1,$2) ON CONFLICT(stream) DO UPDATE SET block=excluded.block,hash=excluded.hash",[block,b.hash]);
     });
     if(!replay)for(const card of cards)await this.recordScan(card);
+  }
+  private async writeTx<T>(work:(tx:ChainDb)=>Promise<T>):Promise<T|typeof DB_CONTENTION_SKIPPED> {
+    try {
+      return await this.db.tx(async tx=>{
+        const restoreCache=this.cache?.checkpoint(),skips=new Map(this.outcomeSkips);
+        tx.afterRollback(()=>{restoreCache?.();this.outcomeSkips=skips;});
+        return work(tx);
+      },{retry:true});
+    } catch(error) {
+      if(!(error instanceof TransactionRetryExhaustedError))throw error;
+      return DB_CONTENTION_SKIPPED;
+    }
   }
   private async persistRun(tx:ChainDb,s:LoadedSources,replay=false) {
     if(this.cache){const claim=await tx.sql.query('INSERT INTO engine_runs VALUES($1,$2,$3,$4,NULL,$5) ON CONFLICT DO NOTHING RETURNING coin',[binary(s.coin),s.asOfBlock,s.asOfSec,s.trade.last?.price_quote ?? null,RULES_VERSION]);if(!claim.rows.length)return;}
@@ -794,6 +821,7 @@ export class EngineWorker {
     const state={prior:prior.rows[0],previous:previous.rows[0],signal:run.rows[0]?.signal};this.cache.writes.set(s.coin,state);return state;
   }
   private async writeCoin(tx: ChainDb,s: LoadedSources) {
+    await tx.sql.query('SELECT read_lock_coins($1::bytea[])',[[binary(s.coin)]]);
     const state=await this.writeState(tx,s);
     const matches=evaluatePlaybooks({ ...s,history:s.history });
     const evaluated=evaluatedPlaybooks(s);
@@ -833,7 +861,7 @@ export class EngineWorker {
       const signalTime=this.clock.get(priorRun.signal.asOfBlock) ?? (await tx.sql.query<{ ts:Date }>('SELECT ts FROM engine_block_times WHERE number=$1',[priorRun.signal.asOfBlock])).rows[0];
       if (signalTime && !shouldRecomputeSignal(seconds(signalTime.ts)*1000,s.asOfSec*1000)) card.signal=priorRun.signal;
     }
-    if(latest && Number(latest.as_of_block)<=s.asOfBlock)this.outcomeDifferences.record(latest.data,latest.rules_version,card,RULES_VERSION);
+    if(latest && Number(latest.as_of_block)<=s.asOfBlock)tx.afterCommit(()=>this.outcomeDifferences.record(latest.data,latest.rules_version,card,RULES_VERSION));
     const outcome=ratingOutcome(card,RULES_VERSION);
     const checkedAt=new Date((this.options.now?.() ?? Date.now()/1000)*1000).toISOString();
     const saveCheck=async(full:boolean)=>{

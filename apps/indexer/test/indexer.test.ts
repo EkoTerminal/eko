@@ -317,3 +317,25 @@ describe('backfill and ordered queue', () => {
     expect(await db.cursor('head')).toBeNull(); expect(await db.blockHash(from)).toBeNull();
   },30000);
 });
+
+for(const failures of [2,5])it(`retries raw block writes atomically after ${failures} serialization conflicts`,async()=>{
+ const db=await database(),data=fixture.ponsLaunch,client=clientFor([data]);
+ const decoder=new BlockDecoder(client,registry,new Metrics(quiet),quiet),committed=vi.spyOn(decoder,'committed');
+ const follower=new HeadFollower(client,db,decoder,{reorgDepth:3,logger:quiet});
+ await db.sql.query('CREATE SEQUENCE sample_ingest_attempt');
+ await db.sql.query(`CREATE FUNCTION sample_ingest_conflict() RETURNS trigger LANGUAGE plpgsql AS $$
+ BEGIN IF nextval('sample_ingest_attempt')<=${failures} THEN RAISE EXCEPTION 'sample conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$`);
+ await db.sql.query('CREATE TRIGGER sample_ingest_conflict BEFORE INSERT OR UPDATE ON ingest_cursors FOR EACH ROW EXECUTE FUNCTION sample_ingest_conflict()');
+ const publish=vi.spyOn(db.bus,'publish');
+ if(failures===5) {
+  await expect(follower.ingest(data.block,data.receipts)).rejects.toMatchObject({code:'40001',name:'TransactionRetryExhaustedError'});
+  expect(await db.cursor('head')).toBeNull();expect(committed).not.toHaveBeenCalled();expect(publish).not.toHaveBeenCalled();
+  expect((await db.sql.query('SELECT 1 FROM tokens')).rows).toHaveLength(0);
+ }
+ expect(await follower.ingest(data.block,data.receipts)).toBe(true);
+ expect(await db.cursor('head')).toBe(BigInt(data.block.number));expect(committed).toHaveBeenCalledOnce();
+ expect(publish.mock.calls.filter(([message])=>message.topic==='chain_block')).toHaveLength(1);
+ const counts=await db.sql.query('SELECT (SELECT count(*) FROM swaps) AS swaps,(SELECT count(*) FROM token_transfers) AS transfers,(SELECT sum(amount) FROM balances) AS balance');
+ await follower.ingest(data.block,data.receipts);
+ expect((await db.sql.query('SELECT (SELECT count(*) FROM swaps) AS swaps,(SELECT count(*) FROM token_transfers) AS transfers,(SELECT sum(amount) FROM balances) AS balance')).rows).toEqual(counts.rows);
+});

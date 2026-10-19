@@ -1,3 +1,4 @@
+import { enginesHalt } from './halt.js';
 import { withRpcOrigin } from '@eko/chain';
 import { openDb, migrate, migrateEngines, PostgresBus, launchEmitter } from '@eko/db';
 import { createMeteredClients, rpcRoleHealth, rpcStopReason, loadRegistry, ponsCurveAbi, ProgressWatchdog, rpcOriginClient, type PonsProfileClient } from '@eko/chain';
@@ -46,6 +47,7 @@ async function main() {
   loadRegistry();
   if (env.ENGINE_MODE==='replay' && (env.FROM==null || env.TO==null || env.TO<env.FROM)) throw new Error('Replay requires FROM <= TO');
   const db=await openDb({ databaseUrl:env.DATABASE_URL,pgliteDir:env.PGLITE_DIR });
+  const stopDbMetrics=db.startTransactionMetrics();
   let readBlock:BlockReader | undefined;
   let client: PonsProfileClient | undefined;
   let rerateClient: PonsProfileClient | undefined;
@@ -108,6 +110,6 @@ async function main() {
       }
       console.log(JSON.stringify({ event:'engines_stopped',mode:env.ENGINE_MODE }));
     } finally { process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);await telemetry.drain(); }
-  } finally { process.removeListener('SIGINT',stopStartup);process.removeListener('SIGTERM',stopStartup);try { await rpc?.meter.close();await db.close(); } finally { watchdog?.stop(); } }
+  } finally { process.removeListener('SIGINT',stopStartup);process.removeListener('SIGTERM',stopStartup);try { await rpc?.meter.close();stopDbMetrics();await db.close(); } finally { watchdog?.stop(); } }
 }
-main().catch(error=>{ if(rpcStopReason(error)==='shutdown_requested'||rpcStopReason(error)==='rpc_session_budget_reached')return;console.error(error instanceof Error && /^Missing (launch|activity) timestamp at block [0-9]+; provide RPC_HTTP_URL for archive headers$/.test(error.message) ? error.message : 'Engines halted: check environment, indexed range and database.');process.exit(1); });
+main().catch(error=>{ if(rpcStopReason(error)==='shutdown_requested'||rpcStopReason(error)==='rpc_session_budget_reached')return;console.error(JSON.stringify(enginesHalt(error)));console.error(error instanceof Error && /^Missing (launch|activity) timestamp at block [0-9]+; provide RPC_HTTP_URL for archive headers$/.test(error.message) ? error.message : 'Engines halted: check environment, indexed range and database.');process.exit(1); });

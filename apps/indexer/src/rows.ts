@@ -22,11 +22,22 @@ export class BlockRows {
     this.graduations.push(...other.graduations);
   }
   get(table: typeof chainTables[number]): readonly Row[] {return this.rows.get(table)??[];}
+  /** Lock the whole raw-write batch before any source trigger can dirty a projection. */
+  async lockReadCoins(db:ChainDb,extra:Uint8Array[]=[]) {
+    const coins:Uint8Array[]=[...extra];
+    for(const [table,rows] of this.rows)for(const row of rows) {
+      const fields=table==='tokens' ? ['address'] : table==='pools' ? ['currency0','currency1'] : ['coin','token'];
+      for(const field of fields)if(row[field] instanceof Uint8Array)coins.push(row[field] as Uint8Array);
+    }
+    for(const row of [...this.launches,...this.graduations])coins.push(binary(row.token));
+    await db.lockReadCoins(coins);
+  }
   /**
    * `notify: false` writes the rows without announcing them: for rows of long-settled blocks (stored raw events turned
    * into swaps). Every swap notice makes the API look the swap up as a new trade.
    */
   async flush(db: ChainDb, timings?: FlushTimings, options: { notify?: boolean } = {}) {
+    await this.lockReadCoins(db);
     const notifications: BusMessage[] = [];
     let insertedTransfers: Record<string, unknown>[] = [];
     let mark = performance.now();

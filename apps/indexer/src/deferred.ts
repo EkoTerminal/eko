@@ -105,7 +105,7 @@ export class DeferredEvents {
       }
       const priced = batch.get('swaps').filter(row => row.usd != null);
       if (priced.length) await refreshBars(tx, priced.map(row => ({ coin: row.coin as Uint8Array, minute: new Date(Math.floor(new Date(row.ts as Date).getTime() / 60000) * 60000) })));
-    });
+    },{retry:true});
     (this.options.logger ?? log)('deferred_events_materialized', { events: done.length, swaps: batch.get('swaps').length, liquidity: batch.get('liquidity_events').length, read: rows.length });
     return done.length;
   }

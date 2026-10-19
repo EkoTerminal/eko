@@ -638,7 +638,7 @@ export class LogHeadFollower {
               ON CONFLICT(token) DO NOTHING`,[launchTokens]);
             await tx.setCursor('head_logs',covered,null);
             if(last) { const applied=await tx.cursor('head');if(applied==null||BigInt(last.number)>=applied)await tx.setCursor('head',BigInt(last.number),last.hash); }
-          });
+          },{retry:true});
         } finally { this.timings.dbWriteMs+=performance.now()-writeBegan;this.timings.commits++; }
         this.options.onProgress?.(covered);
         this.decoder.metrics.blocks+=states.length;
@@ -678,6 +678,7 @@ export class LogHeadFollower {
         // halt here restarted the whole process over a conflict another writer had already resolved by finishing
         // (2026-10-13: the scanner's wallet labels against the head's swap rows, 74 deadlocks in three days).
         const contention=lockContention(error);
+        this.db.recordTransactionSkip(error);
         if (this.stopping || this.client.rpcStopped?.() || !(budget || contention || isTransientRpcUnavailable(error))) throw error;
         delay=contention ? 250 : backoffDelay(failures++, this.options.random, this.options.retryBaseMs ?? 1000, this.options.retryCapMs ?? 60_000);
         this.logger('head_retry', { reason: budget ? 'rpc_budget_exhausted' : contention ? 'database_lock_contention' : 'rpc_unavailable', ...(budget ? { lane: 'public' } : {}), attempt: failures, backoff_ms: Math.round(delay), error: safeError(error) });

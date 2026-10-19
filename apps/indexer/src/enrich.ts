@@ -99,10 +99,12 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
         for(const table of ['wallets','userops','delegations_7702','wallet_protocol_coverage'] as const)for(const row of rows.get(table))batch.add(table,row);
       })));
       await db.tx(async tx=>{
+        const beforeEnriched=enriched;tx.afterRollback(()=>{enriched=beforeEnriched;});
         await tx.sql.query("SET LOCAL lock_timeout='5s'");
         await tx.sql.query('LOCK TABLE tokens,pools,swaps,token_transfers IN SHARE ROW EXCLUSIVE MODE');
         await tx.sql.query('LOCK TABLE chain_blocks IN SHARE MODE');
         for(const [number,expected] of hashes){const stored=await tx.blockHash(BigInt(number));if((expected.stored || stored!=null) && stored!==expected.hash)throw new Error('Reorg before sender enrichment commit');}
+        await batch.lockReadCoins(tx,updates.map(({row})=>row.coin as Uint8Array).filter(coin=>coin instanceof Uint8Array));
         for(const token of batch.get('tokens'))await tx.sql.query(`UPDATE tokens SET symbol=coalesce(symbol,$2),name=coalesce(name,$3),decimals=coalesce(decimals,$4),total_supply=coalesce(total_supply,$5::numeric),supply_block=coalesce(supply_block,$6::bigint) WHERE address=$1`,[token.address,token.symbol,token.name,token.decimals,token.total_supply,token.supply_block]);
         for(const table of ['swaps','liquidity_events'] as const) {
           const rows=updates.filter(u=>u.table===table).map(u=>u.row);
@@ -119,7 +121,7 @@ export async function enrichSenders(db:ChainDb, coin:Address, providedClient?:Ch
         await batch.flush(tx);
         for(const r of pending.filter(r=>r.source==='raw'&&numbers.includes(r.block)))await tx.sql.query('DELETE FROM pending_pool_events WHERE tx_hash=$1 AND log_index=$2 AND block=$3',[r.tx_hash,r.log_index,r.block]);
         await refreshBars(tx,[...batch.get('swaps'),...updates.filter(u=>u.table==='swaps').map(({row})=>row)].map(row=>({coin:row.coin as Uint8Array,minute:new Date(Math.floor(new Date(row.ts as Date).getTime()/60000)*60000)})));
-      });
+      },{retry:true});
       after=pending.filter(r=>numbers.includes(r.block)).at(-1)!;
     }
     return {enriched};

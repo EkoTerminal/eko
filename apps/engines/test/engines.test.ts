@@ -1036,3 +1036,45 @@ describe('engines: live catch-up when the worker lags behind head',()=>{
   } finally {clock.mockRestore();}
  },60000);
 });
+
+async function failSchedule(db:ChainDb,attempts:number) {
+ await db.sql.query('CREATE SEQUENCE sample_schedule_attempt');
+ await db.sql.query(`CREATE FUNCTION sample_schedule_conflict() RETURNS trigger LANGUAGE plpgsql AS $$
+ BEGIN IF NEW.coin=decode('${coin.slice(2)}','hex') AND nextval('sample_schedule_attempt')<=${attempts}
+ THEN RAISE EXCEPTION 'sample transaction conflict' USING ERRCODE='40P01'; END IF; RETURN NEW; END $$`);
+ await db.sql.query('CREATE TRIGGER sample_schedule_conflict BEFORE INSERT OR UPDATE ON engine_schedule FOR EACH ROW EXECUTE FUNCTION sample_schedule_conflict()');
+}
+
+it('retries a rolled-back replay card without leaking cached runs, history, verdicts or notices',async()=>{
+ const db=await setup();await failSchedule(db,2);
+ const notices:unknown[]=[];const unsubscribe=await db.bus.subscribe(message=>{if(message.topic==='card_updated')notices.push(message);});
+ const worker=new EngineWorker(db);
+ try {
+  expect(await worker.replay(1,1)).toBe(1);
+  expect(await count(db,'engine_runs')).toBe(1);expect(await count(db,'coin_cards')).toBe(1);
+  expect(await count(db,'verdicts')).toBe(1);expect(notices).toHaveLength(1);
+  expect(Number((await db.sql.query<{last_value:string|number}>('SELECT last_value FROM sample_schedule_attempt')).rows[0].last_value)).toBe(3);
+ }finally{await unsubscribe();}
+});
+
+it('skips an exhausted poll coin, commits its neighbour, and retries the skipped coin next poll',async()=>{
+ const db=await setup();const other=address(80);await token(db,other,1,true,'Sample second token',address(81));
+ await failSchedule(db,5);
+ const worker=new EngineWorker(db,{now:()=>epoch+60});
+ expect(await worker.poll()).toBe(1);
+ expect((await db.sql.query('SELECT 1 FROM coin_card_latest WHERE coin=$1',[binary(coin)])).rows).toHaveLength(0);
+ expect((await db.sql.query('SELECT 1 FROM coin_card_latest WHERE coin=$1',[binary(other)])).rows).toHaveLength(1);
+ expect((await db.sql.query('SELECT 1 FROM engine_activity_state WHERE coin=$1',[binary(coin)])).rows).toHaveLength(0);
+ expect(await worker.poll()).toBe(1);
+ expect(await count(db,'coin_card_latest')).toBe(2);
+});
+
+it('retries rerate batch writes and keeps all failed-attempt notifications private',async()=>{
+ const db=await setup();await failSchedule(db,2);
+ await db.sql.query("INSERT INTO read_coins(coin,tier,activity,first_block,pair_column,pair_block) VALUES($1,2,to_timestamp($2),1,'new',1) ON CONFLICT(coin) DO UPDATE SET activity=excluded.activity",[binary(coin),epoch+1]);
+ const reports:number[]=[],worker=new EngineWorker(db,{now:()=>epoch+60,rerate:true,rerateIdleMs:10,onRerate:n=>{reports.push(n);worker.stop();}});
+ worker.poll=async()=>{await new Promise(resolve=>setTimeout(resolve,10));return 0;};
+ await worker.run();
+ expect(reports).toEqual([1]);expect(await count(db,'coin_card_latest')).toBe(1);
+ expect(Number((await db.sql.query<{last_value:string|number}>('SELECT last_value FROM sample_schedule_attempt')).rows[0].last_value)).toBe(3);
+});

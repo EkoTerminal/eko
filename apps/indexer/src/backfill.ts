@@ -1,3 +1,4 @@
+import { TransactionRetryExhaustedError } from '@eko/db';
 import { loadSenderScope, extendSenderScope, needsSender, type SenderScope } from './sender-scope.js';
 import { safeError } from './safe-error.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -189,6 +190,11 @@ export class PonsBackfill {
           if (rpcStopReason(error) || this.client.rpcStopped?.() || this.stopping) {
             this.stop(); await leases.finish(this.db, range, 'todo'); throw error;
           }
+          if(error instanceof TransactionRetryExhaustedError){
+            await leases.finish(this.db,range,'todo');
+            await new Promise(resolve=>setTimeout(resolve,1000));
+            continue;
+          }
           if(error instanceof PartitionLockTimeoutError) {
             await leases.finish(this.db,range,'todo');
             await new Promise(resolve=>setTimeout(resolve,1000));
@@ -264,7 +270,7 @@ export class PonsBackfill {
         await this.db.tx(async tx => {
           await leases.renew(range, tx);
           await batch.flush(tx);
-        });
+        },{retry:true});
       }
       from = to + 1n; window.success();
     }

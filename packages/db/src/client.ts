@@ -15,18 +15,65 @@ export class PartitionLockTimeoutError extends Error {
   readonly code = '55P03';
   constructor() { super('Partition DDL lock timeout; retry batch later'); this.name = 'PartitionLockTimeoutError'; }
 }
+export function databaseCode(error: unknown): string | undefined {
+  const code=(error as {code?:unknown} | null)?.code;
+  return typeof code==='string' && /^[0-9A-Z]{5}$/.test(code) ? code : undefined;
+}
+export function retryableTransaction(error: unknown): boolean {
+  return ['40P01','40001'].includes(databaseCode(error) ?? '');
+}
+export class TransactionRetryExhaustedError extends Error {
+  constructor(readonly code: string) { super('Database contention: skip this cycle'); this.name='TransactionRetryExhaustedError'; }
+}
+export interface TransactionOptions { retry?: boolean }
+interface TransactionHooks { commit: (()=>void)[]; rollback: (()=>void)[] }
 export class ChainDb {
-  constructor(readonly sql: SqlClient, private transaction: <T>(fn: (client: SqlClient) => Promise<T>) => Promise<T>, readonly close: () => Promise<void> = async () => {}, private partitions = new Set<string>(), private pendingPartitions: Set<string> | null = null, readonly bus = new InProcessBus(), private pendingMessages: BusMessage[] | null = null, private sessionProvider?: <T>(work: (db: ChainDb) => Promise<T>) => Promise<T>) {}
+  constructor(readonly sql: SqlClient, private transaction: <T>(fn: (client: SqlClient) => Promise<T>) => Promise<T>, readonly close: () => Promise<void> = async () => {}, private partitions = new Set<string>(), private pendingPartitions: Set<string> | null = null, readonly bus = new InProcessBus(), private pendingMessages: BusMessage[] | null = null, private sessionProvider?: <T>(work: (db: ChainDb) => Promise<T>) => Promise<T>, private hooks?: TransactionHooks) {}
   /** Pin one backend across separately committed maintenance transactions. */
   session<T>(work: (db: ChainDb) => Promise<T>): Promise<T> { return this.sessionProvider ? this.sessionProvider(work) : work(this); }
-  async tx<T>(fn: (db: ChainDb) => Promise<T>): Promise<T> {
+  private contention={db_deadlock_retries:0,db_deadlock_skipped:0};
+  /** Counters include serialization conflicts; values reset after each minute's report. */
+  startTransactionMetrics(emit:(value:Record<string,unknown>)=>void=value=>console.log(JSON.stringify(value))) {
+    const report=()=>{emit({event:'db_transaction_contention',...this.contention});this.contention={db_deadlock_retries:0,db_deadlock_skipped:0};};
+    const timer=setInterval(report,60_000);timer.unref();
+    return ()=>{clearInterval(timer);report();};
+  }
+  recordTransactionSkip(error:unknown) {
+    if(retryableTransaction(error) && !(error instanceof TransactionRetryExhaustedError))this.contention.db_deadlock_skipped++;
+  }
+  afterCommit(work:()=>void) { if(this.hooks)this.hooks.commit.push(work);else work(); }
+  afterRollback(work:()=>void) { if(this.hooks)this.hooks.rollback.push(work); }
+  /** Retried callbacks must stage external state, or restore it with afterRollback. Nested calls never retry alone. */
+  async tx<T>(fn: (db: ChainDb) => Promise<T>, options: TransactionOptions = {}): Promise<T> {
     if (this.pendingPartitions) return fn(this);
-    const pending = new Set<string>();
-    const messages: BusMessage[] = [];
-    const result = await this.transaction(client => fn(new ChainDb(client, async nested => nested(client), async () => {}, this.partitions, pending, this.bus, messages)));
-    for (const month of pending) this.partitions.add(month);
-    for (const message of messages) this.bus.publish(message);
-    return result;
+    for(let attempt=1;;attempt++) {
+      const pending = new Set<string>(),messages: BusMessage[] = [],hooks:TransactionHooks={commit:[],rollback:[]};
+      let result:T;
+      try {
+        result=await this.transaction(client => fn(new ChainDb(client, async nested => nested(client), async () => {}, this.partitions, pending, this.bus, messages,undefined,hooks)));
+      } catch(error) {
+        for(const restore of hooks.rollback.reverse())restore();
+        if(!options.retry || !retryableTransaction(error))throw error;
+        if(attempt>=5) {
+          this.contention.db_deadlock_skipped++;
+          throw new TransactionRetryExhaustedError(databaseCode(error)!);
+        }
+        this.contention.db_deadlock_retries++;
+        await new Promise(resolve=>setTimeout(resolve,25*2**(attempt-1)*(0.5+Math.random())));
+        continue;
+      }
+      for (const month of pending) this.partitions.add(month);
+      for (const apply of hooks.commit) apply();
+      for (const message of messages) this.bus.publish(message);
+      return result;
+    }
+  }
+  private projectionLocksAvailable:boolean|undefined;
+  /** Indexer-only databases have no read projections until engines migrations are applied. */
+  async lockReadCoins(coins:Uint8Array[]) {
+    if(!coins.length)return;
+    this.projectionLocksAvailable ||= (await this.sql.query<{available:boolean}>("SELECT to_regprocedure('read_lock_coins(bytea[])') IS NOT NULL AS available")).rows[0]?.available ?? false;
+    if(this.projectionLocksAvailable)await this.sql.query('SELECT read_lock_coins($1::bytea[])',[coins]);
   }
   async cursor(stream: string): Promise<bigint | null> {
     const { rows } = await this.sql.query<{ block: string }>('SELECT block FROM ingest_cursors WHERE stream=$1', [stream]);
