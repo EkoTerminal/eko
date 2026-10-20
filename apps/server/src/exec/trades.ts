@@ -1,4 +1,4 @@
-import { rpcPauseRetryAt } from '@eko/chain';
+import { rpcPauseRetryAt, safeError } from '@eko/chain';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, lt, or, isNull, sql } from 'drizzle-orm';
 import { canonicalize, PreflightRequestSchema, TradeQuoteRequestSchema, TradeQuoteSchema, TradeOrderSchema,
@@ -153,6 +153,8 @@ export class TradeService {
       if (error instanceof TradeError) throw error;
       if (error instanceof ChainQuoteError && ['bad_request', 'no_route', 'stale_data', 'sim_unavailable', 'quote_changed'].includes(error.code))
         throw new TradeError(error.code as ErrorCode, 'Route quote unavailable or refused');
+      // Unexpected failures used to vanish here; log the redacted cause (never URLs or keys) so they are diagnosable.
+      console.error(JSON.stringify({ level: 50, event: 'trade_quote_failed', venueError: error instanceof Error ? error.constructor.name : typeof error, error: safeError(error) }));
       throw new TradeError('sim_unavailable', 'Trade acquisition is unavailable');
     }
     let quote = TradeQuoteSchema.parse(result.quote);
