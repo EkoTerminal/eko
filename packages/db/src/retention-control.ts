@@ -1,3 +1,4 @@
+import { retentionPhase } from './retention-errors.js';
 import { ChainDb, type SqlClient } from './client.js';
 import type { RetentionOptions, RetentionResult } from './retention.js';
 
@@ -60,7 +61,7 @@ export function retentionRules(options: RetentionOptions, result: RetentionResul
       try { await work(timeLeft, state.rows); succeeded = true; break; }
       catch (error) {
         const code = (error as { code?: string })?.code;
-        if (code !== '55P03' && code !== '57014') throw error;
+        if (code !== '55P03' && code !== '57014') await retentionPhase(name, async () => { throw error; });
         state.successes = 0;
         if (code === '57014') {
           stats.timeouts++;

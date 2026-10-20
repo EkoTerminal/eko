@@ -152,6 +152,7 @@ export async function buildApp(cfg: Config, opts: { feed?: Feed; startBackground
         `retention dry_run=${result.dryRun ?? false} table=${table.table} rows=${table.rows} estimated_bytes=${table.estimatedBytes}`);
       if(!('failed' in result))for(const partition of result.partitions ?? [])logger.info(partition,`retention table=${partition.table} partition=${partition.partition} rows=${partition.rows} seconds=${partition.seconds}`);
       if(!('failed' in result))for(const [rule,stats] of Object.entries(result.ruleStats ?? {}))logger.info({rule,...stats},`retention rule=${rule} rows=${stats.rows} skipped=${stats.skipped} timeouts=${stats.timeouts} batch_rows=${stats.batchRows}`);
+      if(!('failed' in result))for(const skip of result.partitionSkips ?? [])logger.info(skip,'Retention partition skipped');
       logger['failed' in result ? 'warn' : 'info']({retention:result},'Chain retention pass');
     });
 

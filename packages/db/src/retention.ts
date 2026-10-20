@@ -1,3 +1,4 @@
+import { retentionPhase } from './retention-errors.js';
 import { retentionDb, retentionRules, retentionCursors, retentionBatchSizes } from './retention-control.js';
 import { determinationPass, compactUnratedTransfers, reportRows, addReport, retentionBatch, type RetentionTableReport } from './determination-retention.js';
 import { ratingRetention } from './rating-retention.js';
@@ -72,6 +73,7 @@ export interface RetentionResult {
   dryRun?: boolean;
   tables?: RetentionTableReport[];
   partitions?: {table:string;partition:string;rows:number;seconds:number}[];
+  partitionSkips?: {partition:string;code:string}[];
 }
 
 const DAY_MS = 86_400_000;
@@ -389,8 +391,8 @@ export async function runRetention(source: ChainDb, options: RetentionOptions): 
     historyTransfers: 0, historyLiquidity: 0, historyPons: 0, historySwaps: 0, trendingSnapshots: 0, finished: true, skippedRules: [] };
   if (options.dryRun) { result.dryRun = true; result.tables = []; }
   const capped = options.swapDays !== undefined || options.transferDays !== undefined;
-  if ((capped || options.rawDays !== undefined) && options.rawPartitions !== false) await rawPartitionPass(source, { ...options,
-    swapDays:options.swapDays ?? Math.max(options.rawDays ?? 1,1),rawPartitionTables:capped ? undefined : ['swaps'] }, result, started);
+  if ((capped || options.rawDays !== undefined) && options.rawPartitions !== false) await retentionPhase('raw_partitions', () => rawPartitionPass(source, { ...options,
+    swapDays:options.swapDays ?? Math.max(options.rawDays ?? 1,1),rawPartitionTables:capped ? undefined : ['swaps'] }, result, started));
   // Long partition maintenance must not consume the other rules' unchanged per-pass budgets.
   const passDeadline = Date.now() + Math.min(options.passBudgetMs ?? 115_000, 115_000);
   let queryDeadline = passDeadline;

@@ -5,7 +5,7 @@ import { migrateEngines } from '../src/engines-migrate.js';
 import { runRetention } from '../src/retention.js';
 import { sealRawPartition } from '../src/raw-partitions.js';
 let db:ChainDb;
-afterEach(async()=>{await db?.close();});
+afterEach(async()=>{await db?.close();db=undefined!;});
 async function fixture() {
  db=await openDb({pgliteDir:':memory:'});await migrate(db);await migrateEngines(db);
  const ts=new Date('2026-09-01T00:00:00Z');await db.ensurePartitions(ts);
@@ -74,4 +74,51 @@ it('recovers a crash after detach and after drop, before watermark advance',asyn
  await db.sql.query("UPDATE raw_history_watermarks SET through_block=-1 WHERE name='token_transfers'");
  await runRetention(db,options);
  expect((await db.sql.query("SELECT through_block FROM raw_history_watermarks WHERE name='token_transfers'")).rows).toEqual([{through_block:1}]);
+});
+
+it.each(['57014','55P03'])('skips a swaps seal with %s after a long raw phase and still drops transfers and runs every later rule',async code=>{
+ await fixture();
+ const ts=new Date('2026-09-01T00:00:00Z');
+ await db.insert('swaps',{ts,block:1,tx_hash:Buffer.alloc(32,3),log_index:0,coin:Buffer.alloc(20,1),pool_id:Buffer.alloc(20,2),quote_asset:Buffer.alloc(20,3),side:1,amount_coin:'1',amount_quote:'1',price_quote:1,usd:1,venue:'uniswap_v3'});
+ const {vi}=await import('vitest');const realNow=Date.now;let elapsed=0;
+ const clock=vi.spyOn(Date,'now').mockImplementation(()=>realNow()+elapsed);
+ const transact=db.tx.bind(db);let forced=false,transfersDropped=false;
+ db.tx=work=>transact(async tx=>{
+  const query=tx.sql.query.bind(tx.sql);
+  tx.sql.query=(async(sql:string,params?:unknown[])=>{
+   if(!forced && sql.startsWith('CREATE TEMP TABLE raw_seal_rows') && sql.includes('swaps_d2026_09_01')) {
+    forced=true;elapsed=343_000;
+    // A database error aborts the transaction, rather than merely rejecting a JavaScript promise.
+    return query(`DO $$ BEGIN RAISE EXCEPTION 'fixture statement failure' USING ERRCODE='${code}'; END $$`);
+   }
+   // A nested seal's finally used to run before transfers and could mask the original code.
+   if(forced && !transfersDropped && sql==='SELECT pg_advisory_unlock(4663,208)')
+    throw Object.assign(new Error('fixture cleanup failure'),{code:'25P02'});
+   const result=await query(sql,params);
+   if(sql==='DROP TABLE IF EXISTS token_transfers_d2026_09_01')transfersDropped=true;
+   return result;
+  }) as typeof tx.sql.query;return work(tx);
+ });
+ try {
+  const result=await runRetention(db,{...options,ratingDays:1,pendingPoolDays:1,feedDays:1,pauseMs:0});
+  expect(forced).toBe(true);
+  expect(result.finished).toBe(false);
+  expect(result.skippedRules).toEqual(['swaps_d2026_09_01']);
+  expect(result.partitionSkips).toContainEqual({partition:'swaps_d2026_09_01',code});
+  expect((await db.sql.query("SELECT sealed,dropped FROM raw_history_seals WHERE partition_name='token_transfers_d2026_09_01'")).rows).toEqual([{sealed:true,dropped:true}]);
+  expect((await db.sql.query("SELECT to_regclass('token_transfers_d2026_09_01') AS p")).rows).toEqual([{p:null}]);
+  expect((await db.sql.query("SELECT to_regclass('swaps_d2026_09_01') AS p")).rows[0]?.p).toBe('swaps_d2026_09_01');
+  for(const rule of ['watcher_swap_evidence','receipt_publications','wallet_fingerprint_dependencies','guard_shadow_runs','coin_cards','playbook_matches','verdicts','pending_pool_events','read_feed'])
+   expect(result.ruleStats?.[rule]?.skipped).toBe(0);
+ } finally {clock.mockRestore();}
+});
+
+it('preserves a seal timeout if session-lock cleanup also fails',async()=>{
+ const {rawMaintenance}=await import('../src/raw-partitions.js');
+ const timeout=Object.assign(new Error('fixture timeout'),{code:'57014'});
+ const sql={query:async <T>(text:string)=>{
+  if(text.startsWith('SELECT pg_advisory_unlock'))throw Object.assign(new Error('fixture cleanup failure'),{code:'25P02'});
+  return {rows:[{acquired:true}] as T[]};
+ }};
+ await expect(rawMaintenance(new ChainDb(sql,work=>work(sql)),async()=>{throw timeout;})).rejects.toBe(timeout);
 });

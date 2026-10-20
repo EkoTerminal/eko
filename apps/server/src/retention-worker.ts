@@ -1,5 +1,5 @@
 import { LoopHeartbeat } from './loop-health.js';
-import { runRetention, type ChainDb, type RetentionResult } from '@eko/db';
+import { runRetention, retentionFailure, type RetentionFailure, type ChainDb, type RetentionResult } from '@eko/db';
 import { RETENTION_RULE_INPUTS } from '@eko/engines';
 import { loadRegistry } from '@eko/chain';
 
@@ -21,7 +21,7 @@ export class RetentionWorker {
   private backlogged = false;
   private nextRawPass = 0;
   constructor(private readonly db: ChainDb, private readonly settings: RetentionSettings,
-    private readonly report: (result: RetentionResult | { failed: true }) => void, private readonly intervalMs = 600_000) { this.heartbeat = new LoopHeartbeat(intervalMs); }
+    private readonly report: (result: RetentionResult | RetentionFailure) => void, private readonly intervalMs = 600_000) { this.heartbeat = new LoopHeartbeat(intervalMs); }
   get enabled() { return this.settings.enabled !== false && Object.entries(this.settings).some(([key,value]) => key !== 'enabled' && value !== undefined); }
   start() {
     if (this.started || !this.enabled) return;
@@ -43,6 +43,7 @@ export class RetentionWorker {
     return this.running;
   }
   private async pass() {
+    let phase = 'registry';
     try {
       const registry=loadRegistry();
       const quoteTokens = registry.entries()
@@ -50,11 +51,12 @@ export class RetentionWorker {
         .map(([, entry]) => String(entry.address).toLowerCase());
       const rawPartitions = Date.now() >= this.nextRawPass;
       if(rawPartitions)this.nextRawPass=Date.now()+3_600_000;
+      phase = 'retention_pass';
       const result = await runRetention(this.db, { quoteTokens, ...RETENTION_RULE_INPUTS, poolManager:registry.addressOf('uniswapV4.poolManager') ?? undefined, ...this.settings, rawPartitions });
       this.heartbeat.complete();
       if (rawPartitions && this.partitionsEnabled) this.partitionHeartbeat.complete();
       this.backlogged = !result.dryRun && !result.finished;
       this.report(result);
-    } catch { this.backlogged = false; this.report({ failed: true }); } // Retry next interval; no SQL or row data enters logs.
+    } catch (error) { this.backlogged = false; this.report(retentionFailure(error, phase)); } // Retry next interval; no SQL or row data enters logs.
   }
 }

@@ -1,3 +1,4 @@
+import { retentionPhase } from './retention-errors.js';
 import type { ChainDb } from './client.js';
 import { addLifetimeSwaps, emptyLifetime, packSwap, type Lifetime, type LifetimeIdentity } from './lifetime.js';
 import { GRADE_CUTS } from './rating-retention.js';
@@ -13,7 +14,12 @@ export async function rawMaintenance<T>(db: ChainDb, work: (session: ChainDb) =>
   return db.session(async session => {
     const acquired=(await session.sql.query<{acquired:boolean}>('SELECT pg_try_advisory_lock(4663,208) AS acquired')).rows[0]?.acquired;
     if (!acquired) throw Object.assign(new Error('Raw history mutex is busy'),{code:'55P03'});
-    try { return await work(session); } finally { await session.sql.query('SELECT pg_advisory_unlock(4663,208)'); }
+    let failed=false;
+    try { return await work(session); } catch(error) { failed=true; throw error; } finally {
+      // Cleanup must not replace a partition's original error with (for example) 25P02.
+      try { await retentionPhase('raw_mutex_release', () => session.sql.query('SELECT pg_advisory_unlock(4663,208)')); }
+      catch(error) { if(!failed)throw error; }
+    }
   });
 }
 const packed = (alias: string) => `jsonb_build_object('block',${alias}.block::text,'ts',to_char(${alias}.ts AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
@@ -27,7 +33,7 @@ export function rawSealStatementMs() {
   if(!Number.isFinite(seconds) || seconds<=0 || seconds>2147483)throw new Error('Invalid RAW_SEAL_STATEMENT_SEC');
   return Math.max(1,Math.floor(seconds*1000));
 }
-async function sealTx<T>(db:ChainDb,work:(tx:ChainDb)=>Promise<T>) {
+export async function sealTx<T>(db:ChainDb,work:(tx:ChainDb)=>Promise<T>) {
   return db.tx(async tx=>{
     await tx.sql.query(`SET LOCAL statement_timeout='${rawSealStatementMs()}ms'`);
     await tx.sql.query("SET LOCAL lock_timeout='5s'");
@@ -37,9 +43,11 @@ async function sealTx<T>(db:ChainDb,work:(tx:ChainDb)=>Promise<T>) {
 /** Fence once, then commit one ordered coin batch per UTC day. */
 export async function sealRawPartition(db: ChainDb, table: RawTable, partition: string, options: RawSealOptions = {}): Promise<RawSeal> {
   validate(table,partition);
-  return rawMaintenance(db, session=>sealOnSession(session,table,partition,options));
+  return rawMaintenance(db, session=>sealRawPartitionOnSession(session,table,partition,options));
 }
-async function sealOnSession(db: ChainDb, table: RawTable, partition: string, options: RawSealOptions): Promise<RawSeal> {
+/** Caller owns the raw maintenance mutex; no nested session lock/cleanup on this path. */
+export async function sealRawPartitionOnSession(db: ChainDb, table: RawTable, partition: string, options: RawSealOptions): Promise<RawSeal> {
+  validate(table,partition);
   const batchSize=options.coinBatchSize ?? 200;
   if(!Number.isInteger(batchSize) || batchSize<1 || batchSize>1000)throw new Error('Invalid seal coin batch size');
   const previous=await sealTx(db,async tx=>(await tx.sql.query<RawSeal>('SELECT * FROM raw_history_seals WHERE name=$1 AND partition_name=$2',[table,partition])).rows[0]);
@@ -65,6 +73,18 @@ async function sealOnSession(db: ChainDb, table: RawTable, partition: string, op
     await sealTx(db,async tx=>{
       await tx.sql.query(`INSERT INTO raw_history_seal_days(name,partition_name,day,end_ts) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,[table,partition,day,end]);
     });
+    // Drain and commit global rankings before the first coin cursor can hide source rows.
+    const untouched=swaps && await sealTx(db,async tx=>(await tx.sql.query<{untouched:boolean}>(
+      'SELECT coins=0 AND NOT complete AS untouched FROM raw_history_seal_days WHERE name=$1 AND partition_name=$2 AND day=$3',[table,partition,day])).rows[0]?.untouched);
+    if(untouched) {
+      // Preserve the first coin batch's identity-clock publication before rankings, as before.
+      await sealTx(db,tx=>tx.sql.query(`INSERT INTO engine_block_times(number,ts,hash,source)
+        SELECT b.number,b.ts,b.hash,'head' FROM (
+          SELECT coin FROM ${partition} WHERE ts>=$1 AND ts<$2 GROUP BY coin ORDER BY coin LIMIT $3
+        )k JOIN tokens t ON t.address=k.coin JOIN chain_blocks b ON b.number=t.first_block
+        WHERE t.deployer IS NOT NULL ON CONFLICT DO NOTHING`,[day,end,batchSize]));
+      await retentionPhase('trending_snapshots', () => sealRankings(db,{...seal,end_ts:end}));
+    }
     while(true) {
       const started=performance.now();
       const progress=await sealTx(db,async tx=>{
@@ -117,8 +137,6 @@ async function sealOnSession(db: ChainDb, table: RawTable, partition: string, op
             UNION ALL SELECT holder,amount FROM transfer_baselines WHERE token=t.coin AND through_block<t.graduated_block
           ) a GROUP BY holder HAVING sum(amount)>0)h ON true WHERE t.graduated_block<=(SELECT max(block) FROM raw_seal_rows) GROUP BY t.coin
         )x WHERE l.coin=x.coin AND l.graduation_holdings IS NULL`);
-        // Global trending snapshots must see the whole live day before any coin batch disappears.
-        if(swaps && Number(cursor.coins)===0)await sealRankings(tx,{...seal,end_ts:end});
         if(swaps)await sealSwaps(tx,{...seal,end_ts:end},options);else await sealTransfers(tx);
         // DETACH/DROP do not fire parent statement triggers. Publish their cache invalidations with the summaries.
         if(swaps) {
@@ -266,19 +284,90 @@ async function sealBars(db: ChainDb) {
     ON CONFLICT(coin,minute) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,volume_usd=excluded.volume_usd,trades=excluded.trades,first_block=excluded.first_block,last_block=excluded.last_block`);
   await db.sql.query(`INSERT INTO raw_history_bar_keys SELECT DISTINCT coin,date_trunc('minute',ts) FROM raw_seal_rows ON CONFLICT DO NOTHING`);
 }
-async function sealRankings(db: ChainDb, seal: RawSeal) {
-  await db.sql.query(`CREATE TEMP TABLE raw_seal_rankings ON COMMIT DROP AS SELECT q.created_block,coalesce(e.ts,c.ts) AS ts
-    FROM trending_snapshot_queue q LEFT JOIN engine_block_times e ON e.number=q.created_block LEFT JOIN chain_blocks c ON c.number=q.created_block
-    WHERE coalesce(e.ts,c.ts)<$1::timestamptz+interval '1 hour'`,[seal.end_ts]);
-  await db.sql.query(`INSERT INTO trending_snapshots(created_block,data)
-    SELECT q.created_block,coalesce(jsonb_agg(x.data ORDER BY x.volume DESC,x.coin) FILTER(WHERE x.coin IS NOT NULL),'[]')
-    FROM raw_seal_rankings q LEFT JOIN LATERAL(
-      SELECT v.coin,v.volume,jsonb_build_object('coin','0x'||encode(v.coin,'hex'),'name',t.name,'symbol',t.symbol,
-        'created',to_char(e.ts AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'started',to_char(v.started AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'volume',v.volume::text) AS data
-      FROM (SELECT coin,min(ts) AS started,sum(usd) AS volume FROM raw_history_live_swaps WHERE block<=q.created_block AND ts>q.ts-interval '1 hour' AND ts<=q.ts+interval '1 second' AND usd>0 GROUP BY coin)v
-      JOIN tokens t ON t.address=v.coin JOIN engine_block_times e ON e.number=t.first_block WHERE t.name IS NOT NULL AND t.symbol IS NOT NULL ORDER BY v.volume DESC,v.coin LIMIT 50
-    )x ON true GROUP BY q.created_block ON CONFLICT DO NOTHING`);
-  await db.sql.query('DELETE FROM trending_snapshot_queue WHERE created_block IN(SELECT created_block FROM raw_seal_rankings)');
+/** Session-local inputs survive batch commits; only queue deletions are the durable resume cursor. */
+export async function sealRankings(db: ChainDb, seal: RawSeal) {
+  let failed=false;
+  try {
+    const queued=await sealTx(db,async tx=>{
+      await tx.sql.query(`CREATE TEMP TABLE raw_seal_rankings ON COMMIT PRESERVE ROWS AS
+        SELECT q.created_block,coalesce(e.ts,c.ts) AS ts FROM trending_snapshot_queue q
+        LEFT JOIN engine_block_times e ON e.number=q.created_block LEFT JOIN chain_blocks c ON c.number=q.created_block
+        WHERE coalesce(e.ts,c.ts)<$1::timestamptz+interval '1 hour'`,[seal.end_ts]);
+      await tx.sql.query('CREATE UNIQUE INDEX ON raw_seal_rankings(created_block)');
+      return (await tx.sql.query<{n:string}>('SELECT count(*) AS n FROM raw_seal_rankings')).rows[0]!.n;
+    });
+    if(!Number(queued))return;
+    await sealTx(db,async tx=>{
+      // Read the live view once for the needed span, including both partial window minutes.
+      // Keep source order for the final float8 SUM: summing rounded minute totals changes volume text.
+      await tx.sql.query(`CREATE TEMP TABLE raw_seal_ranking_rows ON COMMIT PRESERVE ROWS AS
+        SELECT s.coin,s.ts,s.block,s.usd,row_number() OVER() AS ordinal FROM raw_history_live_swaps s
+        WHERE s.ts>(SELECT min(ts) FROM raw_seal_rankings)-interval '1 hour'
+          AND s.ts<=(SELECT max(ts) FROM raw_seal_rankings)+interval '1 second' AND s.usd>0`);
+      await tx.sql.query('CREATE INDEX ON raw_seal_ranking_rows(coin,ts)');
+      await tx.sql.query('CREATE INDEX ON raw_seal_ranking_rows(ts)');
+      await tx.sql.query(`CREATE TEMP TABLE raw_seal_ranking_minutes ON COMMIT PRESERVE ROWS AS
+        SELECT coin,date_trunc('minute',ts) AS minute,min(ts) AS started,sum(usd) AS volume,count(*) AS n,
+          min(block) AS low_block,max(block) AS high_block FROM raw_seal_ranking_rows GROUP BY coin,date_trunc('minute',ts)`);
+      await tx.sql.query('CREATE INDEX ON raw_seal_ranking_minutes(minute)');
+      await tx.sql.query('ANALYZE raw_seal_ranking_rows');
+      await tx.sql.query('ANALYZE raw_seal_ranking_minutes');
+    });
+    while(true) {
+      const count=await sealTx(db,async tx=>{
+        await tx.sql.query(`CREATE TEMP TABLE raw_seal_ranking_batch ON COMMIT DROP AS
+          SELECT * FROM raw_seal_rankings ORDER BY created_block LIMIT 32`);
+        const n=Number((await tx.sql.query<{n:string}>('SELECT count(*) AS n FROM raw_seal_ranking_batch')).rows[0]!.n);
+        if(!n)return 0;
+        await tx.sql.query(`INSERT INTO trending_snapshots(created_block,data)
+          SELECT q.created_block,coalesce(jsonb_agg(x.data ORDER BY x.volume DESC,x.coin) FILTER(WHERE x.coin IS NOT NULL),'[]')
+          FROM raw_seal_ranking_batch q LEFT JOIN LATERAL(
+            WITH pieces AS MATERIALIZED (
+              SELECT m.coin,m.started,m.volume,m.n FROM raw_seal_ranking_minutes m
+              WHERE m.minute>q.ts-interval '1 hour' AND m.minute<=q.ts+interval '1 second'-interval '1 minute' AND m.high_block<=q.created_block
+              UNION ALL
+              SELECT s.coin,min(s.ts),sum(s.usd),count(*) FROM raw_seal_ranking_minutes m
+              CROSS JOIN LATERAL(SELECT s.coin,s.ts,s.usd FROM raw_seal_ranking_rows s
+                WHERE s.coin=m.coin AND s.ts>=m.minute AND s.ts<m.minute+interval '1 minute'
+                  AND s.ts>q.ts-interval '1 hour' AND s.ts<=q.ts+interval '1 second' AND s.block<=q.created_block OFFSET 0)s
+              WHERE m.minute>=date_trunc('minute',q.ts-interval '1 hour') AND m.minute<=q.ts+interval '1 second'
+                AND m.low_block<=q.created_block AND (m.minute<=q.ts-interval '1 hour'
+                  OR m.minute+interval '1 minute'>q.ts+interval '1 second' OR m.high_block>q.created_block)
+              GROUP BY s.coin
+            ), volumes AS MATERIALIZED (
+              SELECT p.coin,min(p.started) AS started,sum(p.volume) AS volume,
+                least(0.5,sum(p.n)*8.881784197001252e-16)::double precision AS error
+              FROM pieces p JOIN tokens t ON t.address=p.coin JOIN engine_block_times e ON e.number=t.first_block
+              WHERE t.name IS NOT NULL AND t.symbol IS NOT NULL GROUP BY p.coin
+            ), bounds AS MATERIALIZED (
+              SELECT *,volume/(1+error) AS lower,volume/(1-error) AS upper FROM volumes
+            ), cutoff AS (
+              SELECT min(lower) AS volume FROM (SELECT lower FROM bounds ORDER BY lower DESC LIMIT 50)b
+            ), exact AS MATERIALIZED (
+              -- Positive volumes have a bounded relative summation error. Include every possible
+              -- top-50 contender (including ties), then preserve source float sums and ordering.
+              SELECT v.coin,v.started,(SELECT sum(s.usd ORDER BY s.ordinal) FROM raw_seal_ranking_rows s
+                WHERE s.coin=v.coin AND s.ts>q.ts-interval '1 hour' AND s.ts<=q.ts+interval '1 second' AND s.block<=q.created_block) AS volume
+              FROM bounds v WHERE v.upper>=(SELECT volume FROM cutoff)
+            )
+            SELECT v.coin,v.volume,jsonb_build_object('coin','0x'||encode(v.coin,'hex'),'name',t.name,'symbol',t.symbol,
+              'created',to_char(e.ts AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+              'started',to_char(v.started AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'volume',v.volume::text) AS data
+            FROM exact v JOIN tokens t ON t.address=v.coin JOIN engine_block_times e ON e.number=t.first_block
+            ORDER BY v.volume DESC,v.coin LIMIT 50
+          )x ON true GROUP BY q.created_block ON CONFLICT DO NOTHING`);
+        await tx.sql.query('DELETE FROM trending_snapshot_queue WHERE created_block IN(SELECT created_block FROM raw_seal_ranking_batch)');
+        await tx.sql.query('DELETE FROM raw_seal_rankings WHERE created_block IN(SELECT created_block FROM raw_seal_ranking_batch)');
+        return n;
+      });
+      if(!count)break;
+    }
+  } catch(error) { failed=true; throw error; } finally {
+    try {
+      await retentionPhase('trending_snapshot_cleanup', () => sealTx(db,tx=>tx.sql.query(
+        'DROP TABLE IF EXISTS pg_temp.raw_seal_rankings,pg_temp.raw_seal_ranking_rows,pg_temp.raw_seal_ranking_minutes')));
+    } catch(error) { if(!failed)throw error; }
+  }
 }
 async function sealGradePrices(db: ChainDb, seal: RawSeal, now: Date) {
   await db.sql.query(`INSERT INTO retention_grade_prices(coin,since,horizon_sec,graded_at,level,p0,p1,hi)

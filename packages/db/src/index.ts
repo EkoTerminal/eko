@@ -42,3 +42,5 @@ export * from './rating-checks.js';
 export * from './raw-partitions.js';
 
 export { maintainedBalance } from './maintained-balance.js';
+
+export { retentionFailure, type RetentionFailure } from './retention-errors.js';

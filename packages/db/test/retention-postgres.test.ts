@@ -140,12 +140,25 @@ it.skipIf(!databaseUrl)('partition DDL times out in two seconds and seal stateme
     process.env.RAW_SEAL_STATEMENT_SEC='0.025';
     const query=clients[1]!.query.bind(clients[1]!);
     clients[1]!.query=(async(sql:string,params?:unknown[])=>{
-      if(sql.startsWith('SELECT * FROM raw_history_seals'))await query('SELECT pg_sleep(0.2)');
+      if(sql.startsWith('SELECT * FROM raw_history_seals') && params?.[0]==='swaps')await query('SELECT pg_sleep(0.2)');
       return query(sql,params);
     }) as typeof clients[number]['query'];
     const leaf=`swaps_d${new Date().toISOString().slice(0,10).replaceAll('-','_')}`;
     await expect(sealRawPartition(handles[1]!,'swaps',leaf)).rejects.toMatchObject({code:'57014'});
     expect((await clients[0]!.query('SELECT * FROM raw_history_seals')).rows).toHaveLength(0);
+    // Exercise the whole pass with a real server-side statement cancellation, not a mocked rejection.
+    const {runRetention}=await import('../src/retention.js');
+    const old=new Date(Date.now()-4*86400000),transferLeaf=`token_transfers_d${old.toISOString().slice(0,10).replaceAll('-','_')}`;
+    await provisionHistory(handles[0]!,old,0);
+    await clients[0]!.query(`INSERT INTO token_transfers(ts,block,tx_hash,log_index,token,from_address,to_address,amount)
+      VALUES($1,1,$2,0,$3,$3,$4,1)`,[old,Buffer.alloc(32,1),Buffer.alloc(20,1),Buffer.alloc(20,2)]);
+    process.env.RAW_SEAL_STATEMENT_SEC='0.1';
+    const result=await runRetention(handles[1]!,{quoteTokens:[],swapDays:1,transferDays:1,ratingDays:1,feedDays:1,dryRun:false,pauseMs:0});
+    expect(result.finished).toBe(false);
+    expect(result.partitionSkips?.some(p=>p.partition.startsWith('swaps_') && p.code==='57014')).toBe(true);
+    expect((await clients[0]!.query('SELECT sealed,dropped FROM raw_history_seals WHERE partition_name=$1',[transferLeaf])).rows).toEqual([{sealed:true,dropped:true}]);
+    expect((await clients[0]!.query('SELECT to_regclass($1) AS p',[transferLeaf])).rows).toEqual([{p:null}]);
+    expect(result.ruleStats?.verdicts?.skipped).toBe(0);expect(result.ruleStats?.read_feed?.skipped).toBe(0);
   }finally{
     if(saved===undefined)delete process.env.RAW_SEAL_STATEMENT_SEC;else process.env.RAW_SEAL_STATEMENT_SEC=saved;
     for(const client of clients){await client.query('ROLLBACK');client.release();}

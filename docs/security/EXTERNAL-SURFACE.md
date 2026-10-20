@@ -286,7 +286,7 @@ Measured: **599/599 (100.00%)** documented. Minimum: **90%**.
 | `SwarmWorker.runNext` | method | [apps/server/src/ai/swarm-worker.ts:120](../../apps/server/src/ai/swarm-worker.ts#L120) | Yes |
 | `SwarmWorker.outcomeWindow` | method | [apps/server/src/ai/swarm-worker.ts:247](../../apps/server/src/ai/swarm-worker.ts#L247) | Yes |
 | `buildApp` | function | [apps/server/src/app.ts:124](../../apps/server/src/app.ts#L124) | Yes |
-| `returned.close` | method | [apps/server/src/app.ts:429](../../apps/server/src/app.ts#L429) | Yes |
+| `returned.close` | method | [apps/server/src/app.ts:430](../../apps/server/src/app.ts#L430) | Yes |
 | `ActualOrderService.constructor` | constructor | [apps/server/src/exec/actual-order.ts:45](../../apps/server/src/exec/actual-order.ts#L45) | Yes |
 | `ActualOrderService.lookup` | method | [apps/server/src/exec/actual-order.ts:64](../../apps/server/src/exec/actual-order.ts#L64) | Yes |
 | `ActualOrderService.prepare` | method | [apps/server/src/exec/actual-order.ts:92](../../apps/server/src/exec/actual-order.ts#L92) | Yes |

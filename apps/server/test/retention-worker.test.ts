@@ -110,7 +110,7 @@ describe('retention worker', () => {
     const failing = vi.fn(), broken = new RetentionWorker({ sql: { query: async () => { throw new Error('fixture failure with row data'); } } } as unknown as ChainDb,
       { quoteDays: 2 }, failing, 60_000);
     await broken.tick();
-    expect(failing).toHaveBeenCalledWith({ failed: true });
+    expect(failing).toHaveBeenCalledWith({ failed: true, code:null, errorConstructor:'TypeError', phase:'quote_transfers' });
   });
 });
 
@@ -128,3 +128,16 @@ it('runs raw partitions at start and hourly while other retention rules keep the
   await worker.stop();worker.start();await worker.tick();expect(run.mock.calls.at(-1)?.[1].rawPartitions).toBe(true);
  }finally{await worker.stop();run.mockRestore();vi.useRealTimers();}
 });
+
+ it('reports only code, original constructor and failing rule on a fatal pass error',async()=>{
+   class DatabaseFailure extends Error { readonly code='23503'; readonly detail='private row data'; }
+   const error=new DatabaseFailure('private SQL and parameters');
+   const sql={query:async <T>(query:string)=>{
+     if(query.startsWith('SELECT run_id,block FROM wallet_fingerprint_dependencies'))throw error;
+     return {rows:[] as T[]};
+   }};
+   const report=vi.fn();
+   await new RetentionWorker(new Database(sql,work=>work(sql)),{ratingDays:1,dryRun:false},report).tick();
+   expect(report).toHaveBeenCalledWith({failed:true,code:'23503',errorConstructor:'DatabaseFailure',phase:'wallet_fingerprint_dependencies'});
+   expect(JSON.stringify(report.mock.calls)).not.toContain('private');
+ });
