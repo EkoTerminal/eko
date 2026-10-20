@@ -72,7 +72,11 @@ describe('v1 quote refusals through the real app wiring', () => {
 describe('live trade sources and probes', () => {
   const pool = padHex('0x51', { size: 20 }), coin = padHex('0x10', { size: 20 }), coinPool = padHex('0x52', { size: 20 });
   const rows: Record<string, { id: string; currency0: string; currency1: string; fee: number }[]> = {
-    [WETH]: [{ id: pool, currency0: WETH, currency1: USDG, fee: 500 }],
+    [WETH]: [{ id: pool, currency0: WETH, currency1: USDG, fee: 500 },
+      // Look-alikes: any contract can emit Initialize. One claims a deeper pool at a false price, one reverts, one has a non-tier fee.
+      { id: padHex('0x61', { size: 20 }), currency0: WETH, currency1: USDG, fee: 3000 },
+      { id: padHex('0x62', { size: 20 }), currency0: WETH, currency1: USDG, fee: 100 },
+      { id: padHex('0x63', { size: 20 }), currency0: WETH, currency1: USDG, fee: 83 }],
     [coin]: [{ id: coinPool, currency0: coin, currency1: WETH, fee: 3000 }],
   };
   const sql: SqlClient = { query: async (_q: string, params?: unknown[]) => {
@@ -84,7 +88,15 @@ describe('live trade sources and probes', () => {
   const client = {
     readContract: vi.fn(async (a: { functionName: string; address: string }) => {
       if (a.functionName === 'decimals') return a.address.toLowerCase() === USDG ? 6 : 18;
-      if (a.functionName === 'liquidity') return 10n ** 18n;
+      if (a.functionName === 'getPool') {
+        const [x, y, fee] = (a as unknown as { args: [string, string, number] }).args.map(v => typeof v === 'string' ? v.toLowerCase() : v) as [string, string, number];
+        const pair = [x, y].sort().join(':');
+        if (pair === [WETH, USDG].map(v => v.toLowerCase()).sort().join(':') && fee === 500) return pool;
+        if (pair === [coin, WETH].map(v => v.toLowerCase()).sort().join(':') && fee === 3000) return coinPool;
+        return '0x0000000000000000000000000000000000000000';
+      }
+      if (a.address === padHex('0x62', { size: 20 })) throw new Error('execution reverted');
+      if (a.functionName === 'liquidity') return a.address === padHex('0x61', { size: 20 }) ? 10n ** 30n : 10n ** 18n;
       if (a.functionName === 'slot0') return [a.address === pool ? sqrt(2e9 / 1e18) : sqrt(1e-3), 0, 0, 0, 0, 0, true];
       throw new Error(`unexpected ${a.functionName}`);
     }),
@@ -93,7 +105,7 @@ describe('live trade sources and probes', () => {
   } as unknown as PublicClient;
   const sources = liveTradeSources(() => client, () => sql);
 
-  it('prices USDG at $1, WETH from the deepest WETH/USDG pool and coins through their pool at one block', async () => {
+  it('prices USDG at $1, WETH from the deepest canonical WETH/USDG pool (never a look-alike) and coins through their pool at one block', async () => {
     expect(await sources.priceUsd(USDG, 5n)).toBe(1);
     expect(await sources.priceUsd(WETH, 5n)).toBeCloseTo(2000, 6);
     expect(await sources.priceUsd(coin, 5n)).toBeCloseTo(2, 6);

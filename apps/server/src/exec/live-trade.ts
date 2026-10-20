@@ -26,6 +26,8 @@ const WETH = lower(registry.requireAddress('tokens.WETH'));
 const USDG = lower(registry.requireAddress('tokens.USDG'));
 const ROUTER = lower(registry.requireAddress('uniswapV3.swapRouter02'));
 const FACTORY = lower(registry.requireAddress('uniswapV3.factory'));
+/** Fee tiers the canonical v3 factory enables on this chain; other fees can only be look-alike pools. */
+const FEES = new Set([100, 500, 3000, 10000]);
 const QUOTER = lower(registry.requireAddress('uniswapV3.quoterV2'));
 /** Arbitrum's NodeInterface virtual contract (protocol address 0xc8, not a deployment): the L1 data share of a
  * transaction, in L2 gas. Like the router's address-this sentinel, it is a fixed protocol constant. */
@@ -81,12 +83,20 @@ export function liveTradeSources(chain: () => PublicClient, sql: () => SqlClient
   /** Spot price of `token` in `quote` units from the deepest indexed pool pairing them, at the block. */
   const spot = async (token: Address, quote: Address, pools: IndexedV3Pool[], block: bigint) => {
     let best: { liquidity: bigint; sqrt: bigint; token0: Address } | null = null;
-    for (const p of pools.filter(p => [p.currency0, p.currency1].some(c => same(c, quote)))) {
-      const [liquidity, slot] = await Promise.all([
-        withRpcOrigin('server.live_trade.L85',()=>chain().readContract({ address: p.address, abi: LIQUIDITY_ABI, functionName: 'liquidity', blockNumber: block })),
-        withRpcOrigin('server.live_trade.L86',()=>chain().readContract({ address: p.address, abi: POOL_ABI, functionName: 'slot0', blockNumber: block })),
-      ]);
-      if (slot[0] > 0n && (!best || liquidity > best.liquidity)) best = { liquidity, sqrt: slot[0], token0: lower(p.currency0) };
+    // Any contract can emit a v3 Initialize event, so the index holds look-alike "pools". Price only from pools the
+    // canonical factory created for exactly this pair and fee; a look-alike could revert or report a false price.
+    const candidates = pools.filter(p => FEES.has(Number(p.fee)) &&
+      [p.currency0, p.currency1].some(c => same(c, quote)) && [p.currency0, p.currency1].some(c => same(c, token)));
+    for (const p of candidates) {
+      try {
+        const canonical = await withRpcOrigin('server.live_trade.L84',()=>chain().readContract({ address: FACTORY, abi: FACTORY_ABI, functionName: 'getPool', args: [token, quote, Number(p.fee)], blockNumber: block }));
+        if (!same(canonical, p.address)) continue;
+        const [liquidity, slot] = await Promise.all([
+          withRpcOrigin('server.live_trade.L85',()=>chain().readContract({ address: p.address, abi: LIQUIDITY_ABI, functionName: 'liquidity', blockNumber: block })),
+          withRpcOrigin('server.live_trade.L86',()=>chain().readContract({ address: p.address, abi: POOL_ABI, functionName: 'slot0', blockNumber: block })),
+        ]);
+        if (slot[0] > 0n && (!best || liquidity > best.liquidity)) best = { liquidity, sqrt: slot[0], token0: lower(p.currency0) };
+      } catch { /* an unreadable pool is skipped, never priced */ }
     }
     if (!best) return null;
     const [dToken, dQuote] = await Promise.all([decimalsOf(token), decimalsOf(quote)]);
