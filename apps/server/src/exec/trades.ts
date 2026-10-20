@@ -89,14 +89,20 @@ export class TradeService {
     }
     let result: Awaited<ReturnType<SellGuard['check']>>;
     try { result = await guard.check(input.coin, input.amountUsd); }
-    catch { throw new TradeError('sim_unavailable', 'The sell check could not run, so the guard refuses this buy'); }
+    catch (error) {
+      console.error(JSON.stringify({ level: 50, event: 'trade_sell_check_failed', coin: input.coin, errorClass: error instanceof Error ? error.constructor.name : typeof error, error: safeError(error) }));
+      throw new TradeError('sim_unavailable', 'The sell check could not run, so the guard refuses this buy');
+    }
     if (result.status === 'refused') {
       // The refusal stands even if counting it fails.
       try { await guard.refused(result, input.amountUsd); } catch { /* counter write is best effort */ }
       throw new TradeError('guard_refused', 'The sell check failed: in simulation this coin could not be sold back, so the guard refuses this buy');
     }
     if (result.status === 'buy_failed') throw new TradeError('guard_refused', 'The buy did not go through in simulation');
-    if (result.status !== 'sellable') throw new TradeError('sim_unavailable', 'The sell check could not run, so the guard refuses this buy');
+    if (result.status !== 'sellable') {
+      console.error(JSON.stringify({ level: 50, event: 'trade_sell_check_unusable', coin: input.coin, status: result.status, block: result.block, requests: result.requests }));
+      throw new TradeError('sim_unavailable', 'The sell check could not run, so the guard refuses this buy');
+    }
   }
   private async admission(owner: TradeOwner, input: TradeQuoteRequest) {
     await this.screen(owner.wallet);
