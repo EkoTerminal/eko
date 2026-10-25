@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # EKO — one image, one explicitly selected process per container.
 
-FROM node:22.23.4-bookworm-slim@sha256:5991875dfb80938dd8a6ba3fe3e96fd04929e70792762b3319d8caadbbe229bc AS base
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS base
 RUN corepack enable && corepack prepare pnpm@11.5.1 --activate
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
@@ -44,7 +44,7 @@ RUN node -e "if (!/^[a-f0-9]{40}$/.test(process.env.EKO_SOURCE_REVISION || '')) 
 RUN pnpm --filter @eko/server build \
  && pnpm --filter @eko/server deploy --prod --legacy /out
 
-FROM node:22.23.4-bookworm-slim@sha256:5991875dfb80938dd8a6ba3fe3e96fd04929e70792762b3319d8caadbbe229bc AS runtime
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS runtime
 ENV NODE_ENV=production \
     APP_ROLE=api \
     RUN_WORKER=false \
